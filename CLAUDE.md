@@ -17,7 +17,9 @@
 Data Processing GUI/
 ├── app.py              # 主程式（UI 邏輯、數據讀取、圖表）
 ├── processing.py       # 純數值處理（背景扣除、歸一化）
-├── requirements.txt    # 依賴套件
+├── peak_fitting.py     # 峰值擬合（Gaussian/Lorentzian/Voigt，使用 scipy）
+├── xps_database.py     # XPS 峰位資料庫（~80 個元素的結合能與 FWHM）
+├── requirements.txt    # 依賴套件（含 scipy>=1.11）
 ├── 啟動_Windows.bat    # Windows 啟動腳本
 ├── 安裝套件.bat        # 套件安裝腳本
 ├── .streamlit/
