@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Streamlit cache
+.streamlit/secrets.toml
+
+# VS Code
+.vscode/

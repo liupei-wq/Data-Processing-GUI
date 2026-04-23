@@ -1,0 +1,8 @@
+[server]
+headless = true
+fileWatcherType = "none"
+address = "localhost"
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
