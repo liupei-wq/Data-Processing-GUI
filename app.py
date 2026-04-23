@@ -275,6 +275,22 @@ def _parse_xps_bytes(raw: bytes):
     for enc in ("utf-8", "big5", "cp950", "latin-1", "utf-16"):
         try:
             content_str = raw.decode(enc)
+            # 先嘗試標準 CSV（兩欄數字，首行可為標頭）
+            import io
+            df = pd.read_csv(io.StringIO(content_str))
+            if df.shape[1] >= 2:
+                x = df.iloc[:, 0].to_numpy(dtype=float)
+                y = df.iloc[:, 1].to_numpy(dtype=float)
+                if len(x) >= 2:
+                    idx = np.argsort(x)
+                    return x[idx], y[idx], None
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            pass
+
+        try:
+            content_str = raw.decode(enc)
             x, y = parse_structured_xps(content_str)
             return x, y, None
         except UnicodeDecodeError:
