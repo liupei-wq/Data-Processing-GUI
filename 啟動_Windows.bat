@@ -1,13 +1,31 @@
 @echo off
 cd /d "%~dp0"
+echo ================================================
+echo  Spectroscopy Data Processing GUI
+echo ================================================
+echo.
 
-:: 關掉舊的 streamlit（避免衝突）
-taskkill /F /IM python.exe /FI "WINDOWTITLE eq streamlit*" >nul 2>&1
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [錯誤] 找不到 Python！
+    echo 請先雙擊「安裝套件.bat」完成安裝。
+    echo.
+    pause
+    exit /b 1
+)
 
-echo 啟動 Spectroscopy Data Processing GUI...
+python -c "import streamlit" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [錯誤] 尚未安裝套件！
+    echo 請先雙擊「安裝套件.bat」完成安裝。
+    echo.
+    pause
+    exit /b 1
+)
+
+echo 啟動中，請稍候...
 start /B "" python -m streamlit run app.py --server.port 8501
 
-:: 輪詢健康端點，伺服器一就緒立刻開瀏覽器（最多等 30 秒）
 set /a COUNT=0
 :WAIT
 timeout /t 1 /nobreak >nul
@@ -17,4 +35,5 @@ set /a COUNT+=1
 if %COUNT% lss 30 goto WAIT
 
 :OPEN
+echo 開啟瀏覽器...
 start http://localhost:8501
