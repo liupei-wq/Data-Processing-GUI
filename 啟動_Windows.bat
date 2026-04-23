@@ -1,10 +1,11 @@
 @echo off
 cd /d "%~dp0"
 
-set STREAMLIT=C:\Users\peili\AppData\Local\Python\pythoncore-3.14-64\Scripts\streamlit.exe
+:: 關掉舊的 streamlit（避免衝突）
+taskkill /F /IM python.exe /FI "WINDOWTITLE eq streamlit*" >nul 2>&1
 
-:: 直接背景啟動，不經過 PowerShell 包裝層
-start /B "" "%STREAMLIT%" run app.py
+echo 啟動 Spectroscopy Data Processing GUI...
+start /B "" python -m streamlit run app.py --server.port 8501
 
 :: 輪詢健康端點，伺服器一就緒立刻開瀏覽器（最多等 30 秒）
 set /a COUNT=0
