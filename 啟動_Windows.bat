@@ -5,16 +5,27 @@ echo  Spectroscopy Data Processing GUI
 echo ================================================
 echo.
 
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [錯誤] 找不到 Python！
-    echo 請先雙擊「安裝套件.bat」完成安裝。
-    echo.
-    pause
-    exit /b 1
+:: 優先用 py 啟動器（Windows 內建，不需設定 PATH）
+py --version >nul 2>&1
+if %errorlevel% == 0 (
+    set PYTHON=py
+    goto CHECK
 )
 
-python -c "import streamlit" >nul 2>&1
+python --version >nul 2>&1
+if %errorlevel% == 0 (
+    set PYTHON=python
+    goto CHECK
+)
+
+echo [錯誤] 找不到 Python！
+echo 請先雙擊「安裝套件.bat」完成安裝。
+echo.
+pause
+exit /b 1
+
+:CHECK
+%PYTHON% -c "import streamlit" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [錯誤] 尚未安裝套件！
     echo 請先雙擊「安裝套件.bat」完成安裝。
@@ -24,7 +35,7 @@ if %errorlevel% neq 0 (
 )
 
 echo 啟動中，請稍候...
-start /B "" python -m streamlit run app.py --server.port 8501
+start /B "" %PYTHON% -m streamlit run app.py --server.port 8501
 
 set /a COUNT=0
 :WAIT
