@@ -1,11 +1,7 @@
 @echo off
+chcp 65001 >nul
 cd /d "%~dp0"
-echo ================================================
-echo  Spectroscopy Data Processing GUI
-echo ================================================
-echo.
 
-:: 優先用 py 啟動器（Windows 內建，不需設定 PATH）
 py --version >nul 2>&1
 if %errorlevel% == 0 (
     set PYTHON=py
@@ -18,24 +14,24 @@ if %errorlevel% == 0 (
     goto CHECK
 )
 
-echo [錯誤] 找不到 Python！
-echo 請先雙擊「安裝套件.bat」完成安裝。
-echo.
+echo [Error] Python not found!
+echo Please run [Install_Packages.bat] first.
 pause
 exit /b 1
 
 :CHECK
 %PYTHON% -c "import streamlit" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [錯誤] 尚未安裝套件！
-    echo 請先雙擊「安裝套件.bat」完成安裝。
-    echo.
+    echo [Error] Packages not installed!
+    echo Please run [Install_Packages.bat] first.
     pause
     exit /b 1
 )
 
-echo 啟動中，請稍候...
-start /B "" %PYTHON% -m streamlit run app.py --server.port 8501
+echo Starting server, please wait...
+start "Streamlit Server" %PYTHON% -m streamlit run app.py --server.port 8501
+
+timeout /t 5 /nobreak >nul
 
 set /a COUNT=0
 :WAIT
@@ -43,8 +39,7 @@ timeout /t 1 /nobreak >nul
 curl -s --max-time 1 http://localhost:8501/_stcore/health >nul 2>&1
 if %errorlevel% == 0 goto OPEN
 set /a COUNT+=1
-if %COUNT% lss 30 goto WAIT
+if %COUNT% lss 25 goto WAIT
 
 :OPEN
-echo 開啟瀏覽器...
 start http://localhost:8501
