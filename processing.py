@@ -27,7 +27,17 @@ def linear_background(x, y):
     return bg
 
 
-def apply_background(x, y, method, bg_x_start, bg_x_end):
+def polynomial_background(x, y, degree=3):
+    """Fit a polynomial of given degree to the segment."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) <= degree:
+        return np.linspace(y[0], y[-1], len(y))
+    coeffs = np.polyfit(x, y, degree)
+    return np.polyval(coeffs, x)
+
+
+def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3):
     """
     Calculate and subtract background only within [bg_x_start, bg_x_end].
     Outside that region the background is extended as a constant
@@ -38,7 +48,6 @@ def apply_background(x, y, method, bg_x_start, bg_x_end):
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
 
-    # Ensure the range is ordered correctly
     r0, r1 = min(bg_x_start, bg_x_end), max(bg_x_start, bg_x_end)
     mask = (x >= r0) & (x <= r1)
 
@@ -53,10 +62,11 @@ def apply_background(x, y, method, bg_x_start, bg_x_end):
         bg_seg = linear_background(xs, ys)
     elif method == "shirley":
         bg_seg = shirley_background(ys)
+    elif method == "polynomial":
+        bg_seg = polynomial_background(xs, ys, degree=poly_deg)
     else:
         return y.copy(), bg_full
 
-    # Fill bg_full: constant outside, computed inside
     bg_full[mask] = bg_seg
     bg_full[x < r0] = bg_seg[0]
     bg_full[x > r1] = bg_seg[-1]
@@ -123,7 +133,8 @@ def normalize_mean_region(x, y, region_x_start, region_x_end):
 
 def apply_processing(x, y, bg_method="none", norm_method="none",
                      bg_x_start=None, bg_x_end=None,
-                     norm_x_start=None, norm_x_end=None):
+                     norm_x_start=None, norm_x_end=None,
+                     poly_deg=3):
     """
     Full processing pipeline: background subtraction → normalization.
 
@@ -146,7 +157,7 @@ def apply_processing(x, y, bg_method="none", norm_method="none",
     if norm_x_end is None:
         norm_x_end = x.max()
 
-    y_out, bg = apply_background(x, y, bg_method, bg_x_start, bg_x_end)
+    y_out, bg = apply_background(x, y, bg_method, bg_x_start, bg_x_end, poly_deg=poly_deg)
 
     if norm_method == "min_max":
         y_out = normalize_min_max(y_out)

@@ -199,12 +199,338 @@ def build_periodic_table(selected_elem: str | None = None) -> go.Figure:
     return fig
 
 
+# ── Raman parser ──────────────────────────────────────────────────────────────
+@st.cache_data
+def _parse_raman_bytes(raw: bytes):
+    import io
+    for enc in ("utf-8", "utf-8-sig", "big5", "cp950", "latin-1"):
+        try:
+            content = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        lines = [l for l in content.splitlines()
+                 if l.strip() and l.strip()[0] not in ('#', '%', ';', '!')]
+        if not lines:
+            continue
+        clean = "\n".join(lines)
+        for sep in (',', '\t', r'\s+'):
+            for hdr in (0, None):
+                try:
+                    df = pd.read_csv(io.StringIO(clean), sep=sep, header=hdr,
+                                     engine='python', on_bad_lines='skip')
+                    num_df = df.apply(pd.to_numeric, errors='coerce')
+                    valid = [c for c in num_df.columns if num_df[c].notna().mean() > 0.8]
+                    if len(valid) >= 2:
+                        x = num_df[valid[0]].dropna().to_numpy()
+                        y = num_df[valid[1]].dropna().to_numpy()
+                        n = min(len(x), len(y))
+                        if n >= 2:
+                            x, y = x[:n], y[:n]
+                            idx = np.argsort(x)
+                            return x[idx], y[idx], None
+                except Exception:
+                    continue
+    return None, None, "無法解析：請確認為兩欄數字格式（波數, 強度）"
+
+
+# ── Raman UI ──────────────────────────────────────────────────────────────────
+def run_raman_ui():
+    RAMAN_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
+                    "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
+
+    # ── sidebar ①② ────────────────────────────────────────────────────────────
+    with st.sidebar:
+        step_header(1, "載入檔案")
+        uploaded_files = st.file_uploader(
+            "上傳 Raman .txt / .csv / .asc 檔案（可多選）",
+            type=["txt", "csv", "asc"],
+            accept_multiple_files=True,
+            key="raman_uploader",
+        )
+
+        skip_avg = step_header_with_skip(2, "多檔平均", "raman_skip_avg")
+        do_average = False
+        show_individual = False
+        interp_points = 601
+        if not skip_avg:
+            do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
+            interp_points = st.number_input(
+                "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
+            )
+            if do_average:
+                show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
+
+        s2 = st.session_state.get("raman_s2", False)
+        if skip_avg and not s2:
+            st.session_state["raman_s2"] = True
+            s2 = True
+        if not skip_avg and not s2:
+            if _next_btn("raman_btn2", "raman_s2"):
+                s2 = True
+        step2_done = skip_avg or s2
+
+    # ── load data ─────────────────────────────────────────────────────────────
+    if not uploaded_files:
+        st.info("請在左側上傳一個或多個 Raman .txt / .csv 檔案。")
+        st.stop()
+
+    data_dict = {}
+    for uf in uploaded_files:
+        x, y, err = _parse_raman_bytes(uf.read())
+        if err:
+            st.error(f"**{uf.name}** 讀取失敗：{err}")
+        else:
+            data_dict[uf.name] = (x, y)
+
+    if not data_dict:
+        st.stop()
+
+    st.success(f"成功載入 {len(data_dict)} 個檔案：{', '.join(data_dict.keys())}")
+
+    # ── range boundaries ──────────────────────────────────────────────────────
+    all_x = np.concatenate([x for x, _ in data_dict.values()])
+    x_min_g = float(all_x.min())
+    x_max_g = float(all_x.max())
+    ov_min = float(max(x.min() for x, _ in data_dict.values()))
+    ov_max = float(min(x.max() for x, _ in data_dict.values()))
+    _cur = st.session_state.get("raman_disp", (ov_min, ov_max))
+    _e0 = float(max(x_min_g, min(float(min(_cur)), x_max_g)))
+    _e1 = float(max(x_min_g, min(float(max(_cur)), x_max_g)))
+    if _e0 >= _e1:
+        _e0, _e1 = ov_min, ov_max
+
+    bg_method = "none"
+    bg_x_start, bg_x_end = _e0, _e1
+    show_bg_baseline = False
+    norm_method = "none"
+    norm_x_start, norm_x_end = _e0, _e1
+    poly_deg = 3
+    step_size = max(0.1, (x_max_g - x_min_g) / 2000)
+
+    # ── sidebar ③④ ────────────────────────────────────────────────────────────
+    with st.sidebar:
+        # ③ 背景扣除
+        s3 = st.session_state.get("raman_s3", False)
+        if step2_done:
+            skip_bg = step_header_with_skip(3, "背景扣除", "raman_skip_bg")
+            if not skip_bg:
+                bg_method = st.selectbox(
+                    "方法",
+                    ["none", "linear", "polynomial"],
+                    format_func=lambda v: {
+                        "none": "不扣除",
+                        "linear": "線性背景",
+                        "polynomial": "多項式（螢光背景）",
+                    }[v],
+                    key="raman_bg_method",
+                )
+                if bg_method == "polynomial":
+                    poly_deg = st.slider("多項式階數", 2, 6, 3, key="raman_poly_deg")
+                if bg_method != "none":
+                    _prev = st.session_state.get("raman_bg_range", (_e0, _e1))
+                    _lo = float(max(_e0, min(float(min(_prev)), _e1)))
+                    _hi = float(max(_e0, min(float(max(_prev)), _e1)))
+                    if _lo >= _hi:
+                        _lo, _hi = _e0, _e1
+                    st.session_state["raman_bg_range"] = (_lo, _hi)
+                    bg_range = st.slider(
+                        "背景計算區間 (cm⁻¹)",
+                        min_value=_e0, max_value=_e1,
+                        step=step_size, format="%.1f cm⁻¹",
+                        key="raman_bg_range",
+                    )
+                    bg_x_start, bg_x_end = sorted(bg_range)
+                    show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True, key="raman_show_bg")
+            if skip_bg and not s3:
+                st.session_state["raman_s3"] = True
+                s3 = True
+            if not skip_bg and not s3:
+                if _next_btn("raman_btn3", "raman_s3"):
+                    s3 = True
+        else:
+            skip_bg = False
+        step3_done = step2_done and (skip_bg or s3)
+
+        # ④ 歸一化
+        s4 = st.session_state.get("raman_s4", False)
+        if step3_done:
+            skip_norm = step_header_with_skip(4, "歸一化", "raman_skip_norm")
+            if not skip_norm:
+                norm_method = st.selectbox(
+                    "方法",
+                    ["none", "min_max", "max", "area", "mean_region"],
+                    format_func=lambda v: {
+                        "none": "不歸一化",
+                        "min_max": "Min-Max (0~1)",
+                        "max": "峰值歸一化（可選區間）",
+                        "area": "面積歸一化（總面積 = 1）",
+                        "mean_region": "算術平均歸一化（選區間）",
+                    }[v],
+                    key="raman_norm_method",
+                )
+                if norm_method in ("mean_region", "max"):
+                    _prev = st.session_state.get("raman_norm_range", (_e0, _e1))
+                    _lo = float(max(_e0, min(float(min(_prev)), _e1)))
+                    _hi = float(max(_e0, min(float(max(_prev)), _e1)))
+                    if _lo >= _hi:
+                        _lo, _hi = _e0, _e1
+                    st.session_state["raman_norm_range"] = (_lo, _hi)
+                    norm_range = st.slider(
+                        "歸一化參考區間 (cm⁻¹)",
+                        min_value=_e0, max_value=_e1,
+                        step=step_size, format="%.1f cm⁻¹",
+                        key="raman_norm_range",
+                    )
+                    norm_x_start, norm_x_end = sorted(norm_range)
+            if skip_norm and not s4:
+                st.session_state["raman_s4"] = True
+                s4 = True
+            if not skip_norm and not s4:
+                if _next_btn("raman_btn4", "raman_s4"):
+                    s4 = True
+
+    # ── main: range slider ────────────────────────────────────────────────────
+    r_range = st.slider(
+        "顯示範圍 — Raman Shift (cm⁻¹)",
+        min_value=x_min_g, max_value=x_max_g,
+        value=(ov_min, ov_max),
+        step=step_size, format="%.1f cm⁻¹",
+        key="raman_disp",
+    )
+    r_start, r_end = sorted(r_range)
+
+    # ── processing ────────────────────────────────────────────────────────────
+    fig1 = go.Figure()
+    fig2 = go.Figure()
+    export_frames = {}
+
+    if do_average:
+        new_x = np.linspace(r_start, r_end, int(interp_points))
+        all_interp = []
+        for name, (x, y) in data_dict.items():
+            mask = (x >= r_start) & (x <= r_end)
+            xc, yc = x[mask], y[mask]
+            if len(xc) < 2:
+                st.warning(f"{name}：所選範圍內數據點不足，已跳過。")
+                continue
+            fi = interp1d(xc, yc, kind="linear", fill_value="extrapolate")
+            yi = fi(new_x)
+            all_interp.append(yi)
+            if show_individual:
+                fig1.add_trace(go.Scatter(x=new_x, y=yi, mode="lines", name=name,
+                                          line=dict(width=1, dash="dot"), opacity=0.4))
+        if all_interp:
+            avg_y = np.mean(all_interp, axis=0)
+            y_bg, bg = apply_processing(new_x, avg_y, bg_method, "none",
+                                        bg_x_start=bg_x_start, bg_x_end=bg_x_end,
+                                        poly_deg=poly_deg)
+            if bg_method != "none":
+                fig1.add_trace(go.Scatter(x=new_x, y=avg_y, mode="lines", name="Average（原始）",
+                                          line=dict(color="white", width=1.5, dash="dash"), opacity=0.6))
+                if show_bg_baseline:
+                    fig1.add_trace(go.Scatter(x=new_x, y=bg, mode="lines", name="背景基準線",
+                                              line=dict(color="gray", width=1.5, dash="longdash")))
+                fig1.add_trace(go.Scatter(x=new_x, y=y_bg, mode="lines", name="Average（扣除背景後）",
+                                          line=dict(color="#EF553B", width=2.5)))
+            else:
+                fig1.add_trace(go.Scatter(x=new_x, y=avg_y, mode="lines", name="Average",
+                                          line=dict(color="#EF553B", width=2.5)))
+            y_final, _ = apply_processing(new_x, y_bg, "none", norm_method,
+                                          norm_x_start=norm_x_start, norm_x_end=norm_x_end)
+            if norm_method != "none":
+                fig2.add_trace(go.Scatter(x=new_x, y=y_final, mode="lines",
+                                          name="Average（歸一化後）",
+                                          line=dict(color="#EF553B", width=2.5)))
+            export_frames["Average"] = pd.DataFrame({
+                "Raman_Shift_cm": new_x, "Average_raw": avg_y,
+                "Average_bg_subtracted": y_bg,
+                **({"Background": bg} if bg_method != "none" else {}),
+                **({"Average_normalized": y_final} if norm_method != "none" else {}),
+            })
+    else:
+        for i, (name, (x, y)) in enumerate(data_dict.items()):
+            mask = (x >= r_start) & (x <= r_end)
+            xc, yc = x[mask], y[mask]
+            if len(xc) < 2:
+                st.warning(f"{name}：所選範圍內數據點不足，已跳過。")
+                continue
+            color = RAMAN_COLORS[i % len(RAMAN_COLORS)]
+            y_bg, bg = apply_processing(xc, yc, bg_method, "none",
+                                        bg_x_start=bg_x_start, bg_x_end=bg_x_end,
+                                        poly_deg=poly_deg)
+            if bg_method != "none":
+                fig1.add_trace(go.Scatter(x=xc, y=yc, mode="lines", name=f"{name}（原始）",
+                                          line=dict(color=color, width=1.5, dash="dash"), opacity=0.5))
+                if show_bg_baseline:
+                    fig1.add_trace(go.Scatter(x=xc, y=bg, mode="lines", name=f"{name}（背景）",
+                                              line=dict(color=color, width=1.2, dash="longdash"), opacity=0.5))
+                fig1.add_trace(go.Scatter(x=xc, y=y_bg, mode="lines", name=f"{name}（扣除背景後）",
+                                          line=dict(color=color, width=2)))
+            else:
+                fig1.add_trace(go.Scatter(x=xc, y=yc, mode="lines", name=name,
+                                          line=dict(color=color, width=2)))
+            y_final, _ = apply_processing(xc, y_bg, "none", norm_method,
+                                          norm_x_start=norm_x_start, norm_x_end=norm_x_end)
+            if norm_method != "none":
+                fig2.add_trace(go.Scatter(x=xc, y=y_final, mode="lines",
+                                          name=f"{name}（歸一化後）",
+                                          line=dict(color=color, width=2)))
+            export_frames[name] = pd.DataFrame({
+                "Raman_Shift_cm": xc, "Intensity_raw": yc,
+                "Intensity_bg_subtracted": y_bg,
+                **({"Background": bg} if bg_method != "none" else {}),
+                **({"Intensity_normalized": y_final} if norm_method != "none" else {}),
+            })
+
+    # ── figure 1 ──────────────────────────────────────────────────────────────
+    if bg_method != "none":
+        fig1.add_vrect(x0=bg_x_start, x1=bg_x_end, fillcolor="red", opacity=0.06,
+                       layer="below", line_width=0,
+                       annotation_text="背景區間", annotation_position="top left")
+    fig1.update_layout(
+        xaxis_title="Raman Shift (cm⁻¹)", yaxis_title="Intensity",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        template="plotly_dark", height=480, margin=dict(l=50, r=20, t=60, b=50),
+    )
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # ── figure 2 ──────────────────────────────────────────────────────────────
+    if norm_method != "none":
+        st.caption("歸一化結果")
+        if norm_method in ("mean_region", "max"):
+            fig2.add_vrect(x0=norm_x_start, x1=norm_x_end, fillcolor="blue", opacity=0.06,
+                           layer="below", line_width=0,
+                           annotation_text="歸一化區間", annotation_position="top right")
+        fig2.update_layout(
+            xaxis_title="Raman Shift (cm⁻¹)", yaxis_title="Normalized Intensity",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            template="plotly_dark", height=400, margin=dict(l=50, r=20, t=40, b=50),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # ── export ────────────────────────────────────────────────────────────────
+    if export_frames:
+        st.subheader("匯出")
+        btn_cols = st.columns(min(len(export_frames), 4))
+        for col, (name, df) in zip(btn_cols, export_frames.items()):
+            base = name.rsplit(".", 1)[0]
+            fname = col.text_input("檔名", value=f"{base}_processed",
+                                   key=f"raman_fname_{name}", label_visibility="collapsed")
+            col.download_button(
+                "⬇️ 下載 CSV",
+                data=df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{(fname or base + '_processed').strip()}.csv",
+                mime="text/csv",
+                key=f"raman_dl_{name}",
+            )
+
+
 DATA_TYPES = {
     "XPS":   {"icon": "✅", "ready": True,  "desc": "X-ray Photoelectron Spectroscopy"},
     "XAS":   {"icon": "🔧", "ready": False, "desc": "X-ray Absorption Spectroscopy"},
     "XES":   {"icon": "🔧", "ready": False, "desc": "X-ray Emission Spectroscopy"},
     "SEM":   {"icon": "🔧", "ready": False, "desc": "Scanning Electron Microscopy"},
-    "Raman": {"icon": "🔧", "ready": False, "desc": "Raman Spectroscopy"},
+    "Raman": {"icon": "✅", "ready": True,  "desc": "Raman Spectroscopy"},
     "XRD":   {"icon": "🔧", "ready": False, "desc": "X-ray Diffraction"},
 }
 
@@ -216,10 +542,14 @@ selected_type = st.radio(
 )
 
 if not DATA_TYPES[selected_type]["ready"]:
-    st.warning(f"**{selected_type}** 模組尚未開放，目前僅支援 XPS。")
+    st.warning(f"**{selected_type}** 模組尚未開放，目前僅支援 XPS 與 Raman。")
     st.stop()
 
 st.divider()
+
+if selected_type == "Raman":
+    run_raman_ui()
+    st.stop()
 
 
 # ── XPS parser ────────────────────────────────────────────────────────────────
@@ -397,7 +727,6 @@ _e1 = float(max(_cur[0], _cur[1]))
 
 # 預設值（未到該步驟時使用）
 offset = 0.0
-show_calibrated = False
 calib_au_x = calib_au_y = None
 bg_method = "none"
 bg_x_start, bg_x_end = _e0, _e1
@@ -452,7 +781,6 @@ with st.sidebar:
                         col_m1, col_m2 = st.columns(2)
                         col_m1.metric("偵測峰值", f"{measured_e:.2f} eV")
                         col_m2.metric("位移量 ΔE", f"{offset:+.3f} eV")
-                        show_calibrated = st.checkbox("疊加顯示校正後數據", value=False)
                         with st.expander("查看標準品峰值偵測圖"):
                             fig_au = go.Figure()
                             fig_au.add_trace(go.Scatter(
@@ -662,7 +990,7 @@ if do_average:
         all_interp.append(yi)
         if show_individual:
             fig1.add_trace(go.Scatter(
-                x=new_x, y=yi, mode="lines", name=name,
+                x=new_x + offset, y=yi, mode="lines", name=name,
                 line=dict(width=1, dash="dot"), opacity=0.4,
             ))
 
@@ -672,43 +1000,39 @@ if do_average:
             new_x, avg_y, bg_method, "none",
             bg_x_start=bg_x_start, bg_x_end=bg_x_end,
         )
-        fig1.add_trace(go.Scatter(
-            x=new_x, y=avg_y, mode="lines", name="Average（原始）",
-            line=dict(color="white", width=1.5, dash="dash"), opacity=0.6,
-        ))
-        if bg_method != "none" and show_bg_baseline:
+        if bg_method != "none":
             fig1.add_trace(go.Scatter(
-                x=new_x, y=bg, mode="lines", name="背景基準線",
-                line=dict(color="gray", width=1.5, dash="longdash"),
+                x=new_x + offset, y=avg_y, mode="lines", name="Average（原始）",
+                line=dict(color="white", width=1.5, dash="dash"), opacity=0.6,
             ))
-        fig1.add_trace(go.Scatter(
-            x=new_x, y=y_bg, mode="lines", name="Average（扣除背景後）",
-            line=dict(color="#EF553B", width=2.5),
-        ))
+            if show_bg_baseline:
+                fig1.add_trace(go.Scatter(
+                    x=new_x + offset, y=bg, mode="lines", name="背景基準線",
+                    line=dict(color="gray", width=1.5, dash="longdash"),
+                ))
+            fig1.add_trace(go.Scatter(
+                x=new_x + offset, y=y_bg, mode="lines", name="Average（扣除背景後）",
+                line=dict(color="#EF553B", width=2.5),
+            ))
+        else:
+            fig1.add_trace(go.Scatter(
+                x=new_x + offset, y=avg_y, mode="lines", name="Average",
+                line=dict(color="#EF553B", width=2.5),
+            ))
         y_final, _ = apply_processing(
             new_x, y_bg, "none", norm_method,
             norm_x_start=norm_x_start, norm_x_end=norm_x_end,
         )
         if norm_method != "none":
             fig2.add_trace(go.Scatter(
-                x=new_x, y=y_final, mode="lines", name="Average（歸一化後）",
+                x=new_x + offset, y=y_final, mode="lines", name="Average（歸一化後）",
                 line=dict(color="#EF553B", width=2.5),
             ))
-            if show_calibrated and calib_au_x is not None:
-                fig2.add_trace(go.Scatter(
-                    x=new_x + offset, y=y_final, mode="lines", name="Average（校正後）",
-                    line=dict(color="#FFA15A", width=2.5, dash="dash"),
-                ))
             fit_x, fit_y = new_x, y_final
         else:
-            if show_calibrated and calib_au_x is not None:
-                fig1.add_trace(go.Scatter(
-                    x=new_x + offset, y=y_bg, mode="lines", name="Average（校正後）",
-                    line=dict(color="#FFA15A", width=2.5, dash="dash"),
-                ))
             fit_x, fit_y = new_x, y_bg
         export_frames["Average"] = pd.DataFrame({
-            "Energy_eV": new_x,
+            "Energy_eV": new_x + offset,
             "Average_raw": avg_y,
             "Average_bg_subtracted": y_bg,
             **({"Background": bg} if bg_method != "none" else {}),
@@ -726,43 +1050,39 @@ else:
             xc, yc, bg_method, "none",
             bg_x_start=bg_x_start, bg_x_end=bg_x_end,
         )
-        fig1.add_trace(go.Scatter(
-            x=xc, y=yc, mode="lines", name=f"{name}（原始）",
-            line=dict(color=color, width=1.5, dash="dash"), opacity=0.5,
-        ))
-        if bg_method != "none" and show_bg_baseline:
+        if bg_method != "none":
             fig1.add_trace(go.Scatter(
-                x=xc, y=bg, mode="lines", name=f"{name}（背景）",
-                line=dict(color=color, width=1.2, dash="longdash"), opacity=0.5,
+                x=xc + offset, y=yc, mode="lines", name=f"{name}（原始）",
+                line=dict(color=color, width=1.5, dash="dash"), opacity=0.5,
             ))
-        fig1.add_trace(go.Scatter(
-            x=xc, y=y_bg, mode="lines", name=f"{name}（扣除背景後）",
-            line=dict(color=color, width=2),
-        ))
+            if show_bg_baseline:
+                fig1.add_trace(go.Scatter(
+                    x=xc + offset, y=bg, mode="lines", name=f"{name}（背景）",
+                    line=dict(color=color, width=1.2, dash="longdash"), opacity=0.5,
+                ))
+            fig1.add_trace(go.Scatter(
+                x=xc + offset, y=y_bg, mode="lines", name=f"{name}（扣除背景後）",
+                line=dict(color=color, width=2),
+            ))
+        else:
+            fig1.add_trace(go.Scatter(
+                x=xc + offset, y=yc, mode="lines", name=name,
+                line=dict(color=color, width=2),
+            ))
         y_final, _ = apply_processing(
             xc, y_bg, "none", norm_method,
             norm_x_start=norm_x_start, norm_x_end=norm_x_end,
         )
         if norm_method != "none":
             fig2.add_trace(go.Scatter(
-                x=xc, y=y_final, mode="lines", name=f"{name}（歸一化後）",
+                x=xc + offset, y=y_final, mode="lines", name=f"{name}（歸一化後）",
                 line=dict(color=color, width=2),
             ))
-            if show_calibrated and calib_au_x is not None:
-                fig2.add_trace(go.Scatter(
-                    x=xc + offset, y=y_final, mode="lines", name=f"{name}（校正後）",
-                    line=dict(color=color, width=2, dash="dash"),
-                ))
             fit_x, fit_y = xc, y_final
         else:
-            if show_calibrated and calib_au_x is not None:
-                fig1.add_trace(go.Scatter(
-                    x=xc + offset, y=y_bg, mode="lines", name=f"{name}（校正後）",
-                    line=dict(color=color, width=2, dash="dash"),
-                ))
             fit_x, fit_y = xc, y_bg
         export_frames[name] = pd.DataFrame({
-            "Energy_eV": xc,
+            "Energy_eV": xc + offset,
             "Intensity_raw": yc,
             "Intensity_bg_subtracted": y_bg,
             **({"Background": bg} if bg_method != "none" else {}),
@@ -772,7 +1092,7 @@ else:
 # ── 圖一：背景扣除 ────────────────────────────────────────────────────────────
 if bg_method != "none":
     fig1.add_vrect(
-        x0=bg_x_start, x1=bg_x_end,
+        x0=bg_x_start + offset, x1=bg_x_end + offset,
         fillcolor="red", opacity=0.06,
         layer="below", line_width=0,
         annotation_text="背景區間", annotation_position="top left",
@@ -793,7 +1113,7 @@ if norm_method != "none":
     st.caption("歸一化結果")
     if norm_method in ("mean_region", "max"):
         fig2.add_vrect(
-            x0=norm_x_start, x1=norm_x_end,
+            x0=norm_x_start + offset, x1=norm_x_end + offset,
             fillcolor="blue", opacity=0.06,
             layer="below", line_width=0,
             annotation_text="歸一化區間", annotation_position="top right",
@@ -812,49 +1132,20 @@ if norm_method != "none":
 # ── 匯出 ──────────────────────────────────────────────────────────────────────
 if export_frames:
     st.subheader("匯出")
-    has_calib = show_calibrated and calib_au_x is not None
-    if has_calib:
-        col_raw, col_calib = st.columns(2)
-    else:
-        col_raw = st.container()
-        col_calib = None
-
-    with col_raw:
-        st.caption("處理後數據")
-        btn_cols = st.columns(min(len(export_frames), 4))
-        for col, (name, df) in zip(btn_cols, export_frames.items()):
-            base = name.rsplit(".", 1)[0]
-            fname = col.text_input(
-                "檔名", value=f"{base}_processed",
-                key=f"fname_{name}", label_visibility="collapsed",
-            )
-            col.download_button(
-                "⬇️ 下載 CSV",
-                data=df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{(fname or base + '_processed').strip()}.csv",
-                mime="text/csv",
-                key=f"dl_{name}",
-            )
-
-    if has_calib and col_calib is not None:
-        with col_calib:
-            st.caption("校正後數據")
-            btn_cols2 = st.columns(min(len(export_frames), 4))
-            for col, (name, df) in zip(btn_cols2, export_frames.items()):
-                base = name.rsplit(".", 1)[0]
-                fname2 = col.text_input(
-                    "檔名", value=f"{base}_calibrated",
-                    key=f"fname2_{name}", label_visibility="collapsed",
-                )
-                df_calib = df.copy()
-                df_calib["Energy_eV"] = df_calib["Energy_eV"] + offset
-                col.download_button(
-                    "⬇️ 下載（校正後）",
-                    data=df_calib.to_csv(index=False).encode("utf-8"),
-                    file_name=f"{(fname2 or base + '_calibrated').strip()}.csv",
-                    mime="text/csv",
-                    key=f"calib_{name}",
-                )
+    btn_cols = st.columns(min(len(export_frames), 4))
+    for col, (name, df) in zip(btn_cols, export_frames.items()):
+        base = name.rsplit(".", 1)[0]
+        fname = col.text_input(
+            "檔名", value=f"{base}_processed",
+            key=f"fname_{name}", label_visibility="collapsed",
+        )
+        col.download_button(
+            "⬇️ 下載 CSV",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{(fname or base + '_processed').strip()}.csv",
+            mime="text/csv",
+            key=f"dl_{name}",
+        )
 
 # ── 週期表 & 峰值擬合 ─────────────────────────────────────────────────────────
 if step6_visible:
@@ -916,12 +1207,12 @@ if step6_visible:
 
             fig_fit = go.Figure()
             fig_fit.add_trace(go.Scatter(
-                x=fit_x_used, y=fit_y_used,
+                x=fit_x_used + offset, y=fit_y_used,
                 mode="lines", name="實驗數據",
                 line=dict(color="white", width=1.5, dash="dot"),
             ))
             fig_fit.add_trace(go.Scatter(
-                x=fit_x_used, y=result["y_fit"],
+                x=fit_x_used + offset, y=result["y_fit"],
                 mode="lines", name="擬合包絡",
                 line=dict(color="#FFD700", width=2.5),
             ))
@@ -930,15 +1221,15 @@ if step6_visible:
             ):
                 c = FIT_PEAK_COLORS[pi % len(FIT_PEAK_COLORS)]
                 fig_fit.add_trace(go.Scatter(
-                    x=fit_x_used, y=yi,
+                    x=fit_x_used + offset, y=yi,
                     mode="lines",
-                    name=f"{pk_info['label']}  {pk_info['center']:.2f} eV",
+                    name=f"{pk_info['label']}  {pk_info['center'] + offset:.2f} eV",
                     line=dict(color=c, width=1.5, dash="dash"),
                     fill="tozeroy",
                     fillcolor=hex_to_rgba(c, 0.12),
                 ))
             fig_fit.add_trace(go.Scatter(
-                x=fit_x_used, y=result["residuals"],
+                x=fit_x_used + offset, y=result["residuals"],
                 mode="lines", name="殘差",
                 line=dict(color="#888888", width=1),
                 yaxis="y2",
@@ -966,7 +1257,7 @@ if step6_visible:
             rows_table = [
                 {
                     "峰": pk["label"],
-                    "中心 (eV)": f"{pk['center']:.3f}",
+                    "中心 (eV)": f"{pk['center'] + offset:.3f}",
                     "FWHM (eV)": f"{pk['fwhm']:.3f}",
                     "面積": f"{pk['area']:.4g}",
                     "面積%": f"{pk['area_pct']:.1f}%",
@@ -978,7 +1269,7 @@ if step6_visible:
             )
 
             fit_df = pd.DataFrame({
-                "Energy_eV": fit_x_used,
+                "Energy_eV": fit_x_used + offset,
                 "Experimental": fit_y_used,
                 "Fit_envelope": result["y_fit"],
                 "Residuals": result["residuals"],
