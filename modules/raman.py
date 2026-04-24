@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from scipy.ndimage import maximum_filter1d
 from scipy.signal import peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
@@ -13,6 +14,9 @@ from core.spectrum_ops import detect_spectrum_peaks, interpolate_spectrum_to_gri
 from core.ui_helpers import _next_btn, hex_to_rgba, step_header, step_header_with_skip
 from peak_fitting import fit_peaks
 from processing import apply_normalization, apply_processing, despike_signal, smooth_signal
+from raman_database import RAMAN_REFERENCES
+
+_REF_COLORS = ["#F4D03F", "#58D68D", "#5DADE2", "#E59866", "#A569BD", "#EC7063", "#AAB7B8"]
 
 
 def build_raman_peak_table(
@@ -47,6 +51,54 @@ def build_raman_peak_table(
     })
 
 
+def _detect_raman_peaks(
+    x: np.ndarray,
+    y: np.ndarray,
+    prom_ratio: float,
+    height_ratio: float,
+    distance_cm: float,
+    max_peaks: int,
+    detect_x_start: float,
+    detect_x_end: float,
+    use_local_prom: bool,
+    local_window_cm: float,
+) -> np.ndarray:
+    """Peak detection with optional X-range filter and local adaptive normalization.
+
+    Returns indices into the *original* x/y arrays.
+    """
+    # -- X range filter --
+    if detect_x_start > x[0] or detect_x_end < x[-1]:
+        mask = (x >= detect_x_start) & (x <= detect_x_end)
+        x_det = x[mask]
+        y_det = y[mask]
+        orig_idx = np.where(mask)[0]
+    else:
+        x_det, y_det = x, y
+        orig_idx = np.arange(len(x), dtype=int)
+
+    if len(x_det) < 3:
+        return np.array([], dtype=int)
+
+    # -- Local adaptive normalization --
+    if use_local_prom:
+        step = (x_det[-1] - x_det[0]) / max(len(x_det) - 1, 1)
+        win = max(5, int(local_window_cm / step))
+        local_max = maximum_filter1d(y_det, size=win)
+        local_max = np.where(local_max < 1e-10, 1e-10, local_max)
+        y_for_det = y_det / local_max
+    else:
+        y_for_det = y_det
+
+    sub_idx = detect_spectrum_peaks(
+        x_det, y_for_det, prom_ratio, height_ratio, distance_cm, max_peaks,
+    )
+    if len(sub_idx) == 0:
+        return np.array([], dtype=int)
+    # map sub-array indices back to original array
+    return orig_idx[sub_idx]
+
+
 def run_raman_ui():
     RAMAN_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
                     "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
@@ -60,6 +112,48 @@ def run_raman_ui():
             accept_multiple_files=True,
             key="raman_uploader",
         )
+
+        # ── 基板訊號扣除（可選）──────────────────────────────────────────────
+        sub_correction_enabled = False
+        sub_peak_pos = 520.7
+        show_sub_spectrum = False
+        show_pre_correction = False
+        sub_uploader = None
+
+        with st.expander("基板訊號扣除（可選）", expanded=False):
+            st.caption(
+                "上傳裸基板光譜，程式自動對齊 Si 峰再扣除，"
+                "可消除不同曝光時間／次數造成的強度差異。"
+            )
+            sub_uploader = st.file_uploader(
+                "裸基板光譜（.txt / .csv / .asc）",
+                type=["txt", "csv", "asc"],
+                accept_multiple_files=False,
+                key="raman_substrate_uploader",
+            )
+            if sub_uploader is not None:
+                sub_peak_pos = float(st.number_input(
+                    "對齊峰位 (cm⁻¹)",
+                    min_value=50.0, max_value=2000.0,
+                    value=520.7, step=0.1, format="%.1f",
+                    key="raman_sub_peak_pos",
+                    help="通常用 Si 520.7 cm⁻¹；藍寶石基板可選 645 cm⁻¹",
+                ))
+                sub_correction_enabled = st.checkbox(
+                    "啟用基板扣除",
+                    value=True,
+                    key="raman_sub_enabled",
+                )
+                show_sub_spectrum = st.checkbox(
+                    "在圖上顯示已縮放基板光譜",
+                    value=False,
+                    key="raman_show_sub",
+                )
+                show_pre_correction = st.checkbox(
+                    "在圖上顯示扣除前原始光譜",
+                    value=True,
+                    key="raman_show_pre_corr",
+                )
 
     if not uploaded_files:
         st.info("請在左側上傳一個或多個 Raman .txt / .csv 檔案。")
@@ -103,6 +197,57 @@ def run_raman_ui():
         _e0, _e1 = ov_min, ov_max
     step_size = float(max(0.1, (x_max_g - x_min_g) / 2000))
     raman_peak_distance_default = float(max(step_size, min(20.0, max(step_size, (_e1 - _e0) / 80))))
+
+    # ── Substrate correction ───────────────────────────────────────────────────
+    data_dict_original: dict[str, tuple[np.ndarray, np.ndarray]] = {
+        k: (xv.copy(), yv.copy()) for k, (xv, yv) in data_dict.items()
+    }
+    sub_spectrum_scaled: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    sub_scale_info: list[str] = []
+
+    if sub_uploader is not None:
+        _sub_ck = f"_raman_sub_{sub_uploader.name}_{sub_uploader.size}"
+        if _sub_ck not in st.session_state:
+            _sx, _sy, _serr = parse_two_column_spectrum_bytes(sub_uploader.read())
+            if _serr:
+                st.session_state[_sub_ck] = (None, None, _serr)
+            else:
+                st.session_state[_sub_ck] = (
+                    np.asarray(_sx, dtype=float).ravel(),
+                    np.asarray(_sy, dtype=float).ravel(),
+                    None,
+                )
+        _sub_cached = st.session_state[_sub_ck]
+        if _sub_cached[2] is not None:
+            st.error(f"基板檔案讀取失敗：{_sub_cached[2]}")
+        else:
+            sub_x_raw, sub_y_raw = _sub_cached[0], _sub_cached[1]
+
+            if sub_correction_enabled:
+                # find substrate's own peak at sub_peak_pos
+                _win_sub = (sub_x_raw >= sub_peak_pos - 15) & (sub_x_raw <= sub_peak_pos + 15)
+                sub_peak_int = float(sub_y_raw[_win_sub].max()) if _win_sub.any() else 1.0
+
+                corrected_dict: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+                for fname, (xv, yv) in data_dict.items():
+                    # interpolate substrate onto sample x-grid
+                    sub_y_interp = np.interp(xv, sub_x_raw, sub_y_raw,
+                                             left=float(sub_y_raw[0]),
+                                             right=float(sub_y_raw[-1]))
+                    # find sample peak intensity at sub_peak_pos
+                    _win_s = (xv >= sub_peak_pos - 15) & (xv <= sub_peak_pos + 15)
+                    sample_peak_int = float(yv[_win_s].max()) if _win_s.any() else 1.0
+                    # scale factor: normalise substrate to same peak height as sample
+                    scale = sample_peak_int / max(sub_peak_int, 1e-10)
+                    y_sub_scaled = sub_y_interp * scale
+                    y_corrected = yv - y_sub_scaled
+                    corrected_dict[fname] = (xv, y_corrected)
+                    sub_spectrum_scaled[fname] = (xv, y_sub_scaled)
+                    sub_scale_info.append(
+                        f"{fname}：Si 峰縮放比 {scale:.4f}"
+                        f"（樣品 {sample_peak_int:.0f} / 基板 {sub_peak_int:.0f}）"
+                    )
+                data_dict = corrected_dict
 
     # ── Step 2: despike (sidebar) ─────────────────────────────────────────────
     despike_method = "none"
@@ -325,6 +470,10 @@ def run_raman_ui():
     max_peak_labels = 15
     label_peaks = True
     run_peak_detection = False
+    detect_x_start = float(x_min_g)
+    detect_x_end = float(x_max_g)
+    use_local_prom = False
+    local_window_cm = 100.0
 
     with st.sidebar:
         s7 = st.session_state.get("raman_step7_done", False)
@@ -350,6 +499,52 @@ def run_raman_ui():
                     "最多標記峰數", min_value=1, max_value=50, value=15, step=1, key="raman_peak_max"
                 ))
                 label_peaks = st.checkbox("標示峰位數值", value=True, key="raman_peak_labels")
+
+                # ── 局部自適應靈敏度 ──────────────────────────────────────────
+                use_local_prom = st.checkbox(
+                    "局部自適應靈敏度",
+                    value=False,
+                    key="raman_local_prom",
+                    help="偵測前對每個局部區域做歸一化，讓強峰（如 Si）旁邊的弱峰也能被偵測到",
+                )
+                if use_local_prom:
+                    local_window_cm = float(st.number_input(
+                        "局部窗口 (cm⁻¹)",
+                        min_value=20.0,
+                        max_value=float(max(200.0, x_max_g - x_min_g)),
+                        value=100.0,
+                        step=10.0,
+                        format="%.0f",
+                        key="raman_local_window_cm",
+                    ))
+
+                # ── 限制偵測 X 範圍 ───────────────────────────────────────────
+                use_detect_range = st.checkbox(
+                    "限制偵測 X 範圍",
+                    value=False,
+                    key="raman_detect_range_on",
+                    help="只在指定區間內搜尋峰值，適合只看某段薄膜訊號區域",
+                )
+                if use_detect_range:
+                    detect_x_start = float(st.number_input(
+                        "偵測起點 (cm⁻¹)",
+                        min_value=float(x_min_g),
+                        max_value=float(x_max_g),
+                        value=float(x_min_g),
+                        step=step_size,
+                        format="%.1f",
+                        key="raman_detect_x_start",
+                    ))
+                    detect_x_end = float(st.number_input(
+                        "偵測終點 (cm⁻¹)",
+                        min_value=float(x_min_g),
+                        max_value=float(x_max_g),
+                        value=float(x_max_g),
+                        step=step_size,
+                        format="%.1f",
+                        key="raman_detect_x_end",
+                    ))
+
             if skip_peaks:
                 st.session_state["raman_step7_done"] = True
             s7 = st.session_state.get("raman_step7_done", False)
@@ -418,6 +613,57 @@ def run_raman_ui():
             run_peak_fit = (not skip_fit) and s8
         else:
             fit_target = fit_target_default
+
+        # ── 放大顯示設定（sidebar，永遠顯示只要有資料）──────────────────────
+        if data_dict:
+            st.divider()
+            st.markdown("**放大顯示**")
+            zoom_on = st.checkbox(
+                "啟用放大圖",
+                value=st.session_state.get("raman_zoom_on", False),
+                key="raman_zoom_on",
+                help="在主圖下方顯示指定 X 範圍的放大圖，y 軸自動縮放",
+            )
+            if zoom_on:
+                _z_lo = float(st.session_state.get("raman_zoom_start", float(x_min_g)))
+                _z_hi = float(st.session_state.get("raman_zoom_end", float(x_max_g)))
+                _z_lo = max(float(x_min_g), min(_z_lo, float(x_max_g)))
+                _z_hi = max(float(x_min_g), min(_z_hi, float(x_max_g)))
+                if _z_lo >= _z_hi:
+                    _z_lo, _z_hi = float(x_min_g), float(x_max_g)
+                st.session_state["raman_zoom_start"] = _z_lo
+                st.session_state["raman_zoom_end"] = _z_hi
+                z_range = st.slider(
+                    "放大區間 (cm⁻¹)",
+                    min_value=float(x_min_g),
+                    max_value=float(x_max_g),
+                    value=(_z_lo, _z_hi),
+                    step=step_size,
+                    format="%.0f",
+                    key="raman_zoom_range_slider",
+                )
+                st.session_state["raman_zoom_start"] = float(min(z_range))
+                st.session_state["raman_zoom_end"] = float(max(z_range))
+
+        # ── 參考峰疊加 ────────────────────────────────────────────────────────
+        if data_dict:
+            st.divider()
+            st.markdown("**Raman 參考峰**")
+            ref_materials = st.multiselect(
+                "疊加參考材料",
+                list(RAMAN_REFERENCES.keys()),
+                default=st.session_state.get("raman_ref_materials", []),
+                key="raman_ref_materials",
+                help="在圖上用虛線標示各材料的已知 Raman 峰位；線條深淺對應峰強弱",
+            )
+            show_ref_labels = st.checkbox(
+                "顯示峰標籤",
+                value=st.session_state.get("raman_ref_labels", True),
+                key="raman_ref_labels",
+            )
+        else:
+            ref_materials = []
+            show_ref_labels = True
 
     # ── Main: display range slider ─────────────────────────────────────────────
     r_range = st.slider(
@@ -575,9 +821,11 @@ def run_raman_ui():
                         avg_raw, avg_input, y_bg, y_smooth, y_final
                     )
                     fit_source_map["Average"] = (new_x, peak_signal)
-                    peak_idx = detect_spectrum_peaks(
+                    peak_idx = _detect_raman_peaks(
                         new_x, peak_signal, peak_prom_ratio,
                         peak_height_ratio, peak_distance_cm, max_peak_labels,
+                        detect_x_start, detect_x_end,
+                        use_local_prom, local_window_cm,
                     )
                     peak_table = build_raman_peak_table("Average", new_x, peak_signal, peak_idx)
                     peak_table_map["Average"] = peak_table
@@ -617,6 +865,28 @@ def run_raman_ui():
                 st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
                 continue
             color = RAMAN_COLORS[i % len(RAMAN_COLORS)]
+
+            # ── 基板扣除前後疊加顯示 ───────────────────────────────────────
+            if sub_correction_enabled and fname in data_dict_original:
+                xv_orig, yv_orig = data_dict_original[fname]
+                mask_o = (xv_orig >= r_start) & (xv_orig <= r_end)
+                if show_pre_correction and np.any(mask_o):
+                    fig1.add_trace(go.Scatter(
+                        x=xv_orig[mask_o], y=yv_orig[mask_o],
+                        mode="lines", name=f"{fname}（扣除前）",
+                        line=dict(color=color, width=1.2, dash="dot"),
+                        opacity=0.35,
+                    ))
+                if show_sub_spectrum and fname in sub_spectrum_scaled:
+                    xsub, ysub = sub_spectrum_scaled[fname]
+                    mask_s = (xsub >= r_start) & (xsub <= r_end)
+                    if np.any(mask_s):
+                        fig1.add_trace(go.Scatter(
+                            x=xsub[mask_s], y=ysub[mask_s],
+                            mode="lines", name=f"基板×縮放（{fname}）",
+                            line=dict(color="gray", width=1.0, dash="longdash"),
+                            opacity=0.5,
+                        ))
             y_input, spike_mask = despike_signal(
                 yc, despike_method,
                 threshold=despike_threshold,
@@ -711,9 +981,11 @@ def run_raman_ui():
                     yc, y_input, y_bg, y_smooth, y_final
                 )
                 fit_source_map[fname] = (xc, peak_signal)
-                peak_idx = detect_spectrum_peaks(
+                peak_idx = _detect_raman_peaks(
                     xc, peak_signal, peak_prom_ratio,
                     peak_height_ratio, peak_distance_cm, max_peak_labels,
+                    detect_x_start, detect_x_end,
+                    use_local_prom, local_window_cm,
                 )
                 peak_table = build_raman_peak_table(fname, xc, peak_signal, peak_idx)
                 peak_table_map[fname] = peak_table
@@ -746,6 +1018,54 @@ def run_raman_ui():
     if despike_method != "none" and despike_notes:
         st.caption("去尖峰摘要：" + "；".join(despike_notes))
 
+    # ── Reference peak sticks ─────────────────────────────────────────────────
+    if ref_materials:
+        # determine y scale from the main figure's data
+        ref_y_vals = []
+        for tr in fig1.data:
+            if tr.y is not None:
+                ys = [v for v in tr.y if v is not None and np.isfinite(v)]
+                if ys:
+                    ref_y_vals.extend(ys)
+        ref_y_max = float(np.max(ref_y_vals)) if ref_y_vals else 1.0
+        ref_scale = ref_y_max * 0.25  # sticks reach up to 25% of y range
+
+        for mat_i, mat_name in enumerate(ref_materials):
+            peaks = RAMAN_REFERENCES.get(mat_name, [])
+            color = _REF_COLORS[mat_i % len(_REF_COLORS)]
+            xs, ys, hover_texts = [], [], []
+            for p in peaks:
+                pos = float(p["pos"])
+                if pos < r_start or pos > r_end:
+                    continue
+                height = ref_scale * p["strength"] / 100.0
+                xs.extend([pos, pos, None])
+                ys.extend([0.0, height, None])
+                hover = (
+                    f"Material: {mat_name}<br>"
+                    f"Position: {pos:.1f} cm⁻¹<br>"
+                    f"Mode: {p['label']}<br>"
+                    f"Note: {p.get('note', '')}"
+                )
+                hover_texts.extend([hover, hover, None])
+                if show_ref_labels:
+                    fig1.add_annotation(
+                        x=pos, y=height,
+                        text=p["label"],
+                        showarrow=False,
+                        font=dict(size=9, color=color),
+                        yshift=4,
+                        xanchor="center",
+                    )
+            if xs:
+                fig1.add_trace(go.Scatter(
+                    x=xs, y=ys, mode="lines",
+                    name=f"{mat_name} 參考峰",
+                    line=dict(color=color, width=1.4, dash="dot"),
+                    text=hover_texts,
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+
     # ── Render figure 1 ────────────────────────────────────────────────────────
     if bg_method != "none":
         fig1.add_vrect(
@@ -775,6 +1095,42 @@ def run_raman_ui():
             template="plotly_dark", height=400, margin=dict(l=50, r=20, t=40, b=50),
         )
         st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Render zoom panel ──────────────────────────────────────────────────────
+    if st.session_state.get("raman_zoom_on", False):
+        zm_start = float(st.session_state.get("raman_zoom_start", r_start))
+        zm_end = float(st.session_state.get("raman_zoom_end", r_end))
+        if zm_start < zm_end:
+            # Rebuild zoom figure from the same traces used in the source figure
+            src_fig = fig2 if norm_method != "none" else fig1
+            zoom_fig = go.Figure()
+            for tr in src_fig.data:
+                x_tr = np.asarray(tr.x) if tr.x is not None else np.array([])
+                y_tr = np.asarray(tr.y) if tr.y is not None else np.array([])
+                if len(x_tr) == 0:
+                    continue
+                mask_z = (x_tr >= zm_start) & (x_tr <= zm_end)
+                if not np.any(mask_z):
+                    continue
+                zoom_fig.add_trace(go.Scatter(
+                    x=x_tr[mask_z], y=y_tr[mask_z],
+                    mode=tr.mode, name=tr.name,
+                    line=tr.line if hasattr(tr, "line") else None,
+                    marker=tr.marker if hasattr(tr, "marker") else None,
+                    text=None,
+                    showlegend=tr.showlegend if hasattr(tr, "showlegend") else True,
+                    opacity=tr.opacity if hasattr(tr, "opacity") else 1.0,
+                ))
+            zoom_fig.update_layout(
+                xaxis_title="Raman Shift (cm⁻¹)",
+                yaxis_title="Intensity（放大）",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                template="plotly_dark",
+                height=360,
+                margin=dict(l=50, r=20, t=40, b=50),
+            )
+            st.caption(f"放大顯示 {zm_start:.0f} – {zm_end:.0f} cm⁻¹（y 軸自動縮放）")
+            st.plotly_chart(zoom_fig, use_container_width=True)
 
     peak_export_df = pd.concat(peak_tables, ignore_index=True) if peak_tables else pd.DataFrame()
     if run_peak_detection:
