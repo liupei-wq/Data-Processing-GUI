@@ -6,7 +6,7 @@ from scipy.interpolate import interp1d
 from scipy.signal import find_peaks, peak_widths
 
 from processing import apply_normalization, apply_processing, despike_signal, smooth_signal
-from xps_database import ELEMENTS, CATEGORY_COLORS, FITTABLE_ELEMENTS
+from xps_database import ELEMENTS, CATEGORY_COLORS, FITTABLE_ELEMENTS, ELEMENT_RSF, DOUBLET_INFO
 from xrd_database import XRD_REFERENCES
 from peak_fitting import fit_peaks
 
@@ -2344,11 +2344,14 @@ calib_au_x = calib_au_y = None
 bg_method = "none"
 bg_x_start, bg_x_end = _e0, _e1
 show_bg_baseline = False
+tougaard_B = 2866.0
+tougaard_C = 1643.0
 norm_method = "none"
 norm_x_start, norm_x_end = _e0, _e1
 init_peaks_selected: list = []
 manual_centers: list = []
 manual_fwhms: list = []
+doublet_pairs: list = []
 fit_profile = "voigt"
 do_fit = False
 
@@ -2384,39 +2387,45 @@ with st.sidebar:
                     peaks_det, _ = find_peaks(
                         calib_au_y, height=np.max(calib_au_y) * 0.5, distance=20
                     )
-                    if len(peaks_det) == 0:
-                        st.error("無法偵測到明顯峰值。")
-                        calib_au_x = calib_au_y = None
-                    else:
+                    auto_e = None
+                    if len(peaks_det) > 0:
                         best = peaks_det[np.argmax(calib_au_y[peaks_det])]
-                        measured_e = float(calib_au_x[best])
-                        offset = ref_e - measured_e
-                        col_m1, col_m2 = st.columns(2)
-                        col_m1.metric("偵測峰值", f"{measured_e:.2f} eV")
-                        col_m2.metric("位移量 ΔE", f"{offset:+.3f} eV")
-                        with st.expander("查看標準品峰值偵測圖"):
-                            fig_au = go.Figure()
-                            fig_au.add_trace(go.Scatter(
-                                x=calib_au_x, y=calib_au_y, mode="lines",
-                                name=std_name, line=dict(color="#00CC96", width=2),
-                            ))
-                            fig_au.add_vline(
-                                x=measured_e, line_dash="dash", line_color="red",
-                                annotation_text=f"偵測：{measured_e:.2f} eV",
-                                annotation_position="top left",
-                            )
-                            fig_au.add_vline(
-                                x=ref_e, line_dash="dot", line_color="gray",
-                                annotation_text=f"標準：{ref_e:.2f} eV",
-                                annotation_position="top right",
-                            )
-                            fig_au.update_layout(
-                                xaxis_title="Binding Energy (eV)", yaxis_title="Intensity",
-                                xaxis=dict(autorange="reversed"),
-                                template="plotly_white", height=260,
-                                margin=dict(l=40, r=20, t=30, b=40),
-                            )
-                            st.plotly_chart(fig_au, use_container_width=True)
+                        auto_e = float(calib_au_x[best])
+                    else:
+                        st.warning("無法自動偵測峰值，請手動輸入峰位。")
+                    measured_e = st.number_input(
+                        "偵測到的峰位置 (eV)（可手動修改）",
+                        value=auto_e if auto_e is not None else float(ref_e),
+                        step=0.01, format="%.3f",
+                        key="calib_measured_e",
+                    )
+                    offset = ref_e - measured_e
+                    col_m1, col_m2 = st.columns(2)
+                    col_m1.metric("偵測峰值", f"{measured_e:.2f} eV")
+                    col_m2.metric("位移量 ΔE", f"{offset:+.3f} eV")
+                    with st.expander("查看標準品峰值偵測圖"):
+                        fig_au = go.Figure()
+                        fig_au.add_trace(go.Scatter(
+                            x=calib_au_x, y=calib_au_y, mode="lines",
+                            name=std_name, line=dict(color="#00CC96", width=2),
+                        ))
+                        fig_au.add_vline(
+                            x=measured_e, line_dash="dash", line_color="red",
+                            annotation_text=f"偵測：{measured_e:.2f} eV",
+                            annotation_position="top left",
+                        )
+                        fig_au.add_vline(
+                            x=ref_e, line_dash="dot", line_color="gray",
+                            annotation_text=f"標準：{ref_e:.2f} eV",
+                            annotation_position="top right",
+                        )
+                        fig_au.update_layout(
+                            xaxis_title="Binding Energy (eV)", yaxis_title="Intensity",
+                            xaxis=dict(autorange="reversed"),
+                            template="plotly_white", height=260,
+                            margin=dict(l=40, r=20, t=30, b=40),
+                        )
+                        st.plotly_chart(fig_au, use_container_width=True)
 
         if skip_calib and not step3_confirmed:
             st.session_state["step3_confirmed"] = True
@@ -2434,14 +2443,28 @@ with st.sidebar:
 
     if step4_visible:
         skip_bg = step_header_with_skip(4, "背景扣除", "skip_bg")
+        tougaard_B = 2866.0
+        tougaard_C = 1643.0
         if not skip_bg:
             bg_method = st.selectbox(
                 "方法",
-                ["none", "linear", "shirley"],
+                ["none", "linear", "shirley", "tougaard"],
                 format_func=lambda v: {
-                    "none": "不扣除", "linear": "線性背景", "shirley": "Shirley 背景"
+                    "none": "不扣除",
+                    "linear": "線性背景",
+                    "shirley": "Shirley 背景",
+                    "tougaard": "Tougaard 背景（XPS 推薦）",
                 }[v],
             )
+            if bg_method == "tougaard":
+                tougaard_B = float(st.number_input(
+                    "Tougaard B (eV²)", value=2866.0, min_value=100.0,
+                    max_value=9999.0, step=50.0, format="%.0f",
+                ))
+                tougaard_C = float(st.number_input(
+                    "Tougaard C (eV³)", value=1643.0, min_value=100.0,
+                    max_value=9999.0, step=50.0, format="%.0f",
+                ))
             if bg_method != "none":
                 _prev_bg = st.session_state.get("bg_range", (_e0, _e1))
                 _bg_lo = float(max(_e0, min(float(min(_prev_bg)), _e1)))
@@ -2568,6 +2591,38 @@ with st.sidebar:
                         manual_centers.append(None)
                         manual_fwhms.append(None)
 
+            # ── 自旋軌道雙峰約束 ───────────────────────────────────────────
+            if selected_elem in DOUBLET_INFO:
+                dinfo = DOUBLET_INFO[selected_elem]
+                use_doublet = st.checkbox(
+                    f"啟用自旋軌道雙峰約束 ({dinfo['orbital']}: "
+                    f"{dinfo['major_sub']} / {dinfo['minor_sub']})",
+                    value=True, key="fit_use_doublet",
+                )
+                if use_doublet:
+                    st.caption(
+                        f"間距 {dinfo['be_sep']} eV · "
+                        f"面積比 {dinfo['area_ratio']:.3f}（次峰/主峰）"
+                    )
+                    maj_sub = dinfo["major_sub"]
+                    min_sub = dinfo["minor_sub"]
+                    maj_idx = next(
+                        (i for i, p in enumerate(init_peaks_selected) if maj_sub in p["label"]),
+                        None,
+                    )
+                    min_idx = next(
+                        (i for i, p in enumerate(init_peaks_selected) if min_sub in p["label"]),
+                        None,
+                    )
+                    if maj_idx is not None and min_idx is not None:
+                        doublet_pairs = [{
+                            "major": maj_idx, "minor": min_idx,
+                            "be_sep": dinfo["be_sep"],
+                            "area_ratio": dinfo["area_ratio"],
+                        }]
+                    else:
+                        st.warning("請同時勾選主峰與次峰以套用雙峰約束。")
+
         st.divider()
         st.caption("⊕ 自訂峰（手動輸入，不受資料庫限制）")
 
@@ -2649,6 +2704,7 @@ if do_average:
         y_bg, bg = apply_processing(
             new_x, avg_y, bg_method, "none",
             bg_x_start=bg_x_start, bg_x_end=bg_x_end,
+            tougaard_B=tougaard_B, tougaard_C=tougaard_C,
         )
         if bg_method != "none":
             fig1.add_trace(go.Scatter(
@@ -2699,6 +2755,7 @@ else:
         y_bg, bg = apply_processing(
             xc, yc, bg_method, "none",
             bg_x_start=bg_x_start, bg_x_end=bg_x_end,
+            tougaard_B=tougaard_B, tougaard_C=tougaard_C,
         )
         if bg_method != "none":
             fig1.add_trace(go.Scatter(
@@ -2836,6 +2893,7 @@ if step6_visible:
                         manual_fwhms
                         if any(f is not None for f in manual_fwhms) else None
                     ),
+                    doublet_pairs=doublet_pairs if doublet_pairs else None,
                 )
             st.session_state["fit_result"] = result
             st.session_state["fit_x_used"] = fit_x.tolist()
@@ -2937,3 +2995,47 @@ if step6_visible:
                 file_name=f"{(fit_fname or 'fit_result').strip()}.csv",
                 mime="text/csv",
             )
+
+            # ── 原子濃度累積表 ─────────────────────────────────────────────
+            st.divider()
+            st.caption("原子濃度計算（跨元素累積）")
+            col_add_ac, col_clr_ac = st.columns(2)
+            with col_add_ac:
+                if st.button("＋ 加入原子濃度表", use_container_width=True, key="btn_add_ac"):
+                    if "xps_fit_history" not in st.session_state:
+                        st.session_state["xps_fit_history"] = []
+                    elem_label = selected_elem if selected_elem != "（未選擇）" else "Unknown"
+                    for pk in result["peaks"]:
+                        rsf = ELEMENT_RSF.get(elem_label, None)
+                        st.session_state["xps_fit_history"].append({
+                            "元素": elem_label,
+                            "峰": pk["label"],
+                            "中心 (eV)": round(pk["center"] + offset, 3),
+                            "面積": pk["area"],
+                            "RSF": rsf,
+                        })
+            with col_clr_ac:
+                if st.button("清除原子濃度表", use_container_width=True, key="btn_clr_ac"):
+                    st.session_state["xps_fit_history"] = []
+
+            if st.session_state.get("xps_fit_history"):
+                hist = st.session_state["xps_fit_history"]
+                hist_df = pd.DataFrame(hist)
+                hist_df["RSF校正面積"] = hist_df.apply(
+                    lambda r: r["面積"] / r["RSF"] if r["RSF"] and r["RSF"] > 0 else None,
+                    axis=1,
+                )
+                total_corrected = hist_df["RSF校正面積"].sum()
+                hist_df["原子濃度 at.%"] = hist_df["RSF校正面積"].apply(
+                    lambda v: round(v / total_corrected * 100, 2) if total_corrected > 0 else None
+                )
+                display_cols = ["元素", "峰", "中心 (eV)", "面積", "RSF", "RSF校正面積", "原子濃度 at.%"]
+                st.dataframe(hist_df[display_cols], use_container_width=True, hide_index=True)
+                ac_csv = hist_df[display_cols].to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇️ 匯出原子濃度表 CSV",
+                    data=ac_csv,
+                    file_name="atomic_concentration.csv",
+                    mime="text/csv",
+                    key="dl_ac_csv",
+                )

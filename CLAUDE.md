@@ -179,14 +179,26 @@ st.session_state["bg_range"] = (_lo, _hi)
 
 `啟動_Windows.bat` 使用 `start /B` 直接背景啟動（不經 PowerShell 包裝），輪詢 `/_stcore/health` 端點，伺服器就緒後立刻開瀏覽器，最多等 30 秒。`.streamlit/config.toml` 關閉檔案監視與遙測以加速啟動。
 
+## XPS 進階功能（已完成）
+
+| 功能 | 實作位置 |
+|---|---|
+| Tougaard 背景扣除 | `processing.py: tougaard_background()`；UI 在 step4 selectbox |
+| Scofield RSF 原子濃度 | `xps_database.py: ELEMENT_RSF`；UI 在擬合結果下方的累積表 |
+| 自旋軌道雙峰約束 | `peak_fitting.py: fit_peaks(doublet_pairs=...)`；UI 在 step6 peak checkboxes 下方 |
+| 能量校正手動輸入 | step3 `number_input`：自動偵測失敗時可手動輸入峰位 |
+| 多元素結果累積 | `st.session_state["xps_fit_history"]`；每次按「加入原子濃度表」追加 |
+
+`apply_processing()` 已加入 `tougaard_B/C` 參數並透傳至 `apply_background()`。
+
 ## 最近驗證
 
-- `python3 -m py_compile app.py processing.py xrd_database.py peak_fitting.py`
+- `python3 -m py_compile app.py processing.py xps_database.py peak_fitting.py` ✅（2026-04-24）
 - `despike_signal()` synthetic spike sanity check
 - `fit_peaks()` synthetic Gaussian peaks sanity check
 - `asls_background()` / `airpls_background()` synthetic fluorescence baseline sanity check
 
-尚未完成：使用真實 Raman / XRD 檔案做完整 Streamlit 互動式 smoke test。
+尚未完成：使用真實 XPS 檔案做完整 Streamlit 互動式 smoke test。
 
 ## 待開發模組
 

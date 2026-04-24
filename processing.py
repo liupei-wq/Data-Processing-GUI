@@ -126,8 +126,37 @@ def airpls_background(y, lam=1e5, max_iter=15):
     return np.asarray(baseline, dtype=float)
 
 
+def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20):
+    """
+    Iterative 2-parameter Tougaard background for XPS.
+    bg(E) = C × ∫_E^E_max (y(E')−bg(E')) × K(E'−E) dE'
+    K(T) = T / (T² + B)²
+    Default B=2866 eV², C=1643 eV³ (universal Tougaard parameters).
+    Background grows from the high-BE tail toward the peak.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    sort_idx = np.argsort(x)
+    xs, ys = x[sort_idx], y[sort_idx]
+    n = len(xs)
+    bg = np.zeros(n)
+    for _ in range(max_iter):
+        bg_prev = bg.copy()
+        for i in range(n - 1):
+            T = xs[i + 1:] - xs[i]
+            K = T / (T ** 2 + B) ** 2
+            integrand = np.maximum(ys[i + 1:] - bg[i + 1:], 0.0) * K
+            bg[i] = C * float(np.trapezoid(integrand, xs[i + 1:]))
+        if np.max(np.abs(bg - bg_prev)) < 1e-8 * (np.max(np.abs(ys)) + 1e-10):
+            break
+    result = np.zeros_like(y)
+    result[sort_idx] = bg
+    return result
+
+
 def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
-                     baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20):
+                     baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20,
+                     tougaard_B=2866.0, tougaard_C=1643.0):
     """
     Calculate and subtract background only within [bg_x_start, bg_x_end].
     Outside that region the background is extended as a constant
@@ -162,6 +191,8 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
         bg_seg = airpls_background(
             ys, lam=baseline_lambda, max_iter=baseline_iter,
         )
+    elif method == "tougaard":
+        bg_seg = tougaard_background(xs, ys, B=tougaard_B, C=tougaard_C)
     else:
         return y.copy(), bg_full
 
@@ -347,11 +378,12 @@ def apply_processing(x, y, bg_method="none", norm_method="none",
                      bg_x_start=None, bg_x_end=None,
                      norm_x_start=None, norm_x_end=None,
                      poly_deg=3,
-                     baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20):
+                     baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20,
+                     tougaard_B=2866.0, tougaard_C=1643.0):
     """
     Full processing pipeline: background subtraction → normalization.
 
-    bg_method   : 'none' | 'linear' | 'shirley' | 'polynomial' | 'asls' | 'airpls'
+    bg_method   : 'none' | 'linear' | 'shirley' | 'polynomial' | 'asls' | 'airpls' | 'tougaard'
     norm_method : 'none' | 'min_max' | 'max' | 'mean_region'
     bg_x_start/end   : energy range for background; defaults to full range.
     norm_x_start/end : energy range for mean normalization; defaults to full range.
@@ -376,6 +408,8 @@ def apply_processing(x, y, bg_method="none", norm_method="none",
         baseline_lambda=baseline_lambda,
         baseline_p=baseline_p,
         baseline_iter=baseline_iter,
+        tougaard_B=tougaard_B,
+        tougaard_C=tougaard_C,
     )
 
     return apply_normalization(

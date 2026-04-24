@@ -284,3 +284,54 @@ CATEGORY_NAMES_ZH = {
 
 # Elements available for peak fitting (have at least one peak entry)
 FITTABLE_ELEMENTS = {s: d for s, d in ELEMENTS.items() if d["peaks"]}
+
+# ── Scofield RSF (Relative Sensitivity Factors) ───────────────────────────────
+# Relative to C 1s = 1.00, for Al Kα source, using the dominant orbital.
+# Values from Scofield (1976) cross-sections, commonly tabulated in XPS handbooks.
+ELEMENT_RSF: dict[str, float] = {
+    "H":  0.11,  "Li": 0.02,  "Be": 0.04,  "B":  0.13,
+    "C":  1.00,  "N":  1.77,  "O":  2.93,  "F":  4.43,
+    "Na": 2.30,  "Mg": 2.30,  "Al": 0.54,  "Si": 0.82,
+    "P":  1.19,  "S":  1.68,  "Cl": 2.16,
+    "K":  5.25,  "Ca": 6.31,  "Sc": 4.84,
+    "Ti": 7.81,  "V":  9.08,  "Cr": 13.96, "Mn": 15.86,
+    "Fe": 12.42, "Co": 14.61, "Ni": 21.10, "Cu": 26.57,
+    "Zn": 27.00, "Ga": 8.54,  "Ge": 5.80,  "As": 6.50,
+    "Se": 7.46,  "Br": 8.56,
+    "Sr": 4.92,  "Y":  5.95,  "Zr": 7.10,  "Nb": 7.70,
+    "Mo": 9.50,  "Ru": 10.31, "Rh": 11.09, "Pd": 22.00,
+    "Ag": 22.28, "Cd": 14.77, "In": 6.40,  "Sn": 7.67,
+    "Sb": 6.79,  "Te": 7.43,  "I":  8.21,
+    "Ba": 8.68,  "La": 9.93,  "Ce": 10.90,
+    "W":  9.54,  "Re": 10.71, "Pt": 25.50, "Au": 17.20,
+    "Tl": 7.90,  "Pb": 7.32,  "Bi": 8.81,
+}
+
+# ── Spin-orbit doublet information ────────────────────────────────────────────
+# be_sep   : expected BE separation from major (2p3/2 / 3d5/2 / 4f7/2) to minor
+# area_ratio: minor_area / major_area (0.5 for 2p, 2/3 for 3d, 0.75 for 4f)
+# major_sub / minor_sub: label substrings to identify which peaks are major/minor
+DOUBLET_INFO: dict[str, dict] = {
+    "S":  {"orbital": "2p", "be_sep": 1.2,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Cl": {"orbital": "2p", "be_sep": 1.6,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "K":  {"orbital": "2p", "be_sep": 3.1,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Ca": {"orbital": "2p", "be_sep": 3.5,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Sc": {"orbital": "2p", "be_sep": 4.8,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Ti": {"orbital": "2p", "be_sep": 6.1,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "V":  {"orbital": "2p", "be_sep": 7.4,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Cr": {"orbital": "2p", "be_sep": 9.4,  "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Mn": {"orbital": "2p", "be_sep": 11.7, "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Fe": {"orbital": "2p", "be_sep": 13.1, "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Co": {"orbital": "2p", "be_sep": 15.0, "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Ni": {"orbital": "2p", "be_sep": 17.3, "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Cu": {"orbital": "2p", "be_sep": 19.9, "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Zn": {"orbital": "2p", "be_sep": 23.1, "area_ratio": 0.5,   "major_sub": "2p3/2", "minor_sub": "2p1/2"},
+    "Mo": {"orbital": "3d", "be_sep": 3.1,  "area_ratio": 0.667, "major_sub": "3d5/2", "minor_sub": "3d3/2"},
+    "Ru": {"orbital": "3d", "be_sep": 4.1,  "area_ratio": 0.667, "major_sub": "3d5/2", "minor_sub": "3d3/2"},
+    "Rh": {"orbital": "3d", "be_sep": 4.7,  "area_ratio": 0.667, "major_sub": "3d5/2", "minor_sub": "3d3/2"},
+    "Pd": {"orbital": "3d", "be_sep": 5.3,  "area_ratio": 0.667, "major_sub": "3d5/2", "minor_sub": "3d3/2"},
+    "Ag": {"orbital": "3d", "be_sep": 6.0,  "area_ratio": 0.667, "major_sub": "3d5/2", "minor_sub": "3d3/2"},
+    "W":  {"orbital": "4f", "be_sep": 2.2,  "area_ratio": 0.75,  "major_sub": "4f7/2", "minor_sub": "4f5/2"},
+    "Pt": {"orbital": "4f", "be_sep": 3.3,  "area_ratio": 0.75,  "major_sub": "4f7/2", "minor_sub": "4f5/2"},
+    "Au": {"orbital": "4f", "be_sep": 3.7,  "area_ratio": 0.75,  "major_sub": "4f7/2", "minor_sub": "4f5/2"},
+}
