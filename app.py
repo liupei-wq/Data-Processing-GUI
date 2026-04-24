@@ -200,7 +200,19 @@ def build_periodic_table(selected_elem: str | None = None) -> go.Figure:
 
 
 # ── Raman parser ──────────────────────────────────────────────────────────────
-@st.cache_data
+def _is_numeric_line(line: str) -> bool:
+    """Return True if every whitespace/comma-separated token in line is a float."""
+    parts = line.strip().replace(',', ' ').split()
+    if not parts:
+        return False
+    try:
+        for p in parts:
+            float(p)
+        return True
+    except ValueError:
+        return False
+
+
 def _parse_raman_bytes(raw: bytes):
     import io
     for enc in ("utf-8", "utf-8-sig", "big5", "cp950", "latin-1"):
@@ -208,7 +220,57 @@ def _parse_raman_bytes(raw: bytes):
             content = raw.decode(enc)
         except UnicodeDecodeError:
             continue
-        lines = [l for l in content.splitlines()
+
+        all_lines = content.splitlines()
+
+        # ── Strategy 1: scan forward to find where numeric data begins ──────
+        # Handles Andor .asc and other files with text headers
+        data_lines = []
+        in_data = False
+        for line in all_lines:
+            if _is_numeric_line(line):
+                in_data = True
+                data_lines.append(line.strip())
+            elif in_data:
+                # A non-numeric line after data started → end of data block
+                break
+
+        if len(data_lines) >= 2:
+            clean = "\n".join(data_lines)
+            for sep in ('\t', r'\s+', ','):
+                try:
+                    df = pd.read_csv(io.StringIO(clean), sep=sep, header=None,
+                                     engine='python', on_bad_lines='skip')
+                    num_df = df.apply(pd.to_numeric, errors='coerce')
+                    valid = [c for c in num_df.columns
+                             if num_df[c].notna().mean() > 0.8]
+                    if len(valid) < 2:
+                        continue
+                    # 3-column case (e.g. pixel-index, wavenumber, intensity)
+                    # Detect if first column is an integer index (uniform step ≈ 1)
+                    if len(valid) >= 3:
+                        col0 = num_df[valid[0]].dropna()
+                        diffs = col0.diff().dropna().abs()
+                        if diffs.mean() > 0 and diffs.std() / diffs.mean() < 0.05:
+                            # Very uniform steps → likely pixel index → skip it
+                            x = num_df[valid[1]].dropna().to_numpy()
+                            y = num_df[valid[2]].dropna().to_numpy()
+                        else:
+                            x = num_df[valid[0]].dropna().to_numpy()
+                            y = num_df[valid[1]].dropna().to_numpy()
+                    else:
+                        x = num_df[valid[0]].dropna().to_numpy()
+                        y = num_df[valid[1]].dropna().to_numpy()
+                    n = min(len(x), len(y))
+                    if n >= 2:
+                        x, y = x[:n], y[:n]
+                        idx = np.argsort(x)
+                        return x[idx], y[idx], None
+                except Exception:
+                    continue
+
+        # ── Strategy 2: fallback — filter comment lines, try various layouts ─
+        lines = [l for l in all_lines
                  if l.strip() and l.strip()[0] not in ('#', '%', ';', '!')]
         if not lines:
             continue
@@ -219,7 +281,8 @@ def _parse_raman_bytes(raw: bytes):
                     df = pd.read_csv(io.StringIO(clean), sep=sep, header=hdr,
                                      engine='python', on_bad_lines='skip')
                     num_df = df.apply(pd.to_numeric, errors='coerce')
-                    valid = [c for c in num_df.columns if num_df[c].notna().mean() > 0.8]
+                    valid = [c for c in num_df.columns
+                             if num_df[c].notna().mean() > 0.8]
                     if len(valid) >= 2:
                         x = num_df[valid[0]].dropna().to_numpy()
                         y = num_df[valid[1]].dropna().to_numpy()
@@ -230,6 +293,7 @@ def _parse_raman_bytes(raw: bytes):
                             return x[idx], y[idx], None
                 except Exception:
                     continue
+
     return None, None, "無法解析：請確認為兩欄數字格式（波數, 強度）"
 
 
@@ -238,78 +302,88 @@ def run_raman_ui():
     RAMAN_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
                     "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
 
-    # ── sidebar ①② ────────────────────────────────────────────────────────────
+    # ── Step 1: file upload (sidebar) ─────────────────────────────────────────
     with st.sidebar:
         step_header(1, "載入檔案")
         uploaded_files = st.file_uploader(
             "上傳 Raman .txt / .csv / .asc 檔案（可多選）",
-            type=["txt", "csv", "asc"],
+            type=["txt", "csv", "asc", "asc_"],
             accept_multiple_files=True,
             key="raman_uploader",
         )
 
-        skip_avg = step_header_with_skip(2, "多檔平均", "raman_skip_avg")
-        do_average = False
-        show_individual = False
-        interp_points = 601
-        if not skip_avg:
-            do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
-            interp_points = st.number_input(
-                "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
-            )
-            if do_average:
-                show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
-
-        s2 = st.session_state.get("raman_s2", False)
-        if skip_avg and not s2:
-            st.session_state["raman_s2"] = True
-            s2 = True
-        if not skip_avg and not s2:
-            if _next_btn("raman_btn2", "raman_s2"):
-                s2 = True
-        step2_done = skip_avg or s2
-
-    # ── load data ─────────────────────────────────────────────────────────────
     if not uploaded_files:
         st.info("請在左側上傳一個或多個 Raman .txt / .csv 檔案。")
         st.stop()
 
-    data_dict = {}
+    # ── Parse uploaded files ───────────────────────────────────────────────────
+    data_dict: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for uf in uploaded_files:
-        x, y, err = _parse_raman_bytes(uf.read())
-        if err:
-            st.error(f"**{uf.name}** 讀取失敗：{err}")
+        _ck = f"_raman_{uf.name}_{uf.size}"
+        if _ck not in st.session_state:
+            _x, _y, _err = _parse_raman_bytes(uf.read())
+            if _err:
+                st.session_state[_ck] = (None, None, _err)
+            else:
+                st.session_state[_ck] = (
+                    np.asarray(_x, dtype=float).ravel(),
+                    np.asarray(_y, dtype=float).ravel(),
+                    None,
+                )
+        _cached = st.session_state[_ck]
+        if _cached[2] is not None:
+            st.error(f"**{uf.name}** 讀取失敗：{_cached[2]}")
         else:
-            data_dict[uf.name] = (x, y)
+            data_dict[uf.name] = (_cached[0], _cached[1])
 
     if not data_dict:
         st.stop()
 
     st.success(f"成功載入 {len(data_dict)} 個檔案：{', '.join(data_dict.keys())}")
 
-    # ── range boundaries ──────────────────────────────────────────────────────
-    all_x = np.concatenate([x for x, _ in data_dict.values()])
-    x_min_g = float(all_x.min())
-    x_max_g = float(all_x.max())
-    ov_min = float(max(x.min() for x, _ in data_dict.values()))
-    ov_max = float(min(x.max() for x, _ in data_dict.values()))
+    # ── Compute global x range ─────────────────────────────────────────────────
+    _all_x = np.concatenate([xv for xv, _ in data_dict.values()])
+    x_min_g = float(_all_x.min())
+    x_max_g = float(_all_x.max())
+    ov_min = float(max(xv.min() for xv, _ in data_dict.values()))
+    ov_max = float(min(xv.max() for xv, _ in data_dict.values()))
     _cur = st.session_state.get("raman_disp", (ov_min, ov_max))
-    _e0 = float(max(x_min_g, min(float(min(_cur)), x_max_g)))
-    _e1 = float(max(x_min_g, min(float(max(_cur)), x_max_g)))
+    _e0 = float(np.clip(float(min(_cur)), x_min_g, x_max_g))
+    _e1 = float(np.clip(float(max(_cur)), x_min_g, x_max_g))
     if _e0 >= _e1:
         _e0, _e1 = ov_min, ov_max
+    step_size = float(max(0.1, (x_max_g - x_min_g) / 2000))
 
+    # ── Step 2: averaging options (sidebar) ───────────────────────────────────
+    do_average = False
+    show_individual = False
+    interp_points = 601
+
+    with st.sidebar:
+        skip_avg = step_header_with_skip(2, "多檔平均", "raman_skip_avg")
+        if not skip_avg:
+            do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
+            interp_points = int(st.number_input(
+                "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
+            ))
+            if do_average:
+                show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
+
+        if skip_avg:
+            st.session_state["raman_s2"] = True
+        s2 = st.session_state.get("raman_s2", False)
+        if not skip_avg and not s2:
+            if _next_btn("raman_btn2", "raman_s2"):
+                s2 = True
+        step2_done = skip_avg or s2
+
+    # ── Step 3: background (sidebar) ──────────────────────────────────────────
     bg_method = "none"
     bg_x_start, bg_x_end = _e0, _e1
     show_bg_baseline = False
-    norm_method = "none"
-    norm_x_start, norm_x_end = _e0, _e1
     poly_deg = 3
-    step_size = max(0.1, (x_max_g - x_min_g) / 2000)
 
-    # ── sidebar ③④ ────────────────────────────────────────────────────────────
     with st.sidebar:
-        # ③ 背景扣除
         s3 = st.session_state.get("raman_s3", False)
         if step2_done:
             skip_bg = step_header_with_skip(3, "背景扣除", "raman_skip_bg")
@@ -325,11 +399,11 @@ def run_raman_ui():
                     key="raman_bg_method",
                 )
                 if bg_method == "polynomial":
-                    poly_deg = st.slider("多項式階數", 2, 6, 3, key="raman_poly_deg")
+                    poly_deg = int(st.slider("多項式階數", 2, 6, 3, key="raman_poly_deg"))
                 if bg_method != "none":
                     _prev = st.session_state.get("raman_bg_range", (_e0, _e1))
-                    _lo = float(max(_e0, min(float(min(_prev)), _e1)))
-                    _hi = float(max(_e0, min(float(max(_prev)), _e1)))
+                    _lo = float(np.clip(float(min(_prev)), _e0, _e1))
+                    _hi = float(np.clip(float(max(_prev)), _e0, _e1))
                     if _lo >= _hi:
                         _lo, _hi = _e0, _e1
                     st.session_state["raman_bg_range"] = (_lo, _hi)
@@ -339,11 +413,12 @@ def run_raman_ui():
                         step=step_size, format="%.1f cm⁻¹",
                         key="raman_bg_range",
                     )
-                    bg_x_start, bg_x_end = sorted(bg_range)
+                    bg_x_start = float(min(bg_range))
+                    bg_x_end = float(max(bg_range))
                     show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True, key="raman_show_bg")
-            if skip_bg and not s3:
+            if skip_bg:
                 st.session_state["raman_s3"] = True
-                s3 = True
+            s3 = st.session_state.get("raman_s3", False)
             if not skip_bg and not s3:
                 if _next_btn("raman_btn3", "raman_s3"):
                     s3 = True
@@ -351,7 +426,11 @@ def run_raman_ui():
             skip_bg = False
         step3_done = step2_done and (skip_bg or s3)
 
-        # ④ 歸一化
+    # ── Step 4: normalization (sidebar) ───────────────────────────────────────
+    norm_method = "none"
+    norm_x_start, norm_x_end = _e0, _e1
+
+    with st.sidebar:
         s4 = st.session_state.get("raman_s4", False)
         if step3_done:
             skip_norm = step_header_with_skip(4, "歸一化", "raman_skip_norm")
@@ -370,8 +449,8 @@ def run_raman_ui():
                 )
                 if norm_method in ("mean_region", "max"):
                     _prev = st.session_state.get("raman_norm_range", (_e0, _e1))
-                    _lo = float(max(_e0, min(float(min(_prev)), _e1)))
-                    _hi = float(max(_e0, min(float(max(_prev)), _e1)))
+                    _lo = float(np.clip(float(min(_prev)), _e0, _e1))
+                    _hi = float(np.clip(float(max(_prev)), _e0, _e1))
                     if _lo >= _hi:
                         _lo, _hi = _e0, _e1
                     st.session_state["raman_norm_range"] = (_lo, _hi)
@@ -381,15 +460,16 @@ def run_raman_ui():
                         step=step_size, format="%.1f cm⁻¹",
                         key="raman_norm_range",
                     )
-                    norm_x_start, norm_x_end = sorted(norm_range)
-            if skip_norm and not s4:
+                    norm_x_start = float(min(norm_range))
+                    norm_x_end = float(max(norm_range))
+            if skip_norm:
                 st.session_state["raman_s4"] = True
-                s4 = True
+            s4 = st.session_state.get("raman_s4", False)
             if not skip_norm and not s4:
                 if _next_btn("raman_btn4", "raman_s4"):
                     s4 = True
 
-    # ── main: range slider ────────────────────────────────────────────────────
+    # ── Main: display range slider ─────────────────────────────────────────────
     r_range = st.slider(
         "顯示範圍 — Raman Shift (cm⁻¹)",
         min_value=x_min_g, max_value=x_max_g,
@@ -397,96 +477,126 @@ def run_raman_ui():
         step=step_size, format="%.1f cm⁻¹",
         key="raman_disp",
     )
-    r_start, r_end = sorted(r_range)
+    r_start = float(min(r_range))
+    r_end = float(max(r_range))
 
-    # ── processing ────────────────────────────────────────────────────────────
+    # ── Build figures ──────────────────────────────────────────────────────────
     fig1 = go.Figure()
     fig2 = go.Figure()
-    export_frames = {}
+    export_frames: dict[str, pd.DataFrame] = {}
 
     if do_average:
-        new_x = np.linspace(r_start, r_end, int(interp_points))
+        new_x = np.linspace(r_start, r_end, interp_points)
         all_interp = []
-        for name, (x, y) in data_dict.items():
-            mask = (x >= r_start) & (x <= r_end)
-            xc, yc = x[mask], y[mask]
+        for fname, (xv, yv) in data_dict.items():
+            mask = (xv >= r_start) & (xv <= r_end)
+            xc, yc = xv[mask], yv[mask]
             if len(xc) < 2:
-                st.warning(f"{name}：所選範圍內數據點不足，已跳過。")
+                st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
                 continue
             fi = interp1d(xc, yc, kind="linear", fill_value="extrapolate")
             yi = fi(new_x)
             all_interp.append(yi)
             if show_individual:
-                fig1.add_trace(go.Scatter(x=new_x, y=yi, mode="lines", name=name,
-                                          line=dict(width=1, dash="dot"), opacity=0.4))
+                fig1.add_trace(go.Scatter(
+                    x=new_x, y=yi, mode="lines", name=fname,
+                    line=dict(width=1, dash="dot"), opacity=0.4,
+                ))
         if all_interp:
             avg_y = np.mean(all_interp, axis=0)
-            y_bg, bg = apply_processing(new_x, avg_y, bg_method, "none",
-                                        bg_x_start=bg_x_start, bg_x_end=bg_x_end,
-                                        poly_deg=poly_deg)
+            y_bg, bg = apply_processing(
+                new_x, avg_y, bg_method, "none",
+                bg_x_start=bg_x_start, bg_x_end=bg_x_end, poly_deg=poly_deg,
+            )
             if bg_method != "none":
-                fig1.add_trace(go.Scatter(x=new_x, y=avg_y, mode="lines", name="Average（原始）",
-                                          line=dict(color="white", width=1.5, dash="dash"), opacity=0.6))
+                fig1.add_trace(go.Scatter(
+                    x=new_x, y=avg_y, mode="lines", name="Average（原始）",
+                    line=dict(color="white", width=1.5, dash="dash"), opacity=0.6,
+                ))
                 if show_bg_baseline:
-                    fig1.add_trace(go.Scatter(x=new_x, y=bg, mode="lines", name="背景基準線",
-                                              line=dict(color="gray", width=1.5, dash="longdash")))
-                fig1.add_trace(go.Scatter(x=new_x, y=y_bg, mode="lines", name="Average（扣除背景後）",
-                                          line=dict(color="#EF553B", width=2.5)))
+                    fig1.add_trace(go.Scatter(
+                        x=new_x, y=bg, mode="lines", name="背景基準線",
+                        line=dict(color="gray", width=1.5, dash="longdash"),
+                    ))
+                fig1.add_trace(go.Scatter(
+                    x=new_x, y=y_bg, mode="lines", name="Average（扣除背景後）",
+                    line=dict(color="#EF553B", width=2.5),
+                ))
             else:
-                fig1.add_trace(go.Scatter(x=new_x, y=avg_y, mode="lines", name="Average",
-                                          line=dict(color="#EF553B", width=2.5)))
-            y_final, _ = apply_processing(new_x, y_bg, "none", norm_method,
-                                          norm_x_start=norm_x_start, norm_x_end=norm_x_end)
+                fig1.add_trace(go.Scatter(
+                    x=new_x, y=avg_y, mode="lines", name="Average",
+                    line=dict(color="#EF553B", width=2.5),
+                ))
+            y_final, _ = apply_processing(
+                new_x, y_bg, "none", norm_method,
+                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+            )
             if norm_method != "none":
-                fig2.add_trace(go.Scatter(x=new_x, y=y_final, mode="lines",
-                                          name="Average（歸一化後）",
-                                          line=dict(color="#EF553B", width=2.5)))
-            export_frames["Average"] = pd.DataFrame({
-                "Raman_Shift_cm": new_x, "Average_raw": avg_y,
-                "Average_bg_subtracted": y_bg,
-                **({"Background": bg} if bg_method != "none" else {}),
-                **({"Average_normalized": y_final} if norm_method != "none" else {}),
-            })
+                fig2.add_trace(go.Scatter(
+                    x=new_x, y=y_final, mode="lines", name="Average（歸一化後）",
+                    line=dict(color="#EF553B", width=2.5),
+                ))
+            row: dict = {"Raman_Shift_cm": new_x, "Average_raw": avg_y,
+                         "Average_bg_subtracted": y_bg}
+            if bg_method != "none":
+                row["Background"] = bg
+            if norm_method != "none":
+                row["Average_normalized"] = y_final
+            export_frames["Average"] = pd.DataFrame(row)
     else:
-        for i, (name, (x, y)) in enumerate(data_dict.items()):
-            mask = (x >= r_start) & (x <= r_end)
-            xc, yc = x[mask], y[mask]
+        for i, (fname, (xv, yv)) in enumerate(data_dict.items()):
+            mask = (xv >= r_start) & (xv <= r_end)
+            xc, yc = xv[mask], yv[mask]
             if len(xc) < 2:
-                st.warning(f"{name}：所選範圍內數據點不足，已跳過。")
+                st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
                 continue
             color = RAMAN_COLORS[i % len(RAMAN_COLORS)]
-            y_bg, bg = apply_processing(xc, yc, bg_method, "none",
-                                        bg_x_start=bg_x_start, bg_x_end=bg_x_end,
-                                        poly_deg=poly_deg)
+            y_bg, bg = apply_processing(
+                xc, yc, bg_method, "none",
+                bg_x_start=bg_x_start, bg_x_end=bg_x_end, poly_deg=poly_deg,
+            )
             if bg_method != "none":
-                fig1.add_trace(go.Scatter(x=xc, y=yc, mode="lines", name=f"{name}（原始）",
-                                          line=dict(color=color, width=1.5, dash="dash"), opacity=0.5))
+                fig1.add_trace(go.Scatter(
+                    x=xc, y=yc, mode="lines", name=f"{fname}（原始）",
+                    line=dict(color=color, width=1.5, dash="dash"), opacity=0.5,
+                ))
                 if show_bg_baseline:
-                    fig1.add_trace(go.Scatter(x=xc, y=bg, mode="lines", name=f"{name}（背景）",
-                                              line=dict(color=color, width=1.2, dash="longdash"), opacity=0.5))
-                fig1.add_trace(go.Scatter(x=xc, y=y_bg, mode="lines", name=f"{name}（扣除背景後）",
-                                          line=dict(color=color, width=2)))
+                    fig1.add_trace(go.Scatter(
+                        x=xc, y=bg, mode="lines", name=f"{fname}（背景）",
+                        line=dict(color=color, width=1.2, dash="longdash"), opacity=0.5,
+                    ))
+                fig1.add_trace(go.Scatter(
+                    x=xc, y=y_bg, mode="lines", name=f"{fname}（扣除背景後）",
+                    line=dict(color=color, width=2),
+                ))
             else:
-                fig1.add_trace(go.Scatter(x=xc, y=yc, mode="lines", name=name,
-                                          line=dict(color=color, width=2)))
-            y_final, _ = apply_processing(xc, y_bg, "none", norm_method,
-                                          norm_x_start=norm_x_start, norm_x_end=norm_x_end)
+                fig1.add_trace(go.Scatter(
+                    x=xc, y=yc, mode="lines", name=fname,
+                    line=dict(color=color, width=2),
+                ))
+            y_final, _ = apply_processing(
+                xc, y_bg, "none", norm_method,
+                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+            )
             if norm_method != "none":
-                fig2.add_trace(go.Scatter(x=xc, y=y_final, mode="lines",
-                                          name=f"{name}（歸一化後）",
-                                          line=dict(color=color, width=2)))
-            export_frames[name] = pd.DataFrame({
-                "Raman_Shift_cm": xc, "Intensity_raw": yc,
-                "Intensity_bg_subtracted": y_bg,
-                **({"Background": bg} if bg_method != "none" else {}),
-                **({"Intensity_normalized": y_final} if norm_method != "none" else {}),
-            })
+                fig2.add_trace(go.Scatter(
+                    x=xc, y=y_final, mode="lines", name=f"{fname}（歸一化後）",
+                    line=dict(color=color, width=2),
+                ))
+            row = {"Raman_Shift_cm": xc, "Intensity_raw": yc, "Intensity_bg_subtracted": y_bg}
+            if bg_method != "none":
+                row["Background"] = bg
+            if norm_method != "none":
+                row["Intensity_normalized"] = y_final
+            export_frames[fname] = pd.DataFrame(row)
 
-    # ── figure 1 ──────────────────────────────────────────────────────────────
+    # ── Render figure 1 ────────────────────────────────────────────────────────
     if bg_method != "none":
-        fig1.add_vrect(x0=bg_x_start, x1=bg_x_end, fillcolor="red", opacity=0.06,
-                       layer="below", line_width=0,
-                       annotation_text="背景區間", annotation_position="top left")
+        fig1.add_vrect(
+            x0=bg_x_start, x1=bg_x_end, fillcolor="red", opacity=0.06,
+            layer="below", line_width=0,
+            annotation_text="背景區間", annotation_position="top left",
+        )
     fig1.update_layout(
         xaxis_title="Raman Shift (cm⁻¹)", yaxis_title="Intensity",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -494,13 +604,15 @@ def run_raman_ui():
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ── figure 2 ──────────────────────────────────────────────────────────────
+    # ── Render figure 2 (normalization) ───────────────────────────────────────
     if norm_method != "none":
         st.caption("歸一化結果")
         if norm_method in ("mean_region", "max"):
-            fig2.add_vrect(x0=norm_x_start, x1=norm_x_end, fillcolor="blue", opacity=0.06,
-                           layer="below", line_width=0,
-                           annotation_text="歸一化區間", annotation_position="top right")
+            fig2.add_vrect(
+                x0=norm_x_start, x1=norm_x_end, fillcolor="blue", opacity=0.06,
+                layer="below", line_width=0,
+                annotation_text="歸一化區間", annotation_position="top right",
+            )
         fig2.update_layout(
             xaxis_title="Raman Shift (cm⁻¹)", yaxis_title="Normalized Intensity",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -508,20 +620,22 @@ def run_raman_ui():
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-    # ── export ────────────────────────────────────────────────────────────────
+    # ── Export ─────────────────────────────────────────────────────────────────
     if export_frames:
         st.subheader("匯出")
         btn_cols = st.columns(min(len(export_frames), 4))
-        for col, (name, df) in zip(btn_cols, export_frames.items()):
-            base = name.rsplit(".", 1)[0]
-            fname = col.text_input("檔名", value=f"{base}_processed",
-                                   key=f"raman_fname_{name}", label_visibility="collapsed")
+        for col, (fname, df) in zip(btn_cols, export_frames.items()):
+            base = fname.rsplit(".", 1)[0]
+            out_name = col.text_input(
+                "檔名", value=f"{base}_processed",
+                key=f"raman_fname_{fname}", label_visibility="collapsed",
+            )
             col.download_button(
                 "⬇️ 下載 CSV",
                 data=df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{(fname or base + '_processed').strip()}.csv",
+                file_name=f"{(out_name or base + '_processed').strip()}.csv",
                 mime="text/csv",
-                key=f"raman_dl_{name}",
+                key=f"raman_dl_{fname}",
             )
 
 
@@ -913,18 +1027,18 @@ with st.sidebar:
             key="fit_element",
         )
 
-        if selected_elem != "（未選擇）" and selected_elem in FITTABLE_ELEMENTS:
-            fit_profile = st.selectbox(
-                "峰形",
-                ["voigt", "gaussian", "lorentzian"],
-                format_func=lambda v: {
-                    "voigt": "Voigt（推薦）",
-                    "gaussian": "Gaussian",
-                    "lorentzian": "Lorentzian",
-                }[v],
-                key="fit_profile",
-            )
+        fit_profile = st.selectbox(
+            "峰形",
+            ["voigt", "gaussian", "lorentzian"],
+            format_func=lambda v: {
+                "voigt": "Voigt（推薦）",
+                "gaussian": "Gaussian",
+                "lorentzian": "Lorentzian",
+            }[v],
+            key="fit_profile",
+        )
 
+        if selected_elem != "（未選擇）" and selected_elem in FITTABLE_ELEMENTS:
             all_peaks_db = FITTABLE_ELEMENTS[selected_elem]["peaks"]
             use_manual = st.checkbox("手動調整峰位 / FWHM", key="fit_manual_toggle")
 
@@ -955,7 +1069,44 @@ with st.sidebar:
                         manual_centers.append(None)
                         manual_fwhms.append(None)
 
-            do_fit = st.button("執行擬合", type="primary", use_container_width=True)
+        st.divider()
+        st.caption("⊕ 自訂峰（手動輸入，不受資料庫限制）")
+
+        if "custom_peak_n" not in st.session_state:
+            st.session_state["custom_peak_n"] = 0
+
+        col_add, col_clear = st.columns(2)
+        with col_add:
+            if st.button("＋ 新增自訂峰", use_container_width=True, key="btn_add_custom"):
+                st.session_state["custom_peak_n"] += 1
+        with col_clear:
+            if st.button("清除全部", use_container_width=True, key="btn_clear_custom"):
+                for _ci in range(st.session_state["custom_peak_n"]):
+                    for _k in [f"cpk_lbl_{_ci}", f"cpk_be_{_ci}", f"cpk_fwhm_{_ci}"]:
+                        st.session_state.pop(_k, None)
+                st.session_state["custom_peak_n"] = 0
+
+        for ci in range(st.session_state["custom_peak_n"]):
+            with st.container(border=True):
+                c_lbl = st.text_input(
+                    f"標籤 #{ci + 1}", value=f"Custom {ci + 1}",
+                    key=f"cpk_lbl_{ci}",
+                )
+                c_be = st.number_input(
+                    f"BE (eV) #{ci + 1}", value=530.0,
+                    step=0.1, format="%.2f",
+                    key=f"cpk_be_{ci}",
+                )
+                c_fwhm = st.number_input(
+                    f"FWHM (eV) #{ci + 1}", value=1.5,
+                    min_value=0.05, step=0.05, format="%.2f",
+                    key=f"cpk_fwhm_{ci}",
+                )
+                init_peaks_selected.append({"label": c_lbl, "be": c_be, "fwhm": c_fwhm})
+                manual_centers.append(c_be)
+                manual_fwhms.append(c_fwhm)
+
+        do_fit = st.button("執行擬合", type="primary", use_container_width=True)
     else:
         selected_elem = "（未選擇）"
 
