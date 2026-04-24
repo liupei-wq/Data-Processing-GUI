@@ -1,14 +1,21 @@
+import io
+import math
+import re
+from datetime import datetime, timezone
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from scipy.interpolate import interp1d
+from scipy.ndimage import median_filter
 from scipy.signal import find_peaks, peak_widths
 
 from processing import apply_normalization, apply_processing, despike_signal, smooth_signal
 from xps_database import ELEMENTS, CATEGORY_COLORS, FITTABLE_ELEMENTS, ELEMENT_RSF, DOUBLET_INFO
 from xrd_database import XRD_REFERENCES
 from peak_fitting import fit_peaks
+from read_fits_image import read_primary_image_bytes
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Spectroscopy Data Processing", page_icon="📊", layout="wide")
@@ -1311,6 +1318,1795 @@ def _build_raman_peak_table(dataset: str, x: np.ndarray, y: np.ndarray,
     })
 
 
+def _build_xes_peak_table(dataset: str, pixel_x: np.ndarray, y: np.ndarray,
+                          peak_idx: np.ndarray,
+                          energy_x: np.ndarray | None = None) -> pd.DataFrame:
+    if len(peak_idx) == 0:
+        columns = [
+            "Dataset", "Peak", "Pixel", "Intensity",
+            "Relative_Intensity_pct", "FWHM_pixel",
+        ]
+        if energy_x is not None:
+            columns.extend(["Energy_eV", "FWHM_eV"])
+        return pd.DataFrame(columns=columns)
+
+    widths, _, left_ips, right_ips = peak_widths(y, peak_idx, rel_height=0.5)
+    sample_axis = np.arange(len(pixel_x), dtype=float)
+    left_pixel = np.interp(left_ips, sample_axis, pixel_x)
+    right_pixel = np.interp(right_ips, sample_axis, pixel_x)
+
+    peak_x = pixel_x[peak_idx]
+    peak_y = y[peak_idx]
+    curve_max = float(np.max(y)) if len(y) else 0.0
+    rel_intensity = (peak_y / curve_max * 100.0) if curve_max > 0 else np.zeros_like(peak_y)
+
+    rows = {
+        "Dataset": dataset,
+        "Peak": np.arange(1, len(peak_idx) + 1),
+        "Pixel": peak_x,
+        "Intensity": peak_y,
+        "Relative_Intensity_pct": rel_intensity,
+        "FWHM_pixel": np.abs(right_pixel - left_pixel),
+    }
+    if energy_x is not None:
+        left_energy = np.interp(left_ips, sample_axis, energy_x)
+        right_energy = np.interp(right_ips, sample_axis, energy_x)
+        rows["Energy_eV"] = energy_x[peak_idx]
+        rows["FWHM_eV"] = np.abs(right_energy - left_energy)
+
+    return pd.DataFrame(rows)
+
+
+def _natural_sort_key(text: str) -> list[object]:
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
+
+
+def _xes_header_time_value(image) -> tuple[float | None, str]:
+    header = image.header
+    for key in ("MJD-OBS", "JD", "EXPSTART", "EXPEND"):
+        value = header.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value), key
+        except (TypeError, ValueError):
+            pass
+
+    date_value = header.get("DATE-OBS") or header.get("DATE")
+    time_value = header.get("TIME-OBS") or header.get("UT")
+    if date_value:
+        raw = str(date_value).strip()
+        if time_value and "T" not in raw and " " not in raw:
+            raw = f"{raw}T{str(time_value).strip()}"
+        raw = raw.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp(), "DATE-OBS"
+        except ValueError:
+            pass
+
+    return None, ""
+
+
+def _xes_exposure_seconds(image) -> float | None:
+    for key in ("EXPTIME", "EXPOSURE", "ITIME", "ONTIME"):
+        value = image.header.get(key)
+        if value is None:
+            continue
+        try:
+            exposure = float(value)
+        except (TypeError, ValueError):
+            continue
+        if exposure > 0:
+            return exposure
+    return None
+
+
+def _xes_image_array(image, plane: int, normalize_exposure: bool,
+                     transpose_image: bool = False) -> np.ndarray:
+    arr = image.as_array(plane).astype(float)
+    if transpose_image:
+        arr = arr.T
+    if normalize_exposure:
+        exposure = _xes_exposure_seconds(image)
+        if exposure and exposure > 0:
+            arr = arr / exposure
+    return arr
+
+
+def _xes_average_frame(
+    image_dict: dict[str, object],
+    plane: int,
+    normalize_exposure: bool,
+    transpose_image: bool = False,
+) -> tuple[np.ndarray | None, pd.DataFrame]:
+    arrays = []
+    rows = []
+    expected_shape = None
+
+    for name, image in image_dict.items():
+        arr = _xes_image_array(image, plane, normalize_exposure, transpose_image)
+        if expected_shape is None:
+            expected_shape = arr.shape
+        elif arr.shape != expected_shape:
+            raise ValueError(f"{name} shape {arr.shape} does not match dark/bias shape {expected_shape}")
+
+        arrays.append(arr)
+        rows.append({
+            "Frame": name,
+            "Exposure_s": _xes_exposure_seconds(image),
+            "Mean": float(np.nanmean(arr)),
+            "Median": float(np.nanmedian(arr)),
+        })
+
+    if not arrays:
+        return None, pd.DataFrame()
+
+    avg = np.nanmean(np.stack(arrays, axis=0), axis=0)
+    return avg.astype(float), pd.DataFrame(rows)
+
+
+def _xes_preprocessed_image_array(
+    image,
+    plane: int,
+    normalize_exposure: bool,
+    dark_frame: np.ndarray | None = None,
+    transpose_image: bool = False,
+) -> np.ndarray:
+    arr = _xes_image_array(image, plane, normalize_exposure, transpose_image)
+    if dark_frame is None:
+        return arr
+    if arr.shape != dark_frame.shape:
+        raise ValueError(f"Image shape {arr.shape} and dark/bias shape {dark_frame.shape} do not match")
+    return arr - dark_frame
+
+
+def _xes_ordered_sample_names(image_dict: dict[str, object], order_method: str) -> list[str]:
+    names = list(image_dict.keys())
+    if order_method == "filename":
+        return sorted(names, key=_natural_sort_key)
+    if order_method == "time":
+        time_rows = []
+        for name in names:
+            t_val, _ = _xes_header_time_value(image_dict[name])
+            if t_val is None:
+                return sorted(names, key=_natural_sort_key)
+            time_rows.append((t_val, name))
+        return [name for _, name in sorted(time_rows)]
+    return names
+
+
+def _xes_bg_weights(
+    image_dict: dict[str, object],
+    bg1_image,
+    bg2_image,
+    order_method: str,
+) -> tuple[dict[str, float], pd.DataFrame, str]:
+    ordered_names = _xes_ordered_sample_names(image_dict, order_method)
+    n = len(ordered_names)
+    weights: dict[str, float] = {}
+    rows = []
+    source_label = {
+        "time": "FITS header time",
+        "filename": "file name natural sort",
+        "upload": "upload order",
+    }.get(order_method, order_method)
+
+    bg1_time, bg1_time_key = _xes_header_time_value(bg1_image)
+    bg2_time, bg2_time_key = _xes_header_time_value(bg2_image)
+    sample_time_available = all(_xes_header_time_value(image_dict[name])[0] is not None for name in image_dict)
+    can_use_time = (
+        order_method == "time"
+        and bg1_time is not None
+        and bg2_time is not None
+        and bg1_time != bg2_time
+        and sample_time_available
+    )
+
+    if order_method == "time" and not can_use_time:
+        source_label = "file name natural sort (time unavailable)"
+        ordered_names = sorted(image_dict.keys(), key=_natural_sort_key)
+
+    for pos, name in enumerate(ordered_names, start=1):
+        time_val, time_key = _xes_header_time_value(image_dict[name])
+        if can_use_time and time_val is not None:
+            raw_weight = (time_val - bg1_time) / (bg2_time - bg1_time)
+        else:
+            raw_weight = pos / (n + 1)
+        weight = float(np.clip(raw_weight, 0.0, 1.0))
+        weights[name] = weight
+        rows.append({
+            "Sample": name,
+            "Order": pos,
+            "Weight_w": weight,
+            "Raw_w": float(raw_weight),
+            "Time_Source": time_key,
+            "BG1_Time_Source": bg1_time_key,
+            "BG2_Time_Source": bg2_time_key,
+        })
+
+    return weights, pd.DataFrame(rows), source_label
+
+
+def _xes_corrected_array(image, plane: int, bg1_image, bg2_image,
+                         bg_method: str, weight: float,
+                         normalize_exposure: bool = False,
+                         dark_frame: np.ndarray | None = None,
+                         transpose_image: bool = False) -> np.ndarray:
+    sample_arr = _xes_preprocessed_image_array(
+        image, plane, normalize_exposure, dark_frame, transpose_image,
+    )
+    if bg_method == "none":
+        return sample_arr.copy()
+
+    if bg1_image is None and bg_method in ("bg1", "average", "interpolated"):
+        raise ValueError("BG1 is required for this background method")
+    if bg2_image is None and bg_method in ("bg2", "average", "interpolated"):
+        raise ValueError("BG2 is required for this background method")
+
+    if bg_method == "bg1":
+        bg_arr = _xes_preprocessed_image_array(
+            bg1_image, plane, normalize_exposure, dark_frame, transpose_image,
+        )
+    elif bg_method == "bg2":
+        bg_arr = _xes_preprocessed_image_array(
+            bg2_image, plane, normalize_exposure, dark_frame, transpose_image,
+        )
+    else:
+        bg1_arr = _xes_preprocessed_image_array(
+            bg1_image, plane, normalize_exposure, dark_frame, transpose_image,
+        )
+        bg2_arr = _xes_preprocessed_image_array(
+            bg2_image, plane, normalize_exposure, dark_frame, transpose_image,
+        )
+        if bg_method == "average":
+            bg_arr = 0.5 * (bg1_arr + bg2_arr)
+        elif bg_method == "interpolated":
+            bg_arr = bg1_arr + float(weight) * (bg2_arr - bg1_arr)
+        else:
+            bg_arr = np.zeros_like(sample_arr, dtype=float)
+
+    if sample_arr.shape != bg_arr.shape:
+        raise ValueError(f"Sample shape {sample_arr.shape} and background shape {bg_arr.shape} do not match")
+    return sample_arr - bg_arr
+
+
+def _xes_fix_hot_pixels(arr: np.ndarray, enabled: bool,
+                        threshold: float = 8.0, window_size: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    arr = np.asarray(arr, dtype=float)
+    mask = np.zeros(arr.shape, dtype=bool)
+    if not enabled or arr.size < 9:
+        return arr.copy(), mask
+
+    window_size = int(max(3, window_size))
+    if window_size % 2 == 0:
+        window_size += 1
+
+    local_median = median_filter(arr, size=window_size, mode="nearest")
+    residual = arr - local_median
+    finite_res = residual[np.isfinite(residual)]
+    if finite_res.size == 0:
+        return arr.copy(), mask
+
+    med = float(np.nanmedian(finite_res))
+    mad = float(np.nanmedian(np.abs(finite_res - med)))
+    scale = 1.4826 * mad
+    if not np.isfinite(scale) or scale < 1e-12:
+        scale = float(np.nanstd(finite_res))
+    if not np.isfinite(scale) or scale < 1e-12:
+        return arr.copy(), mask
+
+    mask = residual > float(threshold) * scale
+    cleaned = arr.copy()
+    cleaned[mask] = local_median[mask]
+    return cleaned, mask
+
+
+def _xes_peak_center_subpixel(x_axis: np.ndarray, y_vals: np.ndarray,
+                              cutoff: float) -> tuple[float | None, float, float]:
+    x_axis = np.asarray(x_axis, dtype=float)
+    y_vals = np.asarray(y_vals, dtype=float)
+    finite = np.isfinite(x_axis) & np.isfinite(y_vals)
+    if np.count_nonzero(finite) < 3:
+        return None, np.nan, np.nan
+
+    x = x_axis[finite]
+    y = y_vals[finite]
+    baseline = float(np.nanmedian(y))
+    residual = y - baseline
+    mad = float(np.nanmedian(np.abs(residual - np.nanmedian(residual))))
+    noise = 1.4826 * mad
+    if not np.isfinite(noise) or noise < 1e-12:
+        noise = float(np.nanstd(residual))
+
+    peak_idx = int(np.nanargmax(y))
+    peak_height = float(y[peak_idx] - baseline)
+    snr = peak_height / noise if noise and noise > 1e-12 else np.inf
+    if peak_height <= 0 or (np.isfinite(snr) and snr < float(cutoff)):
+        return None, peak_height, snr
+
+    center = float(x[peak_idx])
+    if 0 < peak_idx < len(y) - 1:
+        y0, y1, y2 = float(y[peak_idx - 1]), float(y[peak_idx]), float(y[peak_idx + 1])
+        denom = y0 - 2.0 * y1 + y2
+        if abs(denom) > 1e-12:
+            delta = 0.5 * (y0 - y2) / denom
+            if np.isfinite(delta):
+                delta = float(np.clip(delta, -1.0, 1.0))
+                center = float(x[peak_idx] + delta * np.nanmedian(np.diff(x)))
+
+    return center, peak_height, snr
+
+
+def _xes_fit_curvature(
+    arr: np.ndarray,
+    x_range: tuple[int, int],
+    y_range: tuple[int, int],
+    fit_x_range: tuple[int, int],
+    poly_order: int,
+    cutoff: float,
+) -> tuple[pd.DataFrame, list[float], float]:
+    arr = np.asarray(arr, dtype=float)
+    height, width = arr.shape
+    x0 = int(np.clip(min(x_range), 0, width - 1))
+    x1 = int(np.clip(max(x_range), 0, width - 1))
+    y0 = int(np.clip(min(y_range), 0, height - 1))
+    y1 = int(np.clip(max(y_range), 0, height - 1))
+    c0 = int(np.clip(min(fit_x_range), x0, x1))
+    c1 = int(np.clip(max(fit_x_range), x0, x1))
+    if c1 - c0 < 2:
+        raise ValueError("曲率 fitting column 範圍至少需要 3 個 pixel。")
+
+    col_axis = np.arange(c0, c1 + 1, dtype=float)
+    rows = []
+    for row_idx in range(y0, y1 + 1):
+        segment = arr[row_idx, c0:c1 + 1]
+        center, peak_height, snr = _xes_peak_center_subpixel(col_axis, segment, cutoff)
+        rows.append({
+            "Row": row_idx,
+            "Peak_Center_Column": center,
+            "Peak_Height": peak_height,
+            "SNR": snr,
+            "Accepted": center is not None,
+        })
+
+    curve_df = pd.DataFrame(rows)
+    accepted = curve_df[curve_df["Accepted"]].copy()
+    degree = int(max(1, poly_order))
+    if len(accepted) < degree + 1:
+        raise ValueError(f"可用 row 數不足，無法 fit {degree} 階曲率。")
+
+    x_fit = accepted["Row"].to_numpy(dtype=float)
+    y_fit = accepted["Peak_Center_Column"].to_numpy(dtype=float)
+    coeffs = np.polyfit(x_fit, y_fit, degree).astype(float)
+    fit_vals = np.polyval(coeffs, x_fit)
+    residual = y_fit - fit_vals
+    res_mad = float(np.nanmedian(np.abs(residual - np.nanmedian(residual))))
+    res_scale = 1.4826 * res_mad
+    if np.isfinite(res_scale) and res_scale > 1e-12:
+        keep = np.abs(residual) <= float(cutoff) * res_scale
+        if np.count_nonzero(keep) >= degree + 1 and np.count_nonzero(~keep) > 0:
+            x_fit = x_fit[keep]
+            y_fit = y_fit[keep]
+            coeffs = np.polyfit(x_fit, y_fit, degree).astype(float)
+            accepted = accepted.iloc[np.where(keep)[0]].copy()
+
+    row_all = curve_df["Row"].to_numpy(dtype=float)
+    curve_df["Fitted_Center_Column"] = np.polyval(coeffs, row_all)
+    curve_df["Shift_Column"] = np.nan
+    curve_df["Used_In_Fit"] = curve_df["Row"].isin(accepted["Row"].astype(int))
+    reference_center = float(np.nanmedian(curve_df.loc[curve_df["Used_In_Fit"], "Fitted_Center_Column"]))
+    curve_df.loc[curve_df["Accepted"], "Shift_Column"] = (
+        reference_center - curve_df.loc[curve_df["Accepted"], "Fitted_Center_Column"]
+    )
+    return curve_df, coeffs.tolist(), reference_center
+
+
+def _xes_shift_image_from_curvature(
+    arr: np.ndarray,
+    curve_df: pd.DataFrame,
+    coeffs: list[float],
+    reference_center: float,
+    y_range: tuple[int, int],
+) -> np.ndarray:
+    arr = np.asarray(arr, dtype=float)
+    shifted = arr.copy()
+    if not coeffs:
+        return shifted
+
+    height, width = arr.shape
+    y0 = int(np.clip(min(y_range), 0, height - 1))
+    y1 = int(np.clip(max(y_range), 0, height - 1))
+    col_axis = np.arange(width, dtype=float)
+    rows = np.arange(y0, y1 + 1, dtype=float)
+    fitted_centers = np.polyval(np.asarray(coeffs, dtype=float), rows)
+
+    for row_idx, fitted_center in zip(range(y0, y1 + 1), fitted_centers):
+        if not np.isfinite(fitted_center):
+            continue
+        delta = float(reference_center - fitted_center)
+        shifted[row_idx, :] = np.interp(
+            col_axis - delta,
+            col_axis,
+            arr[row_idx, :],
+            left=np.nan,
+            right=np.nan,
+        )
+
+    return shifted
+
+
+def _xes_apply_curvature_correction(
+    arr: np.ndarray,
+    enabled: bool,
+    x_range: tuple[int, int],
+    y_range: tuple[int, int],
+    fit_x_range: tuple[int, int],
+    poly_order: int,
+    cutoff: float,
+) -> tuple[np.ndarray, pd.DataFrame, list[float], float | None]:
+    if not enabled:
+        return arr.copy(), pd.DataFrame(), [], None
+
+    curve_df, coeffs, reference_center = _xes_fit_curvature(
+        arr, x_range, y_range, fit_x_range, poly_order, cutoff,
+    )
+    shifted = _xes_shift_image_from_curvature(
+        arr, curve_df, coeffs, reference_center, y_range,
+    )
+    return shifted, curve_df, coeffs, reference_center
+
+
+def _xes_apply_axis_calibration(pixel_axis: np.ndarray, mode: str,
+                                linear_offset: float, linear_slope: float,
+                                poly_coeffs: list[float]) -> np.ndarray:
+    pixel_axis = np.asarray(pixel_axis, dtype=float)
+    if mode == "linear":
+        return linear_offset + linear_slope * pixel_axis
+    if mode == "reference_points" and poly_coeffs:
+        return np.polyval(poly_coeffs, pixel_axis)
+    return pixel_axis
+
+
+def _xes_calibration_coeffs(ref_df: pd.DataFrame, degree: int) -> list[float]:
+    if ref_df.empty:
+        return []
+    valid = ref_df[["Pixel", "Energy_eV"]].dropna()
+    min_points = int(degree) + 1
+    if len(valid) < min_points:
+        return []
+    return np.polyfit(
+        valid["Pixel"].to_numpy(dtype=float),
+        valid["Energy_eV"].to_numpy(dtype=float),
+        int(degree),
+    ).astype(float).tolist()
+
+
+def _xes_find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    normalized = {
+        re.sub(r"[^a-z0-9]+", "", str(col).lower()): col
+        for col in df.columns
+    }
+    for candidate in candidates:
+        key = re.sub(r"[^a-z0-9]+", "", candidate.lower())
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
+def _xes_read_csv_bytes(uploaded_file) -> pd.DataFrame:
+    raw = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
+    return pd.read_csv(io.BytesIO(raw))
+
+
+def _xes_calibration_points_from_csv(uploaded_file) -> tuple[pd.DataFrame, str]:
+    df = _xes_read_csv_bytes(uploaded_file)
+    pixel_col = _xes_find_column(df, ["Pixel", "Detector Pixel", "Channel", "Column", "Row", "X"])
+    energy_col = _xes_find_column(df, ["Energy_eV", "Energy", "Emission Energy", "eV"])
+    if pixel_col is None or energy_col is None:
+        return pd.DataFrame(columns=["Pixel", "Energy_eV"]), (
+            "CSV 需要包含 Pixel 與 Energy_eV 欄位；也可用 Channel/Column/Row 與 Energy/eV。"
+        )
+
+    points = pd.DataFrame({
+        "Pixel": pd.to_numeric(df[pixel_col], errors="coerce"),
+        "Energy_eV": pd.to_numeric(df[energy_col], errors="coerce"),
+    }).dropna()
+    return points, ""
+
+
+def _xes_i0_table_from_csv(uploaded_file) -> tuple[pd.DataFrame, str]:
+    df = _xes_read_csv_bytes(uploaded_file)
+    file_col = _xes_find_column(df, ["File", "Filename", "Sample", "Name", "Dataset"])
+    i0_col = _xes_find_column(df, ["I0", "Incident Flux", "IncidentFlux", "Flux", "Monitor"])
+    if i0_col is None:
+        return pd.DataFrame(columns=["File", "I0"]), "CSV 需要包含 I0 / Flux / Monitor 欄位。"
+
+    if file_col is None and len(df) == 1:
+        out = pd.DataFrame({"File": ["*"], "I0": [pd.to_numeric(df[i0_col], errors="coerce").iloc[0]]})
+    elif file_col is not None:
+        out = pd.DataFrame({
+            "File": df[file_col].astype(str),
+            "I0": pd.to_numeric(df[i0_col], errors="coerce"),
+        })
+    else:
+        return pd.DataFrame(columns=["File", "I0"]), "多筆 I0 CSV 需要包含 File / Filename / Sample 欄位。"
+
+    out = out.dropna(subset=["I0"])
+    out = out[out["I0"] > 0]
+    return out.reset_index(drop=True), ""
+
+
+def _xes_lookup_i0_value(fname: str, i0_mode: str, i0_global: float,
+                         i0_table: pd.DataFrame) -> float | None:
+    if i0_mode == "global":
+        return float(i0_global) if i0_global > 0 else None
+    if i0_mode != "table" or i0_table.empty:
+        return None
+
+    target = str(fname).strip().lower()
+    target_stem = target.rsplit(".", 1)[0]
+    for _, row in i0_table.iterrows():
+        key = str(row.get("File", "")).strip().lower()
+        if key == "*":
+            return float(row["I0"])
+        key_stem = key.rsplit(".", 1)[0]
+        if key == target or key_stem == target_stem:
+            return float(row["I0"])
+    return None
+
+
+def _xes_apply_i0_to_spectra(values: tuple[np.ndarray, ...], i0_value: float | None) -> tuple[np.ndarray, ...]:
+    if i0_value is None or i0_value <= 0:
+        return values
+    return tuple(np.asarray(v, dtype=float) / float(i0_value) for v in values)
+
+
+def _xes_sorted_finite_xy(axis: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    axis = np.asarray(axis, dtype=float)
+    values = np.asarray(values, dtype=float)
+    mask = np.isfinite(axis) & np.isfinite(values)
+    axis = axis[mask]
+    values = values[mask]
+    if len(axis) < 2:
+        return axis, values
+    order = np.argsort(axis)
+    axis = axis[order]
+    values = values[order]
+    keep = np.concatenate(([True], np.diff(axis) > 1e-12))
+    return axis[keep], values[keep]
+
+
+def _xes_interp_to_axis(axis: np.ndarray, values: np.ndarray, target_axis: np.ndarray) -> np.ndarray:
+    clean_axis, clean_values = _xes_sorted_finite_xy(axis, values)
+    if len(clean_axis) < 2:
+        return np.full_like(target_axis, np.nan, dtype=float)
+    return interp1d(
+        clean_axis, clean_values, kind="linear",
+        bounds_error=False, fill_value=np.nan,
+    )(target_axis)
+
+
+def _extract_xes_spectrum_from_array(arr: np.ndarray, x_range: tuple[int, int], y_range: tuple[int, int],
+                                     projection: str, reducer: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    height, width = arr.shape
+
+    x0 = int(np.clip(min(x_range), 0, width - 1))
+    x1 = int(np.clip(max(x_range), 0, width - 1))
+    y0 = int(np.clip(min(y_range), 0, height - 1))
+    y1 = int(np.clip(max(y_range), 0, height - 1))
+
+    roi = arr[y0:y1 + 1, x0:x1 + 1]
+    if projection == "columns":
+        x_axis = np.arange(x0, x1 + 1, dtype=float)
+        values = np.nanmean(roi, axis=0) if reducer == "mean" else np.nansum(roi, axis=0)
+    else:
+        x_axis = np.arange(y0, y1 + 1, dtype=float)
+        values = np.nanmean(roi, axis=1) if reducer == "mean" else np.nansum(roi, axis=1)
+
+    return x_axis, np.nan_to_num(values.astype(float), nan=0.0), roi
+
+
+def _xes_default_sideband_ranges(signal_range: tuple[int, int], max_index: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    s0 = int(np.clip(min(signal_range), 0, max_index))
+    s1 = int(np.clip(max(signal_range), 0, max_index))
+    width = max(1, s1 - s0 + 1)
+
+    upper_end = max(0, s0 - 1)
+    upper_start = max(0, upper_end - width + 1)
+    lower_start = min(max_index, s1 + 1)
+    lower_end = min(max_index, lower_start + width - 1)
+    return (upper_start, upper_end), (lower_start, lower_end)
+
+
+def _xes_non_overlapping_indices(candidate_range: tuple[int, int], signal_range: tuple[int, int], max_index: int) -> np.ndarray:
+    c0 = int(np.clip(min(candidate_range), 0, max_index))
+    c1 = int(np.clip(max(candidate_range), 0, max_index))
+    s0 = int(np.clip(min(signal_range), 0, max_index))
+    s1 = int(np.clip(max(signal_range), 0, max_index))
+    idx = np.arange(c0, c1 + 1, dtype=int)
+    return idx[(idx < s0) | (idx > s1)]
+
+
+def _extract_xes_spectrum_with_sideband(
+    arr: np.ndarray,
+    x_range: tuple[int, int],
+    y_range: tuple[int, int],
+    projection: str,
+    reducer: str,
+    sideband_enabled: bool = False,
+    sideband_ranges: tuple[tuple[int, int], tuple[int, int]] | None = None,
+    sideband_stat: str = "mean",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    x_axis, signal_values, roi = _extract_xes_spectrum_from_array(
+        arr, x_range, y_range, projection, reducer,
+    )
+    zero_bg = np.zeros_like(signal_values, dtype=float)
+    if not sideband_enabled or not sideband_ranges:
+        return x_axis, signal_values, signal_values, zero_bg, roi
+
+    height, width = arr.shape
+    x0 = int(np.clip(min(x_range), 0, width - 1))
+    x1 = int(np.clip(max(x_range), 0, width - 1))
+    y0 = int(np.clip(min(y_range), 0, height - 1))
+    y1 = int(np.clip(max(y_range), 0, height - 1))
+
+    projections = []
+    if projection == "columns":
+        signal_size = max(1, y1 - y0 + 1)
+        for band_range in sideband_ranges:
+            rows = _xes_non_overlapping_indices(band_range, (y0, y1), height - 1)
+            if rows.size == 0:
+                continue
+            band_roi = arr[np.ix_(rows, np.arange(x0, x1 + 1, dtype=int))]
+            per_pixel = (
+                np.nanmedian(band_roi, axis=0)
+                if sideband_stat == "median" else np.nanmean(band_roi, axis=0)
+            )
+            projections.append(per_pixel)
+    else:
+        signal_size = max(1, x1 - x0 + 1)
+        for band_range in sideband_ranges:
+            cols = _xes_non_overlapping_indices(band_range, (x0, x1), width - 1)
+            if cols.size == 0:
+                continue
+            band_roi = arr[np.ix_(np.arange(y0, y1 + 1, dtype=int), cols)]
+            per_pixel = (
+                np.nanmedian(band_roi, axis=1)
+                if sideband_stat == "median" else np.nanmean(band_roi, axis=1)
+            )
+            projections.append(per_pixel)
+
+    if not projections:
+        return x_axis, signal_values, signal_values, zero_bg, roi
+
+    bg_per_pixel = np.nanmean(np.vstack(projections), axis=0)
+    scale = signal_size if reducer == "sum" else 1
+    scaled_bg = np.nan_to_num(bg_per_pixel * scale, nan=0.0)
+    corrected = np.nan_to_num(signal_values - scaled_bg, nan=0.0)
+    return x_axis, corrected.astype(float), signal_values.astype(float), scaled_bg.astype(float), roi
+
+
+def _extract_xes_spectrum(image, plane: int, x_range: tuple[int, int], y_range: tuple[int, int],
+                          projection: str, reducer: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    arr = image.as_array(plane)
+    return _extract_xes_spectrum_from_array(arr, x_range, y_range, projection, reducer)
+
+
+def run_xes_ui():
+    XES_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
+                  "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
+
+    with st.sidebar:
+        step_header(1, "載入 FITS")
+        uploaded_files = st.file_uploader(
+            "上傳 Sample FITS 影像（可多選）",
+            type=["fits", "fit", "fts"],
+            accept_multiple_files=True,
+            key="xes_uploader",
+        )
+        bg1_file = st.file_uploader(
+            "上傳 BG1 FITS（樣品前背景，必做）",
+            type=["fits", "fit", "fts"],
+            accept_multiple_files=False,
+            key="xes_bg1_uploader",
+        )
+        bg2_file = st.file_uploader(
+            "上傳 BG2 FITS（樣品後背景，必做）",
+            type=["fits", "fit", "fts"],
+            accept_multiple_files=False,
+            key="xes_bg2_uploader",
+        )
+        dark_files = st.file_uploader(
+            "進階可選：Dark/Bias FITS（沒有這類 detector 校正檔就不用上傳）",
+            type=["fits", "fit", "fts"],
+            accept_multiple_files=True,
+            key="xes_dark_uploader",
+        )
+
+    if not uploaded_files:
+        st.info("請在左側上傳一個或多個 XES sample FITS 影像檔。")
+        st.stop()
+
+    image_dict = {}
+    for uf in uploaded_files:
+        cache_key = f"_xes_{uf.name}_{uf.size}"
+        if cache_key not in st.session_state:
+            try:
+                image = read_primary_image_bytes(uf.read(), source=uf.name)
+                st.session_state[cache_key] = (image, None)
+            except Exception as exc:
+                st.session_state[cache_key] = (None, str(exc))
+        cached_image, cached_err = st.session_state[cache_key]
+        if cached_err:
+            st.error(f"**{uf.name}** 讀取失敗：{cached_err}")
+        else:
+            image_dict[uf.name] = cached_image
+
+    if not image_dict:
+        st.stop()
+
+    def _parse_optional_xes_bg(uploaded_bg, label: str):
+        if uploaded_bg is None:
+            return None
+        cache_key = f"_xes_{label}_{uploaded_bg.name}_{uploaded_bg.size}"
+        if cache_key not in st.session_state:
+            try:
+                image = read_primary_image_bytes(uploaded_bg.read(), source=uploaded_bg.name)
+                st.session_state[cache_key] = (image, None)
+            except Exception as exc:
+                st.session_state[cache_key] = (None, str(exc))
+        image, err = st.session_state[cache_key]
+        if err:
+            st.error(f"**{label}: {uploaded_bg.name}** 讀取失敗：{err}")
+            return None
+        return image
+
+    bg1_image = _parse_optional_xes_bg(bg1_file, "BG1")
+    bg2_image = _parse_optional_xes_bg(bg2_file, "BG2")
+    dark_images = {}
+    for df in dark_files or []:
+        cache_key = f"_xes_dark_{df.name}_{df.size}"
+        if cache_key not in st.session_state:
+            try:
+                image = read_primary_image_bytes(df.read(), source=df.name)
+                st.session_state[cache_key] = (image, None)
+            except Exception as exc:
+                st.session_state[cache_key] = (None, str(exc))
+        cached_image, cached_err = st.session_state[cache_key]
+        if cached_err:
+            st.error(f"**Dark/Bias: {df.name}** 讀取失敗：{cached_err}")
+        else:
+            dark_images[df.name] = cached_image
+
+    st.success(f"成功載入 {len(image_dict)} 個 sample FITS：{', '.join(image_dict.keys())}")
+
+    first_name, first_image = next(iter(image_dict.items()))
+    raw_width, raw_height = first_image.width, first_image.height
+    width, height = raw_width, raw_height
+    plane_count = first_image.plane_count
+
+    bg_method = "interpolated" if (bg1_image is not None and bg2_image is not None) else "none"
+    bg_order_method = "filename"
+    bg_weights = {name: (idx + 1) / (len(image_dict) + 1) for idx, name in enumerate(image_dict)}
+    bg_weight_df = pd.DataFrame()
+    bg_weight_source = "upload order"
+    normalize_exposure = False
+    transpose_image = False
+    i0_mode = "none"
+    i0_global_value = 1.0
+    i0_table_df = pd.DataFrame()
+    use_dark_frame = bool(dark_images)
+    dark_frame = None
+    dark_summary_df = pd.DataFrame()
+    fix_hot_pixels = False
+    hot_pixel_threshold = 8.0
+    hot_pixel_window = 3
+    projection = "columns"
+    reducer = "sum"
+    plane_index = 0
+    x_roi = (0, max(0, width - 1))
+    y_roi = (0, max(0, height - 1))
+    sideband_enabled = False
+    sideband_ranges = None
+    sideband_stat = "mean"
+    curvature_enabled = False
+    curvature_fit_x_range = (0, max(0, width - 1))
+    curvature_poly_order = 4
+    curvature_cutoff = 1.9
+    do_average = False
+    show_individual = False
+    smooth_method = "none"
+    smooth_window = 11
+    smooth_poly_deg = 3
+    norm_method = "none"
+    norm_x_start = float(x_roi[0])
+    norm_x_end = float(x_roi[1])
+    run_peak_detection = False
+    peak_prom_ratio = 0.05
+    peak_height_ratio = 0.03
+    peak_distance_pixel = 5.0
+    max_peak_labels = 12
+    label_peaks = True
+    axis_calibration = "pixel"
+    energy_offset = 0.0
+    energy_slope = 1.0
+    energy_poly_coeffs: list[float] = []
+
+    with st.sidebar:
+        step_header(2, "前後背景影像扣除（BG1/BG2）")
+        st.caption("主流程：BG1 是樣品前背景，BG2 是樣品後背景；多張 sample 會用分點法估計各自背景。")
+        bg_method = st.selectbox(
+            "BG1/BG2 扣除方法",
+            ["none", "bg1", "bg2", "average", "interpolated"],
+            index=4 if (bg1_image is not None and bg2_image is not None) else 0,
+            format_func=lambda v: {
+                "none": "不扣除",
+                "bg1": "只扣 BG1",
+                "bg2": "只扣 BG2",
+                "average": "(BG1 + BG2) / 2",
+                "interpolated": "分點法（建議）：BG1 + w(BG2 - BG1)",
+            }[v],
+            key="xes_bg_method",
+        )
+        if bg_method in ("bg1", "average", "interpolated") and bg1_image is None:
+            st.warning("此方法需要 BG1 FITS。")
+        if bg_method in ("bg2", "average", "interpolated") and bg2_image is None:
+            st.warning("此方法需要 BG2 FITS。")
+        if bg_method == "interpolated":
+            bg_order_method = st.selectbox(
+                "Sample 順序來源",
+                ["time", "filename", "upload"],
+                index=1,
+                format_func=lambda v: {
+                    "time": "FITS header 時間",
+                    "filename": "檔名自然排序",
+                    "upload": "上傳順序",
+                }[v],
+                key="xes_bg_order",
+            )
+            st.caption("分點權重：第 i 張 sample 會對應 BG1 與 BG2 之間的位置 w。")
+
+        step_header(3, "影像修正")
+        exposure_options = [
+            _xes_exposure_seconds(img) for img in [first_image, bg1_image, bg2_image] if img is not None
+        ]
+        normalize_exposure = st.checkbox(
+            "以 FITS EXPTIME 正規化（counts/sec）",
+            value=bool(exposure_options),
+            key="xes_norm_exposure",
+        )
+        transpose_image = st.checkbox(
+            "Transpose array（若影像 row/column 與舊程式相反才啟用）",
+            value=False,
+            key="xes_transpose_image",
+        )
+        width, height = (raw_height, raw_width) if transpose_image else (raw_width, raw_height)
+        x_roi = (0, max(0, width - 1))
+        y_roi = (0, max(0, height - 1))
+        i0_mode = st.selectbox(
+            "I0 / incident flux 正規化",
+            ["none", "global", "table"],
+            format_func=lambda v: {
+                "none": "不使用 I0",
+                "global": "所有 sample 使用同一個 I0",
+                "table": "上傳 CSV：每個 sample 對應 I0",
+            }[v],
+            key="xes_i0_mode",
+        )
+        if i0_mode == "global":
+            i0_global_value = float(st.number_input(
+                "I0 值", min_value=1e-12, value=1.0, step=1.0,
+                format="%.9g", key="xes_i0_global",
+            ))
+            st.caption("光譜投影後會除以此 I0；若尚未有 I0 資料請保持不使用。")
+        elif i0_mode == "table":
+            i0_file = st.file_uploader(
+                "I0 CSV（欄位可用 File/Filename/Sample + I0/Flux/Monitor）",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="xes_i0_table",
+            )
+            if i0_file is not None:
+                i0_table_df, i0_err = _xes_i0_table_from_csv(i0_file)
+                if i0_err:
+                    st.warning(i0_err)
+                elif i0_table_df.empty:
+                    st.warning("I0 CSV 沒有可用的正值 I0。")
+                else:
+                    st.caption(f"已讀取 {len(i0_table_df)} 筆 I0 對照。")
+        use_dark_frame = st.checkbox(
+            "進階可選：扣除 Dark/Bias 平均影像",
+            value=bool(dark_images),
+            disabled=not bool(dark_images),
+            key="xes_use_dark",
+        )
+        if dark_images:
+            st.caption(f"已載入 {len(dark_images)} 張 Dark/Bias，套用時會先平均後再扣除。")
+        else:
+            st.caption("Dark/Bias 是 detector 校正檔，不是 BG1/BG2；教授或儀器沒有提供時請保持關閉。")
+        if normalize_exposure and not exposure_options:
+            st.warning("目前 FITS header 沒有可辨識的 EXPTIME / EXPOSURE。")
+        if normalize_exposure:
+            exposure_missing = [
+                name for name, img in image_dict.items() if _xes_exposure_seconds(img) is None
+            ]
+            if bg1_image is not None and _xes_exposure_seconds(bg1_image) is None:
+                exposure_missing.append("BG1")
+            if bg2_image is not None and _xes_exposure_seconds(bg2_image) is None:
+                exposure_missing.append("BG2")
+            exposure_missing.extend(
+                f"Dark/Bias:{name}" for name, img in dark_images.items()
+                if _xes_exposure_seconds(img) is None
+            )
+            if exposure_missing:
+                st.warning("以下 FITS 缺少曝光時間，會保留原始 counts：" + "、".join(exposure_missing))
+        fix_hot_pixels = st.checkbox("修正 CCD hot pixels / 單點異常亮點", value=False, key="xes_fix_hot")
+        if fix_hot_pixels:
+            hot_pixel_threshold = float(st.slider(
+                "hot pixel 門檻", 4.0, 30.0, 8.0, 0.5, key="xes_hot_threshold"
+            ))
+            hot_pixel_window = int(st.number_input(
+                "局部 median 視窗", min_value=3, max_value=15, value=3, step=2, key="xes_hot_window"
+            ))
+
+        step_header(4, "ROI 與積分")
+        if plane_count > 1:
+            plane_index = int(st.number_input(
+                "FITS plane", min_value=0, max_value=plane_count - 1, value=0, step=1, key="xes_plane"
+            ))
+        else:
+            st.caption("FITS plane：0")
+
+        projection = st.selectbox(
+            "投影方向",
+            ["columns", "rows"],
+            format_func=lambda v: {
+                "columns": "沿 Y 加總，輸出 column spectrum",
+                "rows": "沿 X 加總，輸出 row spectrum",
+            }[v],
+            key="xes_projection",
+        )
+        reducer = st.selectbox(
+            "ROI 積分方式",
+            ["sum", "mean"],
+            format_func=lambda v: {"sum": "加總", "mean": "平均"}[v],
+            key="xes_reducer",
+        )
+        if width > 1:
+            prev_x_roi = st.session_state.get("xes_x_roi", (0, width - 1))
+            x0_safe = int(np.clip(min(prev_x_roi), 0, width - 1))
+            x1_safe = int(np.clip(max(prev_x_roi), 0, width - 1))
+            if x0_safe >= x1_safe:
+                x0_safe, x1_safe = 0, width - 1
+            st.session_state["xes_x_roi"] = (x0_safe, x1_safe)
+            x_roi = st.slider("X ROI / column", 0, width - 1, (0, width - 1), key="xes_x_roi")
+        if height > 1:
+            prev_y_roi = st.session_state.get("xes_y_roi", (0, height - 1))
+            y0_safe = int(np.clip(min(prev_y_roi), 0, height - 1))
+            y1_safe = int(np.clip(max(prev_y_roi), 0, height - 1))
+            if y0_safe >= y1_safe:
+                y0_safe, y1_safe = 0, height - 1
+            st.session_state["xes_y_roi"] = (y0_safe, y1_safe)
+            y_roi = st.slider("Y ROI / row", 0, height - 1, (0, height - 1), key="xes_y_roi")
+        sideband_enabled = st.checkbox(
+            "進階可選：啟用 side-band background subtraction",
+            value=False,
+            key="xes_sideband_enabled",
+        )
+        if sideband_enabled:
+            if projection == "columns":
+                band_axis_label = "Y / row"
+                band_max = height - 1
+                signal_band = y_roi
+            else:
+                band_axis_label = "X / column"
+                band_max = width - 1
+                signal_band = x_roi
+            if band_max <= 0:
+                sideband_enabled = False
+                st.warning("目前影像尺寸太小，無法選擇 side-band ROI。")
+            else:
+                default_band_a, default_band_b = _xes_default_sideband_ranges(signal_band, band_max)
+                st.caption("Side-band 是同一張 sample 影像裡 signal ROI 旁邊的背景區，不是 BG1/BG2；教授未要求時建議先不要啟用。")
+                sideband_a = st.slider(
+                    f"Side-band A ({band_axis_label})",
+                    0, band_max, default_band_a,
+                    key="xes_sideband_a",
+                )
+                sideband_b = st.slider(
+                    f"Side-band B ({band_axis_label})",
+                    0, band_max, default_band_b,
+                    key="xes_sideband_b",
+                )
+                sideband_ranges = (sideband_a, sideband_b)
+                sideband_stat = st.selectbox(
+                    "Side-band 統計",
+                    ["mean", "median"],
+                    format_func=lambda v: {"mean": "平均值", "median": "中位數"}[v],
+                    key="xes_sideband_stat",
+                )
+
+        step_header(5, "曲率校正 / 影像拉直")
+        curvature_enabled = st.checkbox(
+            "啟用 find curvature → shift image",
+            value=False,
+            disabled=(projection != "columns"),
+            key="xes_curvature_enabled",
+        )
+        if projection != "columns":
+            st.caption("曲率校正目前依舊程式流程支援 column spectrum；若要使用請將投影方向設為 columns。")
+            curvature_enabled = False
+        if curvature_enabled:
+            st.caption("流程：先用目前 row ROI 做 Sum，看主峰位置後設定 fitting column 範圍，再逐 row 找峰中心並拉直影像。")
+            if width > 2:
+                prev_curve_range = st.session_state.get(
+                    "xes_curvature_x_range", (int(min(x_roi)), int(max(x_roi))),
+                )
+                curve0_safe = int(np.clip(min(prev_curve_range), int(min(x_roi)), int(max(x_roi))))
+                curve1_safe = int(np.clip(max(prev_curve_range), int(min(x_roi)), int(max(x_roi))))
+                if curve1_safe - curve0_safe < 2:
+                    curve0_safe, curve1_safe = int(min(x_roi)), int(max(x_roi))
+                st.session_state["xes_curvature_x_range"] = (curve0_safe, curve1_safe)
+                curvature_fit_x_range = st.slider(
+                    "曲率 fitting column 範圍",
+                    0, width - 1,
+                    (int(min(x_roi)), int(max(x_roi))),
+                    key="xes_curvature_x_range",
+                )
+            curvature_poly_order = int(st.number_input(
+                "polynomial order", min_value=1, max_value=6, value=4, step=1,
+                key="xes_curvature_order",
+            ))
+            curvature_cutoff = float(st.number_input(
+                "cutoff（弱峰/離群 row 篩選）", min_value=0.1, max_value=20.0,
+                value=1.9, step=0.1, format="%.2f", key="xes_curvature_cutoff",
+            ))
+
+        step_header(6, "多檔平均")
+        do_average = st.checkbox("對所有 FITS 投影光譜做平均", value=False, key="xes_do_avg")
+        if do_average:
+            show_individual = st.checkbox("疊加顯示個別光譜", value=False, key="xes_show_ind")
+
+        step_header(7, "平滑")
+        smooth_method = st.selectbox(
+            "方法",
+            ["none", "moving_average", "savitzky_golay"],
+            format_func=lambda v: {
+                "none": "不平滑",
+                "moving_average": "移動平均",
+                "savitzky_golay": "Savitzky-Golay",
+            }[v],
+            key="xes_smooth_method",
+        )
+        if smooth_method != "none":
+            smooth_window = int(st.number_input(
+                "視窗點數", min_value=3, max_value=301, value=11, step=2, key="xes_smooth_window"
+            ))
+        if smooth_method == "savitzky_golay":
+            smooth_poly_deg = int(st.slider("多項式階數", 2, 5, 3, key="xes_smooth_poly"))
+
+        step_header(8, "歸一化")
+        axis_start = float(x_roi[0] if projection == "columns" else y_roi[0])
+        axis_end = float(x_roi[1] if projection == "columns" else y_roi[1])
+        norm_method = st.selectbox(
+            "方法",
+            ["none", "max", "min_max", "area"],
+            format_func=lambda v: {
+                "none": "不歸一化",
+                "max": "峰值歸一化（可選區間）",
+                "min_max": "Min-Max (0~1)",
+                "area": "面積歸一化（總面積 = 1）",
+            }[v],
+            key="xes_norm_method",
+        )
+        if norm_method == "max" and axis_end > axis_start:
+            norm_range = st.slider(
+                "歸一化參考區間 (pixel)",
+                min_value=axis_start,
+                max_value=axis_end,
+                value=(axis_start, axis_end),
+                step=1.0,
+                format="%.0f",
+                key="xes_norm_range",
+            )
+            norm_x_start = float(min(norm_range))
+            norm_x_end = float(max(norm_range))
+
+        step_header(9, "X 軸校正")
+        axis_calibration = st.selectbox(
+            "X 軸顯示",
+            ["pixel", "linear", "reference_points"],
+            format_func=lambda v: {
+                "pixel": "Detector pixel",
+                "linear": "線性係數：E = E0 + slope × pixel",
+                "reference_points": "參考點擬合 pixel → eV",
+            }[v],
+            key="xes_axis_calibration",
+        )
+        if axis_calibration == "linear":
+            energy_offset = float(st.number_input(
+                "E0 (eV)", value=0.0, step=1.0, format="%.6f", key="xes_energy_offset"
+            ))
+            energy_slope = float(st.number_input(
+                "slope (eV / pixel)", value=1.0, step=0.001, format="%.9f", key="xes_energy_slope"
+            ))
+        elif axis_calibration == "reference_points":
+            cal_degree = int(st.selectbox("擬合階數", [1, 2], format_func=lambda v: "linear" if v == 1 else "quadratic", key="xes_cal_degree"))
+            cal_points_file = st.file_uploader(
+                "可選：上傳校正點 CSV（Pixel, Energy_eV）",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="xes_cal_points_csv",
+            )
+            default_cal_df = pd.DataFrame({
+                "Pixel": [np.nan] * (cal_degree + 1),
+                "Energy_eV": [np.nan] * (cal_degree + 1),
+            })
+            if cal_points_file is not None:
+                uploaded_cal_df, cal_err = _xes_calibration_points_from_csv(cal_points_file)
+                if cal_err:
+                    st.warning(cal_err)
+                elif uploaded_cal_df.empty:
+                    st.warning("校正點 CSV 沒有可用的 pixel / energy 數值。")
+                else:
+                    default_cal_df = uploaded_cal_df
+                    st.caption(f"已從 CSV 讀取 {len(uploaded_cal_df)} 個校正點。")
+            cal_df = st.data_editor(
+                default_cal_df,
+                num_rows="dynamic",
+                key="xes_cal_points",
+                hide_index=True,
+            )
+            energy_poly_coeffs = _xes_calibration_coeffs(cal_df, cal_degree)
+            if energy_poly_coeffs:
+                coeff_text = ", ".join(f"{c:.6g}" for c in energy_poly_coeffs)
+                st.caption(f"校正係數 np.polyval 順序：{coeff_text}")
+            else:
+                st.warning("請至少填入足夠的 pixel / energy 參考點。")
+
+        step_header(10, "峰值偵測")
+        run_peak_detection = st.checkbox("啟用峰值偵測", value=False, key="xes_run_peaks")
+        if run_peak_detection:
+            peak_prom_ratio = float(st.slider(
+                "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="xes_peak_prominence"
+            ))
+            peak_height_ratio = float(st.slider(
+                "最小高度（相對最大值）", 0.0, 1.0, 0.03, 0.01, key="xes_peak_height"
+            ))
+            peak_distance_pixel = float(st.number_input(
+                "最小峰距 (pixel)",
+                min_value=1.0,
+                max_value=max(1.0, axis_end - axis_start),
+                value=min(5.0, max(1.0, axis_end - axis_start)),
+                step=1.0,
+                format="%.0f",
+                key="xes_peak_distance",
+            ))
+            max_peak_labels = int(st.number_input(
+                "最多標記峰數", min_value=1, max_value=50, value=12, step=1, key="xes_peak_max"
+            ))
+            label_peaks = st.checkbox("標示峰位數值", value=True, key="xes_peak_labels")
+
+    if bg_method == "interpolated" and bg1_image is not None and bg2_image is not None:
+        bg_weights, bg_weight_df, bg_weight_source = _xes_bg_weights(
+            image_dict, bg1_image, bg2_image, bg_order_method,
+        )
+        st.caption(f"XES 分點背景扣除使用順序來源：{bg_weight_source}")
+        if not bg_weight_df.empty:
+            st.dataframe(
+                bg_weight_df.round({"Weight_w": 4, "Raw_w": 4}),
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        bg_weights = {name: 0.5 for name in image_dict}
+
+    if use_dark_frame and dark_images:
+        try:
+            dark_frame, dark_summary_df = _xes_average_frame(
+                dark_images, plane_index, normalize_exposure, transpose_image,
+            )
+            st.caption(f"Dark/Bias：已平均 {len(dark_images)} 張影像，並在 BG1/BG2 扣除前先套用。")
+        except Exception as exc:
+            st.error(f"Dark/Bias frame 準備失敗：{exc}")
+            st.stop()
+
+    preview_curve_df = pd.DataFrame()
+    preview_curvature_coeffs: list[float] = []
+    preview_reference_center = None
+    try:
+        preview_raw = _xes_corrected_array(
+            first_image, plane_index, bg1_image, bg2_image,
+            bg_method, bg_weights.get(first_name, 0.5),
+            normalize_exposure=normalize_exposure,
+            dark_frame=dark_frame,
+            transpose_image=transpose_image,
+        )
+        preview, preview_hot_mask = _xes_fix_hot_pixels(
+            preview_raw, fix_hot_pixels,
+            threshold=hot_pixel_threshold, window_size=hot_pixel_window,
+        )
+        if curvature_enabled:
+            try:
+                preview, preview_curve_df, preview_curvature_coeffs, preview_reference_center = (
+                    _xes_apply_curvature_correction(
+                        preview, True, x_roi, y_roi, curvature_fit_x_range,
+                        curvature_poly_order, curvature_cutoff,
+                    )
+                )
+                st.caption(
+                    "曲率校正 preview："
+                    f"使用 {int(preview_curve_df['Used_In_Fit'].sum())} / {len(preview_curve_df)} rows，"
+                    f"reference column = {preview_reference_center:.2f}"
+                )
+            except Exception as exc:
+                st.warning(f"曲率校正 preview 失敗，暫用未拉直影像：{exc}")
+    except Exception as exc:
+        st.error(f"背景扣除失敗：{exc}")
+        st.stop()
+
+    intensity_title = "Counts / s" if normalize_exposure else "Counts"
+    if i0_mode != "none":
+        intensity_title += " / I0"
+    use_energy_axis = (
+        axis_calibration == "linear"
+        or (axis_calibration == "reference_points" and bool(energy_poly_coeffs))
+    )
+    axis_title = "Emission Energy (eV)" if use_energy_axis else (
+        "Detector column (pixel)" if projection == "columns" else "Detector row (pixel)"
+    )
+
+    finite_preview = preview[np.isfinite(preview)]
+    if len(finite_preview):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("影像尺寸", f"{width} × {height}")
+        c2.metric("Plane", f"{plane_index + 1} / {plane_count}")
+        c3.metric("最大值", f"{float(np.nanmax(finite_preview)):.3g}")
+        c4.metric("修正熱點", f"{int(np.count_nonzero(preview_hot_mask))}")
+        c5.metric("曲率校正", "ON" if curvature_enabled and not preview_curve_df.empty else "OFF")
+
+    fig_img = go.Figure()
+    fig_img.add_trace(go.Heatmap(
+        z=preview,
+        colorscale="Viridis",
+        colorbar=dict(title=intensity_title),
+        hovertemplate="x=%{x}<br>y=%{y}<br>counts=%{z}<extra></extra>",
+    ))
+    fig_img.add_shape(
+        type="rect",
+        x0=x_roi[0] - 0.5,
+        x1=x_roi[1] + 0.5,
+        y0=y_roi[0] - 0.5,
+        y1=y_roi[1] + 0.5,
+        line=dict(color="#FFD166", width=2),
+    )
+    if sideband_enabled and sideband_ranges:
+        for band_range in sideband_ranges:
+            if projection == "columns":
+                x0_shape, x1_shape = x_roi[0] - 0.5, x_roi[1] + 0.5
+                y0_shape, y1_shape = min(band_range) - 0.5, max(band_range) + 0.5
+            else:
+                x0_shape, x1_shape = min(band_range) - 0.5, max(band_range) + 0.5
+                y0_shape, y1_shape = y_roi[0] - 0.5, y_roi[1] + 0.5
+            fig_img.add_shape(
+                type="rect",
+                x0=x0_shape,
+                x1=x1_shape,
+                y0=y0_shape,
+                y1=y1_shape,
+                line=dict(color="#19D3F3", width=1.5, dash="dash"),
+            )
+    if curvature_enabled:
+        fig_img.add_shape(
+            type="rect",
+            x0=curvature_fit_x_range[0] - 0.5,
+            x1=curvature_fit_x_range[1] + 0.5,
+            y0=y_roi[0] - 0.5,
+            y1=y_roi[1] + 0.5,
+            line=dict(color="#FF6692", width=1.5, dash="dot"),
+        )
+    fig_img.update_layout(
+        title=(
+            f"FITS preview: {first_name}"
+            + ("（已扣背景）" if bg_method != "none" else "")
+            + ("（已曲率校正）" if curvature_enabled and not preview_curve_df.empty else "")
+        ),
+        xaxis_title="Column pixel",
+        yaxis_title="Row pixel",
+        yaxis=dict(autorange="reversed"),
+        template="plotly_dark",
+        height=460,
+        margin=dict(l=50, r=20, t=60, b=50),
+    )
+    st.plotly_chart(fig_img, use_container_width=True)
+
+    fig_raw = go.Figure()
+    fig_norm = go.Figure()
+    export_frames: dict[str, pd.DataFrame] = {}
+    peak_tables: list[pd.DataFrame] = []
+    hot_pixel_notes: list[str] = []
+    i0_notes: list[str] = []
+    curvature_tables: list[pd.DataFrame] = []
+    curvature_notes: list[str] = []
+
+    extracted = {}
+    for fname, image in image_dict.items():
+        try:
+            corrected_raw = _xes_corrected_array(
+                image, plane_index, bg1_image, bg2_image,
+                bg_method, bg_weights.get(fname, 0.5),
+                normalize_exposure=normalize_exposure,
+                dark_frame=dark_frame,
+                transpose_image=transpose_image,
+            )
+            corrected_arr, hot_mask = _xes_fix_hot_pixels(
+                corrected_raw, fix_hot_pixels,
+                threshold=hot_pixel_threshold, window_size=hot_pixel_window,
+            )
+            curvature_applied = False
+            if curvature_enabled:
+                try:
+                    corrected_arr, curve_df, coeffs, ref_center = _xes_apply_curvature_correction(
+                        corrected_arr, True, x_roi, y_roi, curvature_fit_x_range,
+                        curvature_poly_order, curvature_cutoff,
+                    )
+                    if not curve_df.empty:
+                        curve_df = curve_df.copy()
+                        curve_df.insert(0, "Dataset", fname)
+                        curvature_tables.append(curve_df)
+                    curvature_notes.append(
+                        f"{fname}：fit {int(curve_df['Used_In_Fit'].sum())}/{len(curve_df)} rows，"
+                        f"ref={ref_center:.2f}"
+                    )
+                    curvature_applied = True
+                except Exception as exc:
+                    curvature_notes.append(f"{fname}：曲率校正失敗，使用未拉直影像（{exc}）")
+            x_vals, y_vals, signal_vals, side_bg_vals, _ = _extract_xes_spectrum_with_sideband(
+                corrected_arr, x_roi, y_roi, projection, reducer,
+                sideband_enabled=sideband_enabled,
+                sideband_ranges=sideband_ranges,
+                sideband_stat=sideband_stat,
+            )
+            i0_value = _xes_lookup_i0_value(fname, i0_mode, i0_global_value, i0_table_df)
+            if i0_mode != "none":
+                if i0_value is None:
+                    i0_notes.append(f"{fname}：未找到 I0，保留原值")
+                else:
+                    y_vals, signal_vals, side_bg_vals = _xes_apply_i0_to_spectra(
+                        (y_vals, signal_vals, side_bg_vals), i0_value,
+                    )
+                    i0_notes.append(f"{fname}：I0={i0_value:.6g}")
+            extracted[fname] = (x_vals, y_vals, signal_vals, side_bg_vals, i0_value, curvature_applied)
+            if fix_hot_pixels:
+                hot_pixel_notes.append(f"{fname}：修正 {int(np.count_nonzero(hot_mask))} 點")
+        except Exception as exc:
+            st.warning(f"{fname}：背景扣除或投影失敗，已跳過。{exc}")
+
+    if hot_pixel_notes:
+        st.caption("Hot pixel 修正摘要：" + "；".join(hot_pixel_notes))
+    if i0_notes:
+        st.caption("I0 正規化摘要：" + "；".join(i0_notes))
+    if curvature_notes:
+        st.caption("曲率校正摘要：" + "；".join(curvature_notes))
+
+    if do_average:
+        average_records = []
+        for fname, (x_vals, y_vals, signal_vals, side_bg_vals, i0_value, curvature_applied) in extracted.items():
+            coord_axis = (
+                _xes_apply_axis_calibration(x_vals, axis_calibration, energy_offset, energy_slope, energy_poly_coeffs)
+                if use_energy_axis else x_vals
+            )
+            clean_coord, _ = _xes_sorted_finite_xy(coord_axis, y_vals)
+            if len(clean_coord) >= 2:
+                average_records.append({
+                    "name": fname,
+                    "pixel": x_vals,
+                    "coord": coord_axis,
+                    "y": y_vals,
+                    "signal": signal_vals,
+                    "side_bg": side_bg_vals,
+                    "i0": i0_value,
+                    "curvature_applied": curvature_applied,
+                })
+
+        ranges = [
+            (float(np.nanmin(rec["coord"])), float(np.nanmax(rec["coord"])))
+            for rec in average_records
+        ]
+        if not ranges:
+            st.warning("沒有足夠資料可平均。")
+        else:
+            avg_start = max(r[0] for r in ranges)
+            avg_end = min(r[1] for r in ranges)
+            if avg_start >= avg_end:
+                overlap_unit = "energy" if use_energy_axis else "pixel"
+                st.warning(f"多檔平均需要共同 {overlap_unit} 範圍，目前沒有重疊區間。")
+            else:
+                if use_energy_axis:
+                    point_count = min(len(_xes_sorted_finite_xy(rec["coord"], rec["y"])[0]) for rec in average_records)
+                    point_count = int(np.clip(point_count, 2, 20000))
+                    new_axis = np.linspace(avg_start, avg_end, point_count, dtype=float)
+                    first_coord, first_pixel = _xes_sorted_finite_xy(
+                        average_records[0]["coord"], average_records[0]["pixel"],
+                    )
+                    new_x = np.interp(new_axis, first_coord, first_pixel)
+                    interp_axis_label = "energy"
+                    st.caption(f"多檔平均：已先將各檔轉成 energy，再插值到共同 energy grid（{point_count} 點）。")
+                else:
+                    new_x = np.arange(int(math.ceil(avg_start)), int(math.floor(avg_end)) + 1, dtype=float)
+                    new_axis = new_x
+                    interp_axis_label = "pixel"
+                all_interp = []
+                all_signal_interp = []
+                all_side_bg_interp = []
+                for i, rec in enumerate(average_records):
+                    fname = rec["name"]
+                    target_axis = new_axis if use_energy_axis else new_x
+                    source_axis = rec["coord"] if use_energy_axis else rec["pixel"]
+                    interp_y = _xes_interp_to_axis(source_axis, rec["y"], target_axis)
+                    interp_signal = _xes_interp_to_axis(source_axis, rec["signal"], target_axis)
+                    interp_side_bg = _xes_interp_to_axis(source_axis, rec["side_bg"], target_axis)
+                    if not np.all(np.isfinite(interp_y)):
+                        continue
+                    all_interp.append(interp_y)
+                    all_signal_interp.append(interp_signal)
+                    all_side_bg_interp.append(interp_side_bg)
+                    if show_individual:
+                        fig_raw.add_trace(go.Scatter(
+                            x=new_axis, y=interp_y, mode="lines", name=fname,
+                            line=dict(color=XES_COLORS[i % len(XES_COLORS)], width=1, dash="dot"),
+                            opacity=0.35,
+                        ))
+
+                if all_interp:
+                    raw_signal = np.mean(np.vstack(all_interp), axis=0)
+                    avg_signal_roi = np.mean(np.vstack(all_signal_interp), axis=0)
+                    avg_side_bg = np.mean(np.vstack(all_side_bg_interp), axis=0)
+                    if sideband_enabled:
+                        raw_label = "Average（side-band 扣除後）"
+                    elif bg_method != "none" or dark_frame is not None:
+                        raw_label = "Average（影像校正後）"
+                    else:
+                        raw_label = "Average（原始）"
+                    smooth_signal_vals = smooth_signal(
+                        raw_signal, smooth_method,
+                        window_points=smooth_window, poly_deg=smooth_poly_deg,
+                    )
+                    final_signal = apply_normalization(
+                        new_x, smooth_signal_vals, norm_method,
+                        norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+                    )
+                    plot_signal = final_signal if norm_method != "none" else smooth_signal_vals
+
+                    if smooth_method != "none":
+                        fig_raw.add_trace(go.Scatter(
+                            x=new_axis, y=raw_signal, mode="lines", name=raw_label,
+                            line=dict(color="white", width=1.4, dash="dash"), opacity=0.55,
+                        ))
+                    fig_raw.add_trace(go.Scatter(
+                        x=new_axis, y=smooth_signal_vals, mode="lines",
+                        name="Average（平滑後）" if smooth_method != "none" else raw_label,
+                        line=dict(color="#EF553B", width=2.4),
+                    ))
+                    if norm_method != "none":
+                        fig_norm.add_trace(go.Scatter(
+                            x=new_axis, y=final_signal, mode="lines", name="Average（歸一化後）",
+                            line=dict(color="#EF553B", width=2.4),
+                        ))
+
+                    peak_signal = plot_signal
+                    if run_peak_detection:
+                        peak_idx = _detect_spectrum_peaks(
+                            new_x, peak_signal, peak_prom_ratio,
+                            peak_height_ratio, peak_distance_pixel, max_peak_labels,
+                        )
+                        peak_table = _build_xes_peak_table(
+                            "Average", new_x, peak_signal, peak_idx,
+                            energy_x=new_axis if use_energy_axis else None,
+                        )
+                        if not peak_table.empty:
+                            peak_tables.append(peak_table)
+                            target_fig = fig_norm if norm_method != "none" else fig_raw
+                            peak_x_vals = peak_table["Energy_eV"] if use_energy_axis else peak_table["Pixel"]
+                            peak_labels = (
+                                [f"{v:.2f}" for v in peak_table["Energy_eV"]]
+                                if use_energy_axis else [f"{v:.0f}" for v in peak_table["Pixel"]]
+                            )
+                            target_fig.add_trace(go.Scatter(
+                                x=peak_x_vals,
+                                y=peak_table["Intensity"],
+                                mode="markers+text" if label_peaks else "markers",
+                                name="Average 峰位",
+                                text=peak_labels if label_peaks else None,
+                                textposition="top center",
+                                textfont=dict(size=10),
+                                marker=dict(color="#FFD166", size=10, symbol="x"),
+                            ))
+
+                    row = {
+                        "Pixel": new_x,
+                        "Average_grid": np.full(new_x.shape, interp_axis_label, dtype=object),
+                        "Average_sideband_corrected" if sideband_enabled else (
+                            "Average_bg_corrected" if bg_method != "none" or dark_frame is not None else "Average_raw"
+                        ): raw_signal,
+                        "Average_smoothed": smooth_signal_vals,
+                    }
+                    if sideband_enabled:
+                        row["Average_signal_roi_projection"] = avg_signal_roi
+                        row["Average_sideband_background_scaled"] = avg_side_bg
+                    if curvature_enabled:
+                        used_curvature = [rec["curvature_applied"] for rec in average_records]
+                        row["Curvature_corrected_fraction"] = np.full(
+                            new_x.shape, float(np.mean(used_curvature)) if used_curvature else 0.0,
+                            dtype=float,
+                        )
+                    if transpose_image:
+                        row["Transposed"] = np.full(new_x.shape, True, dtype=bool)
+                    if use_energy_axis:
+                        row["Energy_eV"] = new_axis
+                    if bg_method == "interpolated":
+                        used_weights = [bg_weights.get(fname, np.nan) for fname in extracted]
+                        row["Background_weight_w_mean"] = np.full_like(
+                            new_x, float(np.nanmean(used_weights)), dtype=float
+                        )
+                    if i0_mode != "none":
+                        used_i0 = [rec["i0"] for rec in average_records if rec["i0"] is not None]
+                        row["I0_mean"] = np.full_like(
+                            new_x, float(np.nanmean(used_i0)) if used_i0 else np.nan, dtype=float
+                        )
+                    if norm_method != "none":
+                        row["Average_normalized"] = final_signal
+                    export_frames["Average"] = pd.DataFrame(row)
+    else:
+        for i, (fname, (x_vals, y_vals, signal_vals, side_bg_vals, i0_value, curvature_applied)) in enumerate(extracted.items()):
+            color = XES_COLORS[i % len(XES_COLORS)]
+            x_axis = _xes_apply_axis_calibration(
+                x_vals, axis_calibration, energy_offset, energy_slope, energy_poly_coeffs
+            )
+            smooth_signal_vals = smooth_signal(
+                y_vals, smooth_method,
+                window_points=smooth_window, poly_deg=smooth_poly_deg,
+            )
+            final_signal = apply_normalization(
+                x_vals, smooth_signal_vals, norm_method,
+                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+            )
+            plot_signal = final_signal if norm_method != "none" else smooth_signal_vals
+
+            if smooth_method != "none":
+                fig_raw.add_trace(go.Scatter(
+                    x=x_axis, y=y_vals, mode="lines",
+                    name=f"{fname}（side-band 扣除後）" if sideband_enabled else (
+                        f"{fname}（影像校正後）" if bg_method != "none" or dark_frame is not None else f"{fname}（原始）"
+                    ),
+                    line=dict(color=color, width=1.3, dash="dash"), opacity=0.45,
+                ))
+            fig_raw.add_trace(go.Scatter(
+                x=x_axis, y=smooth_signal_vals, mode="lines",
+                name=f"{fname}（平滑後）" if smooth_method != "none" else (
+                    f"{fname}（side-band 扣除後）" if sideband_enabled else (
+                        f"{fname}（影像校正後）" if bg_method != "none" or dark_frame is not None else fname
+                    )
+                ),
+                line=dict(color=color, width=2),
+            ))
+
+            if norm_method != "none":
+                fig_norm.add_trace(go.Scatter(
+                    x=x_axis, y=final_signal, mode="lines", name=f"{fname}（歸一化後）",
+                    line=dict(color=color, width=2),
+                ))
+
+            if run_peak_detection:
+                peak_idx = _detect_spectrum_peaks(
+                    x_vals, plot_signal, peak_prom_ratio,
+                    peak_height_ratio, peak_distance_pixel, max_peak_labels,
+                )
+                peak_table = _build_xes_peak_table(
+                    fname, x_vals, plot_signal, peak_idx,
+                    energy_x=x_axis if use_energy_axis else None,
+                )
+                if not peak_table.empty:
+                    peak_tables.append(peak_table)
+                    target_fig = fig_norm if norm_method != "none" else fig_raw
+                    peak_x_vals = peak_table["Energy_eV"] if use_energy_axis else peak_table["Pixel"]
+                    peak_labels = (
+                        [f"{v:.2f}" for v in peak_table["Energy_eV"]]
+                        if use_energy_axis else [f"{v:.0f}" for v in peak_table["Pixel"]]
+                    )
+                    target_fig.add_trace(go.Scatter(
+                        x=peak_x_vals,
+                        y=peak_table["Intensity"],
+                        mode="markers+text" if label_peaks else "markers",
+                        name=f"{fname} 峰位",
+                        text=peak_labels if label_peaks else None,
+                        textposition="top center",
+                        textfont=dict(size=10),
+                        marker=dict(color=color, size=9, symbol="x"),
+                    ))
+
+            row = {
+                "Pixel": x_vals,
+                "Intensity_sideband_corrected" if sideband_enabled else (
+                    "Intensity_bg_corrected" if bg_method != "none" or dark_frame is not None else "Intensity_raw"
+                ): y_vals,
+                "Intensity_smoothed": smooth_signal_vals,
+            }
+            if sideband_enabled:
+                row["Signal_ROI_projection"] = signal_vals
+                row["Sideband_background_scaled"] = side_bg_vals
+            if curvature_enabled:
+                row["Curvature_corrected"] = np.full(x_vals.shape, curvature_applied, dtype=bool)
+            if transpose_image:
+                row["Transposed"] = np.full(x_vals.shape, True, dtype=bool)
+            if use_energy_axis:
+                row["Energy_eV"] = x_axis
+            if bg_method == "interpolated":
+                row["Background_weight_w"] = np.full_like(x_vals, bg_weights.get(fname, np.nan), dtype=float)
+            if i0_mode != "none":
+                row["I0"] = np.full_like(x_vals, i0_value if i0_value is not None else np.nan, dtype=float)
+            if norm_method != "none":
+                row["Intensity_normalized"] = final_signal
+            export_frames[fname] = pd.DataFrame(row)
+
+    fig_raw.update_layout(
+        xaxis_title=axis_title,
+        yaxis_title=intensity_title,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        template="plotly_dark",
+        height=460,
+        margin=dict(l=50, r=20, t=60, b=50),
+    )
+    st.plotly_chart(fig_raw, use_container_width=True)
+
+    if norm_method != "none":
+        fig_norm.update_layout(
+            xaxis_title=axis_title,
+            yaxis_title="Normalized intensity",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            template="plotly_dark",
+            height=400,
+            margin=dict(l=50, r=20, t=40, b=50),
+        )
+        st.plotly_chart(fig_norm, use_container_width=True)
+
+    peak_export_df = pd.concat(peak_tables, ignore_index=True) if peak_tables else pd.DataFrame()
+    if run_peak_detection:
+        if peak_export_df.empty:
+            st.info("目前條件下未偵測到 XES 峰值。")
+        else:
+            st.subheader("峰值列表")
+            st.dataframe(
+                peak_export_df.copy().round({
+                    "Pixel": 3,
+                    "Energy_eV": 4,
+                    "Intensity": 4,
+                    "Relative_Intensity_pct": 2,
+                    "FWHM_pixel": 3,
+                    "FWHM_eV": 4,
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with st.expander("FITS header 摘要"):
+        header_rows = []
+        for key in ("SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "BSCALE", "BZERO", "EXPTIME", "DATE-OBS", "TIME-OBS", "MJD-OBS"):
+            if key in first_image.header:
+                header_rows.append({"Keyword": key, "Value": first_image.header[key]})
+        st.dataframe(pd.DataFrame(header_rows), use_container_width=True, hide_index=True)
+
+    if use_dark_frame and not dark_summary_df.empty:
+        with st.expander("Dark/Bias frame 摘要"):
+            st.dataframe(
+                dark_summary_df.round({"Exposure_s": 4, "Mean": 4, "Median": 4}),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    curvature_export_df = pd.concat(curvature_tables, ignore_index=True) if curvature_tables else pd.DataFrame()
+    if curvature_enabled:
+        with st.expander("曲率校正 / image straightening 摘要"):
+            if preview_curve_df.empty:
+                st.info("目前沒有可顯示的曲率校正結果。")
+            else:
+                coeff_text = ", ".join(f"{c:.6g}" for c in preview_curvature_coeffs)
+                st.caption(
+                    f"Preview polynomial coefficients（np.polyval 順序）：{coeff_text}；"
+                    f"reference column = {preview_reference_center:.3f}"
+                )
+                fig_curve = go.Figure()
+                accepted_df = preview_curve_df[preview_curve_df["Accepted"]]
+                used_df = preview_curve_df[preview_curve_df["Used_In_Fit"]]
+                fig_curve.add_trace(go.Scatter(
+                    x=accepted_df["Peak_Center_Column"],
+                    y=accepted_df["Row"],
+                    mode="markers",
+                    name="detected center",
+                    marker=dict(color="#FFD166", size=6),
+                ))
+                fig_curve.add_trace(go.Scatter(
+                    x=used_df["Fitted_Center_Column"],
+                    y=used_df["Row"],
+                    mode="lines",
+                    name="polynomial fit",
+                    line=dict(color="#FF6692", width=2),
+                ))
+                fig_curve.update_layout(
+                    xaxis_title="Peak center column",
+                    yaxis_title="Row",
+                    yaxis=dict(autorange="reversed"),
+                    template="plotly_dark",
+                    height=320,
+                    margin=dict(l=50, r=20, t=30, b=50),
+                )
+                st.plotly_chart(fig_curve, use_container_width=True)
+                st.dataframe(
+                    preview_curve_df.round({
+                        "Peak_Center_Column": 3,
+                        "Peak_Height": 3,
+                        "SNR": 3,
+                        "Fitted_Center_Column": 3,
+                        "Shift_Column": 3,
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+    if bg_method == "interpolated" and not bg_weight_df.empty:
+        weight_name = st.text_input("分點權重表檔名", value="xes_bg_weights", key="xes_bg_weight_fname")
+        st.download_button(
+            "⬇️ 下載分點權重表 CSV",
+            data=bg_weight_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{(weight_name or 'xes_bg_weights').strip()}.csv",
+            mime="text/csv",
+            key="xes_bg_weight_dl",
+        )
+
+    if curvature_enabled and not curvature_export_df.empty:
+        curve_name = st.text_input("曲率校正表檔名", value="xes_curvature", key="xes_curve_fname")
+        st.download_button(
+            "⬇️ 下載曲率校正表 CSV",
+            data=curvature_export_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{(curve_name or 'xes_curvature').strip()}.csv",
+            mime="text/csv",
+            key="xes_curve_dl",
+        )
+
+    if export_frames or not peak_export_df.empty:
+        st.subheader("匯出")
+        curve_items = list(export_frames.items())
+        for start in range(0, len(curve_items), 4):
+            row_items = curve_items[start:start + 4]
+            row_cols = st.columns(len(row_items))
+            for col, (fname, df) in zip(row_cols, row_items):
+                base = fname.rsplit(".", 1)[0]
+                out_name = col.text_input(
+                    "檔名", value=f"{base}_xes_spectrum",
+                    key=f"xes_fname_{fname}", label_visibility="collapsed",
+                )
+                col.download_button(
+                    "⬇️ 下載光譜 CSV",
+                    data=df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{(out_name or base + '_xes_spectrum').strip()}.csv",
+                    mime="text/csv",
+                    key=f"xes_dl_{fname}",
+                )
+
+        if not peak_export_df.empty:
+            peak_name = st.text_input("峰值列表檔名", value="xes_peaks", key="xes_peak_fname")
+            st.download_button(
+                "⬇️ 下載峰值列表 CSV",
+                data=peak_export_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{(peak_name or 'xes_peaks').strip()}.csv",
+                mime="text/csv",
+                key="xes_peak_dl",
+            )
+
+
 XRD_WAVELENGTHS = {
     "Cu Kα": 1.54060,
     "Cu Kα1": 1.54056,
@@ -2137,7 +3933,7 @@ def run_xrd_ui():
 DATA_TYPES = {
     "XPS":   {"icon": "✅", "ready": True,  "desc": "X-ray Photoelectron Spectroscopy"},
     "XAS":   {"icon": "🔧", "ready": False, "desc": "X-ray Absorption Spectroscopy"},
-    "XES":   {"icon": "🔧", "ready": False, "desc": "X-ray Emission Spectroscopy"},
+    "XES":   {"icon": "✅", "ready": True,  "desc": "X-ray Emission Spectroscopy"},
     "SEM":   {"icon": "🔧", "ready": False, "desc": "Scanning Electron Microscopy"},
     "Raman": {"icon": "✅", "ready": True,  "desc": "Raman Spectroscopy"},
     "XRD":   {"icon": "✅", "ready": True,  "desc": "X-ray Diffraction"},
@@ -2151,13 +3947,17 @@ selected_type = st.radio(
 )
 
 if not DATA_TYPES[selected_type]["ready"]:
-    st.warning(f"**{selected_type}** 模組尚未開放，目前僅支援 XPS、Raman 與 XRD。")
+    st.warning(f"**{selected_type}** 模組尚未開放，目前支援 XPS、XES、Raman 與 XRD。")
     st.stop()
 
 st.divider()
 
 if selected_type == "Raman":
     run_raman_ui()
+    st.stop()
+
+if selected_type == "XES":
+    run_xes_ui()
     st.stop()
 
 if selected_type == "XRD":
