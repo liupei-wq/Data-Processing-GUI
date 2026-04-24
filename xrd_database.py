@@ -1,0 +1,114 @@
+"""
+Built-in XRD reference patterns for quick phase screening.
+
+These are representative peak lists for convenient overlay/matching in the GUI.
+They are not a complete PDF/JCPDS database and should be treated as a first-pass
+reference only.
+"""
+
+XRD_REFERENCES = {
+    "Si | Silicon": {
+        "formula": "Si",
+        "phase": "diamond cubic",
+        "peaks": [
+            {"hkl": "111", "d": 3.1355, "rel_i": 100},
+            {"hkl": "220", "d": 1.9201, "rel_i": 55},
+            {"hkl": "311", "d": 1.6375, "rel_i": 32},
+            {"hkl": "400", "d": 1.3578, "rel_i": 20},
+            {"hkl": "331", "d": 1.2459, "rel_i": 13},
+            {"hkl": "422", "d": 1.1086, "rel_i": 9},
+        ],
+    },
+    "SiO2 | alpha-Quartz": {
+        "formula": "SiO2",
+        "phase": "alpha-quartz",
+        "peaks": [
+            {"hkl": "100", "d": 4.255, "rel_i": 34},
+            {"hkl": "101", "d": 3.343, "rel_i": 100},
+            {"hkl": "110", "d": 2.456, "rel_i": 18},
+            {"hkl": "102", "d": 2.281, "rel_i": 22},
+            {"hkl": "111", "d": 2.237, "rel_i": 20},
+            {"hkl": "200", "d": 2.126, "rel_i": 16},
+            {"hkl": "201", "d": 1.979, "rel_i": 13},
+            {"hkl": "112", "d": 1.817, "rel_i": 10},
+        ],
+    },
+    "TiO2 | Anatase": {
+        "formula": "TiO2",
+        "phase": "anatase",
+        "peaks": [
+            {"hkl": "101", "d": 3.514, "rel_i": 100},
+            {"hkl": "004", "d": 2.378, "rel_i": 20},
+            {"hkl": "200", "d": 1.893, "rel_i": 37},
+            {"hkl": "105", "d": 1.700, "rel_i": 13},
+            {"hkl": "211", "d": 1.666, "rel_i": 12},
+            {"hkl": "204", "d": 1.480, "rel_i": 25},
+            {"hkl": "116", "d": 1.359, "rel_i": 11},
+            {"hkl": "220", "d": 1.338, "rel_i": 10},
+        ],
+    },
+    "TiO2 | Rutile": {
+        "formula": "TiO2",
+        "phase": "rutile",
+        "peaks": [
+            {"hkl": "110", "d": 3.248, "rel_i": 100},
+            {"hkl": "101", "d": 2.487, "rel_i": 49},
+            {"hkl": "200", "d": 2.296, "rel_i": 19},
+            {"hkl": "111", "d": 2.187, "rel_i": 17},
+            {"hkl": "210", "d": 2.054, "rel_i": 34},
+            {"hkl": "211", "d": 1.687, "rel_i": 14},
+            {"hkl": "220", "d": 1.624, "rel_i": 11},
+            {"hkl": "310", "d": 1.479, "rel_i": 18},
+        ],
+    },
+    "ZnO | Wurtzite": {
+        "formula": "ZnO",
+        "phase": "wurtzite",
+        "peaks": [
+            {"hkl": "100", "d": 2.814, "rel_i": 57},
+            {"hkl": "002", "d": 2.603, "rel_i": 44},
+            {"hkl": "101", "d": 2.475, "rel_i": 100},
+            {"hkl": "102", "d": 1.911, "rel_i": 23},
+            {"hkl": "110", "d": 1.624, "rel_i": 32},
+            {"hkl": "103", "d": 1.477, "rel_i": 27},
+            {"hkl": "200", "d": 1.407, "rel_i": 9},
+            {"hkl": "112", "d": 1.380, "rel_i": 8},
+            {"hkl": "201", "d": 1.359, "rel_i": 9},
+        ],
+    },
+    "Al2O3 | alpha-Alumina": {
+        "formula": "Al2O3",
+        "phase": "alpha-alumina",
+        "peaks": [
+            {"hkl": "012", "d": 3.479, "rel_i": 76},
+            {"hkl": "104", "d": 2.551, "rel_i": 100},
+            {"hkl": "110", "d": 2.379, "rel_i": 42},
+            {"hkl": "113", "d": 2.085, "rel_i": 55},
+            {"hkl": "024", "d": 1.740, "rel_i": 25},
+            {"hkl": "116", "d": 1.601, "rel_i": 30},
+            {"hkl": "214", "d": 1.403, "rel_i": 24},
+            {"hkl": "300", "d": 1.374, "rel_i": 18},
+            {"hkl": "10 10", "d": 1.236, "rel_i": 16},
+        ],
+    },
+    "Cu | fcc": {
+        "formula": "Cu",
+        "phase": "face-centered cubic",
+        "peaks": [
+            {"hkl": "111", "d": 2.087, "rel_i": 100},
+            {"hkl": "200", "d": 1.808, "rel_i": 46},
+            {"hkl": "220", "d": 1.278, "rel_i": 20},
+            {"hkl": "311", "d": 1.090, "rel_i": 12},
+        ],
+    },
+    "Ni | fcc": {
+        "formula": "Ni",
+        "phase": "face-centered cubic",
+        "peaks": [
+            {"hkl": "111", "d": 2.034, "rel_i": 100},
+            {"hkl": "200", "d": 1.762, "rel_i": 42},
+            {"hkl": "220", "d": 1.246, "rel_i": 21},
+            {"hkl": "311", "d": 1.063, "rel_i": 12},
+        ],
+    },
+}

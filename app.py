@@ -3,10 +3,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from scipy.interpolate import interp1d
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, peak_widths
 
-from processing import apply_processing
+from processing import apply_normalization, apply_processing, despike_signal, smooth_signal
 from xps_database import ELEMENTS, CATEGORY_COLORS, FITTABLE_ELEMENTS
+from xrd_database import XRD_REFERENCES
 from peak_fitting import fit_peaks
 
 # ── page config ───────────────────────────────────────────────────────────────
@@ -199,7 +200,7 @@ def build_periodic_table(selected_elem: str | None = None) -> go.Figure:
     return fig
 
 
-# ── Raman parser ──────────────────────────────────────────────────────────────
+# ── Generic 2-column parser ───────────────────────────────────────────────────
 def _is_numeric_line(line: str) -> bool:
     """Return True if every whitespace/comma-separated token in line is a float."""
     parts = line.strip().replace(',', ' ').split()
@@ -213,9 +214,12 @@ def _is_numeric_line(line: str) -> bool:
         return False
 
 
-def _parse_raman_bytes(raw: bytes):
+def _parse_two_column_spectrum_bytes(
+    raw: bytes,
+    encodings=("utf-8", "utf-8-sig", "big5", "cp950", "latin-1", "utf-16"),
+):
     import io
-    for enc in ("utf-8", "utf-8-sig", "big5", "cp950", "latin-1"):
+    for enc in encodings:
         try:
             content = raw.decode(enc)
         except UnicodeDecodeError:
@@ -294,7 +298,15 @@ def _parse_raman_bytes(raw: bytes):
                 except Exception:
                     continue
 
-    return None, None, "無法解析：請確認為兩欄數字格式（波數, 強度）"
+    return None, None, "無法解析：請確認為兩欄數字格式（X, Y）"
+
+
+def _parse_raman_bytes(raw: bytes):
+    return _parse_two_column_spectrum_bytes(raw)
+
+
+def _parse_xrd_bytes(raw: bytes):
+    return _parse_two_column_spectrum_bytes(raw)
 
 
 # ── Raman UI ──────────────────────────────────────────────────────────────────
@@ -353,53 +365,114 @@ def run_raman_ui():
     if _e0 >= _e1:
         _e0, _e1 = ov_min, ov_max
     step_size = float(max(0.1, (x_max_g - x_min_g) / 2000))
+    raman_peak_distance_default = float(max(step_size, min(20.0, max(step_size, (_e1 - _e0) / 80))))
 
-    # ── Step 2: averaging options (sidebar) ───────────────────────────────────
+    # ── Step 2: despike (sidebar) ─────────────────────────────────────────────
+    despike_method = "none"
+    despike_threshold = 8.0
+    despike_window = 7
+    despike_passes = 1
+    show_spike_marks = False
+
+    with st.sidebar:
+        skip_despike = step_header_with_skip(2, "去尖峰", "raman_skip_despike")
+        if not skip_despike:
+            despike_method = st.selectbox(
+                "方法",
+                ["none", "median"],
+                format_func=lambda v: {
+                    "none": "不處理",
+                    "median": "Median despike（cosmic ray）",
+                }[v],
+                key="raman_despike_method",
+            )
+            if despike_method != "none":
+                despike_threshold = float(st.slider(
+                    "尖峰判定門檻", 4.0, 20.0, 8.0, 0.5, key="raman_despike_threshold"
+                ))
+                despike_window = int(st.number_input(
+                    "局部視窗點數", min_value=3, max_value=31, value=7, step=2, key="raman_despike_window"
+                ))
+                despike_passes = int(st.slider("修正回合數", 1, 3, 1, key="raman_despike_passes"))
+                show_spike_marks = st.checkbox("在圖上標示被修正的點", value=False, key="raman_show_spikes")
+
+        if skip_despike:
+            st.session_state["raman_step2_done"] = True
+        s2 = st.session_state.get("raman_step2_done", False)
+        if not skip_despike and not s2:
+            if _next_btn("raman_btn2", "raman_step2_done"):
+                s2 = True
+        step2_done = skip_despike or s2
+
+    # ── Step 3: averaging options (sidebar) ───────────────────────────────────
     do_average = False
     show_individual = False
     interp_points = 601
 
     with st.sidebar:
-        skip_avg = step_header_with_skip(2, "多檔平均", "raman_skip_avg")
-        if not skip_avg:
-            do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
-            interp_points = int(st.number_input(
-                "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
-            ))
-            if do_average:
-                show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
+        s3 = st.session_state.get("raman_step3_done", False)
+        if step2_done:
+            skip_avg = step_header_with_skip(3, "多檔平均", "raman_skip_avg")
+            if not skip_avg:
+                do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
+                interp_points = int(st.number_input(
+                    "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
+                ))
+                if do_average:
+                    show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
+            if skip_avg:
+                st.session_state["raman_step3_done"] = True
+            s3 = st.session_state.get("raman_step3_done", False)
+            if not skip_avg and not s3:
+                if _next_btn("raman_btn3", "raman_step3_done"):
+                    s3 = True
+        else:
+            skip_avg = False
+        step3_done = step2_done and (skip_avg or s3)
 
-        if skip_avg:
-            st.session_state["raman_s2"] = True
-        s2 = st.session_state.get("raman_s2", False)
-        if not skip_avg and not s2:
-            if _next_btn("raman_btn2", "raman_s2"):
-                s2 = True
-        step2_done = skip_avg or s2
-
-    # ── Step 3: background (sidebar) ──────────────────────────────────────────
+    # ── Step 4: background (sidebar) ──────────────────────────────────────────
     bg_method = "none"
     bg_x_start, bg_x_end = _e0, _e1
     show_bg_baseline = False
     poly_deg = 3
+    baseline_lambda = 1e5
+    baseline_p = 0.01
+    baseline_iter = 20
 
     with st.sidebar:
-        s3 = st.session_state.get("raman_s3", False)
-        if step2_done:
-            skip_bg = step_header_with_skip(3, "背景扣除", "raman_skip_bg")
+        s4 = st.session_state.get("raman_step4_done", False)
+        if step3_done:
+            skip_bg = step_header_with_skip(4, "背景扣除", "raman_skip_bg")
             if not skip_bg:
                 bg_method = st.selectbox(
                     "方法",
-                    ["none", "linear", "polynomial"],
+                    ["none", "linear", "polynomial", "asls", "airpls"],
                     format_func=lambda v: {
                         "none": "不扣除",
                         "linear": "線性背景",
                         "polynomial": "多項式（螢光背景）",
+                        "asls": "AsLS（推薦，螢光背景）",
+                        "airpls": "airPLS（自適應螢光背景）",
                     }[v],
                     key="raman_bg_method",
                 )
                 if bg_method == "polynomial":
                     poly_deg = int(st.slider("多項式階數", 2, 6, 3, key="raman_poly_deg"))
+                elif bg_method in ("asls", "airpls"):
+                    lambda_exp = float(st.slider(
+                        "平滑強度 log10(λ)", 2.0, 9.0, 5.0, 0.5, key="raman_baseline_lambda_exp"
+                    ))
+                    baseline_lambda = float(10.0 ** lambda_exp)
+                    baseline_iter = int(st.slider(
+                        "迭代次數", 5, 50, 20, key="raman_baseline_iter"
+                    ))
+                    if bg_method == "asls":
+                        baseline_p = float(st.slider(
+                            "峰值抑制 p", 0.001, 0.200, 0.010, 0.001, key="raman_baseline_p"
+                        ))
+                    st.caption(
+                        "λ 越大，背景越平；AsLS 的 p 越小，越不容易把真正峰形當成背景。"
+                    )
                 if bg_method != "none":
                     _prev = st.session_state.get("raman_bg_range", (_e0, _e1))
                     _lo = float(np.clip(float(min(_prev)), _e0, _e1))
@@ -417,23 +490,59 @@ def run_raman_ui():
                     bg_x_end = float(max(bg_range))
                     show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True, key="raman_show_bg")
             if skip_bg:
-                st.session_state["raman_s3"] = True
-            s3 = st.session_state.get("raman_s3", False)
-            if not skip_bg and not s3:
-                if _next_btn("raman_btn3", "raman_s3"):
-                    s3 = True
+                st.session_state["raman_step4_done"] = True
+            s4 = st.session_state.get("raman_step4_done", False)
+            if not skip_bg and not s4:
+                if _next_btn("raman_btn4", "raman_step4_done"):
+                    s4 = True
         else:
             skip_bg = False
-        step3_done = step2_done and (skip_bg or s3)
+        step4_done = step3_done and (skip_bg or s4)
 
-    # ── Step 4: normalization (sidebar) ───────────────────────────────────────
+    # ── Step 5: smoothing (sidebar) ───────────────────────────────────────────
+    smooth_method = "none"
+    smooth_window = 11
+    smooth_poly_deg = 3
+
+    with st.sidebar:
+        s5 = st.session_state.get("raman_step5_done", False)
+        if step4_done:
+            skip_smooth = step_header_with_skip(5, "平滑", "raman_skip_smooth")
+            if not skip_smooth:
+                smooth_method = st.selectbox(
+                    "方法",
+                    ["none", "moving_average", "savitzky_golay"],
+                    format_func=lambda v: {
+                        "none": "不平滑",
+                        "moving_average": "移動平均",
+                        "savitzky_golay": "Savitzky-Golay",
+                    }[v],
+                    key="raman_smooth_method",
+                )
+                if smooth_method != "none":
+                    smooth_window = int(st.number_input(
+                        "視窗點數", min_value=3, max_value=301, value=11, step=2, key="raman_smooth_window"
+                    ))
+                if smooth_method == "savitzky_golay":
+                    smooth_poly_deg = int(st.slider("多項式階數", 2, 5, 3, key="raman_smooth_poly"))
+            if skip_smooth:
+                st.session_state["raman_step5_done"] = True
+            s5 = st.session_state.get("raman_step5_done", False)
+            if not skip_smooth and not s5:
+                if _next_btn("raman_btn5", "raman_step5_done"):
+                    s5 = True
+        else:
+            skip_smooth = False
+        step5_done = step4_done and (skip_smooth or s5)
+
+    # ── Step 6: normalization (sidebar) ───────────────────────────────────────
     norm_method = "none"
     norm_x_start, norm_x_end = _e0, _e1
 
     with st.sidebar:
-        s4 = st.session_state.get("raman_s4", False)
-        if step3_done:
-            skip_norm = step_header_with_skip(4, "歸一化", "raman_skip_norm")
+        s6 = st.session_state.get("raman_step6_done", False)
+        if step5_done:
+            skip_norm = step_header_with_skip(6, "歸一化", "raman_skip_norm")
             if not skip_norm:
                 norm_method = st.selectbox(
                     "方法",
@@ -463,11 +572,115 @@ def run_raman_ui():
                     norm_x_start = float(min(norm_range))
                     norm_x_end = float(max(norm_range))
             if skip_norm:
-                st.session_state["raman_s4"] = True
-            s4 = st.session_state.get("raman_s4", False)
-            if not skip_norm and not s4:
-                if _next_btn("raman_btn4", "raman_s4"):
-                    s4 = True
+                st.session_state["raman_step6_done"] = True
+            s6 = st.session_state.get("raman_step6_done", False)
+            if not skip_norm and not s6:
+                if _next_btn("raman_btn6", "raman_step6_done"):
+                    s6 = True
+        else:
+            skip_norm = False
+        step6_done = step5_done and (skip_norm or s6)
+
+    # ── Step 7: peak detection (sidebar) ──────────────────────────────────────
+    peak_prom_ratio = 0.05
+    peak_height_ratio = 0.03
+    peak_distance_cm = raman_peak_distance_default
+    max_peak_labels = 15
+    label_peaks = True
+    run_peak_detection = False
+
+    with st.sidebar:
+        s7 = st.session_state.get("raman_step7_done", False)
+        if step6_done:
+            skip_peaks = step_header_with_skip(7, "峰值偵測", "raman_skip_peaks")
+            if not skip_peaks:
+                peak_prom_ratio = float(st.slider(
+                    "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="raman_peak_prominence"
+                ))
+                peak_height_ratio = float(st.slider(
+                    "最小高度（相對最大值）", 0.0, 1.0, 0.03, 0.01, key="raman_peak_height"
+                ))
+                peak_distance_cm = float(st.number_input(
+                    "最小峰距 (cm⁻¹)",
+                    min_value=step_size,
+                    max_value=max(step_size, x_max_g - x_min_g),
+                    value=raman_peak_distance_default,
+                    step=max(step_size, 1.0),
+                    format="%.1f",
+                    key="raman_peak_distance",
+                ))
+                max_peak_labels = int(st.number_input(
+                    "最多標記峰數", min_value=1, max_value=50, value=15, step=1, key="raman_peak_max"
+                ))
+                label_peaks = st.checkbox("標示峰位數值", value=True, key="raman_peak_labels")
+            if skip_peaks:
+                st.session_state["raman_step7_done"] = True
+            s7 = st.session_state.get("raman_step7_done", False)
+            if not skip_peaks and not s7:
+                if _next_btn("raman_btn7", "raman_step7_done"):
+                    s7 = True
+            run_peak_detection = (not skip_peaks) and s7
+        else:
+            skip_peaks = False
+        step7_done = step6_done and (skip_peaks or s7)
+
+    # ── Step 8: peak fitting (sidebar) ────────────────────────────────────────
+    fit_profile = "voigt"
+    fit_max_peaks = 5
+    fit_initial_fwhm = float(max(4.0, min(24.0, (_e1 - _e0) / 30.0)))
+    fit_target_options = ["Average"] if do_average else list(data_dict.keys())
+    fit_target_default = fit_target_options[0]
+    run_peak_fit = False
+
+    with st.sidebar:
+        s8 = st.session_state.get("raman_step8_done", False)
+        if step7_done and run_peak_detection:
+            if st.session_state.get("raman_fit_target") not in fit_target_options:
+                st.session_state["raman_fit_target"] = fit_target_default
+            skip_fit = step_header_with_skip(8, "峰擬合", "raman_skip_fit")
+            if not skip_fit:
+                if len(fit_target_options) > 1:
+                    fit_target = st.selectbox("擬合對象", fit_target_options, key="raman_fit_target")
+                else:
+                    fit_target = fit_target_default
+                    st.caption(f"擬合對象：{fit_target}")
+                fit_profile = st.selectbox(
+                    "線形",
+                    ["voigt", "gaussian", "lorentzian"],
+                    format_func=lambda v: {
+                        "voigt": "Voigt（推薦）",
+                        "gaussian": "Gaussian",
+                        "lorentzian": "Lorentzian",
+                    }[v],
+                    key="raman_fit_profile",
+                )
+                fit_max_peaks = int(st.number_input(
+                    "最多擬合峰數",
+                    min_value=1,
+                    max_value=12,
+                    value=min(5, max_peak_labels),
+                    step=1,
+                    key="raman_fit_max_peaks",
+                ))
+                fit_initial_fwhm = float(st.number_input(
+                    "初始 FWHM (cm⁻¹)",
+                    min_value=float(max(step_size, 0.5)),
+                    max_value=float(max(200.0, x_max_g - x_min_g)),
+                    value=float(max(4.0, min(24.0, (_e1 - _e0) / 30.0))),
+                    step=float(max(step_size, 0.5)),
+                    format="%.1f",
+                    key="raman_fit_init_fwhm",
+                ))
+                st.caption("以目前峰值偵測結果作為初始中心，取強度最高的前幾個峰做擬合。")
+            if skip_fit:
+                st.session_state["raman_step8_done"] = True
+            s8 = st.session_state.get("raman_step8_done", False)
+            if not skip_fit and not s8:
+                if _next_btn("raman_btn8", "raman_step8_done"):
+                    s8 = True
+            run_peak_fit = (not skip_fit) and s8
+        else:
+            fit_target = fit_target_default
 
     # ── Main: display range slider ─────────────────────────────────────────────
     r_range = st.slider(
@@ -480,69 +693,189 @@ def run_raman_ui():
     r_start = float(min(r_range))
     r_end = float(max(r_range))
 
+    def _raman_peak_source(y_raw, y_despiked, y_bg_subtracted, y_smoothed, y_normalized):
+        if norm_method != "none":
+            return y_normalized, "歸一化後"
+        if smooth_method != "none":
+            return y_smoothed, "平滑後"
+        if bg_method != "none":
+            return y_bg_subtracted, "背景扣除後"
+        if despike_method != "none":
+            return y_despiked, "去尖峰後"
+        return y_raw, "原始"
+
     # ── Build figures ──────────────────────────────────────────────────────────
     fig1 = go.Figure()
     fig2 = go.Figure()
     export_frames: dict[str, pd.DataFrame] = {}
+    despike_notes: list[str] = []
+    peak_tables: list[pd.DataFrame] = []
+    peak_table_map: dict[str, pd.DataFrame] = {}
+    fit_source_map: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    peak_signal_label = None
 
     if do_average:
-        new_x = np.linspace(r_start, r_end, interp_points)
-        all_interp = []
-        for fname, (xv, yv) in data_dict.items():
-            mask = (xv >= r_start) & (xv <= r_end)
-            xc, yc = xv[mask], yv[mask]
-            if len(xc) < 2:
-                st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
-                continue
-            fi = interp1d(xc, yc, kind="linear", fill_value="extrapolate")
-            yi = fi(new_x)
-            all_interp.append(yi)
-            if show_individual:
-                fig1.add_trace(go.Scatter(
-                    x=new_x, y=yi, mode="lines", name=fname,
-                    line=dict(width=1, dash="dot"), opacity=0.4,
-                ))
-        if all_interp:
-            avg_y = np.mean(all_interp, axis=0)
-            y_bg, bg = apply_processing(
-                new_x, avg_y, bg_method, "none",
-                bg_x_start=bg_x_start, bg_x_end=bg_x_end, poly_deg=poly_deg,
-            )
-            if bg_method != "none":
-                fig1.add_trace(go.Scatter(
-                    x=new_x, y=avg_y, mode="lines", name="Average（原始）",
-                    line=dict(color="white", width=1.5, dash="dash"), opacity=0.6,
-                ))
-                if show_bg_baseline:
+        avg_start = float(max(r_start, ov_min))
+        avg_end = float(min(r_end, ov_max))
+        if avg_start >= avg_end:
+            st.warning("多檔平均需要共同重疊區間；目前顯示範圍內沒有可平均的區段。")
+        else:
+            if avg_start > r_start or avg_end < r_end:
+                st.caption(
+                    f"多檔平均僅在共同重疊區間 {avg_start:.1f} – {avg_end:.1f} cm⁻¹ 內進行。"
+                )
+            new_x = np.linspace(avg_start, avg_end, interp_points)
+            all_interp_raw = []
+            all_interp_input = []
+            total_spikes = 0
+            for fname, (xv, yv) in data_dict.items():
+                mask = (xv >= avg_start) & (xv <= avg_end)
+                xc, yc = xv[mask], yv[mask]
+                if len(xc) < 2:
+                    st.warning(f"{fname}：共同重疊區間內數據點不足，已跳過。")
+                    continue
+
+                y_input, spike_mask = despike_signal(
+                    yc, despike_method,
+                    threshold=despike_threshold,
+                    window_points=despike_window,
+                    passes=despike_passes,
+                )
+                total_spikes += int(np.count_nonzero(spike_mask))
+                raw_interp = interp1d(
+                    xc, yc, kind="linear", bounds_error=False, fill_value=np.nan
+                )(new_x)
+                input_interp = interp1d(
+                    xc, y_input, kind="linear", bounds_error=False, fill_value=np.nan
+                )(new_x)
+                if not (np.all(np.isfinite(raw_interp)) and np.all(np.isfinite(input_interp))):
+                    st.warning(f"{fname}：插值後資料不完整，已跳過。")
+                    continue
+                all_interp_raw.append(raw_interp)
+                all_interp_input.append(input_interp)
+                if show_individual:
                     fig1.add_trace(go.Scatter(
-                        x=new_x, y=bg, mode="lines", name="背景基準線",
-                        line=dict(color="gray", width=1.5, dash="longdash"),
+                        x=new_x, y=raw_interp, mode="lines", name=fname,
+                        line=dict(width=1, dash="dot"), opacity=0.35,
                     ))
-                fig1.add_trace(go.Scatter(
-                    x=new_x, y=y_bg, mode="lines", name="Average（扣除背景後）",
-                    line=dict(color="#EF553B", width=2.5),
-                ))
-            else:
-                fig1.add_trace(go.Scatter(
-                    x=new_x, y=avg_y, mode="lines", name="Average",
-                    line=dict(color="#EF553B", width=2.5),
-                ))
-            y_final, _ = apply_processing(
-                new_x, y_bg, "none", norm_method,
-                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
-            )
-            if norm_method != "none":
-                fig2.add_trace(go.Scatter(
-                    x=new_x, y=y_final, mode="lines", name="Average（歸一化後）",
-                    line=dict(color="#EF553B", width=2.5),
-                ))
-            row: dict = {"Raman_Shift_cm": new_x, "Average_raw": avg_y,
-                         "Average_bg_subtracted": y_bg}
-            if bg_method != "none":
-                row["Background"] = bg
-            if norm_method != "none":
-                row["Average_normalized"] = y_final
-            export_frames["Average"] = pd.DataFrame(row)
+
+            if all_interp_input:
+                avg_raw = np.mean(np.vstack(all_interp_raw), axis=0)
+                avg_input = np.mean(np.vstack(all_interp_input), axis=0)
+                y_bg, bg = apply_processing(
+                    new_x, avg_input, bg_method, "none",
+                    bg_x_start=bg_x_start, bg_x_end=bg_x_end, poly_deg=poly_deg,
+                    baseline_lambda=baseline_lambda,
+                    baseline_p=baseline_p,
+                    baseline_iter=baseline_iter,
+                )
+                y_smooth = smooth_signal(
+                    y_bg, smooth_method,
+                    window_points=smooth_window, poly_deg=smooth_poly_deg,
+                )
+                y_final = apply_normalization(
+                    new_x, y_smooth, norm_method,
+                    norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+                )
+
+                any_preprocess = (
+                    despike_method != "none" or bg_method != "none" or smooth_method != "none"
+                )
+                if any_preprocess:
+                    fig1.add_trace(go.Scatter(
+                        x=new_x, y=avg_raw, mode="lines", name="Average（原始）",
+                        line=dict(color="white", width=1.5, dash="dash"), opacity=0.55,
+                    ))
+
+                if despike_method != "none" and bg_method == "none" and smooth_method == "none":
+                    fig1.add_trace(go.Scatter(
+                        x=new_x, y=avg_input, mode="lines", name="Average（去尖峰後）",
+                        line=dict(color="#EF553B", width=2.5),
+                    ))
+                elif bg_method != "none":
+                    if show_bg_baseline:
+                        fig1.add_trace(go.Scatter(
+                            x=new_x, y=bg, mode="lines", name="背景基準線",
+                            line=dict(color="gray", width=1.5, dash="longdash"),
+                        ))
+                    if smooth_method != "none":
+                        fig1.add_trace(go.Scatter(
+                            x=new_x, y=y_bg, mode="lines", name="Average（背景扣除後）",
+                            line=dict(color="#B6E880", width=1.8, dash="dot"), opacity=0.85,
+                        ))
+                        fig1.add_trace(go.Scatter(
+                            x=new_x, y=y_smooth, mode="lines", name="Average（平滑後）",
+                            line=dict(color="#EF553B", width=2.5),
+                        ))
+                    else:
+                        fig1.add_trace(go.Scatter(
+                            x=new_x, y=y_bg, mode="lines", name="Average（扣除背景後）",
+                            line=dict(color="#EF553B", width=2.5),
+                        ))
+                elif smooth_method != "none":
+                    if despike_method != "none":
+                        fig1.add_trace(go.Scatter(
+                            x=new_x, y=avg_input, mode="lines", name="Average（去尖峰後）",
+                            line=dict(color="#B6E880", width=1.8, dash="dot"), opacity=0.85,
+                        ))
+                    fig1.add_trace(go.Scatter(
+                        x=new_x, y=y_smooth, mode="lines", name="Average（平滑後）",
+                        line=dict(color="#EF553B", width=2.5),
+                    ))
+                else:
+                    fig1.add_trace(go.Scatter(
+                        x=new_x, y=avg_raw, mode="lines", name="Average",
+                        line=dict(color="#EF553B", width=2.5),
+                    ))
+
+                if despike_method != "none":
+                    despike_notes.append(f"Average：共修正 {total_spikes} 個尖峰點")
+
+                if norm_method != "none":
+                    fig2.add_trace(go.Scatter(
+                        x=new_x, y=y_final, mode="lines", name="Average（歸一化後）",
+                        line=dict(color="#EF553B", width=2.5),
+                    ))
+
+                if run_peak_detection:
+                    peak_signal, peak_signal_label = _raman_peak_source(
+                        avg_raw, avg_input, y_bg, y_smooth, y_final
+                    )
+                    fit_source_map["Average"] = (new_x, peak_signal)
+                    peak_idx = _detect_spectrum_peaks(
+                        new_x, peak_signal, peak_prom_ratio,
+                        peak_height_ratio, peak_distance_cm, max_peak_labels,
+                    )
+                    peak_table = _build_raman_peak_table("Average", new_x, peak_signal, peak_idx)
+                    peak_table_map["Average"] = peak_table
+                    if not peak_table.empty:
+                        peak_tables.append(peak_table)
+                        peak_fig = fig2 if norm_method != "none" else fig1
+                        peak_fig.add_trace(go.Scatter(
+                            x=peak_table["Raman_Shift_cm"],
+                            y=peak_table["Intensity"],
+                            mode="markers+text" if label_peaks else "markers",
+                            name="Average 峰位",
+                            text=[f"{v:.1f}" for v in peak_table["Raman_Shift_cm"]] if label_peaks else None,
+                            textposition="top center",
+                            textfont=dict(size=10),
+                            marker=dict(color="#FFD166", size=10, symbol="x"),
+                        ))
+
+                row: dict[str, np.ndarray] = {
+                    "Raman_Shift_cm": new_x,
+                    "Average_raw": avg_raw,
+                }
+                if despike_method != "none":
+                    row["Average_despiked"] = avg_input
+                if bg_method != "none":
+                    row["Background"] = bg
+                    row["Average_bg_subtracted"] = y_bg
+                if smooth_method != "none":
+                    row["Average_smoothed"] = y_smooth
+                if norm_method != "none":
+                    row["Average_normalized"] = y_final
+                export_frames["Average"] = pd.DataFrame(row)
     else:
         for i, (fname, (xv, yv)) in enumerate(data_dict.items()):
             mask = (xv >= r_start) & (xv <= r_end)
@@ -551,22 +884,77 @@ def run_raman_ui():
                 st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
                 continue
             color = RAMAN_COLORS[i % len(RAMAN_COLORS)]
-            y_bg, bg = apply_processing(
-                xc, yc, bg_method, "none",
-                bg_x_start=bg_x_start, bg_x_end=bg_x_end, poly_deg=poly_deg,
+            y_input, spike_mask = despike_signal(
+                yc, despike_method,
+                threshold=despike_threshold,
+                window_points=despike_window,
+                passes=despike_passes,
             )
-            if bg_method != "none":
+            y_bg, bg = apply_processing(
+                xc, y_input, bg_method, "none",
+                bg_x_start=bg_x_start, bg_x_end=bg_x_end, poly_deg=poly_deg,
+                baseline_lambda=baseline_lambda,
+                baseline_p=baseline_p,
+                baseline_iter=baseline_iter,
+            )
+            y_smooth = smooth_signal(
+                y_bg, smooth_method,
+                window_points=smooth_window, poly_deg=smooth_poly_deg,
+            )
+            y_final = apply_normalization(
+                xc, y_smooth, norm_method,
+                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+            )
+
+            any_preprocess = (
+                despike_method != "none" or bg_method != "none" or smooth_method != "none"
+            )
+            if any_preprocess:
                 fig1.add_trace(go.Scatter(
                     x=xc, y=yc, mode="lines", name=f"{fname}（原始）",
-                    line=dict(color=color, width=1.5, dash="dash"), opacity=0.5,
+                    line=dict(color=color, width=1.5, dash="dash"), opacity=0.45,
                 ))
+            if despike_method != "none" and show_spike_marks and np.any(spike_mask):
+                fig1.add_trace(go.Scatter(
+                    x=xc[spike_mask], y=yc[spike_mask], mode="markers",
+                    name=f"{fname}（尖峰點）",
+                    marker=dict(color=color, size=7, symbol="x"),
+                    showlegend=False,
+                ))
+
+            if bg_method != "none":
                 if show_bg_baseline:
                     fig1.add_trace(go.Scatter(
                         x=xc, y=bg, mode="lines", name=f"{fname}（背景）",
                         line=dict(color=color, width=1.2, dash="longdash"), opacity=0.5,
                     ))
+                if smooth_method != "none":
+                    fig1.add_trace(go.Scatter(
+                        x=xc, y=y_bg, mode="lines", name=f"{fname}（背景扣除後）",
+                        line=dict(color=color, width=1.7, dash="dot"), opacity=0.8,
+                    ))
+                    fig1.add_trace(go.Scatter(
+                        x=xc, y=y_smooth, mode="lines", name=f"{fname}（平滑後）",
+                        line=dict(color=color, width=2.2),
+                    ))
+                else:
+                    fig1.add_trace(go.Scatter(
+                        x=xc, y=y_bg, mode="lines", name=f"{fname}（扣除背景後）",
+                        line=dict(color=color, width=2),
+                    ))
+            elif smooth_method != "none":
+                if despike_method != "none":
+                    fig1.add_trace(go.Scatter(
+                        x=xc, y=y_input, mode="lines", name=f"{fname}（去尖峰後）",
+                        line=dict(color=color, width=1.7, dash="dot"), opacity=0.8,
+                    ))
                 fig1.add_trace(go.Scatter(
-                    x=xc, y=y_bg, mode="lines", name=f"{fname}（扣除背景後）",
+                    x=xc, y=y_smooth, mode="lines", name=f"{fname}（平滑後）",
+                    line=dict(color=color, width=2.2),
+                ))
+            elif despike_method != "none":
+                fig1.add_trace(go.Scatter(
+                    x=xc, y=y_input, mode="lines", name=f"{fname}（去尖峰後）",
                     line=dict(color=color, width=2),
                 ))
             else:
@@ -574,21 +962,56 @@ def run_raman_ui():
                     x=xc, y=yc, mode="lines", name=fname,
                     line=dict(color=color, width=2),
                 ))
-            y_final, _ = apply_processing(
-                xc, y_bg, "none", norm_method,
-                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
-            )
+
+            if despike_method != "none":
+                spike_count = int(np.count_nonzero(spike_mask))
+                despike_notes.append(f"{fname}：修正 {spike_count} 個尖峰點")
+
             if norm_method != "none":
                 fig2.add_trace(go.Scatter(
                     x=xc, y=y_final, mode="lines", name=f"{fname}（歸一化後）",
                     line=dict(color=color, width=2),
                 ))
-            row = {"Raman_Shift_cm": xc, "Intensity_raw": yc, "Intensity_bg_subtracted": y_bg}
+
+            if run_peak_detection:
+                peak_signal, peak_signal_label = _raman_peak_source(
+                    yc, y_input, y_bg, y_smooth, y_final
+                )
+                fit_source_map[fname] = (xc, peak_signal)
+                peak_idx = _detect_spectrum_peaks(
+                    xc, peak_signal, peak_prom_ratio,
+                    peak_height_ratio, peak_distance_cm, max_peak_labels,
+                )
+                peak_table = _build_raman_peak_table(fname, xc, peak_signal, peak_idx)
+                peak_table_map[fname] = peak_table
+                if not peak_table.empty:
+                    peak_tables.append(peak_table)
+                    peak_fig = fig2 if norm_method != "none" else fig1
+                    peak_fig.add_trace(go.Scatter(
+                        x=peak_table["Raman_Shift_cm"],
+                        y=peak_table["Intensity"],
+                        mode="markers+text" if label_peaks else "markers",
+                        name=f"{fname} 峰位",
+                        text=[f"{v:.1f}" for v in peak_table["Raman_Shift_cm"]] if label_peaks else None,
+                        textposition="top center",
+                        textfont=dict(size=10),
+                        marker=dict(color=color, size=9, symbol="x"),
+                    ))
+
+            row: dict[str, np.ndarray] = {"Raman_Shift_cm": xc, "Intensity_raw": yc}
+            if despike_method != "none":
+                row["Intensity_despiked"] = y_input
             if bg_method != "none":
                 row["Background"] = bg
+                row["Intensity_bg_subtracted"] = y_bg
+            if smooth_method != "none":
+                row["Intensity_smoothed"] = y_smooth
             if norm_method != "none":
                 row["Intensity_normalized"] = y_final
             export_frames[fname] = pd.DataFrame(row)
+
+    if despike_method != "none" and despike_notes:
+        st.caption("去尖峰摘要：" + "；".join(despike_notes))
 
     # ── Render figure 1 ────────────────────────────────────────────────────────
     if bg_method != "none":
@@ -620,22 +1043,1094 @@ def run_raman_ui():
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-    # ── Export ─────────────────────────────────────────────────────────────────
-    if export_frames:
-        st.subheader("匯出")
-        btn_cols = st.columns(min(len(export_frames), 4))
-        for col, (fname, df) in zip(btn_cols, export_frames.items()):
-            base = fname.rsplit(".", 1)[0]
-            out_name = col.text_input(
-                "檔名", value=f"{base}_processed",
-                key=f"raman_fname_{fname}", label_visibility="collapsed",
+    peak_export_df = pd.concat(peak_tables, ignore_index=True) if peak_tables else pd.DataFrame()
+    if run_peak_detection:
+        source_label = peak_signal_label or "目前處理後"
+        st.caption(f"峰值偵測以目前{source_label}曲線為準。")
+        if peak_export_df.empty:
+            st.info("目前條件下未偵測到峰值。")
+        else:
+            st.subheader("峰值列表")
+            peak_display = peak_export_df.copy().round({
+                "Raman_Shift_cm": 3,
+                "Intensity": 4,
+                "Relative_Intensity_pct": 2,
+                "FWHM_cm": 3,
+            })
+            st.dataframe(peak_display, use_container_width=True, hide_index=True)
+
+    if run_peak_fit:
+        st.subheader("峰擬合")
+        fit_peak_df = peak_table_map.get(fit_target, pd.DataFrame())
+        fit_series = fit_source_map.get(fit_target)
+        source_label = peak_signal_label or "目前處理後"
+
+        if fit_series is None:
+            st.info("目前沒有可用於擬合的曲線。")
+        elif fit_peak_df.empty:
+            st.info("所選曲線目前沒有可作為初始值的偵測峰。")
+        else:
+            fit_x, fit_y = fit_series
+            fit_seed_df = fit_peak_df.sort_values("Intensity", ascending=False).head(
+                fit_max_peaks
+            ).sort_values("Raman_Shift_cm")
+
+            init_peaks = []
+            min_fwhm = float(max(step_size, 0.5))
+            max_fwhm = float(max(200.0, x_max_g - x_min_g))
+            for idx, row in enumerate(fit_seed_df.itertuples(index=False), start=1):
+                fwhm_guess = float(getattr(row, "FWHM_cm", np.nan))
+                if not np.isfinite(fwhm_guess) or fwhm_guess <= 0:
+                    fwhm_guess = fit_initial_fwhm
+                fwhm_guess = float(np.clip(fwhm_guess, min_fwhm, max_fwhm))
+                init_peaks.append({
+                    "label": f"P{idx}",
+                    "be": float(row.Raman_Shift_cm),
+                    "fwhm": fwhm_guess,
+                })
+
+            st.caption(
+                f"{fit_target}：以目前{source_label}曲線擬合，"
+                f"共使用 {len(init_peaks)} 個初始峰。"
             )
-            col.download_button(
-                "⬇️ 下載 CSV",
-                data=df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{(out_name or base + '_processed').strip()}.csv",
+
+            with st.spinner("Raman 峰擬合中…"):
+                fit_result = fit_peaks(
+                    fit_x, fit_y,
+                    init_peaks=init_peaks,
+                    profile=fit_profile,
+                )
+
+            if not fit_result.get("success"):
+                st.warning(f"峰擬合失敗：{fit_result.get('message', '')}")
+            else:
+                fit_colors = [
+                    "#EF553B", "#636EFA", "#00CC96", "#AB63FA",
+                    "#FFA15A", "#19D3F3", "#FF6692", "#B6E880",
+                ]
+                fig_fit = go.Figure()
+                fig_fit.add_trace(go.Scatter(
+                    x=fit_x, y=fit_y,
+                    mode="lines", name="實驗曲線",
+                    line=dict(color="white", width=1.6, dash="dot"),
+                ))
+                fig_fit.add_trace(go.Scatter(
+                    x=fit_x, y=fit_result["y_fit"],
+                    mode="lines", name="擬合包絡",
+                    line=dict(color="#FFD166", width=2.5),
+                ))
+                for pi, (pk_info, yi) in enumerate(zip(fit_result["peaks"], fit_result["y_individual"])):
+                    color = fit_colors[pi % len(fit_colors)]
+                    fig_fit.add_trace(go.Scatter(
+                        x=fit_x, y=yi,
+                        mode="lines",
+                        name=f"{pk_info['label']}  {pk_info['center']:.1f} cm⁻¹",
+                        line=dict(color=color, width=1.5, dash="dash"),
+                        fill="tozeroy",
+                        fillcolor=hex_to_rgba(color, 0.12),
+                    ))
+                fig_fit.add_trace(go.Scatter(
+                    x=fit_x, y=fit_result["residuals"],
+                    mode="lines", name="殘差",
+                    line=dict(color="#888888", width=1),
+                    yaxis="y2",
+                ))
+                fig_fit.update_layout(
+                    xaxis_title="Raman Shift (cm⁻¹)",
+                    yaxis_title="Intensity",
+                    yaxis2=dict(
+                        title="殘差", overlaying="y", side="right",
+                        showgrid=False, zeroline=True, zerolinecolor="#555555",
+                    ),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    template="plotly_dark",
+                    height=500,
+                    margin=dict(l=50, r=70, t=60, b=50),
+                )
+                st.plotly_chart(fig_fit, use_container_width=True)
+
+                r2 = float(fit_result["r_squared"])
+                st.caption(
+                    f"R² = {r2:.5f}  "
+                    f"({'優秀' if r2 > 0.999 else '良好' if r2 > 0.99 else '尚可' if r2 > 0.95 else '差'})"
+                )
+
+                fit_summary_df = pd.DataFrame([
+                    {
+                        "Dataset": fit_target,
+                        "Peak": pk["label"],
+                        "Center_cm": pk["center"],
+                        "FWHM_cm": pk["fwhm"],
+                        "Area": pk["area"],
+                        "Area_pct": pk["area_pct"],
+                    }
+                    for pk in fit_result["peaks"]
+                ])
+                st.dataframe(
+                    fit_summary_df.round({
+                        "Center_cm": 3,
+                        "FWHM_cm": 3,
+                        "Area": 4,
+                        "Area_pct": 2,
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                fit_curve_df = pd.DataFrame({
+                    "Raman_Shift_cm": fit_x,
+                    "Experimental": fit_y,
+                    "Fit_envelope": fit_result["y_fit"],
+                    "Residuals": fit_result["residuals"],
+                })
+                for pk, yi in zip(fit_result["peaks"], fit_result["y_individual"]):
+                    fit_curve_df[f"{pk['label']}_component"] = yi
+
+                dl_cols = st.columns(2)
+                fit_curve_name = dl_cols[0].text_input(
+                    "擬合曲線檔名", value=f"{fit_target}_raman_fit", key="raman_fit_curve_fname"
+                )
+                dl_cols[0].download_button(
+                    "⬇️ 下載擬合曲線 CSV",
+                    data=fit_curve_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{(fit_curve_name or fit_target + '_raman_fit').strip()}.csv",
+                    mime="text/csv",
+                    key="raman_fit_curve_dl",
+                )
+                fit_peak_name = dl_cols[1].text_input(
+                    "擬合峰表檔名", value=f"{fit_target}_raman_fit_peaks", key="raman_fit_peak_fname"
+                )
+                dl_cols[1].download_button(
+                    "⬇️ 下載擬合峰表 CSV",
+                    data=fit_summary_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{(fit_peak_name or fit_target + '_raman_fit_peaks').strip()}.csv",
+                    mime="text/csv",
+                    key="raman_fit_peak_dl",
+                )
+
+    # ── Export ─────────────────────────────────────────────────────────────────
+    if export_frames or not peak_export_df.empty:
+        st.subheader("匯出")
+        export_items = list(export_frames.items())
+        for start in range(0, len(export_items), 4):
+            row_items = export_items[start:start + 4]
+            row_cols = st.columns(len(row_items))
+            for col, (fname, df) in zip(row_cols, row_items):
+                base = fname.rsplit(".", 1)[0]
+                out_name = col.text_input(
+                    "檔名", value=f"{base}_processed",
+                    key=f"raman_fname_{fname}", label_visibility="collapsed",
+                )
+                col.download_button(
+                    "⬇️ 下載 CSV",
+                    data=df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{(out_name or base + '_processed').strip()}.csv",
+                    mime="text/csv",
+                    key=f"raman_dl_{fname}",
+                )
+
+        if not peak_export_df.empty:
+            peak_name = st.text_input("峰值列表檔名", value="raman_peaks", key="raman_peak_fname")
+            st.download_button(
+                "⬇️ 下載峰值列表 CSV",
+                data=peak_export_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{(peak_name or 'raman_peaks').strip()}.csv",
                 mime="text/csv",
-                key=f"raman_dl_{fname}",
+                key="raman_peak_dl",
+            )
+
+
+def _detect_spectrum_peaks(
+    x: np.ndarray,
+    y: np.ndarray,
+    prominence_ratio: float,
+    height_ratio: float,
+    min_distance_x: float,
+    max_peaks: int,
+) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) < 3 or len(y) < 3:
+        return np.array([], dtype=int)
+
+    dx = np.diff(x)
+    dx = dx[np.isfinite(dx) & (dx > 0)]
+    median_dx = float(np.median(dx)) if len(dx) else 0.0
+    distance_pts = max(1, int(round(float(min_distance_x) / median_dx))) if median_dx > 0 else 1
+
+    y_max = float(np.max(y))
+    y_min = float(np.min(y))
+    y_range = y_max - y_min
+    if not np.isfinite(y_range) or y_range <= 0:
+        return np.array([], dtype=int)
+
+    find_kwargs = {}
+    if prominence_ratio > 0:
+        find_kwargs["prominence"] = float(prominence_ratio) * y_range
+    if height_ratio > 0 and y_max > 0:
+        find_kwargs["height"] = float(height_ratio) * y_max
+    if distance_pts > 1:
+        find_kwargs["distance"] = distance_pts
+
+    peaks, props = find_peaks(y, **find_kwargs)
+    if len(peaks) == 0:
+        return peaks
+
+    metric = props.get("prominences", y[peaks])
+    order = np.argsort(metric)[::-1]
+    if max_peaks > 0:
+        order = order[:max_peaks]
+    return np.sort(peaks[order])
+
+
+def _build_raman_peak_table(dataset: str, x: np.ndarray, y: np.ndarray,
+                            peak_idx: np.ndarray) -> pd.DataFrame:
+    if len(peak_idx) == 0:
+        return pd.DataFrame(columns=[
+            "Dataset", "Peak", "Raman_Shift_cm", "Intensity",
+            "Relative_Intensity_pct", "FWHM_cm",
+        ])
+
+    widths, _, left_ips, right_ips = peak_widths(y, peak_idx, rel_height=0.5)
+    sample_axis = np.arange(len(x), dtype=float)
+    left_x = np.interp(left_ips, sample_axis, x)
+    right_x = np.interp(right_ips, sample_axis, x)
+
+    peak_x = x[peak_idx]
+    peak_y = y[peak_idx]
+    curve_max = float(np.max(y)) if len(y) else 0.0
+    rel_intensity = (peak_y / curve_max * 100.0) if curve_max > 0 else np.zeros_like(peak_y)
+
+    return pd.DataFrame({
+        "Dataset": dataset,
+        "Peak": np.arange(1, len(peak_idx) + 1),
+        "Raman_Shift_cm": peak_x,
+        "Intensity": peak_y,
+        "Relative_Intensity_pct": rel_intensity,
+        "FWHM_cm": np.abs(right_x - left_x),
+    })
+
+
+XRD_WAVELENGTHS = {
+    "Cu Kα": 1.54060,
+    "Cu Kα1": 1.54056,
+    "Cu Kα2": 1.54439,
+    "Co Kα": 1.78901,
+    "Mo Kα": 0.70930,
+    "Cr Kα": 2.28970,
+    "Fe Kα": 1.93604,
+    "自訂": None,
+}
+
+
+def _two_theta_to_d_spacing(two_theta_deg: np.ndarray, wavelength_angstrom: float) -> np.ndarray:
+    two_theta_deg = np.asarray(two_theta_deg, dtype=float)
+    if wavelength_angstrom <= 0:
+        return np.full_like(two_theta_deg, np.nan, dtype=float)
+
+    theta_rad = np.deg2rad(two_theta_deg / 2.0)
+    denom = 2.0 * np.sin(theta_rad)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d_spacing = np.where(denom > 0, wavelength_angstrom / denom, np.nan)
+    return d_spacing
+
+
+def _d_spacing_to_two_theta(d_spacing_A: np.ndarray, wavelength_angstrom: float) -> np.ndarray:
+    d_spacing_A = np.asarray(d_spacing_A, dtype=float)
+    if wavelength_angstrom <= 0:
+        return np.full_like(d_spacing_A, np.nan, dtype=float)
+
+    ratio = wavelength_angstrom / (2.0 * d_spacing_A)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        two_theta = np.where(
+            (d_spacing_A > 0) & (ratio > 0) & (ratio <= 1),
+            2.0 * np.rad2deg(np.arcsin(ratio)),
+            np.nan,
+        )
+    return two_theta
+
+
+def _xrd_axis_values(two_theta_deg: np.ndarray, axis_mode: str,
+                     wavelength_angstrom: float) -> np.ndarray:
+    if axis_mode == "d_spacing":
+        return _two_theta_to_d_spacing(two_theta_deg, wavelength_angstrom)
+    return np.asarray(two_theta_deg, dtype=float)
+
+
+def _build_xrd_reference_df(selected_phases: list[str], wavelength_angstrom: float,
+                            min_rel_intensity: float,
+                            two_theta_min: float, two_theta_max: float) -> pd.DataFrame:
+    rows = []
+    for phase_name in selected_phases:
+        phase = XRD_REFERENCES.get(phase_name)
+        if not phase:
+            continue
+        for pk in phase.get("peaks", []):
+            d_spacing = float(pk["d"])
+            two_theta = float(_d_spacing_to_two_theta(np.array([d_spacing]), wavelength_angstrom)[0])
+            rel_i = float(pk["rel_i"])
+            if not np.isfinite(two_theta):
+                continue
+            if rel_i < float(min_rel_intensity):
+                continue
+            if two_theta < float(two_theta_min) or two_theta > float(two_theta_max):
+                continue
+            rows.append({
+                "Phase": phase_name,
+                "Formula": phase.get("formula", ""),
+                "Structure": phase.get("phase", ""),
+                "hkl": pk.get("hkl", ""),
+                "d_spacing_A": d_spacing,
+                "two_theta_deg": two_theta,
+                "Relative_Intensity_pct": rel_i,
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=[
+            "Phase", "Formula", "Structure", "hkl",
+            "d_spacing_A", "two_theta_deg", "Relative_Intensity_pct",
+        ])
+
+    ref_df = pd.DataFrame(rows)
+    return ref_df.sort_values(["Phase", "two_theta_deg"], ignore_index=True)
+
+
+def _match_xrd_reference_peaks(reference_df: pd.DataFrame, observed_df: pd.DataFrame,
+                               tolerance_deg: float) -> pd.DataFrame:
+    if reference_df.empty or observed_df.empty:
+        return pd.DataFrame(columns=[
+            "Dataset", "Phase", "hkl", "Ref_2theta_deg", "Ref_d_spacing_A",
+            "Ref_Relative_Intensity_pct", "Observed_2theta_deg", "Observed_d_spacing_A",
+            "Observed_Intensity", "Delta_2theta_deg", "Matched",
+        ])
+
+    rows = []
+    for dataset, obs_df in observed_df.groupby("Dataset", sort=False):
+        obs_two_theta = obs_df["2theta_deg"].to_numpy(dtype=float)
+        for _, ref in reference_df.iterrows():
+            if len(obs_two_theta) == 0:
+                continue
+            delta = np.abs(obs_two_theta - float(ref["two_theta_deg"]))
+            best_pos = int(np.argmin(delta))
+            best_obs = obs_df.iloc[best_pos]
+            best_delta = float(delta[best_pos])
+            rows.append({
+                "Dataset": dataset,
+                "Phase": ref["Phase"],
+                "hkl": ref["hkl"],
+                "Ref_2theta_deg": float(ref["two_theta_deg"]),
+                "Ref_d_spacing_A": float(ref["d_spacing_A"]),
+                "Ref_Relative_Intensity_pct": float(ref["Relative_Intensity_pct"]),
+                "Observed_2theta_deg": float(best_obs["2theta_deg"]),
+                "Observed_d_spacing_A": float(best_obs["d_spacing_A"]),
+                "Observed_Intensity": float(best_obs["Intensity"]),
+                "Delta_2theta_deg": best_delta,
+                "Matched": bool(best_delta <= float(tolerance_deg)),
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=[
+            "Dataset", "Phase", "hkl", "Ref_2theta_deg", "Ref_d_spacing_A",
+            "Ref_Relative_Intensity_pct", "Observed_2theta_deg", "Observed_d_spacing_A",
+            "Observed_Intensity", "Delta_2theta_deg", "Matched",
+        ])
+
+    match_df = pd.DataFrame(rows)
+    return match_df.sort_values(["Dataset", "Phase", "Ref_2theta_deg"], ignore_index=True)
+
+
+def _detect_xrd_peaks(
+    x: np.ndarray,
+    y: np.ndarray,
+    prominence_ratio: float,
+    height_ratio: float,
+    min_distance_deg: float,
+    max_peaks: int,
+) -> np.ndarray:
+    return _detect_spectrum_peaks(
+        x, y, prominence_ratio, height_ratio, min_distance_deg, max_peaks
+    )
+
+
+def _build_xrd_peak_table(dataset: str, x: np.ndarray, y: np.ndarray,
+                          peak_idx: np.ndarray,
+                          wavelength_angstrom: float) -> pd.DataFrame:
+    if len(peak_idx) == 0:
+        return pd.DataFrame(columns=[
+            "Dataset", "Peak", "2theta_deg", "d_spacing_A", "Intensity",
+            "Relative_Intensity_pct", "FWHM_deg",
+        ])
+
+    widths, _, left_ips, right_ips = peak_widths(y, peak_idx, rel_height=0.5)
+    sample_axis = np.arange(len(x), dtype=float)
+    left_x = np.interp(left_ips, sample_axis, x)
+    right_x = np.interp(right_ips, sample_axis, x)
+
+    peak_x = x[peak_idx]
+    peak_y = y[peak_idx]
+    curve_max = float(np.max(y)) if len(y) else 0.0
+    rel_intensity = (peak_y / curve_max * 100.0) if curve_max > 0 else np.zeros_like(peak_y)
+    peak_d = _two_theta_to_d_spacing(peak_x, wavelength_angstrom)
+
+    return pd.DataFrame({
+        "Dataset": dataset,
+        "Peak": np.arange(1, len(peak_idx) + 1),
+        "2theta_deg": peak_x,
+        "d_spacing_A": peak_d,
+        "Intensity": peak_y,
+        "Relative_Intensity_pct": rel_intensity,
+        "FWHM_deg": np.abs(right_x - left_x),
+    })
+
+
+def run_xrd_ui():
+    XRD_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
+                  "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
+    REF_COLORS = ["#FFD166", "#06D6A0", "#EF476F", "#118AB2", "#F78C6B", "#B794F4"]
+
+    with st.sidebar:
+        step_header(1, "載入檔案")
+        uploaded_files = st.file_uploader(
+            "上傳 XRD .txt / .csv / .xy / .asc 檔案（可多選）",
+            type=["txt", "csv", "xy", "asc", "asc_"],
+            accept_multiple_files=True,
+            key="xrd_uploader",
+        )
+
+    if not uploaded_files:
+        st.info("請在左側上傳一個或多個 XRD 檔案。")
+        st.stop()
+
+    data_dict: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for uf in uploaded_files:
+        cache_key = f"_xrd_{uf.name}_{uf.size}"
+        if cache_key not in st.session_state:
+            x_vals, y_vals, err = _parse_xrd_bytes(uf.read())
+            if err:
+                st.session_state[cache_key] = (None, None, err)
+            else:
+                st.session_state[cache_key] = (
+                    np.asarray(x_vals, dtype=float).ravel(),
+                    np.asarray(y_vals, dtype=float).ravel(),
+                    None,
+                )
+        cached = st.session_state[cache_key]
+        if cached[2] is not None:
+            st.error(f"**{uf.name}** 讀取失敗：{cached[2]}")
+        else:
+            data_dict[uf.name] = (cached[0], cached[1])
+
+    if not data_dict:
+        st.stop()
+
+    st.success(f"成功載入 {len(data_dict)} 個檔案：{', '.join(data_dict.keys())}")
+
+    all_x = np.concatenate([xv for xv, _ in data_dict.values()])
+    x_min_g = float(all_x.min())
+    x_max_g = float(all_x.max())
+    ov_min = float(max(xv.min() for xv, _ in data_dict.values()))
+    ov_max = float(min(xv.max() for xv, _ in data_dict.values()))
+    if ov_min >= ov_max:
+        ov_min, ov_max = x_min_g, x_max_g
+
+    cur_range = st.session_state.get("xrd_disp", (ov_min, ov_max))
+    e0 = float(np.clip(float(min(cur_range)), x_min_g, x_max_g))
+    e1 = float(np.clip(float(max(cur_range)), x_min_g, x_max_g))
+    if e0 >= e1:
+        e0, e1 = ov_min, ov_max
+
+    step_size = float(max(0.01, (x_max_g - x_min_g) / 2000))
+    peak_distance_default = float(max(step_size, min(0.20, max(step_size, (e1 - e0) / 150))))
+
+    do_average = False
+    show_individual = False
+    interp_points = 2001
+
+    with st.sidebar:
+        skip_avg = step_header_with_skip(2, "多檔平均", "xrd_skip_avg")
+        if not skip_avg:
+            do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="xrd_do_avg")
+            interp_points = int(st.number_input(
+                "插值點數", min_value=100, max_value=10000, value=2001, step=100, key="xrd_interp"
+            ))
+            if do_average:
+                show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="xrd_show_ind")
+
+        if skip_avg:
+            st.session_state["xrd_s2"] = True
+        s2 = st.session_state.get("xrd_s2", False)
+        if not skip_avg and not s2:
+            if _next_btn("xrd_btn2", "xrd_s2"):
+                s2 = True
+        step2_done = skip_avg or s2
+
+    smooth_method = "none"
+    smooth_window = 11
+    smooth_poly_deg = 3
+
+    with st.sidebar:
+        s3 = st.session_state.get("xrd_s3", False)
+        if step2_done:
+            skip_smooth = step_header_with_skip(3, "平滑", "xrd_skip_smooth")
+            if not skip_smooth:
+                smooth_method = st.selectbox(
+                    "方法",
+                    ["none", "moving_average", "savitzky_golay"],
+                    format_func=lambda v: {
+                        "none": "不平滑",
+                        "moving_average": "移動平均",
+                        "savitzky_golay": "Savitzky-Golay",
+                    }[v],
+                    key="xrd_smooth_method",
+                )
+                if smooth_method != "none":
+                    smooth_window = int(st.number_input(
+                        "視窗點數", min_value=3, max_value=301, value=11, step=2, key="xrd_smooth_window"
+                    ))
+                if smooth_method == "savitzky_golay":
+                    smooth_poly_deg = int(st.slider("多項式階數", 2, 5, 3, key="xrd_smooth_poly"))
+            if skip_smooth:
+                st.session_state["xrd_s3"] = True
+            s3 = st.session_state.get("xrd_s3", False)
+            if not skip_smooth and not s3:
+                if _next_btn("xrd_btn3", "xrd_s3"):
+                    s3 = True
+        else:
+            skip_smooth = False
+        step3_done = step2_done and (skip_smooth or s3)
+
+    norm_method = "none"
+    norm_x_start, norm_x_end = e0, e1
+
+    with st.sidebar:
+        s4 = st.session_state.get("xrd_s4", False)
+        if step3_done:
+            skip_norm = step_header_with_skip(4, "歸一化", "xrd_skip_norm")
+            if not skip_norm:
+                norm_method = st.selectbox(
+                    "方法",
+                    ["none", "max", "min_max", "area"],
+                    format_func=lambda v: {
+                        "none": "不歸一化",
+                        "max": "峰值歸一化（可選區間）",
+                        "min_max": "Min-Max (0~1)",
+                        "area": "面積歸一化（總面積 = 1）",
+                    }[v],
+                    key="xrd_norm_method",
+                )
+                if norm_method == "max":
+                    prev = st.session_state.get("xrd_norm_range", (e0, e1))
+                    lo = float(np.clip(float(min(prev)), e0, e1))
+                    hi = float(np.clip(float(max(prev)), e0, e1))
+                    if lo >= hi:
+                        lo, hi = e0, e1
+                    st.session_state["xrd_norm_range"] = (lo, hi)
+                    norm_range = st.slider(
+                        "歸一化參考區間 (2θ)",
+                        min_value=e0, max_value=e1,
+                        step=step_size, format="%.2f°",
+                        key="xrd_norm_range",
+                    )
+                    norm_x_start = float(min(norm_range))
+                    norm_x_end = float(max(norm_range))
+            if skip_norm:
+                st.session_state["xrd_s4"] = True
+            s4 = st.session_state.get("xrd_s4", False)
+            if not skip_norm and not s4:
+                if _next_btn("xrd_btn4", "xrd_s4"):
+                    s4 = True
+        else:
+            skip_norm = False
+        step4_done = step3_done and (skip_norm or s4)
+
+    peak_prom_ratio = 0.05
+    peak_height_ratio = 0.05
+    peak_distance_deg = peak_distance_default
+    max_peak_labels = 12
+    label_peaks = True
+    run_peak_detection = False
+
+    with st.sidebar:
+        s5 = st.session_state.get("xrd_s5", False)
+        if step4_done:
+            skip_peaks = step_header_with_skip(5, "峰值偵測", "xrd_skip_peaks")
+            if not skip_peaks:
+                peak_prom_ratio = float(st.slider(
+                    "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="xrd_peak_prominence"
+                ))
+                peak_height_ratio = float(st.slider(
+                    "最小高度（相對最大值）", 0.0, 1.0, 0.05, 0.01, key="xrd_peak_height"
+                ))
+                peak_distance_deg = float(st.number_input(
+                    "最小峰距 (2θ)",
+                    min_value=step_size,
+                    max_value=max(step_size, x_max_g - x_min_g),
+                    value=peak_distance_default,
+                    step=max(step_size, 0.05),
+                    format="%.2f",
+                    key="xrd_peak_distance",
+                ))
+                max_peak_labels = int(st.number_input(
+                    "最多標記峰數", min_value=1, max_value=50, value=12, step=1, key="xrd_peak_max"
+                ))
+                label_peaks = st.checkbox("標示峰位數值", value=True, key="xrd_peak_labels")
+            if skip_peaks:
+                st.session_state["xrd_s5"] = True
+            s5 = st.session_state.get("xrd_s5", False)
+            if not skip_peaks and not s5:
+                if _next_btn("xrd_btn5", "xrd_s5"):
+                    s5 = True
+            run_peak_detection = (not skip_peaks) and s5
+
+    wavelength_name = "Cu Kα"
+    wavelength_angstrom = XRD_WAVELENGTHS[wavelength_name]
+    xrd_axis_mode = "two_theta"
+
+    with st.sidebar:
+        step_header(6, "X 軸與 d-spacing")
+        wavelength_name = st.selectbox(
+            "X-ray wavelength",
+            list(XRD_WAVELENGTHS.keys()),
+            index=0,
+            key="xrd_wavelength_name",
+        )
+        wavelength_angstrom = XRD_WAVELENGTHS[wavelength_name]
+        if wavelength_angstrom is None:
+            wavelength_angstrom = float(st.number_input(
+                "自訂波長 (Å)",
+                min_value=0.00001,
+                value=1.54060,
+                step=0.00001,
+                format="%.5f",
+                key="xrd_wavelength_custom",
+            ))
+        xrd_axis_mode = st.selectbox(
+            "主圖 X 軸",
+            ["two_theta", "d_spacing"],
+            format_func=lambda v: {
+                "two_theta": "2θ (degree)",
+                "d_spacing": "d-spacing (Å)",
+            }[v],
+            key="xrd_axis_mode",
+        )
+        if xrd_axis_mode == "d_spacing":
+            st.caption("顯示範圍仍以 2θ 滑桿控制。")
+
+    selected_ref_phases: list[str] = []
+    ref_min_rel_intensity = 10.0
+    ref_match_tolerance = 0.30
+    ref_overlay = True
+    ref_only_matched = True
+    run_reference_matching = False
+
+    with st.sidebar:
+        s7 = st.session_state.get("xrd_s7", False)
+        if step4_done:
+            skip_ref = step_header_with_skip(7, "參考峰比對", "xrd_skip_ref")
+            if not skip_ref:
+                selected_ref_phases = st.multiselect(
+                    "選擇內建參考相位",
+                    list(XRD_REFERENCES.keys()),
+                    default=[],
+                    key="xrd_ref_phases",
+                )
+                ref_min_rel_intensity = float(st.slider(
+                    "最小參考相對強度 (%)", 1, 100, 10, 1, key="xrd_ref_min_int"
+                ))
+                ref_match_tolerance = float(st.number_input(
+                    "匹配容差 (±2θ)",
+                    min_value=0.01,
+                    max_value=5.00,
+                    value=0.30,
+                    step=0.01,
+                    format="%.2f",
+                    key="xrd_ref_tol",
+                ))
+                ref_overlay = st.checkbox("在圖上疊加參考峰", value=True, key="xrd_ref_overlay")
+                ref_only_matched = st.checkbox("比對表只顯示容差內匹配", value=True, key="xrd_ref_only_match")
+                st.caption("內建資料為代表性參考峰，用於快速相辨識，不等同完整 PDF/JCPDS 卡。")
+            if skip_ref:
+                st.session_state["xrd_s7"] = True
+            s7 = st.session_state.get("xrd_s7", False)
+            if not skip_ref and not s7:
+                if _next_btn("xrd_btn7", "xrd_s7"):
+                    s7 = True
+            run_reference_matching = (not skip_ref) and s7 and bool(selected_ref_phases)
+        else:
+            skip_ref = False
+
+    r_range = st.slider(
+        "顯示範圍 — 2θ (degree)",
+        min_value=x_min_g, max_value=x_max_g,
+        value=(ov_min, ov_max),
+        step=step_size, format="%.2f°",
+        key="xrd_disp",
+    )
+    r_start = float(min(r_range))
+    r_end = float(max(r_range))
+    st.caption(f"目前波長：{wavelength_name} = {wavelength_angstrom:.5f} Å")
+
+    fig1 = go.Figure()
+    fig2 = go.Figure()
+    export_frames: dict[str, pd.DataFrame] = {}
+    peak_tables: list[pd.DataFrame] = []
+    x_axis_title = "d-spacing (Å)" if xrd_axis_mode == "d_spacing" else "2θ (degree)"
+    reverse_x_axis = xrd_axis_mode == "d_spacing"
+    compare_y_max = 0.0
+
+    if do_average:
+        new_x = np.linspace(r_start, r_end, interp_points)
+        new_axis = _xrd_axis_values(new_x, xrd_axis_mode, wavelength_angstrom)
+        new_d = _two_theta_to_d_spacing(new_x, wavelength_angstrom)
+        all_interp = []
+        for fname, (xv, yv) in data_dict.items():
+            mask = (xv >= r_start) & (xv <= r_end)
+            xc, yc = xv[mask], yv[mask]
+            if len(xc) < 2:
+                st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
+                continue
+            yi = interp1d(xc, yc, kind="linear", fill_value="extrapolate")(new_x)
+            all_interp.append(yi)
+            if show_individual:
+                fig1.add_trace(go.Scatter(
+                    x=new_axis, y=yi, mode="lines", name=fname,
+                    line=dict(width=1, dash="dot"), opacity=0.35,
+                ))
+
+        if all_interp:
+            avg_raw = np.mean(all_interp, axis=0)
+            y_smooth = smooth_signal(avg_raw, smooth_method, smooth_window, smooth_poly_deg)
+            y_final = apply_normalization(
+                new_x, y_smooth, norm_method,
+                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+            )
+            compare_signal = y_final if norm_method != "none" else (
+                y_smooth if smooth_method != "none" else avg_raw
+            )
+            compare_y_max = max(compare_y_max, float(np.nanmax(compare_signal)))
+
+            if smooth_method != "none":
+                fig1.add_trace(go.Scatter(
+                    x=new_axis, y=avg_raw, mode="lines", name="Average（原始）",
+                    line=dict(color="white", width=1.5, dash="dash"), opacity=0.55,
+                ))
+                fig1.add_trace(go.Scatter(
+                    x=new_axis, y=y_smooth, mode="lines", name="Average（平滑後）",
+                    line=dict(color="#EF553B", width=2.5),
+                ))
+            else:
+                fig1.add_trace(go.Scatter(
+                    x=new_axis, y=avg_raw, mode="lines", name="Average",
+                    line=dict(color="#EF553B", width=2.5),
+                ))
+
+            if norm_method != "none":
+                fig2.add_trace(go.Scatter(
+                    x=new_axis, y=y_final, mode="lines", name="Average（歸一化後）",
+                    line=dict(color="#EF553B", width=2.5),
+                ))
+
+            export_row: dict[str, np.ndarray] = {
+                "TwoTheta_deg": new_x,
+                "d_spacing_A": new_d,
+                "Average_raw": avg_raw,
+                "Average_smoothed": y_smooth,
+            }
+            if norm_method != "none":
+                export_row["Average_normalized"] = y_final
+            export_frames["Average"] = pd.DataFrame(export_row)
+
+            if run_peak_detection:
+                peak_signal = y_final if norm_method != "none" else y_smooth
+                peak_idx = _detect_xrd_peaks(
+                    new_x, peak_signal, peak_prom_ratio,
+                    peak_height_ratio, peak_distance_deg, max_peak_labels,
+                )
+                if len(peak_idx):
+                    peak_table = _build_xrd_peak_table(
+                        "Average", new_x, peak_signal, peak_idx, wavelength_angstrom
+                    )
+                    peak_tables.append(peak_table)
+                    peak_fig = fig2 if norm_method != "none" else fig1
+                    peak_x_vals = (
+                        peak_table["d_spacing_A"] if xrd_axis_mode == "d_spacing"
+                        else peak_table["2theta_deg"]
+                    )
+                    peak_labels = (
+                        [f"{v:.3f} Å" for v in peak_table["d_spacing_A"]]
+                        if xrd_axis_mode == "d_spacing"
+                        else [f"{v:.2f}°" for v in peak_table["2theta_deg"]]
+                    )
+                    peak_fig.add_trace(go.Scatter(
+                        x=peak_x_vals,
+                        y=peak_table["Intensity"],
+                        mode="markers+text" if label_peaks else "markers",
+                        name="Average 峰位",
+                        text=peak_labels if label_peaks else None,
+                        textposition="top center",
+                        textfont=dict(size=10),
+                        marker=dict(color="#FFD166", size=10, symbol="x"),
+                    ))
+    else:
+        for i, (fname, (xv, yv)) in enumerate(data_dict.items()):
+            mask = (xv >= r_start) & (xv <= r_end)
+            xc, yc = xv[mask], yv[mask]
+            if len(xc) < 2:
+                st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
+                continue
+
+            color = XRD_COLORS[i % len(XRD_COLORS)]
+            x_axis = _xrd_axis_values(xc, xrd_axis_mode, wavelength_angstrom)
+            x_d = _two_theta_to_d_spacing(xc, wavelength_angstrom)
+            y_smooth = smooth_signal(yc, smooth_method, smooth_window, smooth_poly_deg)
+            y_final = apply_normalization(
+                xc, y_smooth, norm_method,
+                norm_x_start=norm_x_start, norm_x_end=norm_x_end,
+            )
+            compare_signal = y_final if norm_method != "none" else (
+                y_smooth if smooth_method != "none" else yc
+            )
+            compare_y_max = max(compare_y_max, float(np.nanmax(compare_signal)))
+
+            if smooth_method != "none":
+                fig1.add_trace(go.Scatter(
+                    x=x_axis, y=yc, mode="lines", name=f"{fname}（原始）",
+                    line=dict(color=color, width=1.4, dash="dash"), opacity=0.45,
+                ))
+                fig1.add_trace(go.Scatter(
+                    x=x_axis, y=y_smooth, mode="lines", name=f"{fname}（平滑後）",
+                    line=dict(color=color, width=2.2),
+                ))
+            else:
+                fig1.add_trace(go.Scatter(
+                    x=x_axis, y=yc, mode="lines", name=fname,
+                    line=dict(color=color, width=2),
+                ))
+
+            if norm_method != "none":
+                fig2.add_trace(go.Scatter(
+                    x=x_axis, y=y_final, mode="lines", name=f"{fname}（歸一化後）",
+                    line=dict(color=color, width=2),
+                ))
+
+            export_row = {
+                "TwoTheta_deg": xc,
+                "d_spacing_A": x_d,
+                "Intensity_raw": yc,
+                "Intensity_smoothed": y_smooth,
+            }
+            if norm_method != "none":
+                export_row["Intensity_normalized"] = y_final
+            export_frames[fname] = pd.DataFrame(export_row)
+
+            if run_peak_detection:
+                peak_signal = y_final if norm_method != "none" else y_smooth
+                peak_idx = _detect_xrd_peaks(
+                    xc, peak_signal, peak_prom_ratio,
+                    peak_height_ratio, peak_distance_deg, max_peak_labels,
+                )
+                if len(peak_idx):
+                    peak_table = _build_xrd_peak_table(
+                        fname, xc, peak_signal, peak_idx, wavelength_angstrom
+                    )
+                    peak_tables.append(peak_table)
+                    peak_fig = fig2 if norm_method != "none" else fig1
+                    peak_x_vals = (
+                        peak_table["d_spacing_A"] if xrd_axis_mode == "d_spacing"
+                        else peak_table["2theta_deg"]
+                    )
+                    peak_labels = (
+                        [f"{v:.3f} Å" for v in peak_table["d_spacing_A"]]
+                        if xrd_axis_mode == "d_spacing"
+                        else [f"{v:.2f}°" for v in peak_table["2theta_deg"]]
+                    )
+                    peak_fig.add_trace(go.Scatter(
+                        x=peak_x_vals,
+                        y=peak_table["Intensity"],
+                        mode="markers+text" if label_peaks else "markers",
+                        name=f"{fname} 峰位",
+                        text=peak_labels if label_peaks else None,
+                        textposition="top center",
+                        textfont=dict(size=10),
+                        marker=dict(color=color, size=9, symbol="x"),
+                    ))
+
+    reference_df = pd.DataFrame()
+    if run_reference_matching:
+        reference_df = _build_xrd_reference_df(
+            selected_ref_phases, wavelength_angstrom, ref_min_rel_intensity, r_start, r_end
+        )
+        if ref_overlay and not reference_df.empty:
+            target_fig = fig2 if norm_method != "none" else fig1
+            ref_scale = compare_y_max * 0.22 if compare_y_max > 0 else 1.0
+            for i, phase_name in enumerate(selected_ref_phases):
+                phase_df = reference_df[reference_df["Phase"] == phase_name]
+                if phase_df.empty:
+                    continue
+                phase_color = REF_COLORS[i % len(REF_COLORS)]
+                x_vals = (
+                    phase_df["d_spacing_A"].to_numpy(dtype=float)
+                    if xrd_axis_mode == "d_spacing"
+                    else phase_df["two_theta_deg"].to_numpy(dtype=float)
+                )
+                xs, ys, hover_texts = [], [], []
+                for x_val, (_, row) in zip(x_vals, phase_df.iterrows()):
+                    height = ref_scale * float(row["Relative_Intensity_pct"]) / 100.0
+                    xs.extend([x_val, x_val, None])
+                    ys.extend([0.0, height, None])
+                    hover = (
+                        f"Phase: {row['Phase']}<br>"
+                        f"hkl: {row['hkl']}<br>"
+                        f"2θ: {float(row['two_theta_deg']):.3f}°<br>"
+                        f"d: {float(row['d_spacing_A']):.4f} Å<br>"
+                        f"Rel. I: {float(row['Relative_Intensity_pct']):.1f}%"
+                    )
+                    hover_texts.extend([hover, hover, None])
+                target_fig.add_trace(go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    name=f"{phase_name} 參考峰",
+                    line=dict(color=phase_color, width=1.6, dash="dot"),
+                    text=hover_texts,
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+
+    fig1.update_layout(
+        xaxis_title=x_axis_title, yaxis_title="Intensity",
+        xaxis=dict(autorange="reversed" if reverse_x_axis else True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        template="plotly_dark", height=500, margin=dict(l=50, r=20, t=60, b=50),
+    )
+    st.plotly_chart(fig1, use_container_width=True)
+
+    if norm_method != "none":
+        st.caption("歸一化結果")
+        if norm_method == "max":
+            norm_axis = _xrd_axis_values(
+                np.array([norm_x_start, norm_x_end]), xrd_axis_mode, wavelength_angstrom
+            )
+            norm_axis = norm_axis[np.isfinite(norm_axis)]
+            if len(norm_axis) == 2:
+                fig2.add_vrect(
+                    x0=float(np.min(norm_axis)),
+                    x1=float(np.max(norm_axis)),
+                    fillcolor="blue", opacity=0.06,
+                    layer="below", line_width=0,
+                    annotation_text="歸一化區間", annotation_position="top right",
+                )
+        fig2.update_layout(
+            xaxis_title=x_axis_title, yaxis_title="Normalized Intensity",
+            xaxis=dict(autorange="reversed" if reverse_x_axis else True),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            template="plotly_dark", height=420, margin=dict(l=50, r=20, t=40, b=50),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+    peak_export_df = pd.concat(peak_tables, ignore_index=True) if peak_tables else pd.DataFrame()
+    if run_peak_detection:
+        source_label = "歸一化後" if norm_method != "none" else ("平滑後" if smooth_method != "none" else "原始")
+        st.caption(f"峰值偵測以目前{source_label}曲線為準。")
+        if peak_export_df.empty:
+            st.info("目前條件下未偵測到峰值。")
+        else:
+            st.subheader("峰值列表")
+            peak_display = peak_export_df.copy().round({
+                "2theta_deg": 4,
+                "d_spacing_A": 5,
+                "Intensity": 4,
+                "Relative_Intensity_pct": 2,
+                "FWHM_deg": 4,
+            })
+            st.dataframe(peak_display, use_container_width=True, hide_index=True)
+
+    reference_match_df = pd.DataFrame()
+    if run_reference_matching:
+        st.subheader("參考峰")
+        if reference_df.empty:
+            st.info("所選參考相位在目前顯示範圍內沒有符合強度門檻的峰。")
+        else:
+            ref_display = reference_df.copy().round({
+                "two_theta_deg": 4,
+                "d_spacing_A": 5,
+                "Relative_Intensity_pct": 1,
+            })
+            st.dataframe(ref_display, use_container_width=True, hide_index=True)
+
+            if peak_export_df.empty:
+                st.info("若要計算參考峰匹配，請先在 Step 5 啟用並完成峰值偵測。")
+            else:
+                reference_match_df = _match_xrd_reference_peaks(
+                    reference_df, peak_export_df, ref_match_tolerance
+                )
+                match_display = reference_match_df
+                if ref_only_matched:
+                    match_display = match_display[match_display["Matched"]]
+                st.subheader("參考峰匹配")
+                if match_display.empty:
+                    st.info("目前容差下沒有匹配到參考峰。")
+                else:
+                    match_display = match_display.copy().round({
+                        "Ref_2theta_deg": 4,
+                        "Ref_d_spacing_A": 5,
+                        "Ref_Relative_Intensity_pct": 1,
+                        "Observed_2theta_deg": 4,
+                        "Observed_d_spacing_A": 5,
+                        "Observed_Intensity": 4,
+                        "Delta_2theta_deg": 4,
+                    })
+                    st.dataframe(match_display, use_container_width=True, hide_index=True)
+
+    if export_frames or not peak_export_df.empty or not reference_df.empty or not reference_match_df.empty:
+        st.subheader("匯出")
+        curve_items = list(export_frames.items())
+        for start in range(0, len(curve_items), 4):
+            row_items = curve_items[start:start + 4]
+            row_cols = st.columns(len(row_items))
+            for col, (fname, df) in zip(row_cols, row_items):
+                base = fname.rsplit(".", 1)[0]
+                out_name = col.text_input(
+                    "檔名", value=f"{base}_processed",
+                    key=f"xrd_fname_{fname}", label_visibility="collapsed",
+                )
+                col.download_button(
+                    "⬇️ 下載曲線 CSV",
+                    data=df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{(out_name or base + '_processed').strip()}.csv",
+                    mime="text/csv",
+                    key=f"xrd_dl_{fname}",
+                )
+
+        if not peak_export_df.empty:
+            peak_name = st.text_input("峰值列表檔名", value="xrd_peaks", key="xrd_peak_fname")
+            st.download_button(
+                "⬇️ 下載峰值列表 CSV",
+                data=peak_export_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{(peak_name or 'xrd_peaks').strip()}.csv",
+                mime="text/csv",
+                key="xrd_peak_dl",
+            )
+
+        if not reference_df.empty:
+            ref_name = st.text_input("參考峰檔名", value="xrd_references", key="xrd_ref_fname")
+            st.download_button(
+                "⬇️ 下載參考峰 CSV",
+                data=reference_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{(ref_name or 'xrd_references').strip()}.csv",
+                mime="text/csv",
+                key="xrd_ref_dl",
+            )
+
+        if not reference_match_df.empty:
+            ref_match_name = st.text_input(
+                "參考匹配檔名", value="xrd_reference_matches", key="xrd_ref_match_fname"
+            )
+            st.download_button(
+                "⬇️ 下載參考匹配 CSV",
+                data=reference_match_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{(ref_match_name or 'xrd_reference_matches').strip()}.csv",
+                mime="text/csv",
+                key="xrd_ref_match_dl",
             )
 
 
@@ -645,7 +2140,7 @@ DATA_TYPES = {
     "XES":   {"icon": "🔧", "ready": False, "desc": "X-ray Emission Spectroscopy"},
     "SEM":   {"icon": "🔧", "ready": False, "desc": "Scanning Electron Microscopy"},
     "Raman": {"icon": "✅", "ready": True,  "desc": "Raman Spectroscopy"},
-    "XRD":   {"icon": "🔧", "ready": False, "desc": "X-ray Diffraction"},
+    "XRD":   {"icon": "✅", "ready": True,  "desc": "X-ray Diffraction"},
 }
 
 selected_type = st.radio(
@@ -656,13 +2151,17 @@ selected_type = st.radio(
 )
 
 if not DATA_TYPES[selected_type]["ready"]:
-    st.warning(f"**{selected_type}** 模組尚未開放，目前僅支援 XPS 與 Raman。")
+    st.warning(f"**{selected_type}** 模組尚未開放，目前僅支援 XPS、Raman 與 XRD。")
     st.stop()
 
 st.divider()
 
 if selected_type == "Raman":
     run_raman_ui()
+    st.stop()
+
+if selected_type == "XRD":
+    run_xrd_ui()
     st.stop()
 
 
