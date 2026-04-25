@@ -5,10 +5,36 @@ import json
 import streamlit as st
 import streamlit.components.v1 as components
 
+# Per-step badge colours (step number → hex).  Skipped steps always use #555.
+_STEP_BADGE_COLORS: dict[int, str] = {
+    1:  "#2e7d52",   # green        – load files
+    2:  "#1565c0",   # blue         – despike / pre-process
+    3:  "#6a1b9a",   # purple       – averaging
+    4:  "#bf360c",   # deep-orange  – background
+    5:  "#00695c",   # teal         – smoothing
+    6:  "#1a237e",   # indigo       – normalisation
+    7:  "#4a148c",   # deep-purple  – peak detection
+    8:  "#880e4f",   # dark-pink    – peak fitting
+    9:  "#1b4f72",   # navy         – extra step
+    10: "#263238",   # blue-grey    – extra step
+}
+_STEP_COLOR_DEFAULT = "#3d8ef0"
+
+
+def _step_color(num: int) -> str:
+    return _STEP_BADGE_COLORS.get(num, _STEP_COLOR_DEFAULT)
+
+
+def step_exp_label(num: int, title: str, is_done: bool) -> str:
+    """Sidebar expander label: shows ✓ prefix when the step is completed."""
+    if is_done:
+        return f"✓ {num}. {title}"
+    return f"{num}. {title}"
+
 
 def step_header(num: int, title: str, skipped: bool = False) -> None:
-    badge_bg = "#555"   if skipped else "#3d8ef0"
-    text_col = "#555"   if skipped else "#dde3ee"
+    badge_bg = "#555" if skipped else _step_color(num)
+    text_col = "#555" if skipped else "#dde3ee"
     line_col = "#1e2230"
     st.markdown(f"""
     <div style="display:flex;align-items:center;gap:9px;
@@ -27,7 +53,7 @@ def step_header(num: int, title: str, skipped: bool = False) -> None:
 def step_header_with_skip(num: int, title: str, skip_key: str) -> bool:
     """步驟標題與跳過勾選框排在同一行。"""
     skipped = st.session_state.get(skip_key, False)
-    badge_bg = "#555" if skipped else "#3d8ef0"
+    badge_bg = "#555" if skipped else _step_color(num)
     text_col = "#555" if skipped else "#dde3ee"
     strike = "text-decoration:line-through;" if skipped else ""
     line_col = "#1e2230"

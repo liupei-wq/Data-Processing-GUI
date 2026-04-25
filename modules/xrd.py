@@ -10,9 +10,9 @@ from scipy.signal import peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.spectrum_ops import detect_spectrum_peaks, interpolate_spectrum_to_grid, mean_spectrum_arrays
-from core.ui_helpers import _next_btn, auto_scroll_on_appear, scroll_anchor, step_header, step_header_with_skip
-from processing import apply_normalization, smooth_signal
-from xrd_database import XRD_REFERENCES
+from core.ui_helpers import _next_btn, auto_scroll_on_appear, scroll_anchor, step_exp_label, step_header, step_header_with_skip
+from core.processing import apply_normalization, smooth_signal
+from db.xrd_database import XRD_REFERENCES
 
 
 XRD_WAVELENGTHS = {
@@ -265,21 +265,25 @@ def run_xrd_ui() -> None:
     interp_points = 2001
 
     with st.sidebar:
-        skip_avg = step_header_with_skip(2, "多檔平均", "xrd_skip_avg")
-        if not skip_avg:
-            do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="xrd_do_avg")
-            interp_points = int(st.number_input(
-                "插值點數", min_value=100, max_value=10000, value=2001, step=100, key="xrd_interp"
-            ))
-            if do_average:
-                show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="xrd_show_ind")
-
-        if skip_avg:
-            st.session_state["xrd_s2"] = True
         s2 = st.session_state.get("xrd_s2", False)
-        if not skip_avg and not s2:
-            if _next_btn("xrd_btn2", "xrd_s2"):
-                s2 = True
+        _skip2 = st.session_state.get("xrd_skip_avg", False)
+        with st.expander(step_exp_label(2, "多檔平均", s2 or _skip2), expanded=not (s2 or _skip2)):
+            skip_avg = st.checkbox("跳過此步驟 ✓", key="xrd_skip_avg")
+            if not skip_avg:
+                do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="xrd_do_avg")
+                interp_points = int(st.number_input(
+                    "插值點數", min_value=100, max_value=10000, value=2001, step=100, key="xrd_interp"
+                ))
+                if do_average:
+                    show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="xrd_show_ind")
+            if skip_avg:
+                st.session_state["xrd_s2"] = True
+            s2 = st.session_state.get("xrd_s2", False)
+            if not skip_avg and not s2:
+                if _next_btn("xrd_btn2", "xrd_s2"):
+                    s2 = True
+        skip_avg = st.session_state.get("xrd_skip_avg", False)
+        s2 = st.session_state.get("xrd_s2", False)
         step2_done = skip_avg or s2
 
     smooth_method = "none"
@@ -289,30 +293,34 @@ def run_xrd_ui() -> None:
     with st.sidebar:
         s3 = st.session_state.get("xrd_s3", False)
         if step2_done:
-            skip_smooth = step_header_with_skip(3, "平滑", "xrd_skip_smooth")
-            if not skip_smooth:
-                smooth_method = st.selectbox(
-                    "方法",
-                    ["none", "moving_average", "savitzky_golay"],
-                    format_func=lambda v: {
-                        "none": "不平滑",
-                        "moving_average": "移動平均",
-                        "savitzky_golay": "Savitzky-Golay",
-                    }[v],
-                    key="xrd_smooth_method",
-                )
-                if smooth_method != "none":
-                    smooth_window = int(st.number_input(
-                        "視窗點數", min_value=3, max_value=301, value=11, step=2, key="xrd_smooth_window"
-                    ))
-                if smooth_method == "savitzky_golay":
-                    smooth_poly_deg = int(st.slider("多項式階數", 2, 5, 3, key="xrd_smooth_poly"))
-            if skip_smooth:
-                st.session_state["xrd_s3"] = True
+            _skip3 = st.session_state.get("xrd_skip_smooth", False)
+            with st.expander(step_exp_label(3, "平滑", s3 or _skip3), expanded=not (s3 or _skip3)):
+                skip_smooth = st.checkbox("跳過此步驟 ✓", key="xrd_skip_smooth")
+                if not skip_smooth:
+                    smooth_method = st.selectbox(
+                        "方法",
+                        ["none", "moving_average", "savitzky_golay"],
+                        format_func=lambda v: {
+                            "none": "不平滑",
+                            "moving_average": "移動平均",
+                            "savitzky_golay": "Savitzky-Golay",
+                        }[v],
+                        key="xrd_smooth_method",
+                    )
+                    if smooth_method != "none":
+                        smooth_window = int(st.number_input(
+                            "視窗點數", min_value=3, max_value=301, value=11, step=2, key="xrd_smooth_window"
+                        ))
+                    if smooth_method == "savitzky_golay":
+                        smooth_poly_deg = int(st.slider("多項式階數", 2, 5, 3, key="xrd_smooth_poly"))
+                if skip_smooth:
+                    st.session_state["xrd_s3"] = True
+                s3 = st.session_state.get("xrd_s3", False)
+                if not skip_smooth and not s3:
+                    if _next_btn("xrd_btn3", "xrd_s3"):
+                        s3 = True
+            skip_smooth = st.session_state.get("xrd_skip_smooth", False)
             s3 = st.session_state.get("xrd_s3", False)
-            if not skip_smooth and not s3:
-                if _next_btn("xrd_btn3", "xrd_s3"):
-                    s3 = True
         else:
             skip_smooth = False
         step3_done = step2_done and (skip_smooth or s3)
@@ -323,40 +331,44 @@ def run_xrd_ui() -> None:
     with st.sidebar:
         s4 = st.session_state.get("xrd_s4", False)
         if step3_done:
-            skip_norm = step_header_with_skip(4, "歸一化", "xrd_skip_norm")
-            if not skip_norm:
-                norm_method = st.selectbox(
-                    "方法",
-                    ["none", "max", "min_max", "area"],
-                    format_func=lambda v: {
-                        "none": "不歸一化",
-                        "max": "峰值歸一化（可選區間）",
-                        "min_max": "Min-Max (0~1)",
-                        "area": "面積歸一化（總面積 = 1）",
-                    }[v],
-                    key="xrd_norm_method",
-                )
-                if norm_method == "max":
-                    prev = st.session_state.get("xrd_norm_range", (e0, e1))
-                    lo = float(np.clip(float(min(prev)), e0, e1))
-                    hi = float(np.clip(float(max(prev)), e0, e1))
-                    if lo >= hi:
-                        lo, hi = e0, e1
-                    st.session_state["xrd_norm_range"] = (lo, hi)
-                    norm_range = st.slider(
-                        "歸一化參考區間 (2θ)",
-                        min_value=e0, max_value=e1,
-                        step=step_size, format="%.2f°",
-                        key="xrd_norm_range",
+            _skip4 = st.session_state.get("xrd_skip_norm", False)
+            with st.expander(step_exp_label(4, "歸一化", s4 or _skip4), expanded=not (s4 or _skip4)):
+                skip_norm = st.checkbox("跳過此步驟 ✓", key="xrd_skip_norm")
+                if not skip_norm:
+                    norm_method = st.selectbox(
+                        "方法",
+                        ["none", "max", "min_max", "area"],
+                        format_func=lambda v: {
+                            "none": "不歸一化",
+                            "max": "峰值歸一化（可選區間）",
+                            "min_max": "Min-Max (0~1)",
+                            "area": "面積歸一化（總面積 = 1）",
+                        }[v],
+                        key="xrd_norm_method",
                     )
-                    norm_x_start = float(min(norm_range))
-                    norm_x_end = float(max(norm_range))
-            if skip_norm:
-                st.session_state["xrd_s4"] = True
+                    if norm_method == "max":
+                        prev = st.session_state.get("xrd_norm_range", (e0, e1))
+                        lo = float(np.clip(float(min(prev)), e0, e1))
+                        hi = float(np.clip(float(max(prev)), e0, e1))
+                        if lo >= hi:
+                            lo, hi = e0, e1
+                        st.session_state["xrd_norm_range"] = (lo, hi)
+                        norm_range = st.slider(
+                            "歸一化參考區間 (2θ)",
+                            min_value=e0, max_value=e1,
+                            step=step_size, format="%.2f°",
+                            key="xrd_norm_range",
+                        )
+                        norm_x_start = float(min(norm_range))
+                        norm_x_end = float(max(norm_range))
+                if skip_norm:
+                    st.session_state["xrd_s4"] = True
+                s4 = st.session_state.get("xrd_s4", False)
+                if not skip_norm and not s4:
+                    if _next_btn("xrd_btn4", "xrd_s4"):
+                        s4 = True
+            skip_norm = st.session_state.get("xrd_skip_norm", False)
             s4 = st.session_state.get("xrd_s4", False)
-            if not skip_norm and not s4:
-                if _next_btn("xrd_btn4", "xrd_s4"):
-                    s4 = True
         else:
             skip_norm = False
         step4_done = step3_done and (skip_norm or s4)
@@ -371,33 +383,38 @@ def run_xrd_ui() -> None:
     with st.sidebar:
         s5 = st.session_state.get("xrd_s5", False)
         if step4_done:
-            skip_peaks = step_header_with_skip(5, "峰值偵測", "xrd_skip_peaks")
-            if not skip_peaks:
-                peak_prom_ratio = float(st.slider(
-                    "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="xrd_peak_prominence"
-                ))
-                peak_height_ratio = float(st.slider(
-                    "最小高度（相對最大值）", 0.0, 1.0, 0.05, 0.01, key="xrd_peak_height"
-                ))
-                peak_distance_deg = float(st.number_input(
-                    "最小峰距 (2θ)",
-                    min_value=step_size,
-                    max_value=max(step_size, x_max_g - x_min_g),
-                    value=peak_distance_default,
-                    step=max(step_size, 0.05),
-                    format="%.2f",
-                    key="xrd_peak_distance",
-                ))
-                max_peak_labels = int(st.number_input(
-                    "最多標記峰數", min_value=1, max_value=50, value=12, step=1, key="xrd_peak_max"
-                ))
-                label_peaks = st.checkbox("標示峰位數值", value=True, key="xrd_peak_labels")
-            if skip_peaks:
-                st.session_state["xrd_s5"] = True
+            _skip5 = st.session_state.get("xrd_skip_peaks", False)
+            with st.expander(step_exp_label(5, "峰值偵測", s5 or _skip5), expanded=not (s5 or _skip5)):
+                skip_peaks = st.checkbox("跳過此步驟 ✓", key="xrd_skip_peaks")
+                if not skip_peaks:
+                    peak_prom_ratio = float(st.slider(
+                        "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="xrd_peak_prominence"
+                    ))
+                    peak_height_ratio = float(st.slider(
+                        "最小高度（相對最大值）", 0.0, 1.0, 0.05, 0.01, key="xrd_peak_height"
+                    ))
+                    peak_distance_deg = float(st.number_input(
+                        "最小峰距 (2θ)",
+                        min_value=step_size,
+                        max_value=max(step_size, x_max_g - x_min_g),
+                        value=peak_distance_default,
+                        step=max(step_size, 0.05),
+                        format="%.2f",
+                        key="xrd_peak_distance",
+                    ))
+                    max_peak_labels = int(st.number_input(
+                        "最多標記峰數", min_value=1, max_value=50, value=12, step=1, key="xrd_peak_max"
+                    ))
+                    label_peaks = st.checkbox("標示峰位數值", value=True, key="xrd_peak_labels")
+                if skip_peaks:
+                    st.session_state["xrd_s5"] = True
+                s5 = st.session_state.get("xrd_s5", False)
+                if not skip_peaks and not s5:
+                    if _next_btn("xrd_btn5", "xrd_s5"):
+                        s5 = True
+                run_peak_detection = (not skip_peaks) and s5
+            skip_peaks = st.session_state.get("xrd_skip_peaks", False)
             s5 = st.session_state.get("xrd_s5", False)
-            if not skip_peaks and not s5:
-                if _next_btn("xrd_btn5", "xrd_s5"):
-                    s5 = True
             run_peak_detection = (not skip_peaks) and s5
 
     wavelength_name = "Cu Kα"
@@ -444,35 +461,40 @@ def run_xrd_ui() -> None:
     with st.sidebar:
         s7 = st.session_state.get("xrd_s7", False)
         if step4_done:
-            skip_ref = step_header_with_skip(7, "參考峰比對", "xrd_skip_ref")
-            if not skip_ref:
-                selected_ref_phases = st.multiselect(
-                    "選擇內建參考相位",
-                    list(XRD_REFERENCES.keys()),
-                    default=[],
-                    key="xrd_ref_phases",
-                )
-                ref_min_rel_intensity = float(st.slider(
-                    "最小參考相對強度 (%)", 1, 100, 10, 1, key="xrd_ref_min_int"
-                ))
-                ref_match_tolerance = float(st.number_input(
-                    "匹配容差 (±2θ)",
-                    min_value=0.01,
-                    max_value=5.00,
-                    value=0.30,
-                    step=0.01,
-                    format="%.2f",
-                    key="xrd_ref_tol",
-                ))
-                ref_overlay = st.checkbox("在圖上疊加參考峰", value=True, key="xrd_ref_overlay")
-                ref_only_matched = st.checkbox("比對表只顯示容差內匹配", value=True, key="xrd_ref_only_match")
-                st.caption("內建資料為代表性參考峰，用於快速相辨識，不等同完整 PDF/JCPDS 卡。")
-            if skip_ref:
-                st.session_state["xrd_s7"] = True
+            _skip7 = st.session_state.get("xrd_skip_ref", False)
+            with st.expander(step_exp_label(7, "參考峰比對", s7 or _skip7), expanded=not (s7 or _skip7)):
+                skip_ref = st.checkbox("跳過此步驟 ✓", key="xrd_skip_ref")
+                if not skip_ref:
+                    selected_ref_phases = st.multiselect(
+                        "選擇內建參考相位",
+                        list(XRD_REFERENCES.keys()),
+                        default=[],
+                        key="xrd_ref_phases",
+                    )
+                    ref_min_rel_intensity = float(st.slider(
+                        "最小參考相對強度 (%)", 1, 100, 10, 1, key="xrd_ref_min_int"
+                    ))
+                    ref_match_tolerance = float(st.number_input(
+                        "匹配容差 (±2θ)",
+                        min_value=0.01,
+                        max_value=5.00,
+                        value=0.30,
+                        step=0.01,
+                        format="%.2f",
+                        key="xrd_ref_tol",
+                    ))
+                    ref_overlay = st.checkbox("在圖上疊加參考峰", value=True, key="xrd_ref_overlay")
+                    ref_only_matched = st.checkbox("比對表只顯示容差內匹配", value=True, key="xrd_ref_only_match")
+                    st.caption("內建資料為代表性參考峰，用於快速相辨識，不等同完整 PDF/JCPDS 卡。")
+                if skip_ref:
+                    st.session_state["xrd_s7"] = True
+                s7 = st.session_state.get("xrd_s7", False)
+                if not skip_ref and not s7:
+                    if _next_btn("xrd_btn7", "xrd_s7"):
+                        s7 = True
+                run_reference_matching = (not skip_ref) and s7 and bool(selected_ref_phases)
+            skip_ref = st.session_state.get("xrd_skip_ref", False)
             s7 = st.session_state.get("xrd_s7", False)
-            if not skip_ref and not s7:
-                if _next_btn("xrd_btn7", "xrd_s7"):
-                    s7 = True
             run_reference_matching = (not skip_ref) and s7 and bool(selected_ref_phases)
         else:
             skip_ref = False

@@ -18,8 +18,8 @@ from scipy.signal import find_peaks, peak_widths
 from core.parsers import parse_two_column_spectrum_bytes
 from core.spectrum_ops import detect_spectrum_peaks, interpolate_spectrum_to_grid, mean_spectrum_arrays
 from core.ui_helpers import _next_btn, hex_to_rgba, step_header, step_header_with_skip
-from processing import apply_normalization, apply_processing, despike_signal, smooth_signal
-from read_fits_image import read_primary_image_bytes
+from core.processing import apply_normalization, apply_processing, despike_signal, smooth_signal
+from core.read_fits_image import read_primary_image_bytes
 
 
 def build_xes_peak_table(

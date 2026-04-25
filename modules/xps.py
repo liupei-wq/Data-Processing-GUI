@@ -15,12 +15,13 @@ from core.ui_helpers import (
     auto_scroll_on_appear,
     hex_to_rgba,
     scroll_anchor,
+    step_exp_label,
     step_header,
     step_header_with_skip,
 )
-from peak_fitting import fit_peaks
-from processing import apply_processing
-from xps_database import (
+from core.peak_fitting import fit_peaks
+from core.processing import apply_processing
+from db.xps_database import (
     CATEGORY_COLORS,
     DOUBLET_INFO,
     ELEMENT_RSF,
@@ -174,26 +175,29 @@ def run_xps_ui() -> None:
             accept_multiple_files=True,
         )
 
-        skip_avg = step_header_with_skip(2, "多檔平均", "skip_avg")
         do_average = False
         show_individual = False
         interp_points = 601
-        if not skip_avg:
-            do_average = st.checkbox("對所有載入的檔案做平均", value=False)
-            interp_points = st.number_input(
-                "插值點數", min_value=100, max_value=5000, value=601, step=50
-            )
-            if do_average:
-                show_individual = st.checkbox("疊加顯示原始個別曲線", value=False)
-
-        # step2 完成條件
         step2_confirmed = st.session_state.get("step2_confirmed", False)
-        if skip_avg and not step2_confirmed:
-            st.session_state["step2_confirmed"] = True
-            step2_confirmed = True
-        if not skip_avg and not step2_confirmed:
-            if _next_btn("btn_step2_next", "step2_confirmed"):
+        _skip2 = st.session_state.get("skip_avg", False)
+        with st.expander(step_exp_label(2, "多檔平均", step2_confirmed or _skip2),
+                         expanded=not (step2_confirmed or _skip2)):
+            skip_avg = st.checkbox("跳過此步驟 ✓", key="skip_avg")
+            if not skip_avg:
+                do_average = st.checkbox("對所有載入的檔案做平均", value=False)
+                interp_points = st.number_input(
+                    "插值點數", min_value=100, max_value=5000, value=601, step=50
+                )
+                if do_average:
+                    show_individual = st.checkbox("疊加顯示原始個別曲線", value=False)
+            if skip_avg and not step2_confirmed:
+                st.session_state["step2_confirmed"] = True
                 step2_confirmed = True
+            if not skip_avg and not step2_confirmed:
+                if _next_btn("btn_step2_next", "step2_confirmed"):
+                    step2_confirmed = True
+        skip_avg = st.session_state.get("skip_avg", False)
+        step2_confirmed = st.session_state.get("step2_confirmed", False)
         step2_done = skip_avg or step2_confirmed
 
     # ── 載入數據 ──────────────────────────────────────────────────────────────────
@@ -251,75 +255,79 @@ def run_xps_ui() -> None:
         step3_confirmed = st.session_state.get("step3_confirmed", False)
 
         if step3_visible:
-            skip_calib = step_header_with_skip(3, "能量校正（標準品）", "skip_calib")
-            if not skip_calib:
-                au_file = st.file_uploader(
-                    "上傳標準品 .txt", type=["txt", "csv"], key="au_uploader"
-                )
-                if au_file:
-                    std_name = st.selectbox(
-                        "選擇標準品", list(CALIB_STANDARDS.keys()), index=0, key="calib_std"
+            _skip3 = st.session_state.get("skip_calib", False)
+            with st.expander(step_exp_label(3, "能量校正（標準品）", step3_confirmed or _skip3),
+                             expanded=not (step3_confirmed or _skip3)):
+                skip_calib = st.checkbox("跳過此步驟 ✓", key="skip_calib")
+                if not skip_calib:
+                    au_file = st.file_uploader(
+                        "上傳標準品 .txt", type=["txt", "csv"], key="au_uploader"
                     )
-                    ref_e = CALIB_STANDARDS[std_name]
-                    if ref_e is None:
-                        ref_e = st.number_input(
-                            "輸入標準峰位置 (eV)", value=84.0, step=0.1,
-                            format="%.2f", key="calib_custom_e"
+                    if au_file:
+                        std_name = st.selectbox(
+                            "選擇標準品", list(CALIB_STANDARDS.keys()), index=0, key="calib_std"
                         )
-                    calib_au_x, calib_au_y, au_err = load_xps_file(au_file)
-                    if au_err:
-                        st.error(f"標準品讀取失敗：{au_err}")
-                        calib_au_x = calib_au_y = None
-                    else:
-                        peaks_det, _ = find_peaks(
-                            calib_au_y, height=np.max(calib_au_y) * 0.5, distance=20
-                        )
-                        auto_e = None
-                        if len(peaks_det) > 0:
-                            best = peaks_det[np.argmax(calib_au_y[peaks_det])]
-                            auto_e = float(calib_au_x[best])
+                        ref_e = CALIB_STANDARDS[std_name]
+                        if ref_e is None:
+                            ref_e = st.number_input(
+                                "輸入標準峰位置 (eV)", value=84.0, step=0.1,
+                                format="%.2f", key="calib_custom_e"
+                            )
+                        calib_au_x, calib_au_y, au_err = load_xps_file(au_file)
+                        if au_err:
+                            st.error(f"標準品讀取失敗：{au_err}")
+                            calib_au_x = calib_au_y = None
                         else:
-                            st.warning("無法自動偵測峰值，請手動輸入峰位。")
-                        measured_e = st.number_input(
-                            "偵測到的峰位置 (eV)（可手動修改）",
-                            value=auto_e if auto_e is not None else float(ref_e),
-                            step=0.01, format="%.3f",
-                            key="calib_measured_e",
-                        )
-                        offset = ref_e - measured_e
-                        col_m1, col_m2 = st.columns(2)
-                        col_m1.metric("偵測峰值", f"{measured_e:.2f} eV")
-                        col_m2.metric("位移量 ΔE", f"{offset:+.3f} eV")
-                        with st.expander("查看標準品峰值偵測圖"):
-                            fig_au = go.Figure()
-                            fig_au.add_trace(go.Scatter(
-                                x=calib_au_x, y=calib_au_y, mode="lines",
-                                name=std_name, line=dict(color="#00CC96", width=2),
-                            ))
-                            fig_au.add_vline(
-                                x=measured_e, line_dash="dash", line_color="red",
-                                annotation_text=f"偵測：{measured_e:.2f} eV",
-                                annotation_position="top left",
+                            peaks_det, _ = find_peaks(
+                                calib_au_y, height=np.max(calib_au_y) * 0.5, distance=20
                             )
-                            fig_au.add_vline(
-                                x=ref_e, line_dash="dot", line_color="gray",
-                                annotation_text=f"標準：{ref_e:.2f} eV",
-                                annotation_position="top right",
+                            auto_e = None
+                            if len(peaks_det) > 0:
+                                best = peaks_det[np.argmax(calib_au_y[peaks_det])]
+                                auto_e = float(calib_au_x[best])
+                            else:
+                                st.warning("無法自動偵測峰值，請手動輸入峰位。")
+                            measured_e = st.number_input(
+                                "偵測到的峰位置 (eV)（可手動修改）",
+                                value=auto_e if auto_e is not None else float(ref_e),
+                                step=0.01, format="%.3f",
+                                key="calib_measured_e",
                             )
-                            fig_au.update_layout(
-                                xaxis_title="Binding Energy (eV)", yaxis_title="Intensity",
-                                xaxis=dict(autorange="reversed"),
-                                template="plotly_white", height=260,
-                                margin=dict(l=40, r=20, t=30, b=40),
-                            )
-                            st.plotly_chart(fig_au, use_container_width=True)
-
-            if skip_calib and not step3_confirmed:
-                st.session_state["step3_confirmed"] = True
-                step3_confirmed = True
-            if not skip_calib and not step3_confirmed:
-                if _next_btn("btn_step3_next", "step3_confirmed"):
+                            offset = ref_e - measured_e
+                            col_m1, col_m2 = st.columns(2)
+                            col_m1.metric("偵測峰值", f"{measured_e:.2f} eV")
+                            col_m2.metric("位移量 ΔE", f"{offset:+.3f} eV")
+                            with st.expander("查看標準品峰值偵測圖"):
+                                fig_au = go.Figure()
+                                fig_au.add_trace(go.Scatter(
+                                    x=calib_au_x, y=calib_au_y, mode="lines",
+                                    name=std_name, line=dict(color="#00CC96", width=2),
+                                ))
+                                fig_au.add_vline(
+                                    x=measured_e, line_dash="dash", line_color="red",
+                                    annotation_text=f"偵測：{measured_e:.2f} eV",
+                                    annotation_position="top left",
+                                )
+                                fig_au.add_vline(
+                                    x=ref_e, line_dash="dot", line_color="gray",
+                                    annotation_text=f"標準：{ref_e:.2f} eV",
+                                    annotation_position="top right",
+                                )
+                                fig_au.update_layout(
+                                    xaxis_title="Binding Energy (eV)", yaxis_title="Intensity",
+                                    xaxis=dict(autorange="reversed"),
+                                    template="plotly_white", height=260,
+                                    margin=dict(l=40, r=20, t=30, b=40),
+                                )
+                                st.plotly_chart(fig_au, use_container_width=True)
+                if skip_calib and not step3_confirmed:
+                    st.session_state["step3_confirmed"] = True
                     step3_confirmed = True
+                if not skip_calib and not step3_confirmed:
+                    if _next_btn("btn_step3_next", "step3_confirmed"):
+                        step3_confirmed = True
+            skip_calib = st.session_state.get("skip_calib", False)
+            step3_confirmed = st.session_state.get("step3_confirmed", False)
 
         step3_done = step3_visible and (skip_calib or step3_confirmed)
 
@@ -329,51 +337,55 @@ def run_xps_ui() -> None:
         step4_confirmed = st.session_state.get("step4_confirmed", False)
 
         if step4_visible:
-            skip_bg = step_header_with_skip(4, "背景扣除", "skip_bg")
-            tougaard_B = 2866.0
-            tougaard_C = 1643.0
-            if not skip_bg:
-                bg_method = st.selectbox(
-                    "方法",
-                    ["none", "linear", "shirley", "tougaard"],
-                    format_func=lambda v: {
-                        "none": "不扣除",
-                        "linear": "線性背景",
-                        "shirley": "Shirley 背景",
-                        "tougaard": "Tougaard 背景（XPS 推薦）",
-                    }[v],
-                )
-                if bg_method == "tougaard":
-                    tougaard_B = float(st.number_input(
-                        "Tougaard B (eV²)", value=2866.0, min_value=100.0,
-                        max_value=9999.0, step=50.0, format="%.0f",
-                    ))
-                    tougaard_C = float(st.number_input(
-                        "Tougaard C (eV³)", value=1643.0, min_value=100.0,
-                        max_value=9999.0, step=50.0, format="%.0f",
-                    ))
-                if bg_method != "none":
-                    _prev_bg = st.session_state.get("bg_range", (_e0, _e1))
-                    _bg_lo = float(max(_e0, min(float(min(_prev_bg)), _e1)))
-                    _bg_hi = float(max(_e0, min(float(max(_prev_bg)), _e1)))
-                    if _bg_lo >= _bg_hi:
-                        _bg_lo, _bg_hi = _e0, _e1
-                    st.session_state["bg_range"] = (_bg_lo, _bg_hi)
-                    bg_range = st.slider(
-                        "背景計算區間 (eV)",
-                        min_value=_e0, max_value=_e1,
-                        step=0.01, format="%.2f eV",
-                        key="bg_range",
+            _skip4 = st.session_state.get("skip_bg", False)
+            with st.expander(step_exp_label(4, "背景扣除", step4_confirmed or _skip4),
+                             expanded=not (step4_confirmed or _skip4)):
+                skip_bg = st.checkbox("跳過此步驟 ✓", key="skip_bg")
+                tougaard_B = 2866.0
+                tougaard_C = 1643.0
+                if not skip_bg:
+                    bg_method = st.selectbox(
+                        "方法",
+                        ["none", "linear", "shirley", "tougaard"],
+                        format_func=lambda v: {
+                            "none": "不扣除",
+                            "linear": "線性背景",
+                            "shirley": "Shirley 背景",
+                            "tougaard": "Tougaard 背景（XPS 推薦）",
+                        }[v],
                     )
-                    bg_x_start, bg_x_end = sorted(bg_range)
-                    show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True)
-
-            if skip_bg and not step4_confirmed:
-                st.session_state["step4_confirmed"] = True
-                step4_confirmed = True
-            if not skip_bg and not step4_confirmed:
-                if _next_btn("btn_step4_next", "step4_confirmed"):
+                    if bg_method == "tougaard":
+                        tougaard_B = float(st.number_input(
+                            "Tougaard B (eV²)", value=2866.0, min_value=100.0,
+                            max_value=9999.0, step=50.0, format="%.0f",
+                        ))
+                        tougaard_C = float(st.number_input(
+                            "Tougaard C (eV³)", value=1643.0, min_value=100.0,
+                            max_value=9999.0, step=50.0, format="%.0f",
+                        ))
+                    if bg_method != "none":
+                        _prev_bg = st.session_state.get("bg_range", (_e0, _e1))
+                        _bg_lo = float(max(_e0, min(float(min(_prev_bg)), _e1)))
+                        _bg_hi = float(max(_e0, min(float(max(_prev_bg)), _e1)))
+                        if _bg_lo >= _bg_hi:
+                            _bg_lo, _bg_hi = _e0, _e1
+                        st.session_state["bg_range"] = (_bg_lo, _bg_hi)
+                        bg_range = st.slider(
+                            "背景計算區間 (eV)",
+                            min_value=_e0, max_value=_e1,
+                            step=0.01, format="%.2f eV",
+                            key="bg_range",
+                        )
+                        bg_x_start, bg_x_end = sorted(bg_range)
+                        show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True)
+                if skip_bg and not step4_confirmed:
+                    st.session_state["step4_confirmed"] = True
                     step4_confirmed = True
+                if not skip_bg and not step4_confirmed:
+                    if _next_btn("btn_step4_next", "step4_confirmed"):
+                        step4_confirmed = True
+            skip_bg = st.session_state.get("skip_bg", False)
+            step4_confirmed = st.session_state.get("step4_confirmed", False)
 
         step4_done = step4_visible and (skip_bg or step4_confirmed)
 
@@ -383,40 +395,44 @@ def run_xps_ui() -> None:
         step5_confirmed = st.session_state.get("step5_confirmed", False)
 
         if step5_visible:
-            skip_norm = step_header_with_skip(5, "歸一化", "skip_norm")
-            if not skip_norm:
-                norm_method = st.selectbox(
-                    "方法",
-                    ["none", "min_max", "max", "area", "mean_region"],
-                    format_func=lambda v: {
-                        "none": "不歸一化",
-                        "min_max": "Min-Max (0~1)",
-                        "max": "峰值歸一化（可選區間）",
-                        "area": "面積歸一化（總面積 = 1）",
-                        "mean_region": "算術平均歸一化（選區間）",
-                    }[v],
-                )
-                if norm_method in ("mean_region", "max"):
-                    _prev_nm = st.session_state.get("norm_range", (_e0, _e1))
-                    _nm_lo = float(max(_e0, min(float(min(_prev_nm)), _e1)))
-                    _nm_hi = float(max(_e0, min(float(max(_prev_nm)), _e1)))
-                    if _nm_lo >= _nm_hi:
-                        _nm_lo, _nm_hi = _e0, _e1
-                    st.session_state["norm_range"] = (_nm_lo, _nm_hi)
-                    norm_range = st.slider(
-                        "歸一化參考區間 (eV)",
-                        min_value=_e0, max_value=_e1,
-                        step=0.01, format="%.2f eV",
-                        key="norm_range",
+            _skip5 = st.session_state.get("skip_norm", False)
+            with st.expander(step_exp_label(5, "歸一化", step5_confirmed or _skip5),
+                             expanded=not (step5_confirmed or _skip5)):
+                skip_norm = st.checkbox("跳過此步驟 ✓", key="skip_norm")
+                if not skip_norm:
+                    norm_method = st.selectbox(
+                        "方法",
+                        ["none", "min_max", "max", "area", "mean_region"],
+                        format_func=lambda v: {
+                            "none": "不歸一化",
+                            "min_max": "Min-Max (0~1)",
+                            "max": "峰值歸一化（可選區間）",
+                            "area": "面積歸一化（總面積 = 1）",
+                            "mean_region": "算術平均歸一化（選區間）",
+                        }[v],
                     )
-                    norm_x_start, norm_x_end = sorted(norm_range)
-
-            if skip_norm and not step5_confirmed:
-                st.session_state["step5_confirmed"] = True
-                step5_confirmed = True
-            if not skip_norm and not step5_confirmed:
-                if _next_btn("btn_step5_next", "step5_confirmed"):
+                    if norm_method in ("mean_region", "max"):
+                        _prev_nm = st.session_state.get("norm_range", (_e0, _e1))
+                        _nm_lo = float(max(_e0, min(float(min(_prev_nm)), _e1)))
+                        _nm_hi = float(max(_e0, min(float(max(_prev_nm)), _e1)))
+                        if _nm_lo >= _nm_hi:
+                            _nm_lo, _nm_hi = _e0, _e1
+                        st.session_state["norm_range"] = (_nm_lo, _nm_hi)
+                        norm_range = st.slider(
+                            "歸一化參考區間 (eV)",
+                            min_value=_e0, max_value=_e1,
+                            step=0.01, format="%.2f eV",
+                            key="norm_range",
+                        )
+                        norm_x_start, norm_x_end = sorted(norm_range)
+                if skip_norm and not step5_confirmed:
+                    st.session_state["step5_confirmed"] = True
                     step5_confirmed = True
+                if not skip_norm and not step5_confirmed:
+                    if _next_btn("btn_step5_next", "step5_confirmed"):
+                        step5_confirmed = True
+            skip_norm = st.session_state.get("skip_norm", False)
+            step5_confirmed = st.session_state.get("step5_confirmed", False)
 
         step5_done = step5_visible and (skip_norm or step5_confirmed)
 

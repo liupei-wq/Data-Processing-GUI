@@ -21,12 +21,13 @@ from core.ui_helpers import (
     auto_scroll_on_appear,
     hex_to_rgba,
     scroll_anchor,
+    step_exp_label,
     step_header,
     step_header_with_skip,
 )
-from peak_fitting import fit_peaks
-from processing import apply_normalization, apply_processing, despike_signal, smooth_signal
-from raman_database import RAMAN_REFERENCES
+from core.peak_fitting import fit_peaks
+from core.processing import apply_normalization, apply_processing, despike_signal, smooth_signal
+from db.raman_database import RAMAN_REFERENCES
 
 _SUBSTRATE_KEYS: set[str] = {"Si (基板)", "Sapphire α-Al₂O₃ (c-plane)"}
 _FILM_KEYS: list[str] = [k for k in RAMAN_REFERENCES if k not in _SUBSTRATE_KEYS]
@@ -901,6 +902,17 @@ def run_raman_ui():
 
     st.success(f"成功載入 {len(data_dict)} 個檔案：{', '.join(data_dict.keys())}")
 
+    # ── Detect file change → reset range sliders ──────────────────────────────
+    _cur_upload_ids = frozenset(f"{uf.name}_{uf.size}" for uf in uploaded_files)
+    if _cur_upload_ids != st.session_state.get("raman_last_upload_ids"):
+        for _rk in [
+            "raman_bg_range", "raman_norm_range",
+            "raman_detect_x_start", "raman_detect_x_end",
+            "raman_zoom_start", "raman_zoom_end", "raman_zoom_range_slider",
+        ]:
+            st.session_state.pop(_rk, None)
+        st.session_state["raman_last_upload_ids"] = _cur_upload_ids
+
     # ── Compute global x range ─────────────────────────────────────────────────
     _all_x = np.concatenate([xv for xv, _ in data_dict.values()])
     x_min_g = float(_all_x.min())
@@ -971,33 +983,43 @@ def run_raman_ui():
     show_spike_marks = False
 
     with st.sidebar:
-        skip_despike = step_header_with_skip(2, "去尖峰", "raman_skip_despike")
-        if not skip_despike:
-            despike_method = st.selectbox(
-                "方法",
-                ["none", "median"],
-                format_func=lambda v: {
-                    "none": "不處理",
-                    "median": "Median despike（cosmic ray）",
-                }[v],
-                key="raman_despike_method",
-            )
-            if despike_method != "none":
-                despike_threshold = float(st.slider(
-                    "尖峰判定門檻", 4.0, 20.0, 8.0, 0.5, key="raman_despike_threshold"
-                ))
-                despike_window = int(st.number_input(
-                    "局部視窗點數", min_value=3, max_value=31, value=7, step=2, key="raman_despike_window"
-                ))
-                despike_passes = int(st.slider("修正回合數", 1, 3, 1, key="raman_despike_passes"))
-                show_spike_marks = st.checkbox("在圖上標示被修正的點", value=False, key="raman_show_spikes")
-
-        if skip_despike:
-            st.session_state["raman_step2_done"] = True
         s2 = st.session_state.get("raman_step2_done", False)
-        if not skip_despike and not s2:
-            if _next_btn("raman_btn2", "raman_step2_done"):
-                s2 = True
+        _skip2 = st.session_state.get("raman_skip_despike", False)
+        with st.expander(step_exp_label(2, "去尖峰", s2 or _skip2), expanded=not (s2 or _skip2)):
+            skip_despike = st.checkbox("跳過此步驟 ✓", key="raman_skip_despike")
+            if not skip_despike:
+                st.caption("⚠️ 僅用於修正雷射 cosmic ray 造成的**單點**尖銳突起，不適合一般峰形處理。")
+                despike_method = st.selectbox(
+                    "方法",
+                    ["none", "median"],
+                    format_func=lambda v: {
+                        "none": "不處理",
+                        "median": "Median despike（cosmic ray）",
+                    }[v],
+                    key="raman_despike_method",
+                    help="Median despike：以局部中位數取代偏差過大的單點，專門針對 cosmic ray 尖峰。一般樣品訊號寬峰請跳過此步驟。",
+                )
+                if despike_method != "none":
+                    despike_threshold = float(st.slider(
+                        "尖峰判定門檻", 4.0, 20.0, 8.0, 0.5, key="raman_despike_threshold",
+                        help="判定倍數：偏差超過局部標準差×此值才視為尖峰。數值越小修正越激進，建議從 8 開始調整。",
+                    ))
+                    despike_window = int(st.number_input(
+                        "局部視窗點數", min_value=3, max_value=31, value=7, step=2, key="raman_despike_window",
+                        help="計算中位數的鄰近點數（奇數）。視窗太小易誤判，太大會把真實峰也納入比較。",
+                    ))
+                    despike_passes = int(st.slider("修正回合數", 1, 3, 1, key="raman_despike_passes",
+                        help="重複套用幾次。通常 1 次即可；有多個相鄰 cosmic ray 點時可試 2–3 次。",
+                    ))
+                    show_spike_marks = st.checkbox("在圖上標示被修正的點", value=False, key="raman_show_spikes")
+            if skip_despike:
+                st.session_state["raman_step2_done"] = True
+            s2 = st.session_state.get("raman_step2_done", False)
+            if not skip_despike and not s2:
+                if _next_btn("raman_btn2", "raman_step2_done"):
+                    s2 = True
+        skip_despike = st.session_state.get("raman_skip_despike", False)
+        s2 = st.session_state.get("raman_step2_done", False)
         step2_done = skip_despike or s2
 
     # ── Step 3: averaging options (sidebar) ───────────────────────────────────
@@ -1008,20 +1030,24 @@ def run_raman_ui():
     with st.sidebar:
         s3 = st.session_state.get("raman_step3_done", False)
         if step2_done:
-            skip_avg = step_header_with_skip(3, "多檔平均", "raman_skip_avg")
-            if not skip_avg:
-                do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
-                interp_points = int(st.number_input(
-                    "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
-                ))
-                if do_average:
-                    show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
-            if skip_avg:
-                st.session_state["raman_step3_done"] = True
+            _skip3 = st.session_state.get("raman_skip_avg", False)
+            with st.expander(step_exp_label(3, "多檔平均", s3 or _skip3), expanded=not (s3 or _skip3)):
+                skip_avg = st.checkbox("跳過此步驟 ✓", key="raman_skip_avg")
+                if not skip_avg:
+                    do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
+                    interp_points = int(st.number_input(
+                        "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
+                    ))
+                    if do_average:
+                        show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
+                if skip_avg:
+                    st.session_state["raman_step3_done"] = True
+                s3 = st.session_state.get("raman_step3_done", False)
+                if not skip_avg and not s3:
+                    if _next_btn("raman_btn3", "raman_step3_done"):
+                        s3 = True
+            skip_avg = st.session_state.get("raman_skip_avg", False)
             s3 = st.session_state.get("raman_step3_done", False)
-            if not skip_avg and not s3:
-                if _next_btn("raman_btn3", "raman_step3_done"):
-                    s3 = True
         else:
             skip_avg = False
         step3_done = step2_done and (skip_avg or s3)
@@ -1038,59 +1064,63 @@ def run_raman_ui():
     with st.sidebar:
         s4 = st.session_state.get("raman_step4_done", False)
         if step3_done:
-            skip_bg = step_header_with_skip(4, "背景扣除", "raman_skip_bg")
-            if not skip_bg:
-                bg_method = st.selectbox(
-                    "方法",
-                    ["none", "linear", "polynomial", "asls", "airpls"],
-                    format_func=lambda v: {
-                        "none": "不扣除",
-                        "linear": "線性背景",
-                        "polynomial": "多項式（螢光背景）",
-                        "asls": "AsLS（推薦，螢光背景）",
-                        "airpls": "airPLS（自適應螢光背景）",
-                    }[v],
-                    key="raman_bg_method",
-                )
-                if bg_method == "polynomial":
-                    poly_deg = int(st.slider("多項式階數", 2, 6, 3, key="raman_poly_deg"))
-                elif bg_method in ("asls", "airpls"):
-                    lambda_exp = float(st.slider(
-                        "平滑強度 log10(λ)", 2.0, 9.0, 5.0, 0.5, key="raman_baseline_lambda_exp"
-                    ))
-                    baseline_lambda = float(10.0 ** lambda_exp)
-                    baseline_iter = int(st.slider(
-                        "迭代次數", 5, 50, 20, key="raman_baseline_iter"
-                    ))
-                    if bg_method == "asls":
-                        baseline_p = float(st.slider(
-                            "峰值抑制 p", 0.001, 0.200, 0.010, 0.001, key="raman_baseline_p"
+            _skip4 = st.session_state.get("raman_skip_bg", False)
+            with st.expander(step_exp_label(4, "背景扣除", s4 or _skip4), expanded=not (s4 or _skip4)):
+                skip_bg = st.checkbox("跳過此步驟 ✓", key="raman_skip_bg")
+                if not skip_bg:
+                    bg_method = st.selectbox(
+                        "方法",
+                        ["none", "linear", "polynomial", "asls", "airpls"],
+                        format_func=lambda v: {
+                            "none": "不扣除",
+                            "linear": "線性背景",
+                            "polynomial": "多項式（螢光背景）",
+                            "asls": "AsLS（推薦，螢光背景）",
+                            "airpls": "airPLS（自適應螢光背景）",
+                        }[v],
+                        key="raman_bg_method",
+                    )
+                    if bg_method == "polynomial":
+                        poly_deg = int(st.slider("多項式階數", 2, 6, 3, key="raman_poly_deg"))
+                    elif bg_method in ("asls", "airpls"):
+                        lambda_exp = float(st.slider(
+                            "平滑強度 log10(λ)", 2.0, 9.0, 5.0, 0.5, key="raman_baseline_lambda_exp"
                         ))
-                    st.caption(
-                        "λ 越大，背景越平；AsLS 的 p 越小，越不容易把真正峰形當成背景。"
-                    )
-                if bg_method != "none":
-                    _prev = st.session_state.get("raman_bg_range", (_e0, _e1))
-                    _lo = float(np.clip(float(min(_prev)), _e0, _e1))
-                    _hi = float(np.clip(float(max(_prev)), _e0, _e1))
-                    if _lo >= _hi:
-                        _lo, _hi = _e0, _e1
-                    st.session_state["raman_bg_range"] = (_lo, _hi)
-                    bg_range = st.slider(
-                        "背景計算區間 (cm⁻¹)",
-                        min_value=_e0, max_value=_e1,
-                        step=step_size, format="%.1f cm⁻¹",
-                        key="raman_bg_range",
-                    )
-                    bg_x_start = float(min(bg_range))
-                    bg_x_end = float(max(bg_range))
-                    show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True, key="raman_show_bg")
-            if skip_bg:
-                st.session_state["raman_step4_done"] = True
+                        baseline_lambda = float(10.0 ** lambda_exp)
+                        baseline_iter = int(st.slider(
+                            "迭代次數", 5, 50, 20, key="raman_baseline_iter"
+                        ))
+                        if bg_method == "asls":
+                            baseline_p = float(st.slider(
+                                "峰值抑制 p", 0.001, 0.200, 0.010, 0.001, key="raman_baseline_p"
+                            ))
+                        st.caption(
+                            "λ 越大，背景越平；AsLS 的 p 越小，越不容易把真正峰形當成背景。"
+                        )
+                    if bg_method != "none":
+                        _prev = st.session_state.get("raman_bg_range", (_e0, _e1))
+                        _lo = float(np.clip(float(min(_prev)), _e0, _e1))
+                        _hi = float(np.clip(float(max(_prev)), _e0, _e1))
+                        if _lo >= _hi:
+                            _lo, _hi = _e0, _e1
+                        st.session_state["raman_bg_range"] = (_lo, _hi)
+                        bg_range = st.slider(
+                            "背景計算區間 (cm⁻¹)",
+                            min_value=_e0, max_value=_e1,
+                            step=step_size, format="%.1f cm⁻¹",
+                            key="raman_bg_range",
+                        )
+                        bg_x_start = float(min(bg_range))
+                        bg_x_end = float(max(bg_range))
+                        show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True, key="raman_show_bg")
+                if skip_bg:
+                    st.session_state["raman_step4_done"] = True
+                s4 = st.session_state.get("raman_step4_done", False)
+                if not skip_bg and not s4:
+                    if _next_btn("raman_btn4", "raman_step4_done"):
+                        s4 = True
+            skip_bg = st.session_state.get("raman_skip_bg", False)
             s4 = st.session_state.get("raman_step4_done", False)
-            if not skip_bg and not s4:
-                if _next_btn("raman_btn4", "raman_step4_done"):
-                    s4 = True
         else:
             skip_bg = False
         step4_done = step3_done and (skip_bg or s4)
@@ -1103,30 +1133,34 @@ def run_raman_ui():
     with st.sidebar:
         s5 = st.session_state.get("raman_step5_done", False)
         if step4_done:
-            skip_smooth = step_header_with_skip(5, "平滑", "raman_skip_smooth")
-            if not skip_smooth:
-                smooth_method = st.selectbox(
-                    "方法",
-                    ["none", "moving_average", "savitzky_golay"],
-                    format_func=lambda v: {
-                        "none": "不平滑",
-                        "moving_average": "移動平均",
-                        "savitzky_golay": "Savitzky-Golay",
-                    }[v],
-                    key="raman_smooth_method",
-                )
-                if smooth_method != "none":
-                    smooth_window = int(st.number_input(
-                        "視窗點數", min_value=3, max_value=301, value=11, step=2, key="raman_smooth_window"
-                    ))
-                if smooth_method == "savitzky_golay":
-                    smooth_poly_deg = int(st.slider("多項式階數", 2, 5, 3, key="raman_smooth_poly"))
-            if skip_smooth:
-                st.session_state["raman_step5_done"] = True
+            _skip5 = st.session_state.get("raman_skip_smooth", False)
+            with st.expander(step_exp_label(5, "平滑", s5 or _skip5), expanded=not (s5 or _skip5)):
+                skip_smooth = st.checkbox("跳過此步驟 ✓", key="raman_skip_smooth")
+                if not skip_smooth:
+                    smooth_method = st.selectbox(
+                        "方法",
+                        ["none", "moving_average", "savitzky_golay"],
+                        format_func=lambda v: {
+                            "none": "不平滑",
+                            "moving_average": "移動平均",
+                            "savitzky_golay": "Savitzky-Golay",
+                        }[v],
+                        key="raman_smooth_method",
+                    )
+                    if smooth_method != "none":
+                        smooth_window = int(st.number_input(
+                            "視窗點數", min_value=3, max_value=301, value=11, step=2, key="raman_smooth_window"
+                        ))
+                    if smooth_method == "savitzky_golay":
+                        smooth_poly_deg = int(st.slider("多項式階數", 2, 5, 3, key="raman_smooth_poly"))
+                if skip_smooth:
+                    st.session_state["raman_step5_done"] = True
+                s5 = st.session_state.get("raman_step5_done", False)
+                if not skip_smooth and not s5:
+                    if _next_btn("raman_btn5", "raman_step5_done"):
+                        s5 = True
+            skip_smooth = st.session_state.get("raman_skip_smooth", False)
             s5 = st.session_state.get("raman_step5_done", False)
-            if not skip_smooth and not s5:
-                if _next_btn("raman_btn5", "raman_step5_done"):
-                    s5 = True
         else:
             skip_smooth = False
         step5_done = step4_done and (skip_smooth or s5)
@@ -1138,41 +1172,45 @@ def run_raman_ui():
     with st.sidebar:
         s6 = st.session_state.get("raman_step6_done", False)
         if step5_done:
-            skip_norm = step_header_with_skip(6, "歸一化", "raman_skip_norm")
-            if not skip_norm:
-                norm_method = st.selectbox(
-                    "方法",
-                    ["none", "min_max", "max", "area", "mean_region"],
-                    format_func=lambda v: {
-                        "none": "不歸一化",
-                        "min_max": "Min-Max (0~1)",
-                        "max": "峰值歸一化（可選區間）",
-                        "area": "面積歸一化（總面積 = 1）",
-                        "mean_region": "算術平均歸一化（選區間）",
-                    }[v],
-                    key="raman_norm_method",
-                )
-                if norm_method in ("mean_region", "max"):
-                    _prev = st.session_state.get("raman_norm_range", (_e0, _e1))
-                    _lo = float(np.clip(float(min(_prev)), _e0, _e1))
-                    _hi = float(np.clip(float(max(_prev)), _e0, _e1))
-                    if _lo >= _hi:
-                        _lo, _hi = _e0, _e1
-                    st.session_state["raman_norm_range"] = (_lo, _hi)
-                    norm_range = st.slider(
-                        "歸一化參考區間 (cm⁻¹)",
-                        min_value=_e0, max_value=_e1,
-                        step=step_size, format="%.1f cm⁻¹",
-                        key="raman_norm_range",
+            _skip6 = st.session_state.get("raman_skip_norm", False)
+            with st.expander(step_exp_label(6, "歸一化", s6 or _skip6), expanded=not (s6 or _skip6)):
+                skip_norm = st.checkbox("跳過此步驟 ✓", key="raman_skip_norm")
+                if not skip_norm:
+                    norm_method = st.selectbox(
+                        "方法",
+                        ["none", "min_max", "max", "area", "mean_region"],
+                        format_func=lambda v: {
+                            "none": "不歸一化",
+                            "min_max": "Min-Max (0~1)",
+                            "max": "峰值歸一化（可選區間）",
+                            "area": "面積歸一化（總面積 = 1）",
+                            "mean_region": "算術平均歸一化（選區間）",
+                        }[v],
+                        key="raman_norm_method",
                     )
-                    norm_x_start = float(min(norm_range))
-                    norm_x_end = float(max(norm_range))
-            if skip_norm:
-                st.session_state["raman_step6_done"] = True
+                    if norm_method in ("mean_region", "max"):
+                        _prev = st.session_state.get("raman_norm_range", (_e0, _e1))
+                        _lo = float(np.clip(float(min(_prev)), _e0, _e1))
+                        _hi = float(np.clip(float(max(_prev)), _e0, _e1))
+                        if _lo >= _hi:
+                            _lo, _hi = _e0, _e1
+                        st.session_state["raman_norm_range"] = (_lo, _hi)
+                        norm_range = st.slider(
+                            "歸一化參考區間 (cm⁻¹)",
+                            min_value=_e0, max_value=_e1,
+                            step=step_size, format="%.1f cm⁻¹",
+                            key="raman_norm_range",
+                        )
+                        norm_x_start = float(min(norm_range))
+                        norm_x_end = float(max(norm_range))
+                if skip_norm:
+                    st.session_state["raman_step6_done"] = True
+                s6 = st.session_state.get("raman_step6_done", False)
+                if not skip_norm and not s6:
+                    if _next_btn("raman_btn6", "raman_step6_done"):
+                        s6 = True
+            skip_norm = st.session_state.get("raman_skip_norm", False)
             s6 = st.session_state.get("raman_step6_done", False)
-            if not skip_norm and not s6:
-                if _next_btn("raman_btn6", "raman_step6_done"):
-                    s6 = True
         else:
             skip_norm = False
         step6_done = step5_done and (skip_norm or s6)
@@ -1192,79 +1230,84 @@ def run_raman_ui():
     with st.sidebar:
         s7 = st.session_state.get("raman_step7_done", False)
         if step6_done:
-            skip_peaks = step_header_with_skip(7, "峰值偵測", "raman_skip_peaks")
-            if not skip_peaks:
-                peak_prom_ratio = float(st.slider(
-                    "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="raman_peak_prominence"
-                ))
-                peak_height_ratio = float(st.slider(
-                    "最小高度（相對最大值）", 0.0, 1.0, 0.03, 0.01, key="raman_peak_height"
-                ))
-                peak_distance_cm = float(st.number_input(
-                    "最小峰距 (cm⁻¹)",
-                    min_value=step_size,
-                    max_value=max(step_size, x_max_g - x_min_g),
-                    value=raman_peak_distance_default,
-                    step=max(step_size, 1.0),
-                    format="%.1f",
-                    key="raman_peak_distance",
-                ))
-                max_peak_labels = int(st.number_input(
-                    "最多標記峰數", min_value=1, max_value=50, value=15, step=1, key="raman_peak_max"
-                ))
-                label_peaks = st.checkbox("標示峰位數值", value=True, key="raman_peak_labels")
-
-                # ── 局部自適應靈敏度 ──────────────────────────────────────────
-                use_local_prom = st.checkbox(
-                    "局部自適應靈敏度",
-                    value=False,
-                    key="raman_local_prom",
-                    help="偵測前對每個局部區域做歸一化，讓強峰（如 Si）旁邊的弱峰也能被偵測到",
-                )
-                if use_local_prom:
-                    local_window_cm = float(st.number_input(
-                        "局部窗口 (cm⁻¹)",
-                        min_value=20.0,
-                        max_value=float(max(200.0, x_max_g - x_min_g)),
-                        value=100.0,
-                        step=10.0,
-                        format="%.0f",
-                        key="raman_local_window_cm",
+            _skip7 = st.session_state.get("raman_skip_peaks", False)
+            with st.expander(step_exp_label(7, "峰值偵測", s7 or _skip7), expanded=not (s7 or _skip7)):
+                skip_peaks = st.checkbox("跳過此步驟 ✓", key="raman_skip_peaks")
+                if not skip_peaks:
+                    peak_prom_ratio = float(st.slider(
+                        "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="raman_peak_prominence"
                     ))
-
-                # ── 限制偵測 X 範圍 ───────────────────────────────────────────
-                use_detect_range = st.checkbox(
-                    "限制偵測 X 範圍",
-                    value=False,
-                    key="raman_detect_range_on",
-                    help="只在指定區間內搜尋峰值，適合只看某段薄膜訊號區域",
-                )
-                if use_detect_range:
-                    detect_x_start = float(st.number_input(
-                        "偵測起點 (cm⁻¹)",
-                        min_value=float(x_min_g),
-                        max_value=float(x_max_g),
-                        value=float(x_min_g),
-                        step=step_size,
+                    peak_height_ratio = float(st.slider(
+                        "最小高度（相對最大值）", 0.0, 1.0, 0.03, 0.01, key="raman_peak_height"
+                    ))
+                    peak_distance_cm = float(st.number_input(
+                        "最小峰距 (cm⁻¹)",
+                        min_value=step_size,
+                        max_value=max(step_size, x_max_g - x_min_g),
+                        value=raman_peak_distance_default,
+                        step=max(step_size, 1.0),
                         format="%.1f",
-                        key="raman_detect_x_start",
+                        key="raman_peak_distance",
                     ))
-                    detect_x_end = float(st.number_input(
-                        "偵測終點 (cm⁻¹)",
-                        min_value=float(x_min_g),
-                        max_value=float(x_max_g),
-                        value=float(x_max_g),
-                        step=step_size,
-                        format="%.1f",
-                        key="raman_detect_x_end",
+                    max_peak_labels = int(st.number_input(
+                        "最多標記峰數", min_value=1, max_value=50, value=15, step=1, key="raman_peak_max"
                     ))
+                    label_peaks = st.checkbox("標示峰位數值", value=True, key="raman_peak_labels")
 
-            if skip_peaks:
-                st.session_state["raman_step7_done"] = True
+                    # ── 局部自適應靈敏度 ──────────────────────────────────────────
+                    use_local_prom = st.checkbox(
+                        "局部自適應靈敏度",
+                        value=False,
+                        key="raman_local_prom",
+                        help="偵測前對每個局部區域做歸一化，讓強峰（如 Si）旁邊的弱峰也能被偵測到",
+                    )
+                    if use_local_prom:
+                        local_window_cm = float(st.number_input(
+                            "局部窗口 (cm⁻¹)",
+                            min_value=20.0,
+                            max_value=float(max(200.0, x_max_g - x_min_g)),
+                            value=100.0,
+                            step=10.0,
+                            format="%.0f",
+                            key="raman_local_window_cm",
+                        ))
+
+                    # ── 限制偵測 X 範圍 ───────────────────────────────────────────
+                    use_detect_range = st.checkbox(
+                        "限制偵測 X 範圍",
+                        value=False,
+                        key="raman_detect_range_on",
+                        help="只在指定區間內搜尋峰值，適合只看某段薄膜訊號區域",
+                    )
+                    if use_detect_range:
+                        detect_x_start = float(st.number_input(
+                            "偵測起點 (cm⁻¹)",
+                            min_value=float(x_min_g),
+                            max_value=float(x_max_g),
+                            value=float(x_min_g),
+                            step=step_size,
+                            format="%.1f",
+                            key="raman_detect_x_start",
+                        ))
+                        detect_x_end = float(st.number_input(
+                            "偵測終點 (cm⁻¹)",
+                            min_value=float(x_min_g),
+                            max_value=float(x_max_g),
+                            value=float(x_max_g),
+                            step=step_size,
+                            format="%.1f",
+                            key="raman_detect_x_end",
+                        ))
+
+                if skip_peaks:
+                    st.session_state["raman_step7_done"] = True
+                s7 = st.session_state.get("raman_step7_done", False)
+                if not skip_peaks and not s7:
+                    if _next_btn("raman_btn7", "raman_step7_done"):
+                        s7 = True
+                run_peak_detection = step6_done and not skip_peaks
+            skip_peaks = st.session_state.get("raman_skip_peaks", False)
             s7 = st.session_state.get("raman_step7_done", False)
-            if not skip_peaks and not s7:
-                if _next_btn("raman_btn7", "raman_step7_done"):
-                    s7 = True
             run_peak_detection = step6_done and not skip_peaks
         else:
             skip_peaks = False
@@ -1283,39 +1326,58 @@ def run_raman_ui():
         if step7_done:
             if st.session_state.get("raman_fit_target") not in fit_target_options:
                 st.session_state["raman_fit_target"] = fit_target_default
-            skip_fit = step_header_with_skip(8, "峰擬合", "raman_skip_fit")
-            if not skip_fit:
-                if len(fit_target_options) > 1:
-                    fit_target = st.selectbox("擬合對象", fit_target_options, key="raman_fit_target")
-                else:
-                    fit_target = fit_target_default
-                    st.caption(f"擬合對象：{fit_target}")
-                fit_profile = st.selectbox(
-                    "線形",
-                    ["voigt", "gaussian", "lorentzian"],
-                    format_func=lambda v: {
-                        "voigt": "Voigt（推薦）",
-                        "gaussian": "Gaussian",
-                        "lorentzian": "Lorentzian",
-                    }[v],
-                    key="raman_fit_profile",
-                )
-                fit_initial_fwhm = float(st.number_input(
-                    "預設初始 FWHM (cm⁻¹)",
-                    min_value=float(max(step_size, 0.5)),
-                    max_value=float(max(200.0, x_max_g - x_min_g)),
-                    value=float(max(4.0, min(24.0, (_e1 - _e0) / 30.0))),
-                    step=float(max(step_size, 0.5)),
-                    format="%.1f",
-                    key="raman_fit_init_fwhm",
-                ))
-                st.caption("峰位管理（載入基板 / 薄膜 / 自訂峰）在圖表下方操作。")
-            if skip_fit:
-                st.session_state["raman_step8_done"] = True
+            _skip8 = st.session_state.get("raman_skip_fit", False)
+            with st.expander(step_exp_label(8, "峰擬合", s8 or _skip8), expanded=not (s8 or _skip8)):
+                skip_fit = st.checkbox("跳過此步驟 ✓", key="raman_skip_fit")
+                if not skip_fit:
+                    if len(fit_target_options) > 1:
+                        fit_target = st.selectbox("擬合對象", fit_target_options, key="raman_fit_target")
+                    else:
+                        fit_target = fit_target_default
+                        st.caption(f"擬合對象：{fit_target}")
+                    fit_profile = st.selectbox(
+                        "線形",
+                        ["voigt", "gaussian", "lorentzian"],
+                        format_func=lambda v: {
+                            "voigt": "Voigt（推薦）",
+                            "gaussian": "Gaussian",
+                            "lorentzian": "Lorentzian",
+                        }[v],
+                        key="raman_fit_profile",
+                    )
+                    fit_initial_fwhm = float(st.number_input(
+                        "預設初始 FWHM (cm⁻¹)",
+                        min_value=float(max(step_size, 0.5)),
+                        max_value=float(max(200.0, x_max_g - x_min_g)),
+                        value=float(max(4.0, min(24.0, (_e1 - _e0) / 30.0))),
+                        step=float(max(step_size, 0.5)),
+                        format="%.1f",
+                        key="raman_fit_init_fwhm",
+                    ))
+                    _det_med = st.session_state.get("raman_detected_median_fwhm")
+                    _det_rng = st.session_state.get("raman_detected_fwhm_range")
+                    if _det_med is not None:
+                        _rng_txt = (
+                            f"，範圍 {_det_rng[0]:.1f}–{_det_rng[1]:.1f} cm⁻¹"
+                            if _det_rng else ""
+                        )
+                        _fc1, _fc2 = st.columns([3, 1])
+                        _fc1.caption(f"Step 7 偵測中位數：**{_det_med:.1f}** cm⁻¹{_rng_txt}")
+                        if _fc2.button("採用", key="raman_adopt_fwhm", help="將上方 FWHM 設為 Step 7 偵測中位數"):
+                            st.session_state["raman_fit_init_fwhm"] = float(
+                                np.clip(_det_med, float(max(step_size, 0.5)), float(max(200.0, x_max_g - x_min_g)))
+                            )
+                            st.rerun()
+                    st.caption("峰位管理（載入基板 / 薄膜 / 自訂峰）在圖表下方操作。")
+                if skip_fit:
+                    st.session_state["raman_step8_done"] = True
+                s8 = st.session_state.get("raman_step8_done", False)
+                if not skip_fit and not s8:
+                    if _next_btn("raman_btn8", "raman_step8_done"):
+                        s8 = True
+                run_peak_fit = (not skip_fit) and s8
+            skip_fit = st.session_state.get("raman_skip_fit", False)
             s8 = st.session_state.get("raman_step8_done", False)
-            if not skip_fit and not s8:
-                if _next_btn("raman_btn8", "raman_step8_done"):
-                    s8 = True
             run_peak_fit = (not skip_fit) and s8
         else:
             fit_target = fit_target_default
@@ -1907,6 +1969,18 @@ def run_raman_ui():
                     st.plotly_chart(compare_fig, use_container_width=True)
 
     peak_export_df = pd.concat(peak_tables, ignore_index=True) if peak_tables else pd.DataFrame()
+
+    # ── 將偵測到的 FWHM 統計存入 session_state，供 Step 8 參考 ──────────────
+    if run_peak_detection and not peak_export_df.empty and "FWHM_cm" in peak_export_df.columns:
+        _det_fwhm_vals = peak_export_df["FWHM_cm"].dropna()
+        if len(_det_fwhm_vals) >= 1:
+            st.session_state["raman_detected_median_fwhm"] = float(np.median(_det_fwhm_vals))
+            st.session_state["raman_detected_fwhm_range"] = (
+                float(_det_fwhm_vals.min()), float(_det_fwhm_vals.max())
+            )
+    elif not run_peak_detection:
+        pass  # 保留上次偵測的值
+
     if run_peak_detection:
         source_label = peak_signal_label or "目前處理後"
         st.caption(f"峰值偵測以目前{source_label}曲線為準。")
@@ -2031,7 +2105,6 @@ def run_raman_ui():
             peak_editor_source = peak_df_for_ui[peak_table_cols].copy()
             edited_view = st.data_editor(
                 peak_editor_source,
-                key=_EDITOR_WIDGET_KEY,
                 column_config={
                     "Peak_ID": st.column_config.TextColumn("Peak_ID", width="small"),
                     "啟用": st.column_config.CheckboxColumn("啟用", width="small"),
