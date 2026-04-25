@@ -53,4 +53,100 @@ RAMAN_REFERENCES: dict[str, list[dict]] = {
         {"pos": 645, "label": "A₁g", "strength": 90,  "note": "c-Al₂O₃ A₁g mode (strong)"},
         {"pos": 750, "label": "Eg",  "strength": 80,  "note": "c-Al₂O₃ Eg mode (strong)"},
     ],
+
+    # ── ZnO (wurtzite, C₆ᵥ) ──────────────────────────────────────────────────
+    # Refs: Damen et al. PR 1966; Calleja & Cardona PRB 1977
+    "ZnO": [
+        {"pos": 101,  "label": "E₂(low)",  "strength": 35, "note": "ZnO E₂(low) rigid-cage mode"},
+        {"pos": 331,  "label": "E₂H-E₂L", "strength": 15, "note": "ZnO multi-phonon difference mode"},
+        {"pos": 380,  "label": "A₁(TO)",   "strength": 35, "note": "ZnO A₁ transverse optical"},
+        {"pos": 438,  "label": "E₂(high)", "strength": 100,"note": "ZnO E₂(high) main peak"},
+        {"pos": 584,  "label": "E₁(LO)",   "strength": 30, "note": "ZnO E₁ longitudinal optical"},
+    ],
+
+    # ── TiO₂ anatase (D₄ₕ) ───────────────────────────────────────────────────
+    # Refs: Ohsaka et al. J. Raman Spectrosc. 1978; Zhang et al. PRB 2000
+    "TiO₂ (anatase)": [
+        {"pos": 144,  "label": "Eg",       "strength": 100,"note": "anatase Eg strongest mode"},
+        {"pos": 197,  "label": "Eg",       "strength": 15, "note": "anatase Eg weak mode"},
+        {"pos": 399,  "label": "B₁g",      "strength": 45, "note": "anatase B₁g mode"},
+        {"pos": 515,  "label": "A₁g+B₁g", "strength": 40, "note": "anatase A₁g/B₁g overlap"},
+        {"pos": 639,  "label": "Eg",       "strength": 55, "note": "anatase Eg mode"},
+    ],
+
+    # ── TiO₂ rutile (D₄ₕ) ────────────────────────────────────────────────────
+    # Refs: Porto et al. PR 1967; Ohsaka et al. J. Raman Spectrosc. 1978
+    "TiO₂ (rutile)": [
+        {"pos": 143,  "label": "B₁g",  "strength": 20, "note": "rutile B₁g silent-like mode"},
+        {"pos": 235,  "label": "2ph",  "strength": 10, "note": "rutile two-phonon combination"},
+        {"pos": 447,  "label": "Eg",   "strength": 100,"note": "rutile Eg strongest mode"},
+        {"pos": 612,  "label": "A₁g",  "strength": 65, "note": "rutile A₁g mode"},
+    ],
+
+    # ── SnO₂ (rutile, D₄ₕ) ───────────────────────────────────────────────────
+    # Refs: Diéguez et al. J. Appl. Phys. 2001; Abello et al. J. Solid State Chem. 1998
+    "SnO₂": [
+        {"pos": 473,  "label": "Eg",  "strength": 50, "note": "SnO₂ Eg mode"},
+        {"pos": 634,  "label": "A₁g", "strength": 100,"note": "SnO₂ A₁g strongest mode"},
+        {"pos": 774,  "label": "B₂g", "strength": 25, "note": "SnO₂ B₂g mode"},
+    ],
+
+    # ── GaN (wurtzite, C₆ᵥ) ──────────────────────────────────────────────────
+    # Refs: Azuhata et al. J. Phys.: Condens. Matter 1995; Manchon et al. SSC 1970
+    "GaN": [
+        {"pos": 533,  "label": "A₁(TO)", "strength": 55, "note": "GaN A₁ transverse optical"},
+        {"pos": 559,  "label": "E₁(TO)", "strength": 45, "note": "GaN E₁ transverse optical"},
+        {"pos": 569,  "label": "E₂(H)",  "strength": 100,"note": "GaN E₂(high) main peak"},
+        {"pos": 735,  "label": "A₁(LO)", "strength": 35, "note": "GaN A₁ longitudinal optical"},
+    ],
+
+    # ── AlN (wurtzite, C₆ᵥ) ──────────────────────────────────────────────────
+    # Refs: McNeil et al. J. Appl. Phys. 1993; Bungaro et al. PRB 2000
+    "AlN": [
+        {"pos": 250,  "label": "E₂(low)", "strength": 15, "note": "AlN E₂(low) mode"},
+        {"pos": 614,  "label": "A₁(TO)",  "strength": 45, "note": "AlN A₁ transverse optical"},
+        {"pos": 657,  "label": "E₁(TO)",  "strength": 40, "note": "AlN E₁ transverse optical"},
+        {"pos": 669,  "label": "E₂(H)",   "strength": 100,"note": "AlN E₂(high) main peak"},
+        {"pos": 890,  "label": "A₁(LO)",  "strength": 25, "note": "AlN A₁ longitudinal optical"},
+    ],
+
+    # ── MoS₂ (2H, bulk/few-layer) ────────────────────────────────────────────
+    # Refs: Chakraborty et al. PRB 2012; Lee et al. ACS Nano 2010
+    # Note: monolayer shifts E₂g down ~2 cm⁻¹, A₁g up ~2 cm⁻¹ vs bulk
+    "MoS₂": [
+        {"pos": 383,  "label": "E²₂g", "strength": 80, "note": "MoS₂ in-plane E₂g; redshifts for monolayer"},
+        {"pos": 408,  "label": "A₁g",  "strength": 100,"note": "MoS₂ out-of-plane A₁g; blueshifts for monolayer"},
+    ],
+
+    # ── Graphene / Graphite ───────────────────────────────────────────────────
+    # Refs: Ferrari & Robertson PRB 2001; Tuinstra & Koenig J. Chem. Phys. 1970
+    # Note: D intensity ∝ defect density; 2D single peak = monolayer graphene
+    "Graphene / Graphite": [
+        {"pos": 1350, "label": "D",  "strength": 30, "note": "Defect-activated D band (zero for perfect crystal)"},
+        {"pos": 1580, "label": "G",  "strength": 100,"note": "G band (E₂g, always present in sp² carbon)"},
+        {"pos": 2700, "label": "2D", "strength": 80, "note": "2D band; single sharp peak for monolayer graphene"},
+    ],
+
+    # ── α-Fe₂O₃ (hematite, D₃d) ─────────────────────────────────────────────
+    # Refs: de Faria et al. J. Raman Spectrosc. 1997; Shim & Duffy Am. Mineral. 2002
+    "α-Fe₂O₃ (hematite)": [
+        {"pos": 226,  "label": "A₁g", "strength": 50, "note": "hematite A₁g mode"},
+        {"pos": 245,  "label": "Eg",  "strength": 45, "note": "hematite Eg mode"},
+        {"pos": 292,  "label": "Eg",  "strength": 100,"note": "hematite Eg strongest mode"},
+        {"pos": 299,  "label": "Eg",  "strength": 60, "note": "hematite Eg shoulder"},
+        {"pos": 412,  "label": "Eg",  "strength": 40, "note": "hematite Eg mode"},
+        {"pos": 498,  "label": "A₁g", "strength": 35, "note": "hematite A₁g mode"},
+        {"pos": 613,  "label": "Eg",  "strength": 25, "note": "hematite Eg mode (weak)"},
+    ],
+
+    # ── α-Ga₂O₃ (corundum, R3̄c) ─────────────────────────────────────────────
+    # Refs: Playford et al. Chem. Eur. J. 2013; Cuscó et al. PRB 2020
+    "α-Ga₂O₃": [
+        {"pos": 166,  "label": "Eg",  "strength": 30, "note": "α-Ga₂O₃ Eg mode"},
+        {"pos": 302,  "label": "A₁g", "strength": 55, "note": "α-Ga₂O₃ A₁g mode"},
+        {"pos": 423,  "label": "Eg",  "strength": 70, "note": "α-Ga₂O₃ Eg mode (strong)"},
+        {"pos": 498,  "label": "A₁g", "strength": 65, "note": "α-Ga₂O₃ A₁g mode (strong)"},
+        {"pos": 596,  "label": "Eg",  "strength": 40, "note": "α-Ga₂O₃ Eg mode"},
+        {"pos": 881,  "label": "A₁g", "strength": 25, "note": "α-Ga₂O₃ A₁g mode (weak)"},
+    ],
 }

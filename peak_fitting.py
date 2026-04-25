@@ -235,13 +235,17 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
             area = area_voigt(A, sigma, gamma)
 
         y_individual.append(yi)
-        peaks_out.append({
+        peak_entry = {
             "label":   init_peaks[i]["label"],
             "center":  float(c),
             "fwhm":    float(fwhm_fit),
             "area":    float(area),
             "doublet": i in minor_of,
-        })
+        }
+        for key, value in init_peaks[i].items():
+            if key not in {"label", "be", "fwhm"}:
+                peak_entry[key] = value
+        peaks_out.append(peak_entry)
 
     total_area = sum(p["area"] for p in peaks_out)
     for p in peaks_out:

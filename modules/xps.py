@@ -10,7 +10,14 @@ from scipy.interpolate import interp1d
 from scipy.signal import find_peaks
 
 from core.parsers import parse_xps_bytes
-from core.ui_helpers import _next_btn, hex_to_rgba, step_header, step_header_with_skip
+from core.ui_helpers import (
+    _next_btn,
+    auto_scroll_on_appear,
+    hex_to_rgba,
+    scroll_anchor,
+    step_header,
+    step_header_with_skip,
+)
 from peak_fitting import fit_peaks
 from processing import apply_processing
 from xps_database import (
@@ -693,10 +700,17 @@ def run_xps_ui() -> None:
         height=480,
         margin=dict(l=50, r=20, t=60, b=50),
     )
+    scroll_anchor("xps-bg-plot")
     st.plotly_chart(fig1, use_container_width=True)
+    auto_scroll_on_appear(
+        "xps-bg-plot",
+        visible=bg_method != "none",
+        state_key="xps_scroll_bg_plot",
+    )
 
     # ── 圖二：歸一化結果 ─────────────────────────────────────────────────────────
     if norm_method != "none":
+        scroll_anchor("xps-norm-plot")
         st.caption("歸一化結果")
         if norm_method in ("mean_region", "max"):
             fig2.add_vrect(
@@ -715,6 +729,17 @@ def run_xps_ui() -> None:
             margin=dict(l=50, r=20, t=40, b=50),
         )
         st.plotly_chart(fig2, use_container_width=True)
+        auto_scroll_on_appear(
+            "xps-norm-plot",
+            visible=True,
+            state_key="xps_scroll_norm_plot",
+        )
+    else:
+        auto_scroll_on_appear(
+            "xps-norm-plot",
+            visible=False,
+            state_key="xps_scroll_norm_plot",
+        )
 
     # ── 匯出 ──────────────────────────────────────────────────────────────────────
     if export_frames:

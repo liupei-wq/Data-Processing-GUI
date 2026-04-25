@@ -10,7 +10,7 @@ from scipy.signal import peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.spectrum_ops import detect_spectrum_peaks, interpolate_spectrum_to_grid, mean_spectrum_arrays
-from core.ui_helpers import _next_btn, step_header, step_header_with_skip
+from core.ui_helpers import _next_btn, auto_scroll_on_appear, scroll_anchor, step_header, step_header_with_skip
 from processing import apply_normalization, smooth_signal
 from xrd_database import XRD_REFERENCES
 
@@ -723,6 +723,7 @@ def run_xrd_ui() -> None:
     st.plotly_chart(fig1, use_container_width=True)
 
     if norm_method != "none":
+        scroll_anchor("xrd-norm-plot")
         st.caption("歸一化結果")
         if norm_method == "max":
             norm_axis = xrd_axis_values(
@@ -744,6 +745,17 @@ def run_xrd_ui() -> None:
             template="plotly_dark", height=420, margin=dict(l=50, r=20, t=40, b=50),
         )
         st.plotly_chart(fig2, use_container_width=True)
+        auto_scroll_on_appear(
+            "xrd-norm-plot",
+            visible=True,
+            state_key="xrd_scroll_norm_plot",
+        )
+    else:
+        auto_scroll_on_appear(
+            "xrd-norm-plot",
+            visible=False,
+            state_key="xrd_scroll_norm_plot",
+        )
 
     peak_export_df = pd.concat(peak_tables, ignore_index=True) if peak_tables else pd.DataFrame()
     if run_peak_detection:

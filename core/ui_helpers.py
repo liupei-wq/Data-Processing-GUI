@@ -1,6 +1,9 @@
 """Shared Streamlit UI helper widgets used across all spectrum modules."""
 
+import json
+
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 def step_header(num: int, title: str, skipped: bool = False) -> None:
@@ -60,3 +63,35 @@ def hex_to_rgba(hex_color: str, alpha: float = 0.15) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
+
+
+def scroll_anchor(anchor_id: str) -> None:
+    st.markdown(
+        f'<div id="{anchor_id}" style="scroll-margin-top: 88px;"></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def auto_scroll_on_appear(anchor_id: str, *, visible: bool, state_key: str, block: str = "center") -> None:
+    prev_visible = bool(st.session_state.get(state_key, False))
+    if visible and not prev_visible:
+        target = json.dumps(anchor_id)
+        block_mode = json.dumps(block)
+        components.html(
+            f"""
+            <script>
+            const scrollToTarget = () => {{
+              const doc = window.parent.document;
+              const el = doc.getElementById({target});
+              if (!el) return;
+              el.scrollIntoView({{ behavior: "smooth", block: {block_mode} }});
+            }};
+            setTimeout(scrollToTarget, 60);
+            setTimeout(scrollToTarget, 240);
+            setTimeout(scrollToTarget, 520);
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
+    st.session_state[state_key] = bool(visible)
