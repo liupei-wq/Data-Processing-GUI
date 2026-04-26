@@ -536,7 +536,8 @@ def run_xrd_ui() -> None:
     step_size = float(max(0.01, (x_max_g - x_min_g) / 2000))
     peak_distance_default = float(max(step_size, min(0.20, max(step_size, (e1 - e0) / 150))))
     gauss_fwhm_default = float(max(step_size * 3.0, min(0.35, max(step_size * 3.0, peak_distance_default))))
-    gauss_area_default = float(max(1.0, y_max_global * gauss_fwhm_default * np.sqrt(2.0 * np.pi) * 0.20))
+    gauss_height_default = float(max(1.0, y_max_global * 0.10))
+    gauss_area_default = gauss_height_default * gauss_fwhm_default * 1.0645
     gauss_search_default = float(max(step_size * 3.0, gauss_fwhm_default * 2.0))
 
     do_interpolate = False
@@ -587,8 +588,9 @@ def run_xrd_ui() -> None:
     apply_interpolation = bool(do_interpolate or do_average)
 
     gaussian_enabled = False
-    gaussian_fixed_area = gauss_area_default
+    gaussian_fixed_height = gauss_height_default
     gaussian_fixed_fwhm = gauss_fwhm_default
+    gaussian_fixed_area = gaussian_fixed_height * gaussian_fixed_fwhm * 1.0645
     gaussian_search_half_width = gauss_search_default
     gaussian_center_df = _empty_gaussian_center_df((e0 + e1) / 2.0)
 
@@ -613,29 +615,56 @@ def run_xrd_ui() -> None:
                                 min_value=100, max_value=10000, value=interp_points, step=100,
                                 key="xrd_gauss_interp",
                             ))
+                        _fwhm_max = float(max(5.0, (x_max_g - x_min_g) / 2.0))
+                        _area_max = float(max(1000.0, gauss_area_default * 5.0))
+                        _srch_max = float(max(5.0, (x_max_g - x_min_g) / 2.0))
+
+                        # FWHM
+                        _fwhm_cur = max(float(max(step_size, 1e-4)), min(_fwhm_max, float(st.session_state.get("xrd_gauss_fwhm", gauss_fwhm_default))))
+                        st.session_state["_xrd_gauss_fwhm_sl"] = _fwhm_cur
+                        def _on_xrd_fwhm_sl():
+                            st.session_state["xrd_gauss_fwhm"] = st.session_state["_xrd_gauss_fwhm_sl"]
+                        st.slider("FWHM 拉桿 (2θ)", float(max(step_size, 1e-4)), _fwhm_max, step=float(max(step_size, 0.005)),
+                                  key="_xrd_gauss_fwhm_sl", on_change=_on_xrd_fwhm_sl)
                         gaussian_fixed_fwhm = float(st.number_input(
-                            "固定 FWHM (2θ)",
-                            min_value=max(step_size, 1e-4),
-                            max_value=max(1.0, x_max_g - x_min_g),
-                            value=gauss_fwhm_default,
-                            step=max(step_size, 0.01),
+                            "固定 FWHM 精確輸入 (2θ)",
+                            min_value=float(max(step_size, 1e-4)),
+                            max_value=float(max(1.0, x_max_g - x_min_g)),
+                            step=float(max(step_size, 0.01)),
                             format="%.4f",
                             key="xrd_gauss_fwhm",
                         ))
-                        gaussian_fixed_area = float(st.number_input(
-                            "固定面積 (Intensity·degree)",
+
+                        # 峰高 → 面積
+                        _ht_max = float(max(y_max_global * 2.0, gauss_height_default * 5.0))
+                        _ht_cur = max(0.0, min(_ht_max, float(st.session_state.get("xrd_gauss_height", gauss_height_default))))
+                        st.session_state["_xrd_gauss_height_sl"] = _ht_cur
+                        def _on_xrd_height_sl():
+                            st.session_state["xrd_gauss_height"] = st.session_state["_xrd_gauss_height_sl"]
+                        st.slider("峰高 拉桿", 0.0, _ht_max, step=float(max(0.1, gauss_height_default * 0.01)),
+                                  key="_xrd_gauss_height_sl", on_change=_on_xrd_height_sl)
+                        gaussian_fixed_height = float(st.number_input(
+                            "峰高 精確輸入（從圖上讀取）",
                             min_value=0.0,
-                            value=gauss_area_default,
-                            step=max(1.0, gauss_area_default * 0.05),
-                            format="%.6g",
-                            key="xrd_gauss_area",
+                            step=float(max(0.1, gauss_height_default * 0.01)),
+                            format="%.4g",
+                            key="xrd_gauss_height",
                         ))
+                        gaussian_fixed_area = gaussian_fixed_height * gaussian_fixed_fwhm * 1.0645
+                        st.caption(f"換算面積 = {gaussian_fixed_area:.4g}")
+
+                        # 搜尋半寬
+                        _srch_cur = max(float(max(step_size, 1e-4)), min(_srch_max, float(st.session_state.get("xrd_gauss_search_half_width", gauss_search_default))))
+                        st.session_state["_xrd_gauss_srch_sl"] = _srch_cur
+                        def _on_xrd_srch_sl():
+                            st.session_state["xrd_gauss_search_half_width"] = st.session_state["_xrd_gauss_srch_sl"]
+                        st.slider("搜尋半寬 拉桿 (±2θ)", float(max(step_size, 1e-4)), _srch_max, step=float(max(step_size, 0.005)),
+                                  key="_xrd_gauss_srch_sl", on_change=_on_xrd_srch_sl)
                         gaussian_search_half_width = float(st.number_input(
-                            "中心搜尋半寬 (±2θ)",
-                            min_value=max(step_size, 1e-4),
-                            max_value=max(1.0, x_max_g - x_min_g),
-                            value=gauss_search_default,
-                            step=max(step_size, 0.01),
+                            "中心搜尋半寬 精確輸入 (±2θ)",
+                            min_value=float(max(step_size, 1e-4)),
+                            max_value=float(max(1.0, x_max_g - x_min_g)),
+                            step=float(max(step_size, 0.01)),
                             format="%.4f",
                             key="xrd_gauss_search_half_width",
                         ))
@@ -976,15 +1005,15 @@ def run_xrd_ui() -> None:
                     gaussian_fit_tables.append(gaussian_fit_df)
                 fig_gauss.add_trace(go.Scatter(
                     x=new_axis, y=avg_raw, mode="lines", name="Average（原始）",
-                    line=dict(color="white", width=1.4, dash="dash"), opacity=0.60,
+                    line=dict(color="#7EB6D9", width=1.3), opacity=0.60,
                 ))
                 fig_gauss.add_trace(go.Scatter(
                     x=new_axis, y=gaussian_model, mode="lines", name="Average（高斯模板）",
-                    line=dict(color="#F4A261", width=2.0),
+                    line=dict(color="#F05441", width=1.8, dash="dot"),
                 ))
                 fig_gauss.add_trace(go.Scatter(
                     x=new_axis, y=gaussian_subtracted, mode="lines", name="Average（扣高斯後）",
-                    line=dict(color="#2A9D8F", width=2.3),
+                    line=dict(color="#2ABF83", width=2.3),
                 ))
 
             smooth_input = gaussian_subtracted if gaussian_enabled else avg_raw
@@ -1085,17 +1114,20 @@ def run_xrd_ui() -> None:
                 if not gaussian_fit_df.empty:
                     gaussian_fit_df.insert(0, "Dataset", fname)
                     gaussian_fit_tables.append(gaussian_fit_df)
+                _xrd_raw_c   = ["#7EB6D9","#9BC9E0","#A8D5E2","#B0C4DE"]
+                _xrd_model_c = ["#F05441","#FF8C42","#E6501A","#FF6B35"]
+                _xrd_after_c = ["#2ABF83","#4DAF4A","#00BFA5","#43C59E"]
                 fig_gauss.add_trace(go.Scatter(
                     x=x_axis, y=y_raw, mode="lines", name=f"{fname}（原始）",
-                    line=dict(color=color, width=1.2, dash="dash"), opacity=0.45,
+                    line=dict(color=_xrd_raw_c[i % len(_xrd_raw_c)], width=1.3), opacity=0.60,
                 ))
                 fig_gauss.add_trace(go.Scatter(
                     x=x_axis, y=gaussian_model, mode="lines", name=f"{fname}（高斯模板）",
-                    line=dict(color=color, width=1.5, dash="dot"), opacity=0.9,
+                    line=dict(color=_xrd_model_c[i % len(_xrd_model_c)], width=1.8, dash="dot"),
                 ))
                 fig_gauss.add_trace(go.Scatter(
                     x=x_axis, y=gaussian_subtracted, mode="lines", name=f"{fname}（扣高斯後）",
-                    line=dict(color=color, width=2.2),
+                    line=dict(color=_xrd_after_c[i % len(_xrd_after_c)], width=2.2),
                 ))
 
             smooth_input = gaussian_subtracted if gaussian_enabled else y_raw

@@ -42,31 +42,13 @@ if not defined PYTHON (
     exit /b 1
 )
 
-echo [1/3] Finding an available local port...
-REM Try default Streamlit port first for faster startup
-set "APP_PORT=8501"
-for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":8501 "') do set "APP_PORT="
-if not defined APP_PORT (
-    echo [Info] Using port 8501 (Streamlit default)
-    set "APP_PORT=8501"
-) else (
-    REM If 8501 is busy, find next available
-    for %%P in (8502 8503 8504 8505 8506 8507 8508 8509 8510) do (
-        set "FOUND="
-        for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":%%P "') do set "FOUND=1"
-        if not defined FOUND (
-            set "APP_PORT=%%P"
-            goto PORT_FOUND
-        )
-    )
-    if not defined APP_PORT (
-        echo [Error] Ports 8501-8510 all look busy.
-        echo Close old Streamlit windows or restart, then try again.
-        pause
-        exit /b 1
+echo [1/3] Stopping old Streamlit sessions...
+for %%P in (8501 8502 8503 8504 8505 8506 8507 8508 8509 8510) do (
+    for /f "tokens=5" %%A in ('netstat -ano 2^>nul ^| findstr ":%%P "') do (
+        taskkill /PID %%A /F >nul 2>&1
     )
 )
-:PORT_FOUND
+set "APP_PORT=8501"
 
 set "APP_URL=http://localhost:%APP_PORT%"
 

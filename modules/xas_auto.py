@@ -13,6 +13,10 @@ import streamlit as st
 from core.processing import apply_background, apply_normalization
 from core.spectrum_ops import fit_fixed_gaussian_templates, interpolate_spectrum_to_grid
 from core.ui_helpers import step_header
+from modules.xas_fit import (
+    LMFIT_AVAILABLE, PEAK_TYPES,
+    add_peak, default_peak_df, run_xanes_fit, second_derivative,
+)
 from modules.xas import (
     CHANNELS,
     COLORS,
@@ -21,7 +25,6 @@ from modules.xas import (
     _derivative_edge_energy,
     _download_card,
     _empty_gaussian_center_df,
-    _fit_xanes_gaussians,
     _gaussian_center_records,
     _normalize_by_post_edge,
     _normalize_gaussian_center_df,
@@ -137,18 +140,64 @@ def run_xas_ui() -> None:
             step_header(4, "扣除高斯曲線（可選）")
             gaussian_enabled = st.checkbox("啟用高斯扣除", value=False, key="xas_gaussian_enabled")
             gaussian_channels = st.multiselect("套用通道", CHANNELS, default=CHANNELS, key="xas_gaussian_channels", disabled=not gaussian_enabled)
-            gaussian_fwhm = float(st.number_input("固定 FWHM (eV)", min_value=0.000001, value=2.0, step=0.1, format="%.6f", disabled=not gaussian_enabled, key="xas_gaussian_fwhm"))
-            gaussian_area = float(st.number_input("固定面積", min_value=0.0, value=1.0, step=0.1, format="%.6f", disabled=not gaussian_enabled, key="xas_gaussian_area"))
-            gaussian_search = float(st.number_input("中心搜尋半寬 (eV)", min_value=0.0, value=2.0, step=0.1, format="%.6f", disabled=not gaussian_enabled, key="xas_gaussian_search"))
+
+            # ── FWHM ──────────────────────────────────────────────
+            _fwhm_cur = max(0.05, min(30.0, float(st.session_state.get("xas_gaussian_fwhm", 2.0))))
+            st.session_state["_xas_gaussian_fwhm_sl"] = _fwhm_cur
+            def _on_fwhm_sl():
+                st.session_state["xas_gaussian_fwhm"] = st.session_state["_xas_gaussian_fwhm_sl"]
+            st.slider("FWHM 拉桿 (eV)", 0.05, 30.0, step=0.05,
+                      key="_xas_gaussian_fwhm_sl", on_change=_on_fwhm_sl,
+                      disabled=not gaussian_enabled)
+            gaussian_fwhm = float(st.number_input("固定 FWHM 精確輸入 (eV)", min_value=0.000001, step=0.01, format="%.4f", disabled=not gaussian_enabled, key="xas_gaussian_fwhm"))
+
+            # ── 峰高 → 面積 ───────────────────────────────────────
+            _ht_cur = max(0.0001, min(2.0, float(st.session_state.get("xas_gaussian_height", 0.01))))
+            st.session_state["_xas_gaussian_height_sl"] = _ht_cur
+            def _on_height_sl():
+                st.session_state["xas_gaussian_height"] = st.session_state["_xas_gaussian_height_sl"]
+            st.slider("峰高 拉桿", 0.0001, 2.0, step=0.0005, format="%.4f",
+                      key="_xas_gaussian_height_sl", on_change=_on_height_sl,
+                      disabled=not gaussian_enabled)
+            gaussian_peak_height = float(st.number_input("峰高 精確輸入（直接從圖上讀取）", min_value=0.0, step=0.0005, format="%.5f", disabled=not gaussian_enabled, key="xas_gaussian_height"))
+            gaussian_area = gaussian_peak_height * gaussian_fwhm * 1.0645
+            if gaussian_enabled:
+                st.caption(f"換算面積 = {gaussian_area:.5f}")
+
+            # ── 中心搜尋半寬 ───────────────────────────────────────
+            _search_cur = max(0.0, min(20.0, float(st.session_state.get("xas_gaussian_search", 2.0))))
+            st.session_state["_xas_gaussian_search_sl"] = _search_cur
+            def _on_search_sl():
+                st.session_state["xas_gaussian_search"] = st.session_state["_xas_gaussian_search_sl"]
+            st.slider("中心搜尋半寬 拉桿 (eV)", 0.0, 20.0, step=0.1,
+                      key="_xas_gaussian_search_sl", on_change=_on_search_sl,
+                      disabled=not gaussian_enabled)
+            gaussian_search = float(st.number_input("中心搜尋半寬 精確輸入 (eV)", min_value=0.0, step=0.1, format="%.4f", disabled=not gaussian_enabled, key="xas_gaussian_search"))
 
         bg_default = _range_from_energy(energy_min, energy_max, 0.02, 0.18)
         edge_default = _range_from_energy(energy_min, energy_max, 0.35, 0.65)
         norm_default = _range_from_energy(energy_min, energy_max, 0.78, 0.98)
         white_default = _range_from_energy(energy_min, energy_max, 0.35, 0.75)
 
+        # 預設值：確保 expander 外也能安全取用
+        bg_enabled = False
+        bg_method = "linear"
+        bg_range_tey = bg_default
+        bg_range_tfy = bg_default
+        bg_ranges = {"TEY": bg_range_tey, "TFY": bg_range_tfy}
+        bg_order = 1
+        norm_method = "none"
+        e0_mode = "derivative"
+        manual_e0 = float(np.mean(edge_default))
+        edge_search = edge_default
+        norm_range = norm_default
+        norm_order = 1
+        show_norm_region = True
+        white_range = white_default
+
         with st.expander("5. 背景扣除", expanded=False):
             step_header(5, "背景扣除")
-            bg_enabled = st.checkbox("啟用背景扣除", value=True, key="xas_bg_enabled")
+            bg_enabled = st.checkbox("啟用背景扣除", value=False, key="xas_bg_enabled")
             bg_method = st.selectbox(
                 "背景方法",
                 ["linear", "polynomial", "asls", "airpls"],
@@ -161,17 +210,28 @@ def run_xas_ui() -> None:
                 key="xas_bg_method",
                 disabled=not bg_enabled,
             )
-            bg_range = st.slider(
-                "背景計算區間 (eV)",
+            st.caption("TEY 背景區間")
+            bg_range_tey = st.slider(
+                "TEY 背景計算區間 (eV)",
                 float(energy_min),
                 float(energy_max),
-                _slider_range_value("xas2_bg_range", bg_default, energy_min, energy_max),
+                _slider_range_value("xas2_bg_range_tey", bg_default, energy_min, energy_max),
                 float(energy_step),
-                key="xas2_bg_range",
+                key="xas2_bg_range_tey",
                 disabled=not bg_enabled,
             )
+            st.caption("TFY 背景區間")
+            bg_range_tfy = st.slider(
+                "TFY 背景計算區間 (eV)",
+                float(energy_min),
+                float(energy_max),
+                _slider_range_value("xas2_bg_range_tfy", bg_default, energy_min, energy_max),
+                float(energy_step),
+                key="xas2_bg_range_tfy",
+                disabled=not bg_enabled,
+            )
+            bg_ranges = {"TEY": bg_range_tey, "TFY": bg_range_tfy}
             bg_order = int(st.number_input("多項式階數", min_value=0, max_value=5, value=1, key="xas_bg_order", disabled=not (bg_enabled and bg_method == "polynomial")))
-            show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True, key="xas_show_bg_baseline", disabled=not bg_enabled)
 
         with st.expander("6. 歸一化", expanded=False):
             step_header(6, "歸一化")
@@ -194,14 +254,104 @@ def run_xas_ui() -> None:
             norm_range = st.slider("歸一化參考區間 (eV)", float(energy_min), float(energy_max), _slider_range_value("xas2_norm_range", norm_default, energy_min, energy_max), float(energy_step), key="xas2_norm_range", disabled=norm_method in ("none", "min_max", "area"))
             norm_order = int(st.number_input("Post-edge 多項式階數", min_value=0, max_value=3, value=1, key="xas_norm_order", disabled=norm_method != "post_edge"))
             show_norm_region = st.checkbox("疊加顯示歸一化區間", value=True, key="xas_show_norm_region", disabled=norm_method == "none")
-
-        with st.expander("7. 擬合與輸出", expanded=False):
-            step_header(7, "擬合與輸出")
             white_range = st.slider("White line 搜尋範圍 (eV)", float(energy_min), float(energy_max), _slider_range_value("xas2_white_range", white_default, energy_min, energy_max), float(energy_step), key="xas2_white_range")
-            fit_enabled = st.checkbox("啟用初步 Gaussian 擬合", value=False, key="xas_fit_enabled")
-            fit_channels = st.multiselect("擬合通道", CHANNELS, default=CHANNELS, disabled=not fit_enabled, key="xas_fit_channels")
-            fit_range = st.slider("擬合範圍 (eV)", float(energy_min), float(energy_max), _slider_range_value("xas2_fit_range", white_default, energy_min, energy_max), float(energy_step), disabled=not fit_enabled, key="xas2_fit_range")
-            fit_components = int(st.number_input("Gaussian component 數", min_value=1, max_value=5, value=1, disabled=not fit_enabled, key="xas_fit_components"))
+
+        # ── Step 7：XANES 去卷積擬合 ──────────────────────────────────────
+        with st.expander("7. XANES 去卷積擬合（可選）", expanded=False):
+            step_header(7, "XANES 去卷積擬合")
+            if not LMFIT_AVAILABLE:
+                st.warning("需要安裝 lmfit：pip install lmfit")
+            deconv_enabled = st.checkbox("啟用去卷積擬合", value=False, key="xas_deconv_enabled")
+            if deconv_enabled:
+                st.caption("請先完成歸一化（Step 6），再使用此功能。擬合在歸一化後的數據上進行。")
+
+                # 擬合目標
+                _deconv_dataset_options = list(st.session_state.get("_xas_processed_keys", []))
+                deconv_dataset = st.selectbox("資料集", _deconv_dataset_options or ["（尚未有資料）"], key="xas_deconv_dataset")
+                deconv_channel = st.radio("通道", CHANNELS, horizontal=True, key="xas_deconv_channel")
+
+                st.divider()
+                # 擬合範圍
+                deconv_fit_range = st.slider(
+                    "擬合範圍 (eV)",
+                    float(energy_min), float(energy_max),
+                    _slider_range_value("xas2_deconv_fit_range", edge_default, energy_min, energy_max),
+                    float(energy_step), key="xas2_deconv_fit_range",
+                )
+
+                # Step function
+                deconv_include_step = st.checkbox("包含 Step Function（Arctan）", value=True, key="xas_deconv_include_step")
+                deconv_e0_manual = st.checkbox("手動指定 E0", value=False, key="xas_deconv_e0_manual")
+                deconv_e0_val = float(st.number_input(
+                    "E0 (eV)", value=float(np.mean(edge_default)), step=float(energy_step),
+                    format="%.3f", key="xas_deconv_e0_val",
+                    disabled=not deconv_e0_manual,
+                ))
+
+                st.divider()
+                # FWHM 約束
+                st.markdown("**FWHM 約束**")
+                deconv_fwhm_inst = float(st.number_input(
+                    "儀器解析度下限 FWHM (eV)", min_value=0.001, value=0.3,
+                    step=0.05, format="%.3f", key="xas_deconv_fwhm_inst",
+                ))
+                deconv_link_fwhm = st.checkbox("連動所有峰 FWHM（推薦）", value=True, key="xas_deconv_link_fwhm")
+                deconv_fwhm_init = float(st.number_input(
+                    "FWHM 起始值 (eV)", min_value=deconv_fwhm_inst,
+                    value=max(deconv_fwhm_inst, 0.5), step=0.05, format="%.3f",
+                    key="xas_deconv_fwhm_init",
+                ))
+
+                st.divider()
+                # 峰位管理
+                st.markdown("**峰位管理**")
+                _peaks_state = st.session_state.get("xas_deconv_peaks", [])
+                _peaks_df = pd.DataFrame(_peaks_state) if _peaks_state else default_peak_df()
+
+                # 新增峰表單
+                with st.form("xas_deconv_add_peak_form", clear_on_submit=True):
+                    fc1, fc2 = st.columns(2)
+                    _new_center = fc1.number_input("中心 (eV)", value=float(np.mean(edge_default)), step=0.1, format="%.2f")
+                    _new_delta = fc2.number_input("±偏移 (eV)", value=0.3, min_value=0.0, step=0.05, format="%.2f")
+                    fc3, fc4 = st.columns(2)
+                    _new_name = fc3.text_input("峰名稱（可空白）", value="")
+                    _new_type = fc4.selectbox("峰形", PEAK_TYPES)
+                    if st.form_submit_button("＋ 加入峰"):
+                        _peaks_df = add_peak(_peaks_df, _new_center, _new_name, _new_type, _new_delta)
+                        st.session_state["xas_deconv_peaks"] = _peaks_df.to_dict(orient="records")
+                        st.session_state.pop("_xas_deconv_editor_v", None)
+                        st.rerun()
+
+                # 峰位表格
+                _editor_key = f"xas_deconv_peak_editor_v{st.session_state.get('_xas_deconv_editor_v', 0)}"
+                if not _peaks_df.empty:
+                    _edited = st.data_editor(
+                        _peaks_df,
+                        use_container_width=True,
+                        num_rows="fixed",
+                        column_config={
+                            "啟用": st.column_config.CheckboxColumn(width="small"),
+                            "峰形": st.column_config.SelectboxColumn(options=PEAK_TYPES),
+                            "中心_eV": st.column_config.NumberColumn(format="%.3f"),
+                            "偏移範圍_eV": st.column_config.NumberColumn(format="%.3f"),
+                        },
+                        key=_editor_key,
+                    )
+                    bc1, bc2, bc3 = st.columns(3)
+                    if bc1.button("套用表格變更", use_container_width=True):
+                        st.session_state["xas_deconv_peaks"] = _edited.to_dict(orient="records")
+                        st.session_state["_xas_deconv_editor_v"] = st.session_state.get("_xas_deconv_editor_v", 0) + 1
+                        st.rerun()
+                    if bc2.button("清除全部峰", use_container_width=True):
+                        st.session_state["xas_deconv_peaks"] = []
+                        st.session_state["_xas_deconv_editor_v"] = st.session_state.get("_xas_deconv_editor_v", 0) + 1
+                        st.rerun()
+                    if bc3.button("恢復未套用", use_container_width=True):
+                        st.session_state["_xas_deconv_editor_v"] = st.session_state.get("_xas_deconv_editor_v", 0) + 1
+                        st.rerun()
+
+                st.divider()
+                _run_deconv = st.button("▶ 執行擬合", type="primary", use_container_width=True, key="xas_deconv_run")
 
     if not uploaded_files:
         st.info("請上傳 XAS .DAT 檔案。程式會自動解析 TEY / I0 / TFY，不需要選資料欄位模式。")
@@ -258,7 +408,6 @@ def run_xas_ui() -> None:
     processed: dict[str, dict[str, pd.DataFrame]] = {}
     summary_rows: list[dict] = []
     gaussian_rows: list[pd.DataFrame] = []
-    fit_rows: list[pd.DataFrame] = []
 
     for scan_name, channel_map in scans.items():
         processed[scan_name] = {}
@@ -278,12 +427,13 @@ def run_xas_ui() -> None:
                     gaussian_rows.append(gdf)
 
             if bg_enabled:
+                _bgr = bg_ranges[ch]
                 signal_bg_sub, bg_curve = apply_background(
                     energy,
                     signal_after_gaussian,
                     bg_method,
-                    bg_range[0],
-                    bg_range[1],
+                    _bgr[0],
+                    _bgr[1],
                     poly_deg=bg_order,
                 )
             else:
@@ -324,16 +474,6 @@ def run_xas_ui() -> None:
                 white_e = np.nan
                 white_i = np.nan
 
-            fit_curve = np.full_like(energy, np.nan, dtype=float)
-            if fit_enabled and ch in fit_channels:
-                fit_curve, fit_df, fit_err = _fit_xanes_gaussians(energy, signal_norm, fit_range, fit_components)
-                if fit_err:
-                    st.warning(f"{scan_name} / {ch}: {fit_err}")
-                elif not fit_df.empty:
-                    fit_df.insert(0, "Channel", ch)
-                    fit_df.insert(0, "Dataset", scan_name)
-                    fit_rows.append(fit_df)
-
             processed[scan_name][ch] = pd.DataFrame({
                 "Energy_eV": energy,
                 f"{ch}_raw": raw_signal,
@@ -343,7 +483,6 @@ def run_xas_ui() -> None:
                 f"{ch}_bg_subtracted": signal_bg_sub,
                 f"{ch}_post_edge_curve": norm_curve,
                 f"{ch}_normalized": signal_norm,
-                f"{ch}_fit_curve": fit_curve,
             })
             summary_rows.append({
                 "Dataset": scan_name,
@@ -371,38 +510,53 @@ def run_xas_ui() -> None:
                 for idx, (name, channel_map) in enumerate(processed.items()):
                     df = channel_map[ch]
                     color = COLORS[idx % len(COLORS)]
-                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_raw"], mode="lines", name=f"{name} raw", line=dict(color=color)))
-                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_gaussian_model"], mode="lines", name=f"{name} Gaussian", line=dict(color=color, dash="dot")))
-                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_after_gaussian"], mode="lines", name=f"{name} after", line=dict(color=color, dash="dash")))
+                    _raw_colors   = ["#7EB6D9","#9BC9E0","#A8D5E2","#B0C4DE"]
+                    _model_colors = ["#F05441","#FF8C42","#E6501A","#FF6B35"]
+                    _after_colors = ["#2ABF83","#4DAF4A","#00BFA5","#43C59E"]
+                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_raw"], mode="lines", name=f"{name} 原始", line=dict(color=_raw_colors[idx % len(_raw_colors)], width=1.3), opacity=0.6))
+                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_gaussian_model"], mode="lines", name=f"{name} 高斯模板", line=dict(color=_model_colors[idx % len(_model_colors)], width=1.8, dash="dot")))
+                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_after_gaussian"], mode="lines", name=f"{name} 扣高斯後", line=dict(color=_after_colors[idx % len(_after_colors)], width=2.2)))
                 st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("背景扣除")
-    for col, ch in zip(st.columns(2), CHANNELS):
-        with col:
-            fig = _channel_figure(f"{ch} 背景扣除", ch)
-            _add_range_box(fig, bg_range[0], bg_range[1], "背景區間", "#FECB52")
-            for idx, (name, channel_map) in enumerate(processed.items()):
-                df = channel_map[ch]
-                color = COLORS[idx % len(COLORS)]
-                fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_after_gaussian"], mode="lines", name=f"{name} input", line=dict(color=color)))
-                if bg_enabled and show_bg_baseline:
-                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_background"], mode="lines", name=f"{name} 背景", line=dict(color=color, dash="dot")))
-                fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_bg_subtracted"], mode="lines", name=f"{name} 扣背景後", line=dict(color=color, dash="dash")))
-            st.plotly_chart(fig, use_container_width=True)
+    if bg_enabled:
+        st.subheader("背景扣除")
+        st.caption("顯示原始訊號與背景基準線，確認 baseline 位置是否合理。")
+        for col, ch in zip(st.columns(2), CHANNELS):
+            with col:
+                _bgr = bg_ranges[ch]
+                fig = _channel_figure(f"{ch} 背景扣除", ch)
+                _add_range_box(fig, _bgr[0], _bgr[1], "背景區間", "#FECB52")
+                for idx, (name, channel_map) in enumerate(processed.items()):
+                    df = channel_map[ch]
+                    color = COLORS[idx % len(COLORS)]
+                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_after_gaussian"], mode="lines", name=f"{name}", line=dict(color=color)))
+                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_background"], mode="lines", name=f"{name} baseline", line=dict(color=color, dash="dot")))
+                st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("歸一化結果")
-    for col, ch in zip(st.columns(2), CHANNELS):
-        with col:
-            fig = _channel_figure(f"{ch} 歸一化", f"{ch} normalized")
-            if show_norm_region and norm_method not in ("none", "min_max", "area"):
-                _add_range_box(fig, norm_range[0], norm_range[1], "歸一化區間", "#00CC96")
-            for idx, (name, channel_map) in enumerate(processed.items()):
-                df = channel_map[ch]
-                color = COLORS[idx % len(COLORS)]
-                fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_normalized"], mode="lines", name=name, line=dict(color=color)))
-                if fit_enabled and ch in fit_channels and df[f"{ch}_fit_curve"].notna().any():
-                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_fit_curve"], mode="lines", name=f"{name} fit", line=dict(color=color, dash="dot")))
-            st.plotly_chart(fig, use_container_width=True)
+        st.subheader("扣背景後")
+        st.caption("移動上方背景區間，此圖即時更新。")
+        for col, ch in zip(st.columns(2), CHANNELS):
+            with col:
+                fig = _channel_figure(f"{ch} 扣背景後", ch)
+                for idx, (name, channel_map) in enumerate(processed.items()):
+                    df = channel_map[ch]
+                    color = COLORS[idx % len(COLORS)]
+                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_bg_subtracted"], mode="lines", name=name, line=dict(color=color)))
+                st.plotly_chart(fig, use_container_width=True)
+
+    if norm_method != "none":
+        st.subheader("歸一化結果")
+        st.caption("以扣背景後訊號為輸入；移動歸一化區間，此圖即時更新。")
+        for col, ch in zip(st.columns(2), CHANNELS):
+            with col:
+                fig = _channel_figure(f"{ch} 歸一化", f"{ch} normalized")
+                if show_norm_region and norm_method not in ("none", "min_max", "area"):
+                    _add_range_box(fig, norm_range[0], norm_range[1], "歸一化區間", "#00CC96")
+                for idx, (name, channel_map) in enumerate(processed.items()):
+                    df = channel_map[ch]
+                    color = COLORS[idx % len(COLORS)]
+                    fig.add_trace(go.Scatter(x=df["Energy_eV"], y=df[f"{ch}_normalized"], mode="lines", name=name, line=dict(color=color)))
+                st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("處理前後比較", expanded=False):
         compare_dataset = st.selectbox("資料", list(processed.keys()), key="xas2_compare_dataset")
@@ -422,19 +576,131 @@ def run_xas_ui() -> None:
             fig_compare.add_trace(go.Scatter(x=cdf["Energy_eV"], y=cdf[col_name], mode="lines", name=col_name.replace(f"{compare_channel}_", "")))
         st.plotly_chart(fig_compare, use_container_width=True)
 
+    # 把已處理的 dataset 名稱存入 session state，供 Step 7 sidebar 取用
+    st.session_state["_xas_processed_keys"] = list(processed.keys())
+
     summary_df = pd.DataFrame(summary_rows)
     st.subheader("XANES 摘要")
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+    # ── XANES 去卷積擬合結果（Step 7）─────────────────────────────────────
+    _deconv_enabled = st.session_state.get("xas_deconv_enabled", False)
+    if _deconv_enabled and LMFIT_AVAILABLE:
+        st.divider()
+        st.subheader("XANES 去卷積擬合")
+
+        _d_dataset = st.session_state.get("xas_deconv_dataset", "")
+        _d_channel = st.session_state.get("xas_deconv_channel", CHANNELS[0])
+        _d_peaks_raw = st.session_state.get("xas_deconv_peaks", [])
+        _d_peaks_df = pd.DataFrame(_d_peaks_raw) if _d_peaks_raw else default_peak_df()
+        _d_fwhm_inst = float(st.session_state.get("xas_deconv_fwhm_inst", 0.3))
+        _d_fwhm_init = float(st.session_state.get("xas_deconv_fwhm_init", 0.5))
+        _d_link = bool(st.session_state.get("xas_deconv_link_fwhm", True))
+        _d_step = bool(st.session_state.get("xas_deconv_include_step", True))
+        _d_e0_manual = bool(st.session_state.get("xas_deconv_e0_manual", False))
+        _d_e0_val = float(st.session_state.get("xas_deconv_e0_val", float(np.mean(edge_default))))
+        _d_fit_range = st.session_state.get("xas2_deconv_fit_range", edge_default)
+        _run_deconv = st.session_state.get("xas_deconv_run", False)
+
+        # 取得目標資料
+        if _d_dataset in processed and _d_channel in processed[_d_dataset]:
+            _df_target = processed[_d_dataset][_d_channel]
+            _d_energy = _df_target["Energy_eV"].values
+            _d_y_norm = _df_target[f"{_d_channel}_normalized"].values
+
+            # 二階微分（輔助找峰，放在 expander 內）
+            with st.expander("二階微分（輔助峰位識別）", expanded=False):
+                st.caption("波谷（負值區）對應潛在峰位，可作為輸入中心的參考。")
+                _d2y = second_derivative(_d_energy, _d_y_norm)
+                _fig_d2 = _channel_figure(f"{_d_channel} 二階微分", "d²μ/dE²")
+                _fig_d2.add_trace(go.Scatter(x=_d_energy, y=_d2y, mode="lines", name="d²y/dx²", line=dict(color="#AB63FA", width=1.5)))
+                _fig_d2.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+                st.plotly_chart(_fig_d2, use_container_width=True)
+
+            # 執行擬合
+            if _run_deconv or "xas_deconv_last_result" in st.session_state:
+                if _run_deconv:
+                    # 判斷 E0：從 summary 或手動
+                    if _d_e0_manual:
+                        _e0_use = _d_e0_val
+                    else:
+                        _e0_rows = [r for r in summary_rows if r["Dataset"] == _d_dataset and r["Channel"] == _d_channel]
+                        _e0_use = float(_e0_rows[0]["E0_eV"]) if _e0_rows and np.isfinite(float(_e0_rows[0]["E0_eV"])) else _d_e0_val
+
+                    _fit_result = run_xanes_fit(
+                        _d_energy, _d_y_norm,
+                        _d_peaks_df,
+                        _d_fwhm_inst, _d_fwhm_init,
+                        _d_link, _d_step, _e0_use,
+                        (_d_fit_range[0], _d_fit_range[1]),
+                    )
+                    st.session_state["xas_deconv_last_result"] = _fit_result
+                else:
+                    _fit_result = st.session_state["xas_deconv_last_result"]
+
+                if not _fit_result["success"]:
+                    st.error(f"擬合失敗：{_fit_result['message']}")
+                else:
+                    # ── 擬合圖 ─────────────────────────────────────────
+                    _fig_fit = _channel_figure(f"{_d_channel} 去卷積擬合", "Normalized Intensity")
+                    _add_range_box(_fig_fit, _d_fit_range[0], _d_fit_range[1], "擬合範圍", "#636EFA")
+                    _fig_fit.add_trace(go.Scatter(
+                        x=_d_energy, y=_d_y_norm, mode="lines",
+                        name="實驗數據", line=dict(color="#7EB6D9", width=1.5),
+                    ))
+                    _comp_colors = {"step_": "#FECB52", "p0_": "#EF553B", "p1_": "#00CC96",
+                                    "p2_": "#AB63FA", "p3_": "#FFA15A", "p4_": "#19D3F3"}
+                    for _pref, _comp_y in _fit_result["components"].items():
+                        _c = _comp_colors.get(_pref, "#B6E880")
+                        _lbl = "Step Function" if _pref == "step_" else f"峰 {_pref[:-1]}"
+                        _fig_fit.add_trace(go.Scatter(
+                            x=_d_energy, y=_comp_y, mode="lines",
+                            name=_lbl, line=dict(color=_c, width=1.3, dash="dot"), opacity=0.85,
+                        ))
+                    _fig_fit.add_trace(go.Scatter(
+                        x=_d_energy, y=_fit_result["y_fit"], mode="lines",
+                        name="總擬合", line=dict(color="#FF6692", width=2.2),
+                    ))
+                    st.plotly_chart(_fig_fit, use_container_width=True)
+
+                    # ── 殘差圖 ─────────────────────────────────────────
+                    _fig_res = _channel_figure(f"{_d_channel} 殘差", "Residual")
+                    _fig_res.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+                    _fig_res.add_trace(go.Scatter(
+                        x=_d_energy, y=_fit_result["residual"], mode="lines",
+                        name="殘差 (實驗 − 擬合)", line=dict(color="#FF6692", width=1.3),
+                    ))
+                    st.plotly_chart(_fig_res, use_container_width=True)
+
+                    # ── 指標 ───────────────────────────────────────────
+                    _mc1, _mc2, _mc3 = st.columns(3)
+                    _mc1.metric("R-factor", f"{_fit_result['r_factor']:.5f}")
+                    _mc2.metric("Reduced χ²", f"{_fit_result['redchi']:.5f}" if np.isfinite(_fit_result["redchi"]) else "—")
+                    _mc3.metric("擬合點數", str(_fit_result["ndata"]))
+                    if _fit_result["r_factor"] > 0.05:
+                        st.warning(f"R-factor = {_fit_result['r_factor']:.4f} > 0.05，建議檢查殘差並考慮調整峰位或增加峰。")
+                    elif _fit_result["r_factor"] <= 0.02:
+                        st.success(f"R-factor = {_fit_result['r_factor']:.4f} ≤ 0.02，擬合品質良好。")
+
+                    # ── 峰參數表 ───────────────────────────────────────
+                    if not _fit_result["params_table"].empty:
+                        st.markdown("**擬合峰參數**")
+                        st.dataframe(_fit_result["params_table"], use_container_width=True, hide_index=True)
+
+                        # 匯出
+                        _deconv_csv = _fit_result["params_table"].to_csv(index=False).encode("utf-8")
+                        st.download_button(
+                            "下載擬合峰參數 CSV", _deconv_csv,
+                            file_name=f"{_d_dataset}_{_d_channel}_deconv_peaks.csv",
+                            mime="text/csv", key="xas_deconv_peaks_download",
+                        )
+        else:
+            st.info("請先在 Step 6 完成歸一化，並在左側 Step 7 選擇正確的資料集與通道。")
 
     gaussian_df = pd.concat(gaussian_rows, ignore_index=True) if gaussian_rows else pd.DataFrame()
     if gaussian_enabled and not gaussian_df.empty:
         st.subheader("高斯扣除結果")
         st.dataframe(gaussian_df.round(6), use_container_width=True, hide_index=True)
-
-    fit_df_all = pd.concat(fit_rows, ignore_index=True) if fit_rows else pd.DataFrame()
-    if fit_enabled and not fit_df_all.empty:
-        st.subheader("Gaussian 擬合結果")
-        st.dataframe(fit_df_all.round(6), use_container_width=True, hide_index=True)
 
     st.divider()
     st.subheader("匯出")
@@ -450,7 +716,7 @@ def run_xas_ui() -> None:
             "average": {"enabled": do_average},
             "energy_correction": {"enabled": energy_correction_enabled, "offset_eV": energy_offset},
             "gaussian_subtraction": {"enabled": gaussian_enabled, "channels": gaussian_channels, "fixed_fwhm_eV": gaussian_fwhm, "fixed_area": gaussian_area, "search_half_width_eV": gaussian_search},
-            "background": {"enabled": bg_enabled, "method": bg_method, "range_eV": list(bg_range), "order": bg_order},
+            "background": {"enabled": bg_enabled, "method": bg_method, "range_tey_eV": list(bg_range_tey), "range_tfy_eV": list(bg_range_tfy), "order": bg_order},
             "normalization": {"method": norm_method, "e0_mode": e0_mode, "edge_search_range_eV": list(edge_search), "reference_range_eV": list(norm_range), "post_edge_order": norm_order},
             "summary": summary_df.to_dict(orient="records"),
         }

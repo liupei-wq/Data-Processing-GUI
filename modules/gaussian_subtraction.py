@@ -109,27 +109,49 @@ def run_gaussian_subtraction_ui() -> None:
 
         st.divider()
         st.markdown("### 高斯模板")
+        # FWHM
+        _fwhm_cur = max(0.000001, min(50.0, float(st.session_state.get("gauss_sub_fwhm", 0.50))))
+        st.session_state["_gauss_sub_fwhm_sl"] = _fwhm_cur
+        def _on_gsub_fwhm_sl():
+            st.session_state["gauss_sub_fwhm"] = st.session_state["_gauss_sub_fwhm_sl"]
+        st.slider("FWHM 拉桿", 0.01, 50.0, step=0.01,
+                  key="_gauss_sub_fwhm_sl", on_change=_on_gsub_fwhm_sl)
         fixed_fwhm = float(st.number_input(
-            "固定 FWHM（X 軸單位）",
+            "固定 FWHM 精確輸入（X 軸單位）",
             min_value=0.000001,
-            value=0.50,
-            step=0.05,
+            step=0.01,
             format="%.6f",
             key="gauss_sub_fwhm",
         ))
-        fixed_area = float(st.number_input(
-            "固定面積",
+
+        # 峰高 → 面積
+        _ht_cur = max(0.0, min(10000.0, float(st.session_state.get("gauss_sub_height", 100.0))))
+        st.session_state["_gauss_sub_height_sl"] = _ht_cur
+        def _on_gsub_height_sl():
+            st.session_state["gauss_sub_height"] = st.session_state["_gauss_sub_height_sl"]
+        st.slider("峰高 拉桿", 0.0, 10000.0, step=1.0,
+                  key="_gauss_sub_height_sl", on_change=_on_gsub_height_sl)
+        fixed_peak_height = float(st.number_input(
+            "峰高 精確輸入（從圖上讀取）",
             min_value=0.0,
-            value=100.0,
-            step=10.0,
-            format="%.6f",
-            key="gauss_sub_area",
+            step=0.1,
+            format="%.4g",
+            key="gauss_sub_height",
         ))
+        fixed_area = fixed_peak_height * fixed_fwhm * 1.0645
+        st.caption(f"換算面積 = {fixed_area:.4g}")
+
+        # 搜尋半寬
+        _srch_cur = max(0.0, min(50.0, float(st.session_state.get("gauss_sub_search_half_width", 0.50))))
+        st.session_state["_gauss_sub_srch_sl"] = _srch_cur
+        def _on_gsub_srch_sl():
+            st.session_state["gauss_sub_search_half_width"] = st.session_state["_gauss_sub_srch_sl"]
+        st.slider("搜尋半寬 拉桿", 0.0, 50.0, step=0.01,
+                  key="_gauss_sub_srch_sl", on_change=_on_gsub_srch_sl)
         search_half_width = float(st.number_input(
-            "中心搜尋半寬（X 軸單位）",
+            "中心搜尋半寬 精確輸入（X 軸單位）",
             min_value=0.0,
-            value=0.50,
-            step=0.05,
+            step=0.01,
             format="%.6f",
             key="gauss_sub_search_half_width",
         ))
@@ -223,18 +245,20 @@ def run_gaussian_subtraction_ui() -> None:
             fit_df.insert(0, "Dataset", name)
             fit_tables.append(fit_df)
 
-        color = COLORS[idx % len(COLORS)]
+        _gs_raw_c   = ["#7EB6D9","#9BC9E0","#A8D5E2","#B0C4DE"]
+        _gs_model_c = ["#F05441","#FF8C42","#E6501A","#FF6B35"]
+        _gs_after_c = ["#2ABF83","#4DAF4A","#00BFA5","#43C59E"]
         fig.add_trace(go.Scatter(
             x=x, y=y, mode="lines", name=f"{name}（原始）",
-            line=dict(color=color, width=1.3, dash="dash"), opacity=0.45,
+            line=dict(color=_gs_raw_c[idx % len(_gs_raw_c)], width=1.3), opacity=0.60,
         ))
         fig.add_trace(go.Scatter(
             x=x, y=model, mode="lines", name=f"{name}（高斯模板）",
-            line=dict(color=color, width=1.1, dash="dot"), opacity=0.65,
+            line=dict(color=_gs_model_c[idx % len(_gs_model_c)], width=1.8, dash="dot"),
         ))
         fig.add_trace(go.Scatter(
             x=x, y=subtracted, mode="lines", name=f"{name}（扣高斯後）",
-            line=dict(color=color, width=2),
+            line=dict(color=_gs_after_c[idx % len(_gs_after_c)], width=2.2),
         ))
 
         export_frames[name] = pd.DataFrame({
