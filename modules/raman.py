@@ -9,13 +9,9 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.io as pio
 import streamlit as st
-from scipy.ndimage import maximum_filter1d
-from scipy.signal import peak_widths
-
 from core.parsers import parse_two_column_spectrum_bytes
-from core.spectrum_ops import detect_spectrum_peaks, interpolate_spectrum_to_grid, mean_spectrum_arrays
+from core.spectrum_ops import interpolate_spectrum_to_grid, mean_spectrum_arrays
 from core.ui_helpers import (
     _next_btn,
     auto_scroll_on_appear,
@@ -33,26 +29,23 @@ _SUBSTRATE_KEYS: set[str] = {"Si (基板)", "Sapphire α-Al₂O₃ (c-plane)"}
 _FILM_KEYS: list[str] = [k for k in RAMAN_REFERENCES if k not in _SUBSTRATE_KEYS]
 _PEAK_CANDS_KEY = "raman_fit_candidates"
 _EDITOR_WIDGET_KEY = "raman_peak_editor_widget"
+_EDITOR_WIDGET_VERSION_KEY = "raman_peak_editor_widget_version"
 _PEAK_ROLE_OPTIONS = ["主峰", "強峰", "次峰", "弱峰", "待判定", "自訂"]
 _PEAK_ID_COUNTER_KEY = "raman_peak_id_counter"
 _AUTO_REFIT_FLAG_KEY = "raman_fit_auto_refit"
 _AUTO_REFIT_TARGET_KEY = "raman_fit_auto_refit_target"
 _REVIEW_PICK_KEY = "raman_fit_review_pick"
-_FIT_HISTORY_KEY = "raman_fit_history"
 _RAMAN_PRESET_VERSION = 1
 _RAMAN_PRESET_KEYS = [
     "raman_sub_peak_pos", "raman_sub_enabled", "raman_show_sub", "raman_show_pre_corr",
     "raman_skip_despike", "raman_despike_method", "raman_despike_threshold",
     "raman_despike_window", "raman_despike_passes", "raman_show_spikes", "raman_step2_done",
-    "raman_skip_avg", "raman_do_avg", "raman_interp", "raman_show_ind", "raman_step3_done",
+    "raman_skip_avg", "raman_do_interp", "raman_do_avg", "raman_interp", "raman_show_ind", "raman_step3_done",
     "raman_skip_bg", "raman_bg_method", "raman_poly_deg", "raman_baseline_lambda_exp",
     "raman_baseline_iter", "raman_baseline_p", "raman_bg_range", "raman_show_bg",
     "raman_step4_done", "raman_skip_smooth", "raman_smooth_method", "raman_smooth_window",
     "raman_smooth_poly", "raman_step5_done", "raman_skip_norm", "raman_norm_method",
-    "raman_norm_range", "raman_step6_done", "raman_skip_peaks", "raman_peak_prominence",
-    "raman_peak_height", "raman_peak_distance", "raman_peak_max", "raman_peak_labels",
-    "raman_local_prom", "raman_local_window_cm", "raman_detect_range_on",
-    "raman_detect_x_start", "raman_detect_x_end", "raman_step7_done", "raman_skip_fit",
+    "raman_norm_range", "raman_step6_done", "raman_skip_fit",
     "raman_fit_target", "raman_fit_profile", "raman_fit_init_fwhm", "raman_step8_done",
     "raman_zoom_on", "raman_zoom_start", "raman_zoom_end", "raman_zoom_range_slider",
     "raman_peak_table_compact", "raman_review_min_area_pct", "raman_review_max_abs_delta",
@@ -279,7 +272,7 @@ def _add_ref_to_session(mat_name: str, default_fwhm: float) -> None:
         st.session_state[_PEAK_CANDS_KEY] = pd.concat(
             [current, pd.DataFrame(new_rows)], ignore_index=True
         )
-        st.session_state.pop(_EDITOR_WIDGET_KEY, None)
+        _reset_peak_editor_widget()
 
 
 def _add_rows_to_session(rows: list[dict]) -> None:
@@ -307,7 +300,7 @@ def _add_rows_to_session(rows: list[dict]) -> None:
         st.session_state[_PEAK_CANDS_KEY] = pd.concat(
             [current, pd.DataFrame(filtered)], ignore_index=True
         )
-        st.session_state.pop(_EDITOR_WIDGET_KEY, None)
+        _reset_peak_editor_widget()
 
 
 def _queue_raman_auto_refit(target: str) -> None:
@@ -353,153 +346,6 @@ def _build_fit_quality_flag(
     return "；".join(flags) if flags else "OK"
 
 
-def _apply_fit_tuning_to_peak_df(current_df: pd.DataFrame, tune_df: pd.DataFrame) -> pd.DataFrame:
-    out = _ensure_peak_df(current_df).copy()
-    if tune_df is None or not isinstance(tune_df, pd.DataFrame) or tune_df.empty:
-        return out
-
-    updates: dict[str, dict[str, float]] = {}
-    for row in tune_df.to_dict("records"):
-        if not bool(row.get("套用", False)):
-            continue
-        peak_id = str(row.get("Peak_ID", "")).strip()
-        if not peak_id:
-            continue
-        new_center = pd.to_numeric(row.get("下一輪位置_cm"), errors="coerce")
-        new_fwhm = pd.to_numeric(row.get("下一輪FWHM_cm"), errors="coerce")
-        updates[peak_id] = {
-            "位置_cm": float(new_center) if np.isfinite(new_center) else float("nan"),
-            "初始_FWHM_cm": float(new_fwhm) if np.isfinite(new_fwhm) else float("nan"),
-        }
-
-    if not updates:
-        return out
-
-    for idx, peak_id in out["Peak_ID"].astype(str).items():
-        upd = updates.get(peak_id)
-        if upd is None:
-            continue
-        if np.isfinite(upd["位置_cm"]):
-            out.at[idx, "位置_cm"] = float(upd["位置_cm"])
-        if np.isfinite(upd["初始_FWHM_cm"]):
-            out.at[idx, "初始_FWHM_cm"] = float(max(0.5, upd["初始_FWHM_cm"]))
-    return _ensure_peak_df(out)
-
-
-def _fit_summary_signature(df: pd.DataFrame) -> str:
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return "empty"
-    subset_cols = [c for c in ["Peak_ID", "Center_cm", "FWHM_cm", "Quality_Flag"] if c in df.columns]
-    payload = df[subset_cols].round(6).to_csv(index=False)
-    return hashlib.md5(payload.encode("utf-8")).hexdigest()
-
-
-def _recommend_fit_tuning_action(flag: str, ref_cm: float, delta_cm: float) -> str:
-    flag = str(flag or "").strip()
-    if "Area=0" in flag:
-        return "建議停用"
-    if "|Δ|" in flag and np.isfinite(ref_cm):
-        return "建議回拉理論位置"
-    if "Area%<" in flag:
-        return "低面積，視情況停用"
-    if flag == "OK":
-        return "可直接沿用本次結果"
-    return "人工判斷"
-
-
-def _build_fit_tuning_table(fit_summary_df: pd.DataFrame, current_peak_df: pd.DataFrame) -> pd.DataFrame:
-    current_df = _ensure_peak_df(current_peak_df)
-    current_map = current_df.set_index("Peak_ID") if not current_df.empty else pd.DataFrame()
-    rows: list[dict] = []
-    for row in fit_summary_df.to_dict("records"):
-        peak_id = str(row.get("Peak_ID", "")).strip()
-        current_init_center = float("nan")
-        current_init_fwhm = float("nan")
-        if not current_map.empty and peak_id in current_map.index:
-            current_init_center = _coerce_optional_float(current_map.at[peak_id, "位置_cm"])
-            current_init_fwhm = _coerce_optional_float(current_map.at[peak_id, "初始_FWHM_cm"])
-        ref_cm = _coerce_optional_float(row.get("Ref_cm"))
-        delta_cm = _coerce_optional_float(row.get("Delta_cm"))
-        flag = str(row.get("Quality_Flag", "")).strip()
-        rows.append({
-            "套用": False,
-            "Peak_ID": peak_id,
-            "Peak_Name": str(row.get("Peak_Name", "")),
-            "Ref_cm": ref_cm,
-            "Center_cm": _coerce_optional_float(row.get("Center_cm")),
-            "Delta_cm": delta_cm,
-            "FWHM_cm": _coerce_optional_float(row.get("FWHM_cm")),
-            "目前初始位置_cm": current_init_center,
-            "目前初始FWHM_cm": current_init_fwhm,
-            "下一輪位置_cm": _coerce_optional_float(row.get("Center_cm")),
-            "下一輪FWHM_cm": _coerce_optional_float(row.get("FWHM_cm")),
-            "Quality_Flag": flag,
-            "建議": _recommend_fit_tuning_action(flag, ref_cm, delta_cm),
-        })
-    return pd.DataFrame(rows)
-
-
-def _set_fit_tuning_selection(tune_df: pd.DataFrame, selector: str, max_abs_delta: float) -> pd.DataFrame:
-    out = tune_df.copy()
-    if out.empty:
-        return out
-    if selector == "all":
-        out["套用"] = True
-    elif selector == "flagged":
-        out["套用"] = out["Quality_Flag"].astype(str) != "OK"
-    elif selector == "large_delta":
-        out["套用"] = out["Delta_cm"].abs().gt(float(max_abs_delta)).fillna(False)
-    elif selector == "zero_area":
-        out["套用"] = out["Quality_Flag"].astype(str).str.contains("Area=0", regex=False)
-    elif selector == "keep":
-        return out
-    else:
-        out["套用"] = False
-    return out
-
-
-def _fill_selected_fit_tuning_rows(
-    tune_df: pd.DataFrame,
-    *,
-    center_mode: str,
-    fwhm_mode: str,
-    fwhm_cap: float,
-) -> pd.DataFrame:
-    out = tune_df.copy()
-    if out.empty or "套用" not in out.columns:
-        return out
-    mask = out["套用"].astype(bool)
-    if not mask.any():
-        return out
-
-    if center_mode == "fit":
-        out.loc[mask, "下一輪位置_cm"] = out.loc[mask, "Center_cm"]
-    elif center_mode == "ref":
-        ref_mask = mask & out["Ref_cm"].notna()
-        out.loc[ref_mask, "下一輪位置_cm"] = out.loc[ref_mask, "Ref_cm"]
-    elif center_mode == "current":
-        out.loc[mask, "下一輪位置_cm"] = out.loc[mask, "目前初始位置_cm"]
-
-    if fwhm_mode == "fit":
-        out.loc[mask, "下一輪FWHM_cm"] = out.loc[mask, "FWHM_cm"]
-    elif fwhm_mode == "fit_cap":
-        capped = out.loc[mask, "FWHM_cm"].clip(upper=float(max(0.5, fwhm_cap)))
-        out.loc[mask, "下一輪FWHM_cm"] = capped
-    elif fwhm_mode == "current":
-        out.loc[mask, "下一輪FWHM_cm"] = out.loc[mask, "目前初始FWHM_cm"]
-    return out
-
-
-def _format_review_option(row: pd.Series) -> str:
-    ref_text = "-" if not np.isfinite(float(row["Ref_cm"])) else f"{float(row['Ref_cm']):.1f}"
-    delta = float(row["Delta_cm"])
-    delta_text = "-" if not np.isfinite(delta) else f"{delta:+.1f}"
-    return (
-        f"{row['Peak_ID']}｜{row['Peak_Name']}｜Ref {ref_text}｜"
-        f"Fit {float(row['Center_cm']):.1f}｜Δ {delta_text}"
-    )
-
-
 def _sort_peak_candidate_df(df: pd.DataFrame) -> pd.DataFrame:
     out = _ensure_peak_df(df).copy()
     if out.empty:
@@ -534,6 +380,17 @@ def _dataframe_records(df: pd.DataFrame) -> list[dict]:
         return []
     safe_df = df.astype(object).where(pd.notna(df), None)
     return [_json_safe(rec) for rec in safe_df.to_dict("records")]
+
+
+def _peak_editor_widget_key() -> str:
+    version = int(st.session_state.get(_EDITOR_WIDGET_VERSION_KEY, 0))
+    return f"{_EDITOR_WIDGET_KEY}_{version}"
+
+
+def _reset_peak_editor_widget() -> None:
+    st.session_state[_EDITOR_WIDGET_VERSION_KEY] = int(
+        st.session_state.get(_EDITOR_WIDGET_VERSION_KEY, 0)
+    ) + 1
 
 
 def _clear_raman_fit_artifacts() -> None:
@@ -585,84 +442,8 @@ def _apply_raman_preset_payload(payload: dict) -> None:
         peak_df = _ensure_peak_df(pd.DataFrame(peak_records))
         st.session_state[_PEAK_CANDS_KEY] = peak_df
         _update_peak_id_counter_from_df(peak_df)
-    st.session_state.pop(_EDITOR_WIDGET_KEY, None)
+    _reset_peak_editor_widget()
     _clear_raman_fit_artifacts()
-
-
-def _try_plotly_export_bytes(fig: go.Figure, fmt: str) -> tuple[bytes | None, str | None]:
-    try:
-        img_bytes = pio.to_image(fig, format=fmt)
-        return img_bytes, None
-    except Exception as exc:
-        return None, str(exc)
-
-
-def _build_publication_fit_figure(
-    fit_x: np.ndarray,
-    fit_y: np.ndarray,
-    fit_result: dict,
-    fit_summary_df: pd.DataFrame,
-    *,
-    show_components: bool = True,
-) -> go.Figure:
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=fit_x, y=fit_y,
-        mode="lines", name="Experimental",
-        line=dict(color="black", width=2.0),
-    ))
-    fig.add_trace(go.Scatter(
-        x=fit_x, y=fit_result["y_fit"],
-        mode="lines", name="Fit",
-        line=dict(color="#d62728", width=2.4),
-    ))
-    pub_colors = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd",
-        "#8c564b", "#e377c2", "#17becf", "#bcbd22",
-    ]
-    if show_components:
-        for pi, (pk, yi) in enumerate(zip(fit_result["peaks"], fit_result["y_individual"])):
-            fig.add_trace(go.Scatter(
-                x=fit_x,
-                y=yi,
-                mode="lines",
-                name=str(pk.get("display_name", pk["label"])),
-                line=dict(color=pub_colors[pi % len(pub_colors)], width=1.3, dash="dot"),
-            ))
-    fig.update_layout(
-        template="none",
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        font=dict(color="black", size=16),
-        xaxis=dict(
-            title="Raman Shift (cm⁻¹)",
-            showline=True,
-            linewidth=1.5,
-            linecolor="black",
-            mirror=True,
-            showgrid=False,
-            zeroline=False,
-        ),
-        yaxis=dict(
-            title="Intensity (a.u.)",
-            showline=True,
-            linewidth=1.5,
-            linecolor="black",
-            mirror=True,
-            showgrid=False,
-            zeroline=False,
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-        ),
-        height=560,
-        margin=dict(l=70, r=30, t=40, b=60),
-    )
-    return fig
 
 
 def _process_column_display_name(col: str) -> str:
@@ -699,84 +480,45 @@ def _default_compare_columns(columns: list[str]) -> list[str]:
     return ordered[: min(4, len(ordered))]
 
 
-def build_raman_peak_table(
-    dataset: str,
-    x: np.ndarray,
-    y: np.ndarray,
-    peak_idx: np.ndarray,
-) -> pd.DataFrame:
-    if len(peak_idx) == 0:
-        return pd.DataFrame(columns=[
-            "Dataset", "Peak", "Raman_Shift_cm", "Intensity",
-            "Relative_Intensity_pct", "FWHM_cm",
-        ])
-
-    widths, _, left_ips, right_ips = peak_widths(y, peak_idx, rel_height=0.5)
-    sample_axis = np.arange(len(x), dtype=float)
-    left_x = np.interp(left_ips, sample_axis, x)
-    right_x = np.interp(right_ips, sample_axis, x)
-
-    peak_x = x[peak_idx]
-    peak_y = y[peak_idx]
-    curve_max = float(np.max(y)) if len(y) else 0.0
-    rel_intensity = (peak_y / curve_max * 100.0) if curve_max > 0 else np.zeros_like(peak_y)
-
-    return pd.DataFrame({
-        "Dataset": dataset,
-        "Peak": np.arange(1, len(peak_idx) + 1),
-        "Raman_Shift_cm": peak_x,
-        "Intensity": peak_y,
-        "Relative_Intensity_pct": rel_intensity,
-        "FWHM_cm": np.abs(right_x - left_x),
-    })
+def _build_export_filename(stem: str, extension: str) -> str:
+    clean_stem = str(stem or "").strip() or "export"
+    clean_ext = str(extension or "").strip().lstrip(".")
+    if not clean_ext:
+        return clean_stem
+    if clean_stem.lower().endswith(f".{clean_ext.lower()}"):
+        return clean_stem
+    return f"{clean_stem}.{clean_ext}"
 
 
-def _detect_raman_peaks(
-    x: np.ndarray,
-    y: np.ndarray,
-    prom_ratio: float,
-    height_ratio: float,
-    distance_cm: float,
-    max_peaks: int,
-    detect_x_start: float,
-    detect_x_end: float,
-    use_local_prom: bool,
-    local_window_cm: float,
-) -> np.ndarray:
-    """Peak detection with optional X-range filter and local adaptive normalization.
-
-    Returns indices into the *original* x/y arrays.
-    """
-    # -- X range filter --
-    if detect_x_start > x[0] or detect_x_end < x[-1]:
-        mask = (x >= detect_x_start) & (x <= detect_x_end)
-        x_det = x[mask]
-        y_det = y[mask]
-        orig_idx = np.where(mask)[0]
-    else:
-        x_det, y_det = x, y
-        orig_idx = np.arange(len(x), dtype=int)
-
-    if len(x_det) < 3:
-        return np.array([], dtype=int)
-
-    # -- Local adaptive normalization --
-    if use_local_prom:
-        step = (x_det[-1] - x_det[0]) / max(len(x_det) - 1, 1)
-        win = max(5, int(local_window_cm / step))
-        local_max = maximum_filter1d(y_det, size=win)
-        local_max = np.where(local_max < 1e-10, 1e-10, local_max)
-        y_for_det = y_det / local_max
-    else:
-        y_for_det = y_det
-
-    sub_idx = detect_spectrum_peaks(
-        x_det, y_for_det, prom_ratio, height_ratio, distance_cm, max_peaks,
-    )
-    if len(sub_idx) == 0:
-        return np.array([], dtype=int)
-    # map sub-array indices back to original array
-    return orig_idx[sub_idx]
+def _render_download_card(
+    *,
+    title: str,
+    description: str,
+    input_label: str,
+    default_name: str,
+    extension: str,
+    button_label: str,
+    data: bytes,
+    mime: str,
+    input_key: str,
+    button_key: str,
+) -> None:
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        st.caption(description)
+        export_stem = st.text_input(
+            input_label,
+            value=default_name,
+            key=input_key,
+        )
+        st.download_button(
+            button_label,
+            data=data,
+            file_name=_build_export_filename(export_stem, extension),
+            mime=mime,
+            key=button_key,
+            use_container_width=True,
+        )
 
 
 def run_raman_ui():
@@ -922,7 +664,6 @@ def run_raman_ui():
     _e0 = x_min_g
     _e1 = x_max_g
     step_size = float(max(0.1, (x_max_g - x_min_g) / 2000))
-    raman_peak_distance_default = float(max(step_size, min(20.0, max(step_size, (_e1 - _e0) / 80))))
 
     # ── Substrate correction ───────────────────────────────────────────────────
     data_dict_original: dict[str, tuple[np.ndarray, np.ndarray]] = {
@@ -1022,7 +763,8 @@ def run_raman_ui():
         s2 = st.session_state.get("raman_step2_done", False)
         step2_done = skip_despike or s2
 
-    # ── Step 3: averaging options (sidebar) ───────────────────────────────────
+    # ── Step 3: interpolation / averaging options (sidebar) ──────────────────
+    do_interpolate = False
     do_average = False
     show_individual = False
     interp_points = 601
@@ -1030,15 +772,35 @@ def run_raman_ui():
     with st.sidebar:
         s3 = st.session_state.get("raman_step3_done", False)
         if step2_done:
+            if len(data_dict) < 2 and st.session_state.get("raman_do_avg", False):
+                st.session_state["raman_do_avg"] = False
             _skip3 = st.session_state.get("raman_skip_avg", False)
-            with st.expander(step_exp_label(3, "多檔平均", s3 or _skip3), expanded=not (s3 or _skip3)):
+            with st.expander(step_exp_label(3, "內插化及平均化", s3 or _skip3), expanded=not (s3 or _skip3)):
                 skip_avg = st.checkbox("跳過此步驟 ✓", key="raman_skip_avg")
                 if not skip_avg:
-                    do_average = st.checkbox("對所有載入的檔案做平均", value=False, key="raman_do_avg")
-                    interp_points = int(st.number_input(
-                        "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
-                    ))
+                    if len(data_dict) < 2:
+                        st.caption("目前只有 1 個檔案，可單獨做內插化；平均化需至少 2 個檔案。")
+                    else:
+                        st.caption("內插化會先把每條光譜重採樣到固定點數；平均化則會在共同重疊區間內先內插、再平均。")
+                    do_interpolate = st.checkbox(
+                        "對每個載入檔案做內插化",
+                        value=st.session_state.get("raman_do_interp", False),
+                        key="raman_do_interp",
+                        help="單檔與多檔都可使用。適合想把光譜重採樣成固定點數後再進入後續處理。",
+                    )
+                    do_average = st.checkbox(
+                        "對所有載入的檔案做平均化",
+                        value=st.session_state.get("raman_do_avg", False),
+                        key="raman_do_avg",
+                        disabled=len(data_dict) < 2,
+                        help="平均化需要至少 2 個檔案，並會自動使用同一組插值點數。",
+                    )
+                    if do_interpolate or do_average:
+                        interp_points = int(st.number_input(
+                            "插值點數", min_value=100, max_value=5000, value=601, step=50, key="raman_interp"
+                        ))
                     if do_average:
+                        st.caption("平均化會自動使用上方插值點數，並只在共同重疊區間內進行。")
                         show_individual = st.checkbox("疊加顯示原始個別曲線", value=False, key="raman_show_ind")
                 if skip_avg:
                     st.session_state["raman_step3_done"] = True
@@ -1068,6 +830,10 @@ def run_raman_ui():
             with st.expander(step_exp_label(4, "背景扣除", s4 or _skip4), expanded=not (s4 or _skip4)):
                 skip_bg = st.checkbox("跳過此步驟 ✓", key="raman_skip_bg")
                 if not skip_bg:
+                    st.caption(
+                        "如果基線已接近零且無明顯斜率，可直接跳過。"
+                        "螢光背景強或基線有漂移時才需要扣除。"
+                    )
                     bg_method = st.selectbox(
                         "方法",
                         ["none", "linear", "polynomial", "asls", "airpls"],
@@ -1137,6 +903,10 @@ def run_raman_ui():
             with st.expander(step_exp_label(5, "平滑", s5 or _skip5), expanded=not (s5 or _skip5)):
                 skip_smooth = st.checkbox("跳過此步驟 ✓", key="raman_skip_smooth")
                 if not skip_smooth:
+                    st.caption(
+                        "訊雜比（SNR）高的數據通常不需要平滑。"
+                        "平滑視窗過大會展寬峰形，特別是窄峰（如 Si 520 cm⁻¹）。"
+                    )
                     smooth_method = st.selectbox(
                         "方法",
                         ["none", "moving_average", "savitzky_golay"],
@@ -1215,104 +985,6 @@ def run_raman_ui():
             skip_norm = False
         step6_done = step5_done and (skip_norm or s6)
 
-    # ── Step 7: peak detection (sidebar) ──────────────────────────────────────
-    peak_prom_ratio = 0.05
-    peak_height_ratio = 0.03
-    peak_distance_cm = raman_peak_distance_default
-    max_peak_labels = 15
-    label_peaks = True
-    run_peak_detection = False
-    detect_x_start = float(x_min_g)
-    detect_x_end = float(x_max_g)
-    use_local_prom = False
-    local_window_cm = 100.0
-
-    with st.sidebar:
-        s7 = st.session_state.get("raman_step7_done", False)
-        if step6_done:
-            _skip7 = st.session_state.get("raman_skip_peaks", False)
-            with st.expander(step_exp_label(7, "峰值偵測", s7 or _skip7), expanded=not (s7 or _skip7)):
-                skip_peaks = st.checkbox("跳過此步驟 ✓", key="raman_skip_peaks")
-                if not skip_peaks:
-                    peak_prom_ratio = float(st.slider(
-                        "最小顯著度（相對）", 0.0, 1.0, 0.05, 0.01, key="raman_peak_prominence"
-                    ))
-                    peak_height_ratio = float(st.slider(
-                        "最小高度（相對最大值）", 0.0, 1.0, 0.03, 0.01, key="raman_peak_height"
-                    ))
-                    peak_distance_cm = float(st.number_input(
-                        "最小峰距 (cm⁻¹)",
-                        min_value=step_size,
-                        max_value=max(step_size, x_max_g - x_min_g),
-                        value=raman_peak_distance_default,
-                        step=max(step_size, 1.0),
-                        format="%.1f",
-                        key="raman_peak_distance",
-                    ))
-                    max_peak_labels = int(st.number_input(
-                        "最多標記峰數", min_value=1, max_value=50, value=15, step=1, key="raman_peak_max"
-                    ))
-                    label_peaks = st.checkbox("標示峰位數值", value=True, key="raman_peak_labels")
-
-                    # ── 局部自適應靈敏度 ──────────────────────────────────────────
-                    use_local_prom = st.checkbox(
-                        "局部自適應靈敏度",
-                        value=False,
-                        key="raman_local_prom",
-                        help="偵測前對每個局部區域做歸一化，讓強峰（如 Si）旁邊的弱峰也能被偵測到",
-                    )
-                    if use_local_prom:
-                        local_window_cm = float(st.number_input(
-                            "局部窗口 (cm⁻¹)",
-                            min_value=20.0,
-                            max_value=float(max(200.0, x_max_g - x_min_g)),
-                            value=100.0,
-                            step=10.0,
-                            format="%.0f",
-                            key="raman_local_window_cm",
-                        ))
-
-                    # ── 限制偵測 X 範圍 ───────────────────────────────────────────
-                    use_detect_range = st.checkbox(
-                        "限制偵測 X 範圍",
-                        value=False,
-                        key="raman_detect_range_on",
-                        help="只在指定區間內搜尋峰值，適合只看某段薄膜訊號區域",
-                    )
-                    if use_detect_range:
-                        detect_x_start = float(st.number_input(
-                            "偵測起點 (cm⁻¹)",
-                            min_value=float(x_min_g),
-                            max_value=float(x_max_g),
-                            value=float(x_min_g),
-                            step=step_size,
-                            format="%.1f",
-                            key="raman_detect_x_start",
-                        ))
-                        detect_x_end = float(st.number_input(
-                            "偵測終點 (cm⁻¹)",
-                            min_value=float(x_min_g),
-                            max_value=float(x_max_g),
-                            value=float(x_max_g),
-                            step=step_size,
-                            format="%.1f",
-                            key="raman_detect_x_end",
-                        ))
-
-                if skip_peaks:
-                    st.session_state["raman_step7_done"] = True
-                s7 = st.session_state.get("raman_step7_done", False)
-                if not skip_peaks and not s7:
-                    if _next_btn("raman_btn7", "raman_step7_done"):
-                        s7 = True
-                run_peak_detection = step6_done and not skip_peaks
-            skip_peaks = st.session_state.get("raman_skip_peaks", False)
-            s7 = st.session_state.get("raman_step7_done", False)
-            run_peak_detection = step6_done and not skip_peaks
-        else:
-            skip_peaks = False
-        step7_done = step6_done and (skip_peaks or s7)
-
     # ── Step 8: peak fitting (sidebar) ────────────────────────────────────────
     fit_profile = "voigt"
     fit_initial_fwhm = float(max(4.0, min(24.0, (_e1 - _e0) / 30.0)))
@@ -1323,7 +995,7 @@ def run_raman_ui():
 
     with st.sidebar:
         s8 = st.session_state.get("raman_step8_done", False)
-        if step7_done:
+        if step6_done:
             if st.session_state.get("raman_fit_target") not in fit_target_options:
                 st.session_state["raman_fit_target"] = fit_target_default
             _skip8 = st.session_state.get("raman_skip_fit", False)
@@ -1354,20 +1026,6 @@ def run_raman_ui():
                         format="%.1f",
                         key="raman_fit_init_fwhm",
                     ))
-                    _det_med = st.session_state.get("raman_detected_median_fwhm")
-                    _det_rng = st.session_state.get("raman_detected_fwhm_range")
-                    if _det_med is not None:
-                        _rng_txt = (
-                            f"，範圍 {_det_rng[0]:.1f}–{_det_rng[1]:.1f} cm⁻¹"
-                            if _det_rng else ""
-                        )
-                        _fc1, _fc2 = st.columns([3, 1])
-                        _fc1.caption(f"Step 7 偵測中位數：**{_det_med:.1f}** cm⁻¹{_rng_txt}")
-                        if _fc2.button("採用", key="raman_adopt_fwhm", help="將上方 FWHM 設為 Step 7 偵測中位數"):
-                            st.session_state["raman_fit_init_fwhm"] = float(
-                                np.clip(_det_med, float(max(step_size, 0.5)), float(max(200.0, x_max_g - x_min_g)))
-                            )
-                            st.rerun()
                     st.caption("峰位管理（載入基板 / 薄膜 / 自訂峰）在圖表下方操作。")
                 if skip_fit:
                     st.session_state["raman_step8_done"] = True
@@ -1433,17 +1091,12 @@ def run_raman_ui():
     fig2 = go.Figure()
     export_frames: dict[str, pd.DataFrame] = {}
     despike_notes: list[str] = []
-    peak_tables: list[pd.DataFrame] = []
-    peak_table_map: dict[str, pd.DataFrame] = {}
     fit_source_map: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     peak_signal_label = None
-    fit_summary_export_df = pd.DataFrame()
     fit_curve_export_df = pd.DataFrame()
-    publication_fit_fig: go.Figure | None = None
+    fit_summary_export_df = pd.DataFrame()
     fit_qc_summary: dict[str, object] = {}
-    fit_history_df = st.session_state.get(_FIT_HISTORY_KEY, pd.DataFrame())
-    if not isinstance(fit_history_df, pd.DataFrame):
-        fit_history_df = pd.DataFrame()
+    apply_interpolation = bool(do_interpolate or do_average)
 
     if do_average:
         avg_start = float(max(r_start, ov_min))
@@ -1588,28 +1241,6 @@ def run_raman_ui():
                     avg_raw, avg_input, y_bg, y_smooth, y_final
                 )
                 fit_source_map["Average"] = (new_x, peak_signal)
-                if run_peak_detection:
-                    peak_idx = _detect_raman_peaks(
-                        new_x, peak_signal, peak_prom_ratio,
-                        peak_height_ratio, peak_distance_cm, max_peak_labels,
-                        detect_x_start, detect_x_end,
-                        use_local_prom, local_window_cm,
-                    )
-                    peak_table = build_raman_peak_table("Average", new_x, peak_signal, peak_idx)
-                    peak_table_map["Average"] = peak_table
-                    if not peak_table.empty:
-                        peak_tables.append(peak_table)
-                        peak_fig = fig2 if norm_method != "none" else fig1
-                        peak_fig.add_trace(go.Scatter(
-                            x=peak_table["Raman_Shift_cm"],
-                            y=peak_table["Intensity"],
-                            mode="markers+text" if label_peaks else "markers",
-                            name="Average 峰位",
-                            text=[f"{v:.1f}" for v in peak_table["Raman_Shift_cm"]] if label_peaks else None,
-                            textposition="top center",
-                            textfont=dict(size=10),
-                            marker=dict(color="#FFD166", size=10, symbol="x"),
-                        ))
 
                 row: dict[str, np.ndarray] = {
                     "Raman_Shift_cm": new_x,
@@ -1628,8 +1259,8 @@ def run_raman_ui():
     else:
         for i, (fname, (xv, yv)) in enumerate(data_dict.items()):
             mask = (xv >= r_start) & (xv <= r_end)
-            xc, yc = xv[mask], yv[mask]
-            if len(xc) < 2:
+            xc_raw, yc_raw = xv[mask], yv[mask]
+            if len(xc_raw) < 2:
                 st.warning(f"{fname}：所選範圍內數據點不足，已跳過。")
                 continue
             color = RAMAN_COLORS[i % len(RAMAN_COLORS)]
@@ -1656,11 +1287,22 @@ def run_raman_ui():
                             opacity=0.5,
                         ))
             y_input, spike_mask = despike_signal(
-                yc, despike_method,
+                yc_raw, despike_method,
                 threshold=despike_threshold,
                 window_points=despike_window,
                 passes=despike_passes,
             )
+            if apply_interpolation:
+                interp_x = np.linspace(float(xc_raw.min()), float(xc_raw.max()), interp_points)
+                yc = interpolate_spectrum_to_grid(xc_raw, yc_raw, interp_x, fill_value=np.nan)
+                y_input = interpolate_spectrum_to_grid(xc_raw, y_input, interp_x, fill_value=np.nan)
+                if not (np.all(np.isfinite(yc)) and np.all(np.isfinite(y_input))):
+                    st.warning(f"{fname}：內插後資料不完整，已跳過。")
+                    continue
+                xc = interp_x
+            else:
+                xc = xc_raw
+                yc = yc_raw
             y_bg, bg = apply_processing(
                 xc, y_input, bg_method, "none",
                 bg_x_start=bg_x_start, bg_x_end=bg_x_end, poly_deg=poly_deg,
@@ -1687,7 +1329,7 @@ def run_raman_ui():
                 ))
             if despike_method != "none" and show_spike_marks and np.any(spike_mask):
                 fig1.add_trace(go.Scatter(
-                    x=xc[spike_mask], y=yc[spike_mask], mode="markers",
+                    x=xc_raw[spike_mask], y=yc_raw[spike_mask], mode="markers",
                     name=f"{fname}（尖峰點）",
                     marker=dict(color=color, size=7, symbol="x"),
                     showlegend=False,
@@ -1748,28 +1390,6 @@ def run_raman_ui():
                 yc, y_input, y_bg, y_smooth, y_final
             )
             fit_source_map[fname] = (xc, peak_signal)
-            if run_peak_detection:
-                peak_idx = _detect_raman_peaks(
-                    xc, peak_signal, peak_prom_ratio,
-                    peak_height_ratio, peak_distance_cm, max_peak_labels,
-                    detect_x_start, detect_x_end,
-                    use_local_prom, local_window_cm,
-                )
-                peak_table = build_raman_peak_table(fname, xc, peak_signal, peak_idx)
-                peak_table_map[fname] = peak_table
-                if not peak_table.empty:
-                    peak_tables.append(peak_table)
-                    peak_fig = fig2 if norm_method != "none" else fig1
-                    peak_fig.add_trace(go.Scatter(
-                        x=peak_table["Raman_Shift_cm"],
-                        y=peak_table["Intensity"],
-                        mode="markers+text" if label_peaks else "markers",
-                        name=f"{fname} 峰位",
-                        text=[f"{v:.1f}" for v in peak_table["Raman_Shift_cm"]] if label_peaks else None,
-                        textposition="top center",
-                        textfont=dict(size=10),
-                        marker=dict(color=color, size=9, symbol="x"),
-                    ))
 
             row: dict[str, np.ndarray] = {"Raman_Shift_cm": xc, "Intensity_raw": yc}
             if despike_method != "none":
@@ -1968,34 +1588,6 @@ def run_raman_ui():
                     )
                     st.plotly_chart(compare_fig, use_container_width=True)
 
-    peak_export_df = pd.concat(peak_tables, ignore_index=True) if peak_tables else pd.DataFrame()
-
-    # ── 將偵測到的 FWHM 統計存入 session_state，供 Step 8 參考 ──────────────
-    if run_peak_detection and not peak_export_df.empty and "FWHM_cm" in peak_export_df.columns:
-        _det_fwhm_vals = peak_export_df["FWHM_cm"].dropna()
-        if len(_det_fwhm_vals) >= 1:
-            st.session_state["raman_detected_median_fwhm"] = float(np.median(_det_fwhm_vals))
-            st.session_state["raman_detected_fwhm_range"] = (
-                float(_det_fwhm_vals.min()), float(_det_fwhm_vals.max())
-            )
-    elif not run_peak_detection:
-        pass  # 保留上次偵測的值
-
-    if run_peak_detection:
-        source_label = peak_signal_label or "目前處理後"
-        st.caption(f"峰值偵測以目前{source_label}曲線為準。")
-        if peak_export_df.empty:
-            st.info("目前條件下未偵測到峰值。")
-        else:
-            st.subheader("峰值列表")
-            peak_display = peak_export_df.copy().round({
-                "Raman_Shift_cm": 3,
-                "Intensity": 4,
-                "Relative_Intensity_pct": 2,
-                "FWHM_cm": 3,
-            })
-            st.dataframe(peak_display, use_container_width=True, hide_index=True)
-
     if run_peak_fit:
         scroll_anchor("raman-fit-management")
         st.subheader("峰擬合")
@@ -2005,227 +1597,206 @@ def run_raman_ui():
             st.session_state[_PEAK_CANDS_KEY] = _ensure_peak_df(
                 st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df())
             )
-            peak_df_for_ui = _sort_peak_candidate_df(st.session_state[_PEAK_CANDS_KEY])
-            st.session_state[_PEAK_CANDS_KEY] = peak_df_for_ui
-            c_sub, c_film, c_ops = st.columns([2, 4, 2])
 
-            sub_sel = c_sub.selectbox(
-                "基板峰", ["（不選）"] + sorted(_SUBSTRATE_KEYS),
-                key="raman_fit_sub_sel", label_visibility="collapsed",
+            # ── 載入參考峰 ────────────────────────────────────────────────────
+            sel_cols = st.columns([1.2, 3])
+            sub_sel = sel_cols[0].selectbox(
+                "基板",
+                ["（不選）"] + sorted(_SUBSTRATE_KEYS),
+                key="raman_fit_sub_sel",
             )
-            if c_sub.button("載入基板峰", key="raman_load_sub_btn", use_container_width=True):
+            film_sel = sel_cols[1].multiselect(
+                "薄膜材料",
+                sorted(_FILM_KEYS),
+                key="raman_fit_film_sel",
+                placeholder="選擇一或多種薄膜材料…",
+            )
+            btn_cols = st.columns([1.2, 3, 1.5])
+            if btn_cols[0].button("載入基板峰", key="raman_load_sub_btn", use_container_width=True):
                 if sub_sel != "（不選）":
                     _add_ref_to_session(sub_sel, fit_initial_fwhm)
                     st.rerun()
-
-            film_sel = c_film.multiselect(
-                "薄膜材料", sorted(_FILM_KEYS),
-                key="raman_fit_film_sel", label_visibility="collapsed",
-                placeholder="選擇薄膜材料…",
-            )
-            if c_film.button("載入薄膜峰", key="raman_load_film_btn", use_container_width=True):
+            if btn_cols[1].button("載入薄膜峰", key="raman_load_film_btn", use_container_width=True):
                 for mat in film_sel:
                     _add_ref_to_session(mat, fit_initial_fwhm)
                 if film_sel:
                     st.rerun()
-
-            if run_peak_detection:
-                if c_ops.button("載入偵測峰", key="raman_load_det_btn", use_container_width=True):
-                    det_df = peak_table_map.get(fit_target, pd.DataFrame())
-                    if not det_df.empty:
-                        new_rows = [
-                            _build_peak_candidate_row(
-                                source="自動偵測",
-                                material="未指定",
-                                position_cm=float(r.Raman_Shift_cm),
-                                default_fwhm=float(max(1.0, r.FWHM_cm)),
-                                peak_role="待判定",
-                                mode_label=f"Peak {idx}",
-                                display_name=f"待判定峰 {float(r.Raman_Shift_cm):.1f} cm⁻¹",
-                                note="由自動偵測加入，建議補上材料或峰名稱。",
-                            )
-                            for idx, r in enumerate(det_df.itertuples(index=False), start=1)
-                        ]
-                        _add_rows_to_session(new_rows)
-                        st.rerun()
-
-            if c_ops.button("清空峰位表", key="raman_clear_peaks_btn", use_container_width=True):
+            if btn_cols[2].button("清空峰位表", key="raman_clear_peaks_btn", use_container_width=True):
                 st.session_state[_PEAK_CANDS_KEY] = _empty_peak_df()
-                st.session_state.pop(_EDITOR_WIDGET_KEY, None)
+                _reset_peak_editor_widget()
                 st.rerun()
 
+            st.divider()
+
+            # ── 峰位表 ────────────────────────────────────────────────────────
             peak_df_for_ui = _ensure_peak_df(st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df()))
             peak_total = len(peak_df_for_ui)
             peak_enabled = int(peak_df_for_ui["啟用"].sum()) if not peak_df_for_ui.empty else 0
             peak_primary = int(peak_df_for_ui["峰類別"].isin(["主峰", "強峰"]).sum()) if not peak_df_for_ui.empty else 0
-            metric_cols = st.columns(4)
-            metric_cols[0].metric("峰總數", peak_total)
-            metric_cols[1].metric("已啟用", peak_enabled)
-            metric_cols[2].metric("已停用", peak_total - peak_enabled)
-            metric_cols[3].metric("主峰/強峰", peak_primary)
 
-            table_ctrl_cols = st.columns([1.3, 1, 1, 1.2])
-            compact_peak_table = table_ctrl_cols[0].toggle(
-                "簡潔表格",
-                value=st.session_state.get("raman_peak_table_compact", True),
-                key="raman_peak_table_compact",
-                help="簡潔模式只保留最常用欄位；進階模式會顯示來源、模式與備註。",
+            ctrl_cols = st.columns([3.5, 1, 1.1, 1.1])
+            ctrl_cols[0].caption(
+                f"共 **{peak_total}** 峰 · 啟用 **{peak_enabled}** · 停用 {peak_total - peak_enabled} · 主峰/強峰 {peak_primary}"
             )
-            if table_ctrl_cols[1].button("依位置排序", key="raman_peak_sort_btn", use_container_width=True):
+            if ctrl_cols[1].button("排序", key="raman_peak_sort_btn", use_container_width=True, help="依位置由小到大排序"):
                 st.session_state[_PEAK_CANDS_KEY] = _sort_peak_candidate_df(peak_df_for_ui)
-                st.session_state.pop(_EDITOR_WIDGET_KEY, None)
+                _reset_peak_editor_widget()
                 st.rerun()
-            if table_ctrl_cols[2].button("啟用全部", key="raman_peak_enable_all_btn", use_container_width=True):
+            if ctrl_cols[2].button("啟用全部", key="raman_peak_enable_all_btn", use_container_width=True):
                 peak_df_all = peak_df_for_ui.copy()
                 peak_df_all["啟用"] = True
                 st.session_state[_PEAK_CANDS_KEY] = _ensure_peak_df(peak_df_all)
-                st.session_state.pop(_EDITOR_WIDGET_KEY, None)
+                _reset_peak_editor_widget()
                 st.rerun()
-            if table_ctrl_cols[3].button("全部停用", key="raman_peak_disable_all_btn", use_container_width=True):
+            if ctrl_cols[3].button("停用全部", key="raman_peak_disable_all_btn", use_container_width=True):
                 peak_df_all = peak_df_for_ui.copy()
                 peak_df_all["啟用"] = False
                 st.session_state[_PEAK_CANDS_KEY] = _ensure_peak_df(peak_df_all)
-                st.session_state.pop(_EDITOR_WIDGET_KEY, None)
+                _reset_peak_editor_widget()
                 st.rerun()
 
-            st.caption(
-                "在表格中可直接編輯材料、峰類別、峰名稱、位置與 FWHM；"
-                "簡潔模式會隱藏來源、模式與備註，讓大量峰位時更好整理。"
-            )
-
-            peak_table_cols = (
-                ["Peak_ID", "啟用", "材料", "峰類別", "理論位置_cm", "位置_cm", "顯示名稱", "初始_FWHM_cm"]
-                if compact_peak_table
-                else [
-                    "Peak_ID", "啟用", "來源", "材料", "峰類別",
-                    "理論位置_cm", "位置_cm", "標籤", "顯示名稱", "初始_FWHM_cm", "備註",
-                ]
-            )
-
+            peak_table_cols = ["Peak_ID", "啟用", "材料", "位置_cm", "初始_FWHM_cm", "顯示名稱"]
             peak_editor_source = peak_df_for_ui[peak_table_cols].copy()
             edited_view = st.data_editor(
                 peak_editor_source,
+                key=_peak_editor_widget_key(),
                 column_config={
-                    "Peak_ID": st.column_config.TextColumn("Peak_ID", width="small"),
-                    "啟用": st.column_config.CheckboxColumn("啟用", width="small"),
-                    "來源": st.column_config.TextColumn("來源", disabled=True, width="medium"),
+                    "Peak_ID": st.column_config.TextColumn("ID", width="small"),
+                    "啟用": st.column_config.CheckboxColumn("✓", width="small"),
                     "材料": st.column_config.TextColumn("材料", width="medium"),
-                    "峰類別": st.column_config.SelectboxColumn(
-                        "峰類別",
-                        options=_PEAK_ROLE_OPTIONS,
-                        width="small",
-                    ),
-                    "理論位置_cm": st.column_config.NumberColumn(
-                        "理論位置 (cm⁻¹)", format="%.1f", width="small"),
                     "位置_cm": st.column_config.NumberColumn(
-                        "位置 (cm⁻¹)", format="%.1f", min_value=10.0, max_value=4000.0),
-                    "標籤": st.column_config.TextColumn("模式 / 簡稱", width="small"),
-                    "顯示名稱": st.column_config.TextColumn("峰名稱", width="large"),
+                        "位置 (cm⁻¹)", format="%.1f", min_value=10.0, max_value=4000.0, width="small"),
                     "初始_FWHM_cm": st.column_config.NumberColumn(
-                        "初始 FWHM (cm⁻¹)", format="%.1f", min_value=0.5, max_value=500.0),
-                    "備註": st.column_config.TextColumn("備註", width="large"),
+                        "FWHM (cm⁻¹)", format="%.1f", min_value=0.5, max_value=500.0, width="small"),
+                    "顯示名稱": st.column_config.TextColumn("峰名稱", width="large"),
                 },
-                disabled=["Peak_ID", "來源", "理論位置_cm"],
+                disabled=["Peak_ID"],
                 num_rows="fixed",
                 use_container_width=True,
                 hide_index=True,
             )
 
-            edited_cands = peak_df_for_ui.copy()
-            for col in peak_table_cols:
-                edited_cands[col] = edited_view[col].values
-            edited_cands = _ensure_peak_df(edited_cands)
-            st.session_state[_PEAK_CANDS_KEY] = edited_cands
-
-            st.markdown("**數值新增峰位**")
-            manual_series = fit_source_map.get(fit_target)
-            manual_x_min = float(manual_series[0].min()) if manual_series is not None else float(x_min_g)
-            manual_x_max = float(manual_series[0].max()) if manual_series is not None else float(x_max_g)
-            manual_default_pos = float(np.clip(
-                st.session_state.get("raman_manual_peak_pos", (manual_x_min + manual_x_max) / 2.0),
-                manual_x_min,
-                manual_x_max,
-            ))
-
-            add_cols = st.columns([2.1, 1.4, 1.8, 1.4, 1.4])
-            material_choice = add_cols[0].selectbox(
-                "材料",
-                ["（未指定）"] + sorted(RAMAN_REFERENCES) + ["自訂材料"],
-                key="raman_manual_peak_material_choice",
+            peak_edit_cols = st.columns([1.25, 1.15, 3.6])
+            apply_peak_table = peak_edit_cols[0].button(
+                "套用表格變更",
+                key="raman_peak_apply_btn",
+                type="primary",
+                use_container_width=True,
             )
-            manual_pos = float(add_cols[1].number_input(
-                "峰位 (cm⁻¹)",
-                min_value=float(manual_x_min),
-                max_value=float(manual_x_max),
-                value=float(manual_default_pos),
-                step=float(step_size),
-                format="%.1f",
-                key="raman_manual_peak_pos",
-            ))
-            manual_mode = add_cols[2].text_input(
-                "模式 / 簡稱",
-                value=st.session_state.get("raman_manual_peak_mode", ""),
-                key="raman_manual_peak_mode",
-                placeholder="如 1TO、A₁g、2TO",
+            reset_peak_table = peak_edit_cols[1].button(
+                "恢復未套用",
+                key="raman_peak_reset_btn",
+                use_container_width=True,
             )
-            manual_role_choice = add_cols[3].selectbox(
-                "峰類別",
-                ["自動判定"] + _PEAK_ROLE_OPTIONS,
-                key="raman_manual_peak_role",
-            )
-            manual_fwhm = float(add_cols[4].number_input(
-                "初始 FWHM",
-                min_value=float(max(step_size, 0.5)),
-                max_value=500.0,
-                value=float(fit_initial_fwhm),
-                step=float(max(step_size, 0.5)),
-                format="%.1f",
-                key="raman_manual_peak_fwhm",
-            ))
-
-            manual_material = ""
-            if material_choice == "自訂材料":
-                manual_material = st.text_input(
-                    "自訂材料名稱",
-                    value=st.session_state.get("raman_manual_peak_material_custom", ""),
-                    key="raman_manual_peak_material_custom",
-                    placeholder="例如 NiO thin film",
-                ).strip()
-            elif material_choice != "（未指定）":
-                manual_material = material_choice
-
-            name_cols = st.columns([2.2, 1.2])
-            manual_name = name_cols[0].text_input(
-                "峰名稱（可留白自動生成）",
-                value=st.session_state.get("raman_manual_peak_name", ""),
-                key="raman_manual_peak_name",
-                placeholder="例如 NiO 主峰、Si 2TO",
-            )
-            manual_note = name_cols[1].text_input(
-                "備註（可留白）",
-                value=st.session_state.get("raman_manual_peak_note", ""),
-                key="raman_manual_peak_note",
-                placeholder="可選",
+            peak_edit_cols[2].caption(
+                "峰位表的勾選、位置、FWHM 與峰名稱會先暫存在表格內；按「套用表格變更」後才會真正寫回。"
             )
 
-            preview_row = _build_peak_candidate_row(
-                source="數值新增",
-                material=manual_material,
-                position_cm=manual_pos,
-                default_fwhm=manual_fwhm,
-                peak_role="" if manual_role_choice == "自動判定" else manual_role_choice,
-                mode_label=manual_mode,
-                display_name=manual_name,
-                note=manual_note,
-            )
-            st.caption(
-                f"預覽：{preview_row['顯示名稱']}｜{preview_row['峰類別']}｜"
-                f"{preview_row['位置_cm']:.1f} cm⁻¹"
-                f"{'｜' + preview_row['備註'] if preview_row['備註'] else ''}"
-            )
-            if st.button("新增到峰位表", key="raman_add_manual_peak_btn", use_container_width=True):
-                _add_rows_to_session([preview_row])
+            if apply_peak_table:
+                edited_cands = peak_df_for_ui.copy()
+                for col in peak_table_cols:
+                    edited_cands[col] = edited_view[col].values
+                st.session_state[_PEAK_CANDS_KEY] = _ensure_peak_df(edited_cands)
+                _reset_peak_editor_widget()
+                _clear_raman_fit_artifacts()
                 st.rerun()
+
+            if reset_peak_table:
+                _reset_peak_editor_widget()
+                st.rerun()
+
+            st.divider()
+
+            # ── 手動新增峰位 ──────────────────────────────────────────────────
+            with st.container(border=True):
+                st.caption("＋ 手動新增峰位")
+                manual_series = fit_source_map.get(fit_target)
+                manual_x_min = float(manual_series[0].min()) if manual_series is not None else float(x_min_g)
+                manual_x_max = float(manual_series[0].max()) if manual_series is not None else float(x_max_g)
+                manual_default_pos = float(np.clip(
+                    st.session_state.get("raman_manual_peak_pos", (manual_x_min + manual_x_max) / 2.0),
+                    manual_x_min,
+                    manual_x_max,
+                ))
+
+                add_cols = st.columns([2.5, 1.2, 1])
+                material_choice = add_cols[0].selectbox(
+                    "材料",
+                    ["（未指定）"] + sorted(RAMAN_REFERENCES) + ["自訂材料"],
+                    key="raman_manual_peak_material_choice",
+                )
+                manual_pos = float(add_cols[1].number_input(
+                    "峰位 (cm⁻¹)",
+                    min_value=float(manual_x_min),
+                    max_value=float(manual_x_max),
+                    value=float(manual_default_pos),
+                    step=float(step_size),
+                    format="%.1f",
+                    key="raman_manual_peak_pos",
+                ))
+                manual_fwhm = float(add_cols[2].number_input(
+                    "FWHM",
+                    min_value=float(max(step_size, 0.5)),
+                    max_value=500.0,
+                    value=float(fit_initial_fwhm),
+                    step=float(max(step_size, 0.5)),
+                    format="%.1f",
+                    key="raman_manual_peak_fwhm",
+                ))
+
+                if material_choice == "自訂材料":
+                    manual_material = st.text_input(
+                        "自訂材料名稱",
+                        value=st.session_state.get("raman_manual_peak_material_custom", ""),
+                        key="raman_manual_peak_material_custom",
+                        placeholder="例如 NiO thin film",
+                    ).strip()
+                else:
+                    manual_material = "" if material_choice == "（未指定）" else material_choice
+
+                manual_name = st.text_input(
+                    "峰名稱（可留白，自動根據材料生成）",
+                    value=st.session_state.get("raman_manual_peak_name", ""),
+                    key="raman_manual_peak_name",
+                    placeholder="如：Si 基板峰、NiO 主峰",
+                )
+
+                with st.expander("進階設定（模式標籤 / 類別 / 備註）"):
+                    adv_cols = st.columns([2, 1.5])
+                    manual_mode = adv_cols[0].text_input(
+                        "模式 / 簡稱",
+                        value=st.session_state.get("raman_manual_peak_mode", ""),
+                        key="raman_manual_peak_mode",
+                        placeholder="如 1TO、A₁g、2TO",
+                    )
+                    manual_role_choice = adv_cols[1].selectbox(
+                        "峰類別",
+                        ["自動判定"] + _PEAK_ROLE_OPTIONS,
+                        key="raman_manual_peak_role",
+                    )
+                    manual_note = st.text_input(
+                        "備註",
+                        value=st.session_state.get("raman_manual_peak_note", ""),
+                        key="raman_manual_peak_note",
+                        placeholder="可選",
+                    )
+
+                preview_row = _build_peak_candidate_row(
+                    source="數值新增",
+                    material=manual_material,
+                    position_cm=manual_pos,
+                    default_fwhm=manual_fwhm,
+                    peak_role="" if manual_role_choice == "自動判定" else manual_role_choice,
+                    mode_label=manual_mode,
+                    display_name=manual_name,
+                    note=manual_note,
+                )
+                st.caption(
+                    f"→ **{preview_row['顯示名稱']}**  ·  {manual_pos:.1f} cm⁻¹  ·  FWHM {manual_fwhm:.1f}"
+                )
+                if st.button("＋ 新增到峰位表", key="raman_add_manual_peak_btn", use_container_width=True):
+                    _add_rows_to_session([preview_row])
+                    st.rerun()
 
         auto_scroll_on_appear(
             "raman-fit-management",
@@ -2235,12 +1806,13 @@ def run_raman_ui():
         )
 
         # ── Fit execution ─────────────────────────────────────────────────────
+        current_peak_df = _ensure_peak_df(st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df()))
         has_enabled = (
-            not edited_cands.empty
-            and "啟用" in edited_cands.columns
-            and bool(edited_cands["啟用"].any())
+            not current_peak_df.empty
+            and "啟用" in current_peak_df.columns
+            and bool(current_peak_df["啟用"].any())
         )
-        active_cands = edited_cands[edited_cands["啟用"] == True] if has_enabled else pd.DataFrame()
+        active_cands = current_peak_df[current_peak_df["啟用"] == True] if has_enabled else pd.DataFrame()
         fit_series = fit_source_map.get(fit_target)
 
         if active_cands.empty:
@@ -2347,48 +1919,10 @@ def run_raman_ui():
                         )
 
                         summary_cols = st.columns(4)
-                        summary_cols[0].metric("本次擬合峰數", len(fit_summary_df))
+                        summary_cols[0].metric("擬合峰數", len(fit_summary_df))
                         summary_cols[1].metric("可疑峰", flagged_count)
                         summary_cols[2].metric("Area=0", area_zero_count)
                         summary_cols[3].metric("偏移過大", large_delta_count)
-
-                        plot_ctrl_cols = st.columns([1.1, 1.1, 1.2, 1.2])
-                        show_peak_ids_on_plot = plot_ctrl_cols[0].checkbox(
-                            "圖上標 Peak_ID",
-                            value=st.session_state.get("raman_fit_show_peak_ids", len(fit_summary_df) <= 8),
-                            key="raman_fit_show_peak_ids",
-                            help="在擬合圖上標示 Peak_ID，方便和下方表格對照。",
-                        )
-                        show_flagged_only_on_plot = plot_ctrl_cols[1].checkbox(
-                            "圖上只標可疑峰",
-                            value=st.session_state.get("raman_fit_show_flag_only", False),
-                            key="raman_fit_show_flag_only",
-                            help="開啟後只在圖上標示有 Quality_Flag 的峰。",
-                        )
-                        review_min_area_pct = float(plot_ctrl_cols[2].number_input(
-                            "低面積門檻 Area_pct (%)",
-                            min_value=0.0,
-                            max_value=100.0,
-                            value=review_min_area_pct,
-                            step=0.1,
-                            format="%.1f",
-                            key="raman_review_min_area_pct",
-                        ))
-                        review_max_abs_delta = float(plot_ctrl_cols[3].number_input(
-                            "偏移門檻 |Δ| (cm⁻¹)",
-                            min_value=0.0,
-                            max_value=200.0,
-                            value=review_max_abs_delta,
-                            step=0.5,
-                            format="%.1f",
-                            key="raman_review_max_abs_delta",
-                        ))
-
-                        if (
-                            review_min_area_pct != float(st.session_state.get("raman_review_min_area_pct", review_min_area_pct))
-                            or review_max_abs_delta != float(st.session_state.get("raman_review_max_abs_delta", review_max_abs_delta))
-                        ):
-                            st.rerun()
 
                         fit_colors = [
                             "#EF553B", "#636EFA", "#00CC96", "#AB63FA",
@@ -2424,51 +1958,11 @@ def run_raman_ui():
                                 fillcolor=hex_to_rgba(color, 0.18 if quality_flag != "OK" else 0.12),
                                 hovertemplate=(
                                     f"<b>{peak_name}</b><br>"
-                                    f"Peak_ID: {peak_row['Peak_ID']}<br>"
-                                    f"Ref: {ref_text} cm⁻¹<br>"
-                                    f"Fit: {float(peak_row['Center_cm']):.1f} cm⁻¹<br>"
-                                    f"Δ: {delta_text} cm⁻¹<br>"
-                                    f"Area%: {float(peak_row['Area_pct']):.2f}<br>"
-                                    f"狀態: {quality_flag}<extra></extra>"
+                                    f"ID: {peak_row['Peak_ID']}<br>"
+                                    f"Ref: {ref_text} cm⁻¹  Fit: {float(peak_row['Center_cm']):.1f} cm⁻¹  Δ: {delta_text}<br>"
+                                    f"Area%: {float(peak_row['Area_pct']):.2f}  狀態: {quality_flag}<extra></extra>"
                                 ),
                             ))
-                        if show_peak_ids_on_plot and not fit_summary_df.empty:
-                            marker_df = fit_summary_df.copy()
-                            if show_flagged_only_on_plot:
-                                marker_df = marker_df[marker_df["Quality_Flag"] != "OK"]
-                            if not marker_df.empty:
-                                marker_y = np.interp(
-                                    marker_df["Center_cm"].to_numpy(dtype=float),
-                                    fit_x_r,
-                                    fit_result["y_fit"],
-                                )
-                                marker_hover = [
-                                    f"{pid}｜{name}｜Δ {delta:+.1f} cm⁻¹"
-                                    if np.isfinite(delta)
-                                    else f"{pid}｜{name}"
-                                    for pid, name, delta in zip(
-                                        marker_df["Peak_ID"],
-                                        marker_df["Peak_Name"],
-                                        marker_df["Delta_cm"],
-                                    )
-                                ]
-                                fig_fit.add_trace(go.Scatter(
-                                    x=marker_df["Center_cm"],
-                                    y=marker_y,
-                                    mode="markers+text",
-                                    text=marker_df["Peak_ID"],
-                                    textposition="top center",
-                                    textfont=dict(size=10, color="#8BE9FD"),
-                                    marker=dict(
-                                        color="#8BE9FD",
-                                        size=8,
-                                        line=dict(color="#111111", width=1),
-                                    ),
-                                    name="Peak_ID",
-                                    showlegend=False,
-                                    hovertext=marker_hover,
-                                    hovertemplate="%{hovertext}<extra></extra>",
-                                ))
                         fig_fit.add_trace(go.Scatter(
                             x=fit_x_r, y=fit_result["residuals"],
                             mode="lines", name="殘差",
@@ -2507,377 +2001,102 @@ def run_raman_ui():
                             "max_abs_delta_threshold": review_max_abs_delta,
                         }
 
-                        review_cfg_cols = st.columns([2.4, 1.2, 1.8])
-                        review_filter_mode = review_cfg_cols[0].radio(
-                            "審核表顯示",
-                            ["全部峰", "只看可疑峰", "只看 Area=0", "只看低面積", "只看偏移大"],
-                            horizontal=True,
-                            key="raman_review_filter_mode",
-                        )
-                        review_sort_mode = review_cfg_cols[1].selectbox(
-                            "排序方式",
-                            ["可疑優先", "理論位置", "擬合位置", "面積由小到大"],
-                            key="raman_review_sort_mode",
-                        )
-                        review_cfg_cols[2].caption(
-                            "下方審核表是擬合後篩峰入口。使用快速停用或手動選取後，"
-                            "會同步更新上方峰位表並自動重新擬合。"
-                        )
-
-                        fit_display_df = fit_summary_df.copy()
-                        if review_filter_mode == "只看可疑峰":
-                            fit_display_df = fit_display_df[fit_display_df["Quality_Flag"] != "OK"]
-                        elif review_filter_mode == "只看 Area=0":
-                            fit_display_df = fit_display_df[fit_display_df["Area"].abs() <= 1e-9]
-                        elif review_filter_mode == "只看低面積":
-                            fit_display_df = fit_display_df[fit_display_df["Area_pct"] < review_min_area_pct]
-                        elif review_filter_mode == "只看偏移大":
-                            fit_display_df = fit_display_df[
-                                fit_display_df["Delta_cm"].abs().gt(review_max_abs_delta).fillna(False)
-                            ]
-
-                        if review_sort_mode == "理論位置":
-                            fit_display_df = fit_display_df.sort_values(
-                                by=["Ref_cm", "Center_cm"], ascending=[True, True], na_position="last"
-                            )
-                        elif review_sort_mode == "擬合位置":
-                            fit_display_df = fit_display_df.sort_values(by=["Center_cm"], ascending=[True])
-                        elif review_sort_mode == "面積由小到大":
-                            fit_display_df = fit_display_df.sort_values(by=["Area_pct", "Center_cm"], ascending=[True, True])
-                        else:
-                            fit_display_df["__has_flag"] = fit_display_df["Quality_Flag"] != "OK"
-                            fit_display_df["__abs_delta"] = fit_display_df["Delta_cm"].abs().fillna(0.0)
-                            fit_display_df = fit_display_df.sort_values(
-                                by=["__has_flag", "Area_pct", "__abs_delta", "Center_cm"],
-                                ascending=[False, True, False, True],
-                            ).drop(columns=["__has_flag", "__abs_delta"])
-
-                        st.caption(f"審核表目前顯示 {len(fit_display_df)} / {len(fit_summary_df)} 個峰。")
-
-                        st.dataframe(
-                            fit_display_df.round(
-                                {
-                                    "Ref_cm": 3,
-                                    "Center_cm": 3,
-                                    "Delta_cm": 3,
-                                    "FWHM_cm": 3,
-                                    "Area": 4,
-                                    "Area_pct": 2,
-                                }
-                            ),
-                            use_container_width=True,
-                            hide_index=True,
-                        )
+                        # ── 審核表 ────────────────────────────────────────────
+                        st.divider()
+                        thresh_cols = st.columns(2)
+                        review_min_area_pct = float(thresh_cols[0].number_input(
+                            "低面積門檻 Area%",
+                            min_value=0.0, max_value=100.0,
+                            value=review_min_area_pct,
+                            step=0.1, format="%.1f",
+                            key="raman_review_min_area_pct",
+                        ))
+                        review_max_abs_delta = float(thresh_cols[1].number_input(
+                            "偏移門檻 |Δ| (cm⁻¹)",
+                            min_value=0.0, max_value=200.0,
+                            value=review_max_abs_delta,
+                            step=0.5, format="%.1f",
+                            key="raman_review_max_abs_delta",
+                        ))
 
                         review_ids = set(fit_summary_df["Peak_ID"].astype(str))
-                        review_options_df = fit_display_df.copy() if not fit_display_df.empty else fit_summary_df.copy()
-                        review_option_map = {
-                            _format_review_option(row): str(row["Peak_ID"])
-                            for _, row in review_options_df.iterrows()
-                        }
-
-                        review_btn_cols = st.columns([1.1, 1.2, 1.2, 1.2, 1.0])
-                        disable_area_zero = review_btn_cols[0].button(
-                            "停用 Area=0",
-                            key="raman_review_disable_area0",
-                            use_container_width=True,
-                        )
-                        disable_low_area = review_btn_cols[1].button(
-                            f"停用 Area_pct<{review_min_area_pct:g}",
-                            key="raman_review_disable_low_area",
-                            use_container_width=True,
-                        )
-                        disable_large_delta = review_btn_cols[2].button(
-                            f"停用 |Δ|>{review_max_abs_delta:g}",
-                            key="raman_review_disable_large_delta",
-                            use_container_width=True,
-                        )
-                        keep_primary = review_btn_cols[3].button(
-                            "本次只留主峰/強峰",
-                            key="raman_review_keep_primary",
-                            use_container_width=True,
-                        )
-                        restore_review = review_btn_cols[4].button(
-                            "恢復本次擬合峰",
-                            key="raman_review_restore",
-                            use_container_width=True,
-                        )
-
-                        manual_review_cols = st.columns([4, 1])
-                        selected_review_items = manual_review_cols[0].multiselect(
-                            "手動停用峰",
-                            options=list(review_option_map.keys()),
-                            key=_REVIEW_PICK_KEY,
-                            placeholder="選擇要停用的峰…",
-                        )
-                        disable_selected = manual_review_cols[1].button(
-                            "停用選取峰",
-                            key="raman_review_disable_selected",
-                            use_container_width=True,
-                        )
-
                         current_peak_df = _ensure_peak_df(st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df()))
+
+                        qbtn_cols = st.columns(4)
+                        disable_area_zero = qbtn_cols[0].button("停用 Area=0", key="raman_review_disable_area0", use_container_width=True)
+                        disable_low_area = qbtn_cols[1].button(f"停用 Area%<{review_min_area_pct:g}", key="raman_review_disable_low_area", use_container_width=True)
+                        disable_large_delta = qbtn_cols[2].button(f"停用 |Δ|>{review_max_abs_delta:g}", key="raman_review_disable_large_delta", use_container_width=True)
+                        restore_review = qbtn_cols[3].button("恢復本次全部", key="raman_review_restore", use_container_width=True)
+
                         next_peak_df: pd.DataFrame | None = None
                         if disable_area_zero:
                             next_peak_df = _apply_peak_enable_flags(
-                                current_peak_df,
-                                review_ids=review_ids,
-                                disable_ids=set(
-                                    fit_summary_df.loc[fit_summary_df["Area"].abs() <= 1e-9, "Peak_ID"].astype(str)
-                                ),
+                                current_peak_df, review_ids=review_ids,
+                                disable_ids=set(fit_summary_df.loc[fit_summary_df["Area"].abs() <= 1e-9, "Peak_ID"].astype(str)),
                             )
                         elif disable_low_area:
                             next_peak_df = _apply_peak_enable_flags(
-                                current_peak_df,
-                                review_ids=review_ids,
-                                disable_ids=set(
-                                    fit_summary_df.loc[fit_summary_df["Area_pct"] < review_min_area_pct, "Peak_ID"].astype(str)
-                                ),
+                                current_peak_df, review_ids=review_ids,
+                                disable_ids=set(fit_summary_df.loc[fit_summary_df["Area_pct"] < review_min_area_pct, "Peak_ID"].astype(str)),
                             )
                         elif disable_large_delta:
                             next_peak_df = _apply_peak_enable_flags(
-                                current_peak_df,
-                                review_ids=review_ids,
-                                disable_ids=set(
-                                    fit_summary_df.loc[
-                                        fit_summary_df["Delta_cm"].abs() > review_max_abs_delta,
-                                        "Peak_ID",
-                                    ].astype(str)
-                                ),
-                            )
-                        elif keep_primary:
-                            next_peak_df = _apply_peak_enable_flags(
-                                current_peak_df,
-                                review_ids=review_ids,
-                                enable_only_ids=set(
-                                    fit_summary_df.loc[
-                                        fit_summary_df["Peak_Role"].isin(["主峰", "強峰"]),
-                                        "Peak_ID",
-                                    ].astype(str)
-                                ),
+                                current_peak_df, review_ids=review_ids,
+                                disable_ids=set(fit_summary_df.loc[fit_summary_df["Delta_cm"].abs() > review_max_abs_delta, "Peak_ID"].astype(str)),
                             )
                         elif restore_review:
-                            next_peak_df = _apply_peak_enable_flags(
-                                current_peak_df,
-                                review_ids=review_ids,
-                                enable_all=True,
-                            )
-                        elif disable_selected and selected_review_items:
-                            next_peak_df = _apply_peak_enable_flags(
-                                current_peak_df,
-                                review_ids=review_ids,
-                                disable_ids={review_option_map[item] for item in selected_review_items},
-                            )
+                            next_peak_df = _apply_peak_enable_flags(current_peak_df, review_ids=review_ids, enable_all=True)
 
                         if next_peak_df is not None:
                             st.session_state[_PEAK_CANDS_KEY] = _ensure_peak_df(next_peak_df)
-                            st.session_state.pop(_EDITOR_WIDGET_KEY, None)
-                            st.session_state.pop(_REVIEW_PICK_KEY, None)
+                            _reset_peak_editor_widget()
                             _queue_raman_auto_refit(fit_target)
                             st.rerun()
 
-                        with st.expander("下一輪初值微調", expanded=False):
-                            st.caption(
-                                "把本次擬合得到的中心與 FWHM 當成下一輪初值。"
-                                "你可以直接在表格裡微調數字，再回寫到上方峰位表並自動重擬合。"
-                            )
-                            tune_state_key = f"raman_fit_tune_source_{fit_target}"
-                            tune_sig_key = f"raman_fit_tune_sig_{fit_target}"
-                            tune_editor_key = f"raman_fit_tune_editor_{fit_target}"
-                            fit_sig = _fit_summary_signature(fit_summary_df)
-                            if fit_sig != st.session_state.get(tune_sig_key):
-                                st.session_state[tune_state_key] = _build_fit_tuning_table(
-                                    fit_summary_df,
-                                    _ensure_peak_df(st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df())),
-                                )
-                                st.session_state[tune_sig_key] = fit_sig
-                                st.session_state.pop(tune_editor_key, None)
-
-                            tune_df = st.session_state.get(tune_state_key, pd.DataFrame())
-                            if not isinstance(tune_df, pd.DataFrame) or tune_df.empty:
-                                tune_df = _build_fit_tuning_table(
-                                    fit_summary_df,
-                                    _ensure_peak_df(st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df())),
-                                )
-                                st.session_state[tune_state_key] = tune_df
-
-                            quick_pick_cols = st.columns([1, 1, 1, 1, 1])
-                            pick_all = quick_pick_cols[0].button(
-                                "勾選全部峰",
-                                key=f"raman_tune_pick_all_{fit_target}",
-                                use_container_width=True,
-                            )
-                            pick_flagged = quick_pick_cols[1].button(
-                                "勾選可疑峰",
-                                key=f"raman_tune_pick_flagged_{fit_target}",
-                                use_container_width=True,
-                            )
-                            pick_large_delta = quick_pick_cols[2].button(
-                                "勾選偏移大",
-                                key=f"raman_tune_pick_delta_{fit_target}",
-                                use_container_width=True,
-                            )
-                            pick_zero_area = quick_pick_cols[3].button(
-                                "勾選 Area=0",
-                                key=f"raman_tune_pick_area0_{fit_target}",
-                                use_container_width=True,
-                            )
-                            clear_pick = quick_pick_cols[4].button(
-                                "清除勾選",
-                                key=f"raman_tune_clear_pick_{fit_target}",
-                                use_container_width=True,
-                            )
-
-                            select_mode = "keep"
-                            if pick_all:
-                                select_mode = "all"
-                            elif pick_flagged:
-                                select_mode = "flagged"
-                            elif pick_large_delta:
-                                select_mode = "large_delta"
-                            elif pick_zero_area:
-                                select_mode = "zero_area"
-                            elif clear_pick:
-                                select_mode = "clear"
-                            if select_mode != "keep":
-                                st.session_state[tune_state_key] = _set_fit_tuning_selection(
-                                    tune_df,
-                                    select_mode,
-                                    review_max_abs_delta,
-                                )
-                                st.session_state.pop(tune_editor_key, None)
-                                st.rerun()
-
-                            fill_ctrl_cols = st.columns([1.3, 1.3, 1.0, 1.2])
-                            center_fill_mode = fill_ctrl_cols[0].selectbox(
-                                "位置批次填入",
-                                ["本次中心", "理論位置", "目前初始位置"],
-                                key=f"raman_tune_center_fill_{fit_target}",
-                            )
-                            fwhm_fill_mode = fill_ctrl_cols[1].selectbox(
-                                "FWHM 批次填入",
-                                ["本次 FWHM", "本次 FWHM（上限）", "目前初始 FWHM"],
-                                key=f"raman_tune_fwhm_fill_{fit_target}",
-                            )
-                            fwhm_cap = float(fill_ctrl_cols[2].number_input(
-                                "FWHM 上限",
-                                min_value=0.5,
-                                max_value=500.0,
-                                value=float(st.session_state.get(f"raman_tune_fwhm_cap_{fit_target}", 80.0)),
-                                step=0.5,
-                                format="%.1f",
-                                key=f"raman_tune_fwhm_cap_{fit_target}",
+                        enabled_map = dict(zip(current_peak_df["Peak_ID"].astype(str), current_peak_df["啟用"].astype(bool)))
+                        review_table_source = pd.DataFrame({
+                            "啟用": [bool(enabled_map.get(str(pid), True)) for pid in fit_summary_df["Peak_ID"]],
+                            "Peak_ID": fit_summary_df["Peak_ID"].values,
+                            "峰名稱": fit_summary_df["Peak_Name"].values,
+                            "位置_cm": fit_summary_df["Center_cm"].round(1).values,
+                            "Ref_cm": fit_summary_df["Ref_cm"].round(1).values,
+                            "Δ_cm": fit_summary_df["Delta_cm"].round(1).values,
+                            "FWHM_cm": fit_summary_df["FWHM_cm"].round(1).values,
+                            "Area_pct": fit_summary_df["Area_pct"].round(2).values,
+                            "狀態": fit_summary_df["Quality_Flag"].values,
+                        })
+                        review_edited = st.data_editor(
+                            review_table_source,
+                            column_config={
+                                "啟用": st.column_config.CheckboxColumn("啟用", width="small"),
+                                "Peak_ID": st.column_config.TextColumn("ID", width="small"),
+                                "峰名稱": st.column_config.TextColumn("峰名稱", width="large"),
+                                "位置_cm": st.column_config.NumberColumn("位置 cm⁻¹", format="%.1f", width="small"),
+                                "Ref_cm": st.column_config.NumberColumn("理論 cm⁻¹", format="%.1f", width="small"),
+                                "Δ_cm": st.column_config.NumberColumn("Δ cm⁻¹", format="%.1f", width="small"),
+                                "FWHM_cm": st.column_config.NumberColumn("FWHM", format="%.1f", width="small"),
+                                "Area_pct": st.column_config.NumberColumn("Area%", format="%.2f", width="small"),
+                                "狀態": st.column_config.TextColumn("狀態", width="medium"),
+                            },
+                            disabled=["Peak_ID", "峰名稱", "位置_cm", "Ref_cm", "Δ_cm", "FWHM_cm", "Area_pct", "狀態"],
+                            num_rows="fixed",
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        if st.button("套用並重擬合 ▶", type="primary", key="raman_review_apply_refit", use_container_width=True):
+                            updated_enabled = dict(zip(
+                                review_edited["Peak_ID"].astype(str),
+                                review_edited["啟用"].astype(bool),
                             ))
-                            fill_selected = fill_ctrl_cols[3].button(
-                                "批次填入勾選峰",
-                                key=f"raman_tune_fill_selected_{fit_target}",
-                                use_container_width=True,
-                            )
-                            if fill_selected:
-                                filled_df = _fill_selected_fit_tuning_rows(
-                                    tune_df,
-                                    center_mode={
-                                        "本次中心": "fit",
-                                        "理論位置": "ref",
-                                        "目前初始位置": "current",
-                                    }[center_fill_mode],
-                                    fwhm_mode={
-                                        "本次 FWHM": "fit",
-                                        "本次 FWHM（上限）": "fit_cap",
-                                        "目前初始 FWHM": "current",
-                                    }[fwhm_fill_mode],
-                                    fwhm_cap=fwhm_cap,
-                                )
-                                st.session_state[tune_state_key] = filled_df
-                                st.session_state.pop(tune_editor_key, None)
-                                st.rerun()
-
-                            tuned_view = st.data_editor(
-                                tune_df.round(
-                                    {
-                                        "Ref_cm": 3,
-                                        "Center_cm": 3,
-                                        "Delta_cm": 3,
-                                        "FWHM_cm": 3,
-                                        "目前初始位置_cm": 3,
-                                        "目前初始FWHM_cm": 3,
-                                        "下一輪位置_cm": 3,
-                                        "下一輪FWHM_cm": 3,
-                                    }
-                                ),
-                                key=tune_editor_key,
-                                column_config={
-                                    "套用": st.column_config.CheckboxColumn("套用", width="small"),
-                                    "Peak_ID": st.column_config.TextColumn("Peak_ID", width="small"),
-                                    "Peak_Name": st.column_config.TextColumn("峰名稱", width="large"),
-                                    "Ref_cm": st.column_config.NumberColumn("理論位置", format="%.1f", width="small"),
-                                    "Center_cm": st.column_config.NumberColumn("本次中心", format="%.3f", width="small"),
-                                    "Delta_cm": st.column_config.NumberColumn("Δ", format="%.3f", width="small"),
-                                    "FWHM_cm": st.column_config.NumberColumn("本次 FWHM", format="%.3f", width="small"),
-                                    "目前初始位置_cm": st.column_config.NumberColumn("目前初始位置", format="%.3f", width="small"),
-                                    "目前初始FWHM_cm": st.column_config.NumberColumn("目前初始 FWHM", format="%.3f", width="small"),
-                                    "下一輪位置_cm": st.column_config.NumberColumn(
-                                        "下一輪位置", format="%.3f", min_value=10.0, max_value=4000.0
-                                    ),
-                                    "下一輪FWHM_cm": st.column_config.NumberColumn(
-                                        "下一輪 FWHM", format="%.3f", min_value=0.5, max_value=500.0
-                                    ),
-                                    "Quality_Flag": st.column_config.TextColumn("Quality", width="medium"),
-                                    "建議": st.column_config.TextColumn("建議", width="medium"),
-                                },
-                                disabled=[
-                                    "Peak_ID", "Peak_Name", "Ref_cm", "Center_cm", "Delta_cm",
-                                    "FWHM_cm", "目前初始位置_cm", "目前初始FWHM_cm", "Quality_Flag", "建議",
-                                ],
-                                num_rows="fixed",
-                                use_container_width=True,
-                                hide_index=True,
-                            )
-                            st.session_state[tune_state_key] = tuned_view.copy()
-                            tune_btn_cols = st.columns([1.2, 1.2, 1.6])
-                            apply_tune = tune_btn_cols[0].button(
-                                "套用到峰位表並重擬合",
-                                key=f"raman_apply_fit_tune_{fit_target}",
-                                use_container_width=True,
-                            )
-                            disable_tuned = tune_btn_cols[1].button(
-                                "停用勾選峰並重擬合",
-                                key=f"raman_disable_fit_tune_{fit_target}",
-                                use_container_width=True,
-                            )
-                            selected_tune_count = int(tuned_view["套用"].sum()) if "套用" in tuned_view.columns else 0
-                            tune_btn_cols[2].caption(
-                                f"目前已勾選 {selected_tune_count} 個峰。"
-                                "可先用上方快速勾選與批次填入，再決定要回寫初值或直接停用。"
-                            )
-                            selected_tune_ids = set(
-                                tuned_view.loc[tuned_view["套用"] == True, "Peak_ID"].astype(str)
-                            ) if "套用" in tuned_view.columns else set()
-                            if apply_tune:
-                                if selected_tune_count <= 0:
-                                    st.warning("請先勾選至少一個峰，再套用下一輪初值。")
-                                else:
-                                    tuned_peak_df = _apply_fit_tuning_to_peak_df(
-                                        _ensure_peak_df(st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df())),
-                                        tuned_view,
-                                    )
-                                    st.session_state[_PEAK_CANDS_KEY] = tuned_peak_df
-                                    st.session_state.pop(_EDITOR_WIDGET_KEY, None)
-                                    _queue_raman_auto_refit(fit_target)
-                                    st.rerun()
-                            elif disable_tuned:
-                                if selected_tune_count <= 0:
-                                    st.warning("請先勾選至少一個峰，再停用。")
-                                else:
-                                    disabled_peak_df = _apply_peak_enable_flags(
-                                        _ensure_peak_df(st.session_state.get(_PEAK_CANDS_KEY, _empty_peak_df())),
-                                        review_ids=set(fit_summary_df["Peak_ID"].astype(str)),
-                                        disable_ids=selected_tune_ids,
-                                    )
-                                    st.session_state[_PEAK_CANDS_KEY] = disabled_peak_df
-                                    st.session_state.pop(_EDITOR_WIDGET_KEY, None)
-                                    _queue_raman_auto_refit(fit_target)
-                                    st.rerun()
+                            new_peak_df = current_peak_df.copy()
+                            for idx, row in new_peak_df.iterrows():
+                                pid = str(row["Peak_ID"])
+                                if pid in updated_enabled:
+                                    new_peak_df.at[idx, "啟用"] = updated_enabled[pid]
+                            st.session_state[_PEAK_CANDS_KEY] = _ensure_peak_df(new_peak_df)
+                            _reset_peak_editor_widget()
+                            _queue_raman_auto_refit(fit_target)
+                            st.rerun()
 
                         fit_curve_df = pd.DataFrame({
                             "Raman_Shift_cm": fit_x_r,
@@ -2893,218 +2112,8 @@ def run_raman_ui():
                             ] = yi
 
                         fit_summary_export_df = fit_summary_df.copy()
+
                         fit_curve_export_df = fit_curve_df.copy()
-
-                        with st.expander("發表用圖匯出", expanded=False):
-                            pub_cfg_cols = st.columns([1.1, 1.5])
-                            pub_show_components = pub_cfg_cols[0].checkbox(
-                                "顯示 component 曲線",
-                                value=True,
-                                key=f"raman_pub_components_{fit_target}",
-                                help="關閉後只保留原始曲線與總擬合包絡，較適合做簡潔版發表圖。",
-                            )
-                            pub_base_name = pub_cfg_cols[1].text_input(
-                                "發表圖檔名",
-                                value=f"{fit_target}_raman_publication",
-                                key=f"raman_pub_fname_{fit_target}",
-                            )
-                            publication_fit_fig = _build_publication_fit_figure(
-                                fit_x_r,
-                                fit_y_r,
-                                fit_result,
-                                fit_summary_df,
-                                show_components=pub_show_components,
-                            )
-                            st.plotly_chart(publication_fit_fig, use_container_width=True)
-
-                            pub_dl_cols = st.columns(3)
-                            pub_html = publication_fit_fig.to_html(
-                                include_plotlyjs="cdn",
-                                full_html=True,
-                            ).encode("utf-8")
-                            pub_dl_cols[0].download_button(
-                                "⬇️ 下載 HTML 圖",
-                                data=pub_html,
-                                file_name=f"{(pub_base_name or fit_target + '_raman_publication').strip()}.html",
-                                mime="text/html",
-                                key=f"raman_pub_html_dl_{fit_target}",
-                            )
-                            svg_bytes, svg_err = _try_plotly_export_bytes(publication_fit_fig, "svg")
-                            if svg_bytes is not None:
-                                pub_dl_cols[1].download_button(
-                                    "⬇️ 下載 SVG",
-                                    data=svg_bytes,
-                                    file_name=f"{(pub_base_name or fit_target + '_raman_publication').strip()}.svg",
-                                    mime="image/svg+xml",
-                                    key=f"raman_pub_svg_dl_{fit_target}",
-                                )
-                            else:
-                                pub_dl_cols[1].caption("SVG 匯出需安裝 kaleido")
-                            png_bytes, png_err = _try_plotly_export_bytes(publication_fit_fig, "png")
-                            if png_bytes is not None:
-                                pub_dl_cols[2].download_button(
-                                    "⬇️ 下載 PNG",
-                                    data=png_bytes,
-                                    file_name=f"{(pub_base_name or fit_target + '_raman_publication').strip()}.png",
-                                    mime="image/png",
-                                    key=f"raman_pub_png_dl_{fit_target}",
-                                )
-                            else:
-                                pub_dl_cols[2].caption("PNG 匯出需安裝 kaleido")
-                            if svg_err or png_err:
-                                st.caption("若要直接輸出 SVG / PNG，請安裝 `kaleido`；目前 HTML 發表圖可直接使用。")
-
-                        with st.expander("擬合歷史比較 / 統計", expanded=False):
-                            existing_run_count = (
-                                int(fit_history_df["Run_Label"].nunique())
-                                if not fit_history_df.empty and "Run_Label" in fit_history_df.columns
-                                else 0
-                            )
-                            history_label = st.text_input(
-                                "本次擬合標籤",
-                                value=st.session_state.get(
-                                    f"raman_fit_history_label_{fit_target}",
-                                    f"{fit_target}_run_{existing_run_count + 1:02d}",
-                                ),
-                                key=f"raman_fit_history_label_{fit_target}",
-                                help="可用樣品名、退火條件、重測批次等做標記，方便後面統計比較。",
-                            )
-                            history_btn_cols = st.columns([1.2, 1.0, 2.2])
-                            save_history = history_btn_cols[0].button(
-                                "加入擬合歷史",
-                                key=f"raman_fit_history_add_{fit_target}",
-                                use_container_width=True,
-                            )
-                            clear_history = history_btn_cols[1].button(
-                                "清空歷史",
-                                key=f"raman_fit_history_clear_{fit_target}",
-                                use_container_width=True,
-                            )
-                            history_btn_cols[2].caption(
-                                "保存後會把本次峰表附上 Run_Label、R²、門檻值，"
-                                "可用來比較不同樣品或不同處理條件。"
-                            )
-
-                            if save_history:
-                                saved_at = datetime.now().astimezone().isoformat(timespec="seconds")
-                                history_block = fit_summary_df.copy()
-                                history_block.insert(0, "Run_Label", (history_label or fit_target).strip())
-                                history_block.insert(1, "Saved_At", saved_at)
-                                history_block["Fit_Target"] = fit_target
-                                history_block["Fit_Profile"] = fit_profile
-                                history_block["R_squared"] = r2
-                                history_block["Min_Area_pct_Threshold"] = review_min_area_pct
-                                history_block["Max_Abs_Delta_Threshold"] = review_max_abs_delta
-                                fit_history_df = pd.concat(
-                                    [fit_history_df, history_block],
-                                    ignore_index=True,
-                                )
-                                st.session_state[_FIT_HISTORY_KEY] = fit_history_df
-                                st.success(f"已保存擬合歷史：{(history_label or fit_target).strip()}")
-
-                            if clear_history:
-                                fit_history_df = pd.DataFrame()
-                                st.session_state[_FIT_HISTORY_KEY] = fit_history_df
-                                st.info("已清空 Raman 擬合歷史。")
-
-                            if fit_history_df.empty:
-                                st.caption("尚未保存任何擬合歷史。")
-                            else:
-                                run_count = (
-                                    int(fit_history_df["Run_Label"].nunique())
-                                    if "Run_Label" in fit_history_df.columns
-                                    else 0
-                                )
-                                st.caption(f"目前已保存 {run_count} 次擬合，共 {len(fit_history_df)} 筆峰資料。")
-                                st.dataframe(
-                                    fit_history_df.round(
-                                        {
-                                            "Ref_cm": 3,
-                                            "Center_cm": 3,
-                                            "Delta_cm": 3,
-                                            "FWHM_cm": 3,
-                                            "Area": 4,
-                                            "Area_pct": 2,
-                                            "R_squared": 5,
-                                        }
-                                    ),
-                                    use_container_width=True,
-                                    hide_index=True,
-                                )
-
-                                history_stats_df = (
-                                    fit_history_df.groupby(
-                                        ["Peak_Name", "Material", "Peak_Role", "Mode_Label"],
-                                        dropna=False,
-                                    )
-                                    .agg(
-                                        Runs=("Run_Label", "nunique"),
-                                        Ref_cm=("Ref_cm", "mean"),
-                                        Center_cm_mean=("Center_cm", "mean"),
-                                        Center_cm_std=("Center_cm", "std"),
-                                        FWHM_cm_mean=("FWHM_cm", "mean"),
-                                        FWHM_cm_std=("FWHM_cm", "std"),
-                                        Area_pct_mean=("Area_pct", "mean"),
-                                        Area_pct_std=("Area_pct", "std"),
-                                    )
-                                    .reset_index()
-                                )
-                                st.caption("跨次擬合統計摘要")
-                                st.dataframe(
-                                    history_stats_df.round(
-                                        {
-                                            "Ref_cm": 3,
-                                            "Center_cm_mean": 3,
-                                            "Center_cm_std": 3,
-                                            "FWHM_cm_mean": 3,
-                                            "FWHM_cm_std": 3,
-                                            "Area_pct_mean": 2,
-                                            "Area_pct_std": 2,
-                                        }
-                                    ),
-                                    use_container_width=True,
-                                    hide_index=True,
-                                )
-
-                                history_dl_cols = st.columns(2)
-                                history_dl_cols[0].download_button(
-                                    "⬇️ 下載擬合歷史 CSV",
-                                    data=fit_history_df.to_csv(index=False).encode("utf-8"),
-                                    file_name="raman_fit_history.csv",
-                                    mime="text/csv",
-                                    key=f"raman_fit_history_dl_{fit_target}",
-                                )
-                                history_dl_cols[1].download_button(
-                                    "⬇️ 下載擬合統計 CSV",
-                                    data=history_stats_df.to_csv(index=False).encode("utf-8"),
-                                    file_name="raman_fit_history_stats.csv",
-                                    mime="text/csv",
-                                    key=f"raman_fit_history_stats_dl_{fit_target}",
-                                )
-
-                        dl_cols = st.columns(2)
-                        fit_curve_name = dl_cols[0].text_input(
-                            "擬合曲線檔名", value=f"{fit_target}_raman_fit",
-                            key="raman_fit_curve_fname",
-                        )
-                        dl_cols[0].download_button(
-                            "⬇️ 下載擬合曲線 CSV",
-                            data=fit_curve_df.to_csv(index=False).encode("utf-8"),
-                            file_name=f"{(fit_curve_name or fit_target + '_raman_fit').strip()}.csv",
-                            mime="text/csv",
-                            key="raman_fit_curve_dl",
-                        )
-                        fit_peak_name = dl_cols[1].text_input(
-                            "擬合峰表檔名", value=f"{fit_target}_raman_fit_peaks",
-                            key="raman_fit_peak_fname",
-                        )
-                        dl_cols[1].download_button(
-                            "⬇️ 下載擬合峰表 CSV",
-                            data=fit_summary_df.to_csv(index=False).encode("utf-8"),
-                            file_name=f"{(fit_peak_name or fit_target + '_raman_fit_peaks').strip()}.csv",
-                            mime="text/csv",
-                            key="raman_fit_peak_dl",
-                        )
     else:
         auto_scroll_on_appear(
             "raman-fit-management",
@@ -3114,35 +2123,70 @@ def run_raman_ui():
         )
 
     # ── Export ─────────────────────────────────────────────────────────────────
-    if export_frames or not peak_export_df.empty or not fit_summary_export_df.empty or bool(fit_qc_summary):
+    if export_frames or not fit_curve_export_df.empty or not fit_summary_export_df.empty or bool(fit_qc_summary):
         st.subheader("匯出")
-        export_items = list(export_frames.items())
-        for start in range(0, len(export_items), 4):
-            row_items = export_items[start:start + 4]
-            row_cols = st.columns(len(row_items))
-            for col, (fname, df) in zip(row_cols, row_items):
-                base = fname.rsplit(".", 1)[0]
-                out_name = col.text_input(
-                    "檔名", value=f"{base}_processed",
-                    key=f"raman_fname_{fname}", label_visibility="collapsed",
-                )
-                col.download_button(
-                    "⬇️ 下載 CSV",
-                    data=df.to_csv(index=False).encode("utf-8"),
-                    file_name=f"{(out_name or base + '_processed').strip()}.csv",
-                    mime="text/csv",
-                    key=f"raman_dl_{fname}",
-                )
+        st.caption("下載區已整理成三類：研究常用、原始處理輸出、追溯 / QC。通常先拿研究常用，再視需要保存完整紀錄。")
 
-        if not peak_export_df.empty:
-            peak_name = st.text_input("峰值列表檔名", value="raman_peaks", key="raman_peak_fname")
-            st.download_button(
-                "⬇️ 下載峰值列表 CSV",
-                data=peak_export_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{(peak_name or 'raman_peaks').strip()}.csv",
+        st.markdown("**研究常用**")
+        st.caption("最常拿來做圖、寫結果與和其他樣品比較的檔案。")
+        research_cards_rendered = False
+        if not fit_summary_export_df.empty:
+            research_cards_rendered = True
+            _render_download_card(
+                title="擬合峰表 CSV",
+                description="包含每個峰的峰位、FWHM、Area%、理論峰位與偏移量，適合整理研究結果、做後續統計與對照文獻。",
+                input_label="檔名",
+                default_name=f"{st.session_state.get('raman_fit_result_target', 'raman')}_raman_fit_peaks",
+                extension="csv",
+                button_label="下載擬合峰表 CSV",
+                data=fit_summary_export_df.to_csv(index=False).encode("utf-8"),
                 mime="text/csv",
-                key="raman_peak_dl",
+                input_key="raman_fit_peak_fname",
+                button_key="raman_fit_peak_dl",
             )
+
+        export_items = list(export_frames.items())
+        if export_items:
+            research_cards_rendered = True
+            st.caption("處理後光譜會保留目前流程下的主要數值欄位，適合重畫光譜、做樣品比較或再匯入其他分析工具。")
+            for start in range(0, len(export_items), 2):
+                row_items = export_items[start:start + 2]
+                row_cols = st.columns(len(row_items))
+                for col, (fname, df) in zip(row_cols, row_items):
+                    base = fname.rsplit(".", 1)[0]
+                    with col:
+                        _render_download_card(
+                            title=f"處理後光譜：{fname}",
+                            description="適合後續重畫光譜、和其他樣品比較，或再匯入分析軟體做進一步處理。",
+                            input_label="檔名",
+                            default_name=f"{base}_processed",
+                            extension="csv",
+                            button_label="下載處理後光譜 CSV",
+                            data=df.to_csv(index=False).encode("utf-8"),
+                            mime="text/csv",
+                            input_key=f"raman_fname_{fname}",
+                            button_key=f"raman_dl_{fname}",
+                        )
+        if not research_cards_rendered:
+            st.caption("完成光譜處理或峰擬合後，這裡會出現最常用的下載檔案。")
+
+        st.markdown("**原始處理輸出**")
+        st.caption("偏向完整數值輸出，適合二次分析、重建圖表或自己做其他後處理。")
+        if not fit_curve_export_df.empty:
+            _render_download_card(
+                title="擬合曲線 CSV",
+                description="包含實驗曲線、擬合包絡、殘差與每個 component 曲線，適合重繪擬合圖、檢查殘差或做更深入分析。",
+                input_label="檔名",
+                default_name=f"{st.session_state.get('raman_fit_result_target', 'raman')}_raman_fit",
+                extension="csv",
+                button_label="下載擬合曲線 CSV",
+                data=fit_curve_export_df.to_csv(index=False).encode("utf-8"),
+                mime="text/csv",
+                input_key="raman_fit_curve_fname",
+                button_key="raman_fit_curve_dl",
+            )
+        else:
+            st.caption("完成峰擬合後，這裡會提供完整的擬合曲線輸出。")
 
         processing_report = {
             "report_type": "raman_processing_report",
@@ -3170,8 +2214,9 @@ def run_raman_ui():
                 },
                 "average": {
                     "skip": bool(skip_avg),
-                    "enabled": bool(do_average),
-                    "interp_points": int(interp_points),
+                    "interpolation_enabled": bool(apply_interpolation),
+                    "average_enabled": bool(do_average),
+                    "interp_points": int(interp_points) if apply_interpolation else None,
                     "show_individual": bool(show_individual),
                 },
                 "background": {
@@ -3194,33 +2239,12 @@ def run_raman_ui():
                     "method": norm_method,
                     "range_cm": [float(norm_x_start), float(norm_x_end)],
                 },
-                "peak_detection": {
-                    "skip": bool(skip_peaks),
-                    "source_label": peak_signal_label,
-                    "prominence_ratio": float(st.session_state.get("raman_peak_prominence", 0.02)),
-                    "height_ratio": float(st.session_state.get("raman_peak_height", 0.0)),
-                    "distance_cm": float(st.session_state.get("raman_peak_distance", raman_peak_distance_default)),
-                    "max_peaks": int(st.session_state.get("raman_peak_max", 12)),
-                    "local_prominence": bool(st.session_state.get("raman_local_prom", False)),
-                    "local_window_cm": float(st.session_state.get("raman_local_window_cm", 80.0)),
-                    "detect_range_enabled": bool(st.session_state.get("raman_detect_range_on", False)),
-                    "detect_range_cm": [
-                        float(st.session_state.get("raman_detect_x_start", _e0)),
-                        float(st.session_state.get("raman_detect_x_end", _e1)),
-                    ],
-                    "detected_peaks": _dataframe_records(peak_export_df),
-                },
                 "fit": {
                     "skip": bool(skip_fit),
                     "target": st.session_state.get("raman_fit_result_target"),
                     "profile": st.session_state.get("raman_fit_profile"),
                     "summary": _dataframe_records(fit_summary_export_df),
                     "qc_summary": _json_safe(fit_qc_summary),
-                    "history_run_count": int(
-                        fit_history_df["Run_Label"].nunique()
-                        if not fit_history_df.empty and "Run_Label" in fit_history_df.columns
-                        else 0
-                    ),
                 },
             },
             "peak_candidates": _dataframe_records(
@@ -3229,33 +2253,39 @@ def run_raman_ui():
             "preset_snapshot": _build_raman_preset_payload(),
         }
 
+        st.markdown("**追溯 / QC**")
+        st.caption("保存參數、流程與品質指標，方便日後重現分析、交叉比對與研究存檔。")
         report_cols = st.columns(2)
-        report_name = report_cols[0].text_input(
-            "處理報告檔名",
-            value="raman_processing_report",
-            key="raman_report_fname",
-        )
-        report_cols[0].download_button(
-            "⬇️ 下載處理報告 JSON",
-            data=json.dumps(_json_safe(processing_report), ensure_ascii=False, indent=2).encode("utf-8"),
-            file_name=f"{(report_name or 'raman_processing_report').strip()}.json",
-            mime="application/json",
-            key="raman_report_dl",
-        )
+        with report_cols[0]:
+            _render_download_card(
+                title="處理報告 JSON",
+                description="完整保存本次 Raman 流程的參數、處理步驟與峰位表，適合研究追溯、重現分析與日後整理。",
+                input_label="檔名",
+                default_name="raman_processing_report",
+                extension="json",
+                button_label="下載處理報告 JSON",
+                data=json.dumps(_json_safe(processing_report), ensure_ascii=False, indent=2).encode("utf-8"),
+                mime="application/json",
+                input_key="raman_report_fname",
+                button_key="raman_report_dl",
+            )
 
-        if fit_qc_summary:
-            qc_name = report_cols[1].text_input(
-                "QC 摘要檔名",
-                value="raman_fit_qc_summary",
-                key="raman_qc_fname",
-            )
-            qc_df = pd.DataFrame([_json_safe(fit_qc_summary)])
-            report_cols[1].download_button(
-                "⬇️ 下載 QC 摘要 CSV",
-                data=qc_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{(qc_name or 'raman_fit_qc_summary').strip()}.csv",
-                mime="text/csv",
-                key="raman_qc_dl",
-            )
-        else:
-            report_cols[1].caption("完成峰擬合後，這裡會提供 QC 摘要 CSV。")
+        with report_cols[1]:
+            if fit_qc_summary:
+                qc_df = pd.DataFrame([_json_safe(fit_qc_summary)])
+                _render_download_card(
+                    title="QC 摘要 CSV",
+                    description="整理本次擬合的 R²、可疑峰數、Area=0 與偏移過大統計，適合快速做品質檢查與批次比較。",
+                    input_label="檔名",
+                    default_name="raman_fit_qc_summary",
+                    extension="csv",
+                    button_label="下載 QC 摘要 CSV",
+                    data=qc_df.to_csv(index=False).encode("utf-8"),
+                    mime="text/csv",
+                    input_key="raman_qc_fname",
+                    button_key="raman_qc_dl",
+                )
+            else:
+                with st.container(border=True):
+                    st.markdown("**QC 摘要 CSV**")
+                    st.caption("完成峰擬合後，這裡會提供本次擬合的 QC 摘要下載。")
