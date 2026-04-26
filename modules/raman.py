@@ -1427,6 +1427,8 @@ def run_raman_ui():
         "raman-bg-plot",
         visible=bg_method != "none",
         state_key="raman_scroll_bg_plot",
+        block="start",
+        flash=True,
     )
 
     # ── Render figure 2 (normalization) ───────────────────────────────────────
@@ -1449,6 +1451,8 @@ def run_raman_ui():
             "raman-norm-plot",
             visible=True,
             state_key="raman_scroll_norm_plot",
+            block="start",
+            flash=True,
         )
     else:
         auto_scroll_on_appear(

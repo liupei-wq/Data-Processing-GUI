@@ -1139,6 +1139,8 @@ def run_xrd_ui() -> None:
             "xrd-gauss-plot",
             visible=True,
             state_key="xrd_scroll_gauss_plot",
+            block="start",
+            flash=True,
         )
         if not gaussian_fit_export_df.empty:
             fit_display = gaussian_fit_export_df.copy().round({
@@ -1184,6 +1186,8 @@ def run_xrd_ui() -> None:
             "xrd-norm-plot",
             visible=True,
             state_key="xrd_scroll_norm_plot",
+            block="start",
+            flash=True,
         )
     else:
         auto_scroll_on_appear(
@@ -1207,6 +1211,8 @@ def run_xrd_ui() -> None:
             "xrd-log-plot",
             visible=True,
             state_key="xrd_scroll_log_plot",
+            block="start",
+            flash=True,
         )
     else:
         auto_scroll_on_appear(

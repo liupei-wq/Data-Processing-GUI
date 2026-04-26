@@ -104,82 +104,49 @@ def _emit_scroll_script(anchor_id: str, *, block: str = "center", flash: bool = 
     flash_mode = "true" if flash else "false"
     script = """
         <script>
-        const ensureFlashStyle = () => {
-          const doc = window.parent.document;
-          if (doc.getElementById("codex-scroll-flash-style")) return;
-          const style = doc.createElement("style");
-          style.id = "codex-scroll-flash-style";
-          style.textContent = `
-            @keyframes codexScrollFlashGlow {
-              0% {
-                box-shadow: 0 0 0 rgba(255, 214, 10, 0);
-                outline: 0 solid rgba(255, 214, 10, 0);
-                background: transparent;
-              }
-              20% {
-                box-shadow: 0 0 0.45rem rgba(255, 214, 10, 0.45),
-                            0 0 1.3rem rgba(255, 214, 10, 0.28);
-                outline: 2px solid rgba(255, 214, 10, 0.78);
-                background: rgba(255, 214, 10, 0.06);
-              }
-              45% {
-                box-shadow: 0 0 0 rgba(255, 214, 10, 0);
-                outline: 0 solid rgba(255, 214, 10, 0);
-                background: transparent;
-              }
-              65% {
-                box-shadow: 0 0 0.35rem rgba(255, 214, 10, 0.32),
-                            0 0 0.95rem rgba(255, 214, 10, 0.18);
-                outline: 2px solid rgba(255, 214, 10, 0.68);
-                background: rgba(255, 214, 10, 0.04);
-              }
-              100% {
-                box-shadow: 0 0 0 rgba(255, 214, 10, 0);
-                outline: 0 solid rgba(255, 214, 10, 0);
-                background: transparent;
-              }
-            }
-            .codex-scroll-flash-target {
-              border-radius: 14px;
-              animation: codexScrollFlashGlow 1.7s ease-in-out 1;
-              transition: box-shadow 180ms ease;
-            }
-          `;
-          doc.head.appendChild(style);
-        };
-
-        const flashTarget = () => {
-          if (!__FLASH__) return;
+        const findChartEl = () => {
           const doc = window.parent.document;
           const anchor = doc.getElementById(__TARGET__);
-          if (!anchor) return;
-          const anchorContainer = anchor.closest('[data-testid="element-container"]');
-          const focusTarget = anchorContainer?.nextElementSibling || anchorContainer || anchor;
-          if (!focusTarget) return;
-          ensureFlashStyle();
-          focusTarget.classList.remove("codex-scroll-flash-target");
-          void focusTarget.offsetWidth;
-          focusTarget.classList.add("codex-scroll-flash-target");
-          setTimeout(() => {
-            focusTarget.classList.remove("codex-scroll-flash-target");
-          }, 1900);
+          if (!anchor) return null;
+          const anchorEC = anchor.closest('[data-testid="element-container"]');
+          if (!anchorEC) return null;
+          let sib = anchorEC.nextElementSibling;
+          while (sib && sib.offsetHeight < 30) sib = sib.nextElementSibling;
+          if (!sib) return null;
+          return sib.querySelector('[data-testid="stPlotlyChart"]') || sib;
+        };
+
+        const applyOutline = (el, alpha) => {
+          el.style.outline = '5px solid rgba(255,220,0,' + alpha + ')';
+          el.style.outlineOffset = '8px';
+          el.style.borderRadius = '8px';
+        };
+        const clearOutline = (el) => {
+          el.style.outline = '';
+          el.style.outlineOffset = '';
+          el.style.borderRadius = '';
+        };
+
+        const doFlash = () => {
+          if (!__FLASH__) return;
+          const el = findChartEl();
+          if (!el) return;
+          applyOutline(el, 1);
+          setTimeout(() => clearOutline(el), 500);
+          setTimeout(() => applyOutline(el, 0.65), 900);
+          setTimeout(() => clearOutline(el), 1500);
         };
 
         const scrollToTarget = () => {
           const doc = window.parent.document;
-          const el = doc.getElementById(__TARGET__);
-          if (!el) return;
-          el.scrollIntoView({ behavior: "smooth", block: __BLOCK__ });
+          const anchor = doc.getElementById(__TARGET__);
+          if (!anchor) return;
+          anchor.scrollIntoView({ behavior: "smooth", block: __BLOCK__ });
         };
 
-        const focusSequence = () => {
-          scrollToTarget();
-          setTimeout(flashTarget, 110);
-        };
-
-        setTimeout(focusSequence, 60);
-        setTimeout(focusSequence, 240);
-        setTimeout(focusSequence, 520);
+        scrollToTarget();
+        setTimeout(scrollToTarget, 250);
+        setTimeout(doFlash, 700);
         </script>
     """.replace("__TARGET__", target).replace("__BLOCK__", block_mode).replace("__FLASH__", flash_mode)
     components.html(script, height=0, width=0)

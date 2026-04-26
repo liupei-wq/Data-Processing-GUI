@@ -1050,6 +1050,8 @@ def run_xps_ui() -> None:
         "xps-bg-plot",
         visible=bg_method != "none",
         state_key="xps_scroll_bg_plot",
+        block="start",
+        flash=True,
     )
 
     # ── 圖二：歸一化結果 ─────────────────────────────────────────────────────────
@@ -1077,6 +1079,8 @@ def run_xps_ui() -> None:
             "xps-norm-plot",
             visible=True,
             state_key="xps_scroll_norm_plot",
+            block="start",
+            flash=True,
         )
     else:
         auto_scroll_on_appear(
