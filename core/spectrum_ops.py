@@ -81,3 +81,96 @@ def mean_spectrum_arrays(arrays: list[np.ndarray]) -> np.ndarray | None:
     if not arrays:
         return None
     return np.mean(np.vstack(arrays), axis=0)
+
+
+def gaussian_template_from_area(
+    x: np.ndarray,
+    center: float,
+    fwhm: float,
+    area: float,
+) -> np.ndarray:
+    """Build a Gaussian template from fixed center, FWHM and integrated area."""
+    x = np.asarray(x, dtype=float)
+    sigma = float(max(fwhm, 1e-12)) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    amplitude = float(area) / (sigma * np.sqrt(2.0 * np.pi))
+    return amplitude * np.exp(-0.5 * ((x - float(center)) / sigma) ** 2)
+
+
+def fit_fixed_gaussian_templates(
+    x: np.ndarray,
+    signal: np.ndarray,
+    centers: list[dict],
+    fixed_fwhm: float,
+    fixed_area: float,
+    search_half_width: float,
+) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    """Subtract fixed-area/FWHM Gaussian templates while searching only center positions."""
+    x = np.asarray(x, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+    if len(x) == 0 or len(signal) == 0:
+        return np.array([]), np.array([]), []
+
+    valid_centers: list[dict] = []
+    for idx, row in enumerate(centers):
+        enabled = bool(row.get("enabled", True))
+        center = row.get("center")
+        if not enabled or center is None:
+            continue
+        try:
+            center_f = float(center)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(center_f):
+            continue
+        valid_centers.append({
+            "name": str(row.get("name", "")).strip() or f"Peak {idx + 1}",
+            "center": center_f,
+        })
+
+    empty_rows: list[dict] = []
+    if not valid_centers:
+        return np.zeros_like(signal, dtype=float), signal.copy(), empty_rows
+
+    valid_centers.sort(key=lambda item: item["center"])
+    residual = signal.copy()
+    total_model = np.zeros_like(residual, dtype=float)
+    fit_rows: list[dict] = []
+    local_half_window = float(max(search_half_width, fixed_fwhm * 3.0))
+
+    for row in valid_centers:
+        seed_center = float(row["center"])
+        low = max(float(np.min(x)), seed_center - float(search_half_width))
+        high = min(float(np.max(x)), seed_center + float(search_half_width))
+        if not np.isfinite(low) or not np.isfinite(high) or low >= high:
+            candidate_centers = np.array([seed_center], dtype=float)
+        else:
+            candidate_centers = np.linspace(low, high, 161, dtype=float)
+
+        best_center = seed_center
+        best_score = -np.inf
+        positive_residual = np.clip(residual, a_min=0.0, a_max=None)
+        for center in candidate_centers:
+            mask = (x >= center - local_half_window) & (x <= center + local_half_window)
+            if int(np.count_nonzero(mask)) < 3:
+                continue
+            local_x = x[mask]
+            local_model = gaussian_template_from_area(local_x, float(center), fixed_fwhm, fixed_area)
+            score = float(np.trapezoid(positive_residual[mask] * local_model, local_x))
+            if score > best_score:
+                best_score = score
+                best_center = float(center)
+
+        best_model = gaussian_template_from_area(x, best_center, fixed_fwhm, fixed_area)
+        residual = residual - best_model
+        total_model += best_model
+        fit_rows.append({
+            "Peak_Name": row["name"],
+            "Seed_Center": seed_center,
+            "Fitted_Center": best_center,
+            "Shift": best_center - seed_center,
+            "Fixed_FWHM": float(fixed_fwhm),
+            "Fixed_Area": float(fixed_area),
+            "Template_Height": float(np.max(best_model)) if len(best_model) else 0.0,
+        })
+
+    return total_model, residual, fit_rows

@@ -526,6 +526,11 @@ def run_raman_ui():
     # ── Step 1: file upload (sidebar) ─────────────────────────────────────────
     with st.sidebar:
         with st.expander("Raman Preset", expanded=False):
+            st.caption(
+                "Preset 會保存目前 Raman 流程的主要參數，例如去尖峰、內插/平均、"
+                "背景扣除、平滑、歸一化、峰偵測與峰擬合設定。適合把同一組處理條件"
+                "套用到同系列樣品，或把分析設定留給下次重現。"
+            )
             preset_payload = _build_raman_preset_payload()
             preset_name = st.text_input(
                 "Preset 檔名",

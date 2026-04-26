@@ -944,6 +944,12 @@ def run_xes_ui():
 
     with st.sidebar:
         with st.expander("XES Preset", expanded=False):
+            st.caption(
+                "Preset 會保存目前 XES 流程的主要參數，例如資料來源模式、FITS 影像處理、"
+                "ROI / 投影方向、BG1/BG2 背景扣除、I0 或曝光時間歸一化、平滑、"
+                "能量校正與峰偵測設定。適合把同一套偵測器與量測條件套用到同批樣品，"
+                "或日後重現同一組 XES 分析流程。"
+            )
             preset_payload = _build_xes_preset_payload()
             preset_name = st.text_input(
                 "Preset 檔名",
