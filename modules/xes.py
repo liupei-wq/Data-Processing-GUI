@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 import re
 from datetime import datetime, timezone
@@ -793,11 +794,187 @@ def _extract_xes_spectrum(image, plane: int, x_range: tuple[int, int], y_range: 
     return _extract_xes_spectrum_from_array(arr, x_range, y_range, projection, reducer)
 
 
+# ── Preset / export helpers ────────────────────────────────────────────────────
+
+_XES_PRESET_VERSION = 1
+_XES_PRESET_KEYS = [
+    "xes_input_mode",
+    "xes_bg_method", "xes_bg_order",
+    "xes_norm_exposure", "xes_transpose_image",
+    "xes_i0_mode", "xes_i0_global",
+    "xes_use_dark", "xes_fix_hot", "xes_hot_threshold", "xes_hot_window",
+    "xes_plane",
+    "xes_projection", "xes_reducer",
+    "xes_x_roi", "xes_y_roi",
+    "xes_sideband_enabled", "xes_sideband_a", "xes_sideband_b", "xes_sideband_stat",
+    "xes_curvature_enabled", "xes_curvature_x_range", "xes_curvature_order", "xes_curvature_cutoff",
+    "xes_do_avg", "xes_show_ind",
+    "xes_smooth_method", "xes_smooth_window", "xes_smooth_poly",
+    "xes_norm_method", "xes_norm_range",
+    "xes_axis_calibration", "xes_energy_offset", "xes_energy_slope", "xes_cal_degree",
+    "xes_run_peaks", "xes_peak_prominence", "xes_peak_height", "xes_peak_distance",
+    "xes_peak_max", "xes_peak_labels",
+]
+
+
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return [_json_safe(v) for v in value.tolist()]
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, pd.DataFrame):
+        return _json_safe(_dataframe_records(value))
+    if isinstance(value, pd.Series):
+        return _json_safe(value.to_dict())
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
+def _dataframe_records(df: pd.DataFrame) -> list[dict]:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return []
+    safe_df = df.astype(object).where(pd.notna(df), None)
+    return [_json_safe(rec) for rec in safe_df.to_dict("records")]
+
+
+def _build_export_filename(stem: str, extension: str) -> str:
+    clean_stem = str(stem or "").strip() or "export"
+    clean_ext = str(extension or "").strip().lstrip(".")
+    if not clean_ext:
+        return clean_stem
+    if clean_stem.lower().endswith(f".{clean_ext.lower()}"):
+        return clean_stem
+    return f"{clean_stem}.{clean_ext}"
+
+
+def _render_download_card(
+    *,
+    title: str,
+    description: str,
+    input_label: str,
+    default_name: str,
+    extension: str,
+    button_label: str,
+    data: bytes,
+    mime: str,
+    input_key: str,
+    button_key: str,
+) -> None:
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        st.caption(description)
+        export_stem = st.text_input(input_label, value=default_name, key=input_key)
+        st.download_button(
+            button_label,
+            data=data,
+            file_name=_build_export_filename(export_stem, extension),
+            mime=mime,
+            key=button_key,
+            use_container_width=True,
+        )
+
+
+def _build_xes_preset_payload() -> dict:
+    settings = {
+        key: _json_safe(st.session_state.get(key))
+        for key in _XES_PRESET_KEYS
+        if key in st.session_state
+    }
+    return {
+        "preset_type": "xes_processing_preset",
+        "version": _XES_PRESET_VERSION,
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "settings": settings,
+    }
+
+
+def _apply_xes_preset_payload(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    settings = payload.get("settings", {})
+    if not isinstance(settings, dict):
+        return
+    for key, value in settings.items():
+        if key in _XES_PRESET_KEYS:
+            st.session_state[key] = value
+
+
+def _xes_column_display_name(col: str) -> str:
+    mapping = {
+        "Intensity": "原始訊號",
+        "Average_intensity": "原始訊號（平均）",
+        "BG1BG2_background": "BG1/BG2 背景",
+        "Average_BG1BG2_background": "BG1/BG2 背景（平均）",
+        "Intensity_before_BG1BG2": "BG 扣除前",
+        "Average_before_BG1BG2": "BG 扣除前（平均）",
+        "Intensity_smoothed": "平滑後",
+        "Average_smoothed": "平滑後（平均）",
+        "Intensity_normalized": "歸一化後",
+        "Average_normalized": "歸一化後（平均）",
+    }
+    return mapping.get(col, col.replace("_", " "))
+
+
+def _xes_default_compare_columns(columns: list[str]) -> list[str]:
+    priority = [
+        lambda c: c in ("Intensity", "Average_intensity"),
+        lambda c: c in ("BG1BG2_background", "Average_BG1BG2_background"),
+        lambda c: c in ("Intensity_smoothed", "Average_smoothed"),
+        lambda c: c in ("Intensity_normalized", "Average_normalized"),
+    ]
+    ordered: list[str] = []
+    for matcher in priority:
+        match = next((col for col in columns if matcher(col)), None)
+        if match and match not in ordered:
+            ordered.append(match)
+    return ordered or columns[:min(3, len(columns))]
+
+
 def run_xes_ui():
     XES_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
                   "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
 
     with st.sidebar:
+        with st.expander("XES Preset", expanded=False):
+            preset_payload = _build_xes_preset_payload()
+            preset_name = st.text_input(
+                "Preset 檔名",
+                value=st.session_state.get("xes_preset_name", "xes_preset"),
+                key="xes_preset_name",
+            )
+            st.download_button(
+                "⬇️ 匯出 XES preset JSON",
+                data=json.dumps(preset_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                file_name=_build_export_filename(preset_name or "xes_preset", "json"),
+                mime="application/json",
+                key="xes_preset_export_btn",
+                use_container_width=True,
+            )
+            st.divider()
+            preset_upload = st.file_uploader(
+                "匯入 Preset JSON",
+                type=["json"],
+                key="xes_preset_uploader",
+            )
+            if preset_upload is not None:
+                try:
+                    loaded = json.loads(preset_upload.read().decode("utf-8"))
+                    if loaded.get("preset_type") == "xes_processing_preset":
+                        _apply_xes_preset_payload(loaded)
+                        st.success("Preset 已套用，重新整理頁面生效。")
+                    else:
+                        st.warning("此 JSON 不是 XES preset 格式。")
+                except Exception as exc:
+                    st.error(f"Preset 讀取失敗：{exc}")
+
         step_header(1, "載入資料")
         xes_input_mode = st.radio(
             "資料來源模式",
@@ -2172,54 +2349,262 @@ def run_xes_ui():
                     hide_index=True,
                 )
 
-    if bg_method == "interpolated" and not bg_weight_df.empty:
-        weight_name = st.text_input("分點權重表檔名", value="xes_bg_weights", key="xes_bg_weight_fname")
-        st.download_button(
-            "⬇️ 下載分點權重表 CSV",
-            data=bg_weight_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"{(weight_name or 'xes_bg_weights').strip()}.csv",
-            mime="text/csv",
-            key="xes_bg_weight_dl",
-        )
+    # ── 處理前後比較 ─────────────────────────────────────────────────────────────
+    if export_frames:
+        with st.expander("處理前後比較 / Baseline Preview", expanded=False):
+            frame_names = list(export_frames.keys())
+            cmp_dataset = st.selectbox(
+                "選擇資料集",
+                frame_names,
+                key="xes_compare_dataset",
+            )
+            cmp_df = export_frames.get(cmp_dataset, pd.DataFrame())
+            x_col = "Energy_eV" if "Energy_eV" in cmp_df.columns else "Pixel"
+            signal_cols = [c for c in cmp_df.columns if c not in (x_col, "Average_grid",
+                "Curvature_corrected", "Transposed", "Background_weight_w",
+                "Background_weight_w_mean", "I0", "I0_mean",
+                "Signal_ROI_projection", "Sideband_background_scaled",
+                "Average_signal_roi_projection", "Average_sideband_background_scaled",
+                "Curvature_corrected_fraction")]
+            default_cols = _xes_default_compare_columns(signal_cols)
+            cmp_cols = st.multiselect(
+                "比較欄位",
+                signal_cols,
+                default=default_cols,
+                format_func=_xes_column_display_name,
+                key="xes_compare_cols",
+            )
+            if cmp_cols and not cmp_df.empty and x_col in cmp_df.columns:
+                x_vals_cmp = cmp_df[x_col].to_numpy(dtype=float)
+                fig_cmp = go.Figure()
+                cmp_colors = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA",
+                              "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
+                for ci, col_name in enumerate(cmp_cols):
+                    if col_name in cmp_df.columns:
+                        y_vals_cmp = cmp_df[col_name].to_numpy(dtype=float)
+                        is_bg = "background" in col_name.lower() or "BG" in col_name
+                        fig_cmp.add_trace(go.Scatter(
+                            x=x_vals_cmp, y=y_vals_cmp,
+                            mode="lines",
+                            name=_xes_column_display_name(col_name),
+                            line=dict(
+                                color=cmp_colors[ci % len(cmp_colors)],
+                                width=1.5,
+                                dash="dot" if is_bg else "solid",
+                            ),
+                        ))
+                fig_cmp.update_layout(
+                    xaxis_title="Energy (eV)" if x_col == "Energy_eV" else "Pixel",
+                    yaxis_title="Intensity",
+                    template="plotly_dark",
+                    height=380,
+                    margin=dict(l=50, r=20, t=30, b=50),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig_cmp, use_container_width=True)
 
-    if curvature_enabled and not curvature_export_df.empty:
-        curve_name = st.text_input("曲率校正表檔名", value="xes_curvature", key="xes_curve_fname")
-        st.download_button(
-            "⬇️ 下載曲率校正表 CSV",
-            data=curvature_export_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"{(curve_name or 'xes_curvature').strip()}.csv",
-            mime="text/csv",
-            key="xes_curve_dl",
+    # ── QC 摘要 ──────────────────────────────────────────────────────────────────
+    qc_rows: list[dict] = []
+    for ds_name, ds_df in export_frames.items():
+        x_col_q = "Energy_eV" if "Energy_eV" in ds_df.columns else "Pixel"
+        sig_col = next(
+            (c for c in ("Intensity_smoothed", "Average_smoothed", "Intensity", "Average_intensity")
+             if c in ds_df.columns),
+            None,
         )
+        qc_row: dict = {"資料集": ds_name}
+        if sig_col and x_col_q in ds_df.columns:
+            yq = ds_df[sig_col].to_numpy(dtype=float)
+            finite_y = yq[np.isfinite(yq)]
+            if finite_y.size > 0:
+                peak_val = float(np.nanmax(finite_y))
+                med = float(np.nanmedian(finite_y))
+                mad = float(np.nanmedian(np.abs(finite_y - med)))
+                noise = 1.4826 * mad
+                snr = peak_val / noise if noise > 1e-12 else np.inf
+                qc_row["最大強度"] = round(peak_val, 4)
+                qc_row["估算 SNR"] = round(snr, 1) if np.isfinite(snr) else None
+        if not peak_export_df.empty:
+            ds_peaks = peak_export_df[peak_export_df["Dataset"] == ds_name]
+            qc_row["偵測峰數"] = len(ds_peaks)
+            if not ds_peaks.empty:
+                if "Energy_eV" in ds_peaks.columns:
+                    peak_pos_str = ", ".join(f"{v:.3f}" for v in ds_peaks["Energy_eV"].dropna())
+                else:
+                    peak_pos_str = ", ".join(f"{v:.1f}" for v in ds_peaks["Pixel"].dropna())
+                qc_row["峰位"] = peak_pos_str
+        qc_rows.append(qc_row)
 
+    if qc_rows:
+        with st.expander("QC 摘要", expanded=False):
+            qc_df = pd.DataFrame(qc_rows)
+            st.dataframe(qc_df, use_container_width=True, hide_index=True)
+
+    # ── 建立 processing report ────────────────────────────────────────────────
+    report_input_files = (
+        [f.name for f in spectrum_files] if using_preprocessed_spectra else
+        [f.name for f in uploaded_files]
+    ) if True else []
+    processing_report = {
+        "tool": "XES Data Processing GUI",
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "input_mode": "preprocessed_1d" if using_preprocessed_spectra else "fits",
+        "input_files": report_input_files,
+        "datasets": list(export_frames.keys()),
+        "step_bg1bg2": {
+            "method": bg_method,
+            "order": bg_order_method,
+            "bg1_provided": bg1_available,
+            "bg2_provided": bg2_available,
+        },
+        "step_image_correction": {
+            "normalize_exposure": normalize_exposure,
+            "transpose": transpose_image,
+            "use_dark_frame": use_dark_frame,
+            "fix_hot_pixels": fix_hot_pixels,
+            "hot_threshold": hot_pixel_threshold,
+            "hot_window": hot_pixel_window,
+        },
+        "step_roi_projection": {
+            "projection": projection,
+            "reducer": reducer,
+            "x_roi": list(x_roi),
+            "y_roi": list(y_roi),
+            "sideband_enabled": sideband_enabled,
+            "curvature_enabled": curvature_enabled,
+            "curvature_poly_order": curvature_poly_order,
+        },
+        "step_average": {
+            "enabled": do_average,
+        },
+        "step_smooth": {
+            "method": smooth_method,
+            "window": smooth_window,
+            "poly_deg": smooth_poly_deg,
+        },
+        "step_normalization": {
+            "method": norm_method,
+            "x_start": norm_x_start,
+            "x_end": norm_x_end,
+        },
+        "step_axis_calibration": {
+            "mode": axis_calibration,
+            "energy_offset": energy_offset,
+            "energy_slope": energy_slope,
+            "poly_coeffs": energy_poly_coeffs,
+        },
+        "step_peak_detection": {
+            "enabled": run_peak_detection,
+            "prominence_ratio": peak_prom_ratio,
+            "height_ratio": peak_height_ratio,
+            "distance": peak_distance_pixel,
+            "max_labels": max_peak_labels,
+        },
+        "qc_summary": _json_safe(qc_rows),
+    }
+
+    # ── 三區卡片式匯出 ────────────────────────────────────────────────────────
     if export_frames or not peak_export_df.empty:
+        st.divider()
         st.subheader("匯出")
-        curve_items = list(export_frames.items())
-        for start in range(0, len(curve_items), 4):
-            row_items = curve_items[start:start + 4]
-            row_cols = st.columns(len(row_items))
-            for col, (fname, df) in zip(row_cols, row_items):
-                base = fname.rsplit(".", 1)[0]
-                out_name = col.text_input(
-                    "檔名", value=f"{base}_xes_spectrum",
-                    key=f"xes_fname_{fname}", label_visibility="collapsed",
-                )
-                col.download_button(
-                    "⬇️ 下載光譜 CSV",
-                    data=df.to_csv(index=False).encode("utf-8"),
-                    file_name=f"{(out_name or base + '_xes_spectrum').strip()}.csv",
-                    mime="text/csv",
-                    key=f"xes_dl_{fname}",
-                )
+
+        # 研究常用
+        st.markdown("**研究常用**")
+        st.caption("直接用於論文附圖或數據報告的檔案。")
+        rc_cols = st.columns(2)
+        rc_idx = 0
+        for fname, df in export_frames.items():
+            base = fname.rsplit(".", 1)[0]
+            _render_download_card(
+                title=f"處理後光譜 — {fname}",
+                description="含各處理階段欄位（BG 扣除、平滑、歸一化、能量軸）的完整光譜 CSV。",
+                input_label="檔名",
+                default_name=f"{base}_xes_spectrum",
+                extension="csv",
+                button_label="⬇️ 下載光譜 CSV",
+                data=df.to_csv(index=False).encode("utf-8"),
+                mime="text/csv",
+                input_key=f"xes_fname_card_{fname}",
+                button_key=f"xes_dl_card_{fname}",
+            )
 
         if not peak_export_df.empty:
-            peak_name = st.text_input("峰值列表檔名", value="xes_peaks", key="xes_peak_fname")
-            st.download_button(
-                "⬇️ 下載峰值列表 CSV",
+            _render_download_card(
+                title="峰值列表",
+                description="偵測峰的 Pixel、Energy_eV（若已校正）、Intensity、FWHM 匯整表。",
+                input_label="檔名",
+                default_name="xes_peaks",
+                extension="csv",
+                button_label="⬇️ 下載峰值列表 CSV",
                 data=peak_export_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{(peak_name or 'xes_peaks').strip()}.csv",
                 mime="text/csv",
-                key="xes_peak_dl",
+                input_key="xes_peak_fname_card",
+                button_key="xes_peak_dl_card",
             )
+
+        # 原始處理輸出
+        st.markdown("**原始處理輸出**")
+        st.caption("校正過程中產生的中間結果，適合深入審閱或重現。")
+        aux_col1, aux_col2 = st.columns(2)
+        if bg_method == "interpolated" and not bg_weight_df.empty:
+            with aux_col1:
+                _render_download_card(
+                    title="BG1/BG2 分點權重表",
+                    description="各 sample 的 BG 分點插值權重 w，確認分點法是否合理。",
+                    input_label="檔名",
+                    default_name="xes_bg_weights",
+                    extension="csv",
+                    button_label="⬇️ 下載權重表 CSV",
+                    data=bg_weight_df.to_csv(index=False).encode("utf-8"),
+                    mime="text/csv",
+                    input_key="xes_bg_weight_fname_card",
+                    button_key="xes_bg_weight_dl_card",
+                )
+        if curvature_enabled and not curvature_export_df.empty:
+            with aux_col2:
+                _render_download_card(
+                    title="曲率校正表",
+                    description="各 row 的 peak center 偵測結果與 polynomial fit 校正量。",
+                    input_label="檔名",
+                    default_name="xes_curvature",
+                    extension="csv",
+                    button_label="⬇️ 下載曲率校正表 CSV",
+                    data=curvature_export_df.to_csv(index=False).encode("utf-8"),
+                    mime="text/csv",
+                    input_key="xes_curve_fname_card",
+                    button_key="xes_curve_dl_card",
+                )
+
+        # 追溯 / QC
+        st.markdown("**追溯 / QC**")
+        st.caption("記錄完整處理流程的 JSON，日後重現或向合作者說明參數設定時使用。")
+        rp_col1, rp_col2 = st.columns(2)
+        with rp_col1:
+            _render_download_card(
+                title="XES Processing Report",
+                description="完整處理參數（輸入檔、BG 方法、平滑、歸一化、能量校正、峰偵測設定）。",
+                input_label="檔名",
+                default_name="xes_processing_report",
+                extension="json",
+                button_label="⬇️ 下載 Processing Report JSON",
+                data=json.dumps(_json_safe(processing_report), ensure_ascii=False, indent=2).encode("utf-8"),
+                mime="application/json",
+                input_key="xes_report_fname",
+                button_key="xes_report_dl",
+            )
+        if qc_rows:
+            with rp_col2:
+                _render_download_card(
+                    title="QC 摘要",
+                    description="各資料集的 SNR 估算、最大強度與峰位統計。",
+                    input_label="檔名",
+                    default_name="xes_qc_summary",
+                    extension="csv",
+                    button_label="⬇️ 下載 QC 摘要 CSV",
+                    data=pd.DataFrame(qc_rows).to_csv(index=False).encode("utf-8"),
+                    mime="text/csv",
+                    input_key="xes_qc_fname",
+                    button_key="xes_qc_dl",
+                )
 
 

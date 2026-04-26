@@ -25,8 +25,6 @@ from core.peak_fitting import fit_peaks
 from core.processing import apply_normalization, apply_processing, despike_signal, smooth_signal
 from db.raman_database import RAMAN_REFERENCES
 
-_SUBSTRATE_KEYS: set[str] = {"Si (基板)", "Sapphire α-Al₂O₃ (c-plane)"}
-_FILM_KEYS: list[str] = [k for k in RAMAN_REFERENCES if k not in _SUBSTRATE_KEYS]
 _PEAK_CANDS_KEY = "raman_fit_candidates"
 _EDITOR_WIDGET_KEY = "raman_peak_editor_widget"
 _EDITOR_WIDGET_VERSION_KEY = "raman_peak_editor_widget_version"
@@ -46,7 +44,7 @@ _RAMAN_PRESET_KEYS = [
     "raman_step4_done", "raman_skip_smooth", "raman_smooth_method", "raman_smooth_window",
     "raman_smooth_poly", "raman_step5_done", "raman_skip_norm", "raman_norm_method",
     "raman_norm_range", "raman_step6_done", "raman_skip_fit",
-    "raman_fit_target", "raman_fit_profile", "raman_fit_init_fwhm", "raman_step8_done",
+    "raman_fit_target", "raman_fit_profile", "raman_fit_init_fwhm", "raman_sample_type", "raman_step8_done",
     "raman_zoom_on", "raman_zoom_start", "raman_zoom_end", "raman_zoom_range_slider",
     "raman_peak_table_compact", "raman_review_min_area_pct", "raman_review_max_abs_delta",
     "raman_fit_show_peak_ids", "raman_fit_show_flag_only", "raman_review_filter_mode",
@@ -987,7 +985,13 @@ def run_raman_ui():
 
     # ── Step 8: peak fitting (sidebar) ────────────────────────────────────────
     fit_profile = "voigt"
-    fit_initial_fwhm = float(max(4.0, min(24.0, (_e1 - _e0) / 30.0)))
+    sample_type = st.session_state.get("raman_sample_type", "薄膜")
+    _fwhm_default = (
+        float(max(15.0, min(60.0, (_e1 - _e0) / 15.0)))
+        if sample_type == "粉末"
+        else float(max(4.0, min(24.0, (_e1 - _e0) / 30.0)))
+    )
+    fit_initial_fwhm = _fwhm_default
     fit_target_options = ["Average"] if do_average else list(data_dict.keys())
     fit_target_default = fit_target_options[0]
     run_peak_fit = False
@@ -1002,6 +1006,17 @@ def run_raman_ui():
             with st.expander(step_exp_label(8, "峰擬合", s8 or _skip8), expanded=not (s8 or _skip8)):
                 skip_fit = st.checkbox("跳過此步驟 ✓", key="raman_skip_fit")
                 if not skip_fit:
+                    sample_type = st.radio(
+                        "樣品類型",
+                        ["薄膜", "粉末"],
+                        horizontal=True,
+                        key="raman_sample_type",
+                    )
+                    _fwhm_default = (
+                        float(max(15.0, min(60.0, (_e1 - _e0) / 15.0)))
+                        if sample_type == "粉末"
+                        else float(max(4.0, min(24.0, (_e1 - _e0) / 30.0)))
+                    )
                     if len(fit_target_options) > 1:
                         fit_target = st.selectbox("擬合對象", fit_target_options, key="raman_fit_target")
                     else:
@@ -1020,13 +1035,13 @@ def run_raman_ui():
                     fit_initial_fwhm = float(st.number_input(
                         "預設初始 FWHM (cm⁻¹)",
                         min_value=float(max(step_size, 0.5)),
-                        max_value=float(max(200.0, x_max_g - x_min_g)),
-                        value=float(max(4.0, min(24.0, (_e1 - _e0) / 30.0))),
+                        max_value=float(max(300.0, x_max_g - x_min_g)),
+                        value=float(st.session_state.get("raman_fit_init_fwhm", _fwhm_default)),
                         step=float(max(step_size, 0.5)),
                         format="%.1f",
                         key="raman_fit_init_fwhm",
                     ))
-                    st.caption("峰位管理（載入基板 / 薄膜 / 自訂峰）在圖表下方操作。")
+                    st.caption("峰位管理（載入材料參考峰 / 自訂峰）在圖表下方操作。")
                 if skip_fit:
                     st.session_state["raman_step8_done"] = True
                 s8 = st.session_state.get("raman_step8_done", False)
@@ -1428,7 +1443,6 @@ def run_raman_ui():
         visible=bg_method != "none",
         state_key="raman_scroll_bg_plot",
         block="start",
-        flash=True,
     )
 
     # ── Render figure 2 (normalization) ───────────────────────────────────────
@@ -1452,7 +1466,6 @@ def run_raman_ui():
             visible=True,
             state_key="raman_scroll_norm_plot",
             block="start",
-            flash=True,
         )
     else:
         auto_scroll_on_appear(
@@ -1603,29 +1616,19 @@ def run_raman_ui():
             )
 
             # ── 載入參考峰 ────────────────────────────────────────────────────
-            sel_cols = st.columns([1.2, 3])
-            sub_sel = sel_cols[0].selectbox(
-                "基板",
-                ["（不選）"] + sorted(_SUBSTRATE_KEYS),
-                key="raman_fit_sub_sel",
+            mat_sel = st.multiselect(
+                "選擇材料",
+                sorted(RAMAN_REFERENCES),
+                key="raman_fit_mat_sel",
+                placeholder="選擇一或多種材料…",
             )
-            film_sel = sel_cols[1].multiselect(
-                "薄膜材料",
-                sorted(_FILM_KEYS),
-                key="raman_fit_film_sel",
-                placeholder="選擇一或多種薄膜材料…",
-            )
-            btn_cols = st.columns([1.2, 3, 1.5])
-            if btn_cols[0].button("載入基板峰", key="raman_load_sub_btn", use_container_width=True):
-                if sub_sel != "（不選）":
-                    _add_ref_to_session(sub_sel, fit_initial_fwhm)
-                    st.rerun()
-            if btn_cols[1].button("載入薄膜峰", key="raman_load_film_btn", use_container_width=True):
-                for mat in film_sel:
+            btn_cols = st.columns([2, 1.5])
+            if btn_cols[0].button("載入參考峰", key="raman_load_mat_btn", use_container_width=True):
+                for mat in mat_sel:
                     _add_ref_to_session(mat, fit_initial_fwhm)
-                if film_sel:
+                if mat_sel:
                     st.rerun()
-            if btn_cols[2].button("清空峰位表", key="raman_clear_peaks_btn", use_container_width=True):
+            if btn_cols[1].button("清空峰位表", key="raman_clear_peaks_btn", use_container_width=True):
                 st.session_state[_PEAK_CANDS_KEY] = _empty_peak_df()
                 _reset_peak_editor_widget()
                 st.rerun()
@@ -2056,6 +2059,70 @@ def run_raman_ui():
                             _reset_peak_editor_widget()
                             _queue_raman_auto_refit(fit_target)
                             st.rerun()
+
+                        # ── Si 峰位移 → 雙軸應力 ──────────────────────────────
+                        si_cands = fit_summary_df[
+                            fit_summary_df["Material"].str.contains(
+                                r"n[-\s]?Si|p[-\s]?Si|\bSi\b", case=False, na=False, regex=True
+                            )
+                            & fit_summary_df["Center_cm"].between(480, 570)
+                        ]
+                        if not si_cands.empty:
+                            with st.expander("Si 峰位移 → 雙軸應力估算", expanded=False):
+                                st.caption(
+                                    "依 Anastassakis et al. (1990)，(100) Si 的雙軸應力轉換係數約為 "
+                                    "**Δω = −1.93 cm⁻¹/GPa**。"
+                                    "Δω > 0 → 壓應力（compressive）；Δω < 0 → 拉應力（tensile）。"
+                                )
+                                _col_ref, _col_coeff = st.columns(2)
+                                si_ref_pos = float(_col_ref.number_input(
+                                    "無應力參考位置 (cm⁻¹)",
+                                    value=float(st.session_state.get("raman_si_ref_pos", 520.7)),
+                                    step=0.1, format="%.1f",
+                                    key="raman_si_ref_pos",
+                                    help="體矽 520.7 cm⁻¹；可改成您量測的標準品值",
+                                ))
+                                si_coeff = float(_col_coeff.number_input(
+                                    "轉換係數 (cm⁻¹/GPa)",
+                                    value=float(st.session_state.get("raman_si_stress_coeff", -1.93)),
+                                    step=0.01, format="%.3f",
+                                    key="raman_si_stress_coeff",
+                                    help="雙軸：−1.93；單軸 [100]：約 −1.6 cm⁻¹/GPa",
+                                ))
+                                _stress_rows = []
+                                for _, _sr in si_cands.iterrows():
+                                    _center = float(_sr["Center_cm"])
+                                    _dw = _center - si_ref_pos
+                                    _sigma = (_dw / si_coeff) if abs(si_coeff) > 1e-9 else np.nan
+                                    _interp = (
+                                        "壓應力（compressive）" if _sigma < -0.05 else
+                                        "拉應力（tensile）" if _sigma > 0.05 else
+                                        "接近無應力"
+                                    ) if np.isfinite(_sigma) else "—"
+                                    _stress_rows.append({
+                                        "Peak_ID": _sr["Peak_ID"],
+                                        "Peak_Name": _sr["Peak_Name"],
+                                        "Ref (cm⁻¹)": si_ref_pos,
+                                        "Center (cm⁻¹)": round(_center, 2),
+                                        "Δω (cm⁻¹)": round(_dw, 3),
+                                        "σ (GPa)": round(_sigma, 3) if np.isfinite(_sigma) else None,
+                                        "解讀": _interp,
+                                    })
+                                _stress_df = pd.DataFrame(_stress_rows)
+                                st.dataframe(_stress_df, use_container_width=True, hide_index=True)
+                                _m_cols = st.columns(min(4, len(_stress_rows)))
+                                for _mc, _row in zip(_m_cols, _stress_rows):
+                                    _σ = _row.get("σ (GPa)")
+                                    if _σ is not None:
+                                        _mc.metric(
+                                            label=(_row["Peak_Name"] or _row["Peak_ID"])[:18],
+                                            value=f"{_σ:+.3f} GPa",
+                                            delta=_row["解讀"],
+                                        )
+                                st.caption(
+                                    "此估算假設峰位移完全來自應力；若樣品有組成偏析、"
+                                    "溫度效應或多峰疊加，需進一步校正。"
+                                )
 
                         enabled_map = dict(zip(current_peak_df["Peak_ID"].astype(str), current_peak_df["啟用"].astype(bool)))
                         review_table_source = pd.DataFrame({

@@ -32,6 +32,7 @@ from db.xps_database import (
     ELEMENT_RSF,
     ELEMENTS,
     FITTABLE_ELEMENTS,
+    get_orbital_rsf,
 )
 
 
@@ -159,7 +160,6 @@ def _build_xps_quant_review_df(
     fit_target_used: str,
     fit_offset_used: float,
 ) -> pd.DataFrame:
-    rsf = ELEMENT_RSF.get(elem_label, None)
     dominant_family = _dominant_xps_orbital_family(result_peaks, elem_label)
     major_sub = DOUBLET_INFO.get(elem_label, {}).get("major_sub")
     minor_sub = DOUBLET_INFO.get(elem_label, {}).get("minor_sub")
@@ -171,6 +171,8 @@ def _build_xps_quant_review_df(
         is_satellite = _is_xps_satellite_label(label)
         is_major = bool(major_sub and major_sub in label)
         is_minor = bool(minor_sub and minor_sub in label)
+
+        rsf_val, rsf_src = get_orbital_rsf(elem_label, label)
 
         if is_satellite:
             include = False
@@ -199,7 +201,8 @@ def _build_xps_quant_review_df(
             "軌域族": family or "未辨識",
             "中心 (eV)": round(float(pk.get("center", 0.0)) + fit_offset_used, 3),
             "面積": float(pk.get("area", 0.0)),
-            "RSF": rsf,
+            "RSF": rsf_val,
+            "RSF來源": rsf_src,
             "定量建議": suggestion,
         })
 
@@ -420,6 +423,616 @@ def load_xps_file(uploaded_file):
     return _parse_xps_bytes(raw)
 
 
+def _vbm_linear_extrapolation(
+    x: np.ndarray,
+    y: np.ndarray,
+    edge_lo: float,
+    edge_hi: float,
+    baseline_lo: float,
+    baseline_hi: float,
+) -> tuple[float | None, float, float, float, bool]:
+    """Linear extrapolation of VB leading edge to baseline level → VBM position.
+
+    Returns (vbm_eV, slope, intercept, baseline_level, success).
+    VBM = x where fitted line meets the mean baseline level.
+    """
+    sort_idx = np.argsort(x)
+    xs, ys = x[sort_idx], y[sort_idx]
+    edge_mask = (xs >= edge_lo) & (xs <= edge_hi)
+    base_mask = (xs >= baseline_lo) & (xs <= baseline_hi)
+    if edge_mask.sum() < 2 or base_mask.sum() < 1:
+        return None, 0.0, 0.0, 0.0, False
+    coeffs = np.polyfit(xs[edge_mask], ys[edge_mask], 1)
+    slope, intercept = float(coeffs[0]), float(coeffs[1])
+    baseline_level = float(np.mean(ys[base_mask]))
+    if abs(slope) < 1e-12:
+        return None, slope, intercept, baseline_level, False
+    vbm = (baseline_level - intercept) / slope
+    return float(vbm), slope, intercept, baseline_level, True
+
+
+def _run_valence_band_ui(
+    uploaded_files: list,
+    data_dict: dict,
+    x_min_global: float,
+    x_max_global: float,
+    overlap_min: float,
+    overlap_max: float,
+) -> None:
+    """Valence Band XPS analysis mode – VBM linear extrapolation workflow."""
+    span = max(x_max_global - x_min_global, 1e-6)
+
+    # ── pre-init sidebar-derived values ──────────────────────────────────────
+    offset = 0.0
+    bg_method = "none"
+    bg_x_start = overlap_min
+    bg_x_end = overlap_max
+    show_bg_baseline = False
+    skip_vb_bg = st.session_state.get("vb_skip_bg", False)
+    vb_bg_step_done = False
+    run_vbm = False
+    vbm_edge_lo = vbm_edge_hi = x_min_global
+    vbm_base_lo = vbm_base_hi = x_min_global
+    show_vbm_line = True
+
+    with st.sidebar:
+        # ─── Step 2: 手動能量校正 ──────────────────────────────────────────
+        step_header(2, "能量校正（可選）")
+        st.caption("通常以 Au 4f7/2（84.0 eV）或 C 1s 污染碳（284.8 eV）做校正後填入 ΔE。")
+        offset = float(st.number_input(
+            "手動位移量 ΔE (eV)",
+            value=0.0, step=0.01, format="%.3f",
+            key="vb_energy_offset",
+        ))
+        if offset != 0.0:
+            st.caption(f"全部光譜將位移 {offset:+.3f} eV")
+
+        # ─── Step 3: 背景扣除（可選） ──────────────────────────────────────
+        vb_bg_confirmed = st.session_state.get("vb_bg_confirmed", False)
+        _skip_vb_bg_ss = st.session_state.get("vb_skip_bg", False)
+        with st.expander(
+            step_exp_label(3, "背景扣除（可選）", vb_bg_confirmed or _skip_vb_bg_ss),
+            expanded=not (vb_bg_confirmed or _skip_vb_bg_ss),
+        ):
+            st.caption(
+                "VB 分析通常用線性或 Shirley 背景，目的是拉平 free-electron tail，"
+                "而非 core level 定量。若訊號已夠乾淨可跳過。"
+            )
+            skip_vb_bg = st.checkbox("跳過此步驟 ✓", key="vb_skip_bg")
+            if not skip_vb_bg:
+                bg_method = st.selectbox(
+                    "方法",
+                    ["none", "linear", "shirley"],
+                    format_func=lambda v: {
+                        "none": "不扣除",
+                        "linear": "線性背景",
+                        "shirley": "Shirley 背景",
+                    }[v],
+                    key="vb_bg_method",
+                )
+                if bg_method != "none":
+                    _prev_vbbg = st.session_state.get("vb_bg_range", (overlap_min, overlap_max))
+                    _blo = float(max(x_min_global, min(float(min(_prev_vbbg)), x_max_global)))
+                    _bhi = float(max(x_min_global, min(float(max(_prev_vbbg)), x_max_global)))
+                    if _blo >= _bhi:
+                        _blo, _bhi = overlap_min, overlap_max
+                    st.session_state["vb_bg_range"] = (_blo, _bhi)
+                    vb_bg_range = st.slider(
+                        "背景計算區間 (eV)",
+                        min_value=x_min_global, max_value=x_max_global,
+                        step=0.01, format="%.2f eV",
+                        key="vb_bg_range",
+                    )
+                    bg_x_start, bg_x_end = sorted(vb_bg_range)
+                    show_bg_baseline = st.checkbox(
+                        "疊加顯示背景基準線", value=True, key="vb_show_bg_baseline"
+                    )
+            if skip_vb_bg and not vb_bg_confirmed:
+                st.session_state["vb_bg_confirmed"] = True
+                vb_bg_confirmed = True
+            if not skip_vb_bg and not vb_bg_confirmed:
+                if _next_btn("btn_vb_bg_next", "vb_bg_confirmed"):
+                    vb_bg_confirmed = True
+        skip_vb_bg = st.session_state.get("vb_skip_bg", False)
+        vb_bg_confirmed = st.session_state.get("vb_bg_confirmed", False)
+        vb_bg_step_done = skip_vb_bg or vb_bg_confirmed
+        bg_method = "none" if skip_vb_bg else st.session_state.get("vb_bg_method", "none")
+
+        # ─── Step 4: VBM 線性外推設定 ─────────────────────────────────────
+        if vb_bg_step_done:
+            step_header(4, "VBM 線性外推")
+            st.caption(
+                "① 選 **Leading edge 擬合區**（VB 上升段）— 藍色陰影；"
+                "② 選 **Baseline 區**（費米能級附近平坦無態區）— 綠色陰影。"
+                "外推線與 Baseline 水平線的交點即為 VBM。"
+            )
+
+            # Leading edge range
+            _edge_def_lo = float(x_min_global + span * 0.12)
+            _edge_def_hi = float(x_min_global + span * 0.40)
+            _prev_edge = st.session_state.get("vb_edge_range", (_edge_def_lo, _edge_def_hi))
+            _el = float(max(x_min_global, min(float(min(_prev_edge)), x_max_global)))
+            _eh = float(max(x_min_global, min(float(max(_prev_edge)), x_max_global)))
+            if _el >= _eh:
+                _el, _eh = _edge_def_lo, _edge_def_hi
+            st.session_state["vb_edge_range"] = (_el, _eh)
+            edge_range = st.slider(
+                "Leading edge 擬合區間 (eV)",
+                min_value=x_min_global, max_value=x_max_global,
+                step=0.01, format="%.2f eV",
+                key="vb_edge_range",
+            )
+            vbm_edge_lo, vbm_edge_hi = sorted(edge_range)
+
+            # Baseline range
+            _base_def_lo = x_min_global
+            _base_def_hi = float(x_min_global + span * 0.10)
+            _prev_base = st.session_state.get("vb_base_range", (_base_def_lo, _base_def_hi))
+            _bl = float(max(x_min_global, min(float(min(_prev_base)), x_max_global)))
+            _bh = float(max(x_min_global, min(float(max(_prev_base)), x_max_global)))
+            if _bl >= _bh:
+                _bl, _bh = _base_def_lo, _base_def_hi
+            st.session_state["vb_base_range"] = (_bl, _bh)
+            base_range = st.slider(
+                "Baseline 區間 (eV)",
+                min_value=x_min_global, max_value=x_max_global,
+                step=0.01, format="%.2f eV",
+                key="vb_base_range",
+            )
+            vbm_base_lo, vbm_base_hi = sorted(base_range)
+            show_vbm_line = st.checkbox(
+                "顯示外推線與 VBM 標記", value=True, key="vb_show_vbm_line"
+            )
+            run_vbm = True
+
+    # ── 主區：顯示範圍 ────────────────────────────────────────────────────────
+    _prev_vbd = st.session_state.get("vb_display_range", (overlap_min, overlap_max))
+    _vdlo = float(max(x_min_global, min(float(min(_prev_vbd)), x_max_global)))
+    _vdhi = float(max(x_min_global, min(float(max(_prev_vbd)), x_max_global)))
+    if _vdlo >= _vdhi:
+        _vdlo, _vdhi = overlap_min, overlap_max
+    st.session_state["vb_display_range"] = (_vdlo, _vdhi)
+    e_range = st.slider(
+        "能量顯示範圍 — Binding Energy (eV)",
+        min_value=x_min_global, max_value=x_max_global,
+        step=0.01, format="%.2f eV",
+        key="vb_display_range",
+    )
+    e_start, e_end = sorted(e_range)
+
+    # ── 數據處理與圖表 ────────────────────────────────────────────────────────
+    fig_vb = go.Figure()
+    export_frames: dict[str, pd.DataFrame] = {}
+    vbm_results: dict[str, tuple[float, float, float]] = {}  # name → (vbm, slope, intercept)
+    baseline_level_global: float | None = None
+
+    for i, (name, (x, y)) in enumerate(data_dict.items()):
+        mask = (x >= e_start) & (x <= e_end)
+        xc, yc = x[mask], y[mask]
+        if len(xc) < 2:
+            st.warning(f"{name}：所選範圍內數據點不足，已跳過。")
+            continue
+        color = COLORS[i % len(COLORS)]
+
+        y_bg, bg = apply_processing(
+            xc, yc, bg_method, "none",
+            bg_x_start=bg_x_start, bg_x_end=bg_x_end,
+        )
+        y_plot = y_bg if bg_method != "none" else yc
+
+        if bg_method != "none":
+            fig_vb.add_trace(go.Scatter(
+                x=xc + offset, y=yc, mode="lines", name=f"{name}（原始）",
+                line=dict(color=color, width=1.5, dash="dash"), opacity=0.4,
+            ))
+            if show_bg_baseline:
+                fig_vb.add_trace(go.Scatter(
+                    x=xc + offset, y=bg, mode="lines", name=f"{name}（背景）",
+                    line=dict(color=color, width=1, dash="longdash"), opacity=0.45,
+                ))
+            fig_vb.add_trace(go.Scatter(
+                x=xc + offset, y=y_bg, mode="lines", name=name,
+                line=dict(color=color, width=2),
+            ))
+        else:
+            fig_vb.add_trace(go.Scatter(
+                x=xc + offset, y=yc, mode="lines", name=name,
+                line=dict(color=color, width=2),
+            ))
+
+        if run_vbm and show_vbm_line:
+            vbm, slope, intercept, bl_level, ok = _vbm_linear_extrapolation(
+                xc, y_plot, vbm_edge_lo, vbm_edge_hi, vbm_base_lo, vbm_base_hi,
+            )
+            if ok and vbm is not None:
+                vbm_results[name] = (vbm, slope, intercept)
+                baseline_level_global = bl_level
+                # Extrapolation line from slightly below VBM to edge_hi
+                x_ext_lo = max(float(xc.min()), vbm - 0.5 * (vbm_edge_hi - vbm_edge_lo))
+                x_line = np.linspace(x_ext_lo, vbm_edge_hi, 80)
+                y_line = slope * x_line + intercept
+                fig_vb.add_trace(go.Scatter(
+                    x=x_line + offset, y=y_line,
+                    mode="lines", name=f"{name} 外推線",
+                    line=dict(color=color, width=1.8, dash="dot"),
+                ))
+                fig_vb.add_vline(
+                    x=vbm + offset, line_dash="dash", line_color=color,
+                    annotation_text=f"VBM = {vbm + offset:.2f} eV",
+                    annotation_position="top right",
+                )
+
+        export_frames[name] = pd.DataFrame({
+            "Energy_eV": xc + offset,
+            "Intensity_raw": yc,
+            "Intensity_bg_subtracted": y_bg,
+            **({"Background": bg} if bg_method != "none" else {}),
+        })
+
+    # Shared overlays for VBM regions and baseline
+    if run_vbm:
+        fig_vb.add_vrect(
+            x0=vbm_edge_lo + offset, x1=vbm_edge_hi + offset,
+            fillcolor="#636EFA", opacity=0.07, layer="below", line_width=0,
+            annotation_text="Edge 擬合區", annotation_position="top left",
+        )
+        fig_vb.add_vrect(
+            x0=vbm_base_lo + offset, x1=vbm_base_hi + offset,
+            fillcolor="#00CC96", opacity=0.07, layer="below", line_width=0,
+            annotation_text="Baseline 區", annotation_position="top right",
+        )
+        if show_vbm_line and baseline_level_global is not None:
+            fig_vb.add_hline(
+                y=baseline_level_global, line_dash="longdash",
+                line_color="gray", opacity=0.6,
+                annotation_text="Baseline", annotation_position="bottom left",
+            )
+
+    fig_vb.update_layout(
+        xaxis_title="Binding Energy (eV)",
+        yaxis_title="Intensity",
+        xaxis=dict(autorange="reversed"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        template="plotly_dark",
+        height=480,
+        margin=dict(l=50, r=20, t=60, b=50),
+    )
+    st.plotly_chart(fig_vb, use_container_width=True)
+
+    # ── VBM 結果顯示 ──────────────────────────────────────────────────────────
+    if vbm_results:
+        st.divider()
+        st.subheader("VBM 外推結果")
+        met_cols = st.columns(max(1, len(vbm_results)))
+        for col, (name, (vbm, _, __)) in zip(met_cols, vbm_results.items()):
+            with col:
+                st.metric(
+                    label=name,
+                    value=f"{vbm + offset:.3f} eV",
+                    help="E_F − E_VBM：Fermi level 到 valence band maximum 的距離（eV）",
+                )
+        vbm_table_df = pd.DataFrame([
+            {
+                "資料集": name,
+                "VBM (eV)": round(vbm + offset, 3),
+                "Leading Edge 區間": f"{vbm_edge_lo:.2f}–{vbm_edge_hi:.2f} eV",
+                "Baseline 區間": f"{vbm_base_lo:.2f}–{vbm_base_hi:.2f} eV",
+            }
+            for name, (vbm, _, __) in vbm_results.items()
+        ])
+        st.dataframe(vbm_table_df, use_container_width=True, hide_index=True)
+        st.caption(
+            "**VBM (eV)** = E_F − E_{VBM}：Fermi level 到價帶頂的距離。"
+            "半導體通常 0.5–3 eV；金屬趨近 0 eV。"
+        )
+        st.caption(
+            "搭配 optical bandgap E_g 推估 CBM：E_CBM − E_F ≈ E_g − VBM。"
+            "嚴格 band offset 請用 Kraut method（需同時量測 core level 與接面樣品）。"
+        )
+
+    # ── Kraut Method Band Offset 計算 ────────────────────────────────────────
+    st.divider()
+    with st.expander("Band Offset 計算（Kraut Method）", expanded=False):
+        st.caption(
+            "Kraut method 需要三組 XPS 量測：\n"
+            "① 純材料 A 的 VBM（由 VB XPS 外推）與一個 core level BE；\n"
+            "② 純材料 B 的 VBM 與一個 core level BE；\n"
+            "③ A/B 接面樣品中 A 與 B 各自的 core level BE。"
+        )
+        st.markdown(
+            r"$$\Delta E_V = (E_{CL}^A - E_{VBM}^A)_{bulk}"
+            r" - (E_{CL}^B - E_{VBM}^B)_{bulk}"
+            r" - (E_{CL}^A - E_{CL}^B)_{interface}$$"
+        )
+
+        kc1, kc2 = st.columns(2)
+        with kc1:
+            st.markdown("**材料 A（純品量測）**")
+            k_mat_a = st.text_input("材料 A 名稱", value="NiO", key="kraut_mat_a")
+            k_vbm_a = st.number_input(
+                "VBM_A (eV)", value=0.20, step=0.01, format="%.3f", key="kraut_vbm_a",
+                help="由 VB XPS 線性外推得到的 VBM（= E_F − E_VBM，單位 eV）",
+            )
+            k_cl_label_a = st.text_input("Core level 標籤 A", value="Ni 2p3/2", key="kraut_cl_label_a")
+            k_cl_a = st.number_input(
+                "CL_A BE (eV)", value=854.50, step=0.01, format="%.3f", key="kraut_cl_a",
+                help="在純 A 材料樣品中量測到的 core level binding energy",
+            )
+        with kc2:
+            st.markdown("**材料 B（純品量測）**")
+            k_mat_b = st.text_input("材料 B 名稱", value="Ga₂O₃", key="kraut_mat_b")
+            k_vbm_b = st.number_input(
+                "VBM_B (eV)", value=3.50, step=0.01, format="%.3f", key="kraut_vbm_b",
+                help="由 VB XPS 線性外推得到的 VBM",
+            )
+            k_cl_label_b = st.text_input("Core level 標籤 B", value="Ga 2p3/2", key="kraut_cl_label_b")
+            k_cl_b = st.number_input(
+                "CL_B BE (eV)", value=1118.50, step=0.01, format="%.3f", key="kraut_cl_b",
+                help="在純 B 材料樣品中量測到的 core level binding energy",
+            )
+
+        st.markdown("**接面樣品量測（A/B heterostructure）**")
+        int_c1, int_c2 = st.columns(2)
+        with int_c1:
+            k_cl_a_int = st.number_input(
+                f"{k_cl_label_a} @ interface (eV)",
+                value=854.80, step=0.01, format="%.3f", key="kraut_cl_a_int",
+            )
+        with int_c2:
+            k_cl_b_int = st.number_input(
+                f"{k_cl_label_b} @ interface (eV)",
+                value=1118.30, step=0.01, format="%.3f", key="kraut_cl_b_int",
+            )
+
+        st.markdown("**Bandgap（可選，用於計算 ΔEC 與繪製能帶圖）**")
+        eg_c1, eg_c2 = st.columns(2)
+        with eg_c1:
+            k_eg_a = st.number_input(
+                f"Eg ({k_mat_a}) (eV)", value=3.70, min_value=0.0,
+                step=0.01, format="%.2f", key="kraut_eg_a",
+                help="填 0 表示不使用",
+            )
+        with eg_c2:
+            k_eg_b = st.number_input(
+                f"Eg ({k_mat_b}) (eV)", value=4.80, min_value=0.0,
+                step=0.01, format="%.2f", key="kraut_eg_b",
+                help="填 0 表示不使用",
+            )
+        k_use_eg = k_eg_a > 0 and k_eg_b > 0
+
+        # ── 計算 ──────────────────────────────────────────────────────────────
+        delta_bulk_a = k_cl_a - k_vbm_a
+        delta_bulk_b = k_cl_b - k_vbm_b
+        delta_cl_int = k_cl_a_int - k_cl_b_int
+        delta_ev = delta_bulk_a - delta_bulk_b - delta_cl_int
+        delta_ec = (delta_ev + k_eg_a - k_eg_b) if k_use_eg else None
+
+        st.divider()
+        st.markdown("**計算結果**")
+        step_cols = st.columns(3)
+        step_cols[0].metric(
+            "ΔCL_A (bulk)",
+            f"{delta_bulk_a:.3f} eV",
+            help=f"{k_cl_label_a} − VBM_A = {k_cl_a:.3f} − {k_vbm_a:.3f}",
+        )
+        step_cols[1].metric(
+            "ΔCL_B (bulk)",
+            f"{delta_bulk_b:.3f} eV",
+            help=f"{k_cl_label_b} − VBM_B = {k_cl_b:.3f} − {k_vbm_b:.3f}",
+        )
+        step_cols[2].metric(
+            "ΔCL (interface)",
+            f"{delta_cl_int:.3f} eV",
+            help=f"{k_cl_label_a}@int − {k_cl_label_b}@int",
+        )
+
+        res_cols = st.columns(2)
+        res_cols[0].metric(
+            f"ΔEV  ({k_mat_a} / {k_mat_b})",
+            f"{delta_ev:.3f} eV",
+            help="ΔCL_A − ΔCL_B − ΔCL_interface；正值表示 A 的 VBM 比 B 高",
+        )
+        if delta_ec is not None:
+            res_cols[1].metric(
+                f"ΔEC  ({k_mat_a} / {k_mat_b})",
+                f"{delta_ec:.3f} eV",
+                help=f"ΔEV + Eg_A − Eg_B = {delta_ev:.3f} + {k_eg_a:.2f} − {k_eg_b:.2f}",
+            )
+
+        if abs(delta_ev) < 0.01:
+            st.info("ΔEV ≈ 0：兩材料 VBM 幾乎對齊。")
+        elif delta_ev > 0:
+            st.success(
+                f"ΔEV = +{delta_ev:.3f} eV：{k_mat_a} 的 VBM 比 {k_mat_b} 高 {delta_ev:.3f} eV"
+                f"（{k_mat_a} ionization energy 較低）。"
+            )
+        else:
+            st.info(
+                f"ΔEV = {delta_ev:.3f} eV：{k_mat_b} 的 VBM 比 {k_mat_a} 高 {abs(delta_ev):.3f} eV"
+                f"（{k_mat_b} ionization energy 較低）。"
+            )
+
+        # ── 能帶排列示意圖 ─────────────────────────────────────────────────────
+        if k_use_eg:
+            st.caption(f"能帶排列示意圖（以 {k_mat_b} 的 VBM = 0 eV 為基準）")
+            # Energy positions relative to B's VBM = 0
+            vbm_b_e = 0.0
+            cbm_b_e = k_eg_b
+            vbm_a_e = delta_ev
+            cbm_a_e = delta_ev + k_eg_a
+
+            all_e = [vbm_b_e, cbm_b_e, vbm_a_e, cbm_a_e]
+            y_lo = min(all_e) - 0.8
+            y_hi = max(all_e) + 0.8
+            band_h = (y_hi - y_lo) * 0.35  # height of shaded band blocks
+
+            fig_band = go.Figure()
+
+            def _add_band_block(fig, x0, x1, e_vbm, e_cbm, color, mat):
+                # VB block (below VBM)
+                fig.add_shape(type="rect", x0=x0, x1=x1,
+                              y0=e_vbm - band_h, y1=e_vbm,
+                              fillcolor=color, opacity=0.55, line_width=0)
+                # CB block (above CBM)
+                fig.add_shape(type="rect", x0=x0, x1=x1,
+                              y0=e_cbm, y1=e_cbm + band_h,
+                              fillcolor=color, opacity=0.30, line_width=0)
+                # VBM line
+                fig.add_shape(type="line", x0=x0, x1=x1, y0=e_vbm, y1=e_vbm,
+                              line=dict(color=color, width=2))
+                # CBM line
+                fig.add_shape(type="line", x0=x0, x1=x1, y0=e_cbm, y1=e_cbm,
+                              line=dict(color=color, width=2))
+                xc = (x0 + x1) / 2
+                fig.add_annotation(x=xc, y=e_vbm, text=f"VBM<br>{e_vbm:.2f} eV",
+                                   yanchor="top", showarrow=False, font=dict(size=10, color=color))
+                fig.add_annotation(x=xc, y=e_cbm, text=f"CBM<br>{e_cbm:.2f} eV",
+                                   yanchor="bottom", showarrow=False, font=dict(size=10, color=color))
+                fig.add_annotation(x=xc, y=(e_cbm + e_vbm) / 2, text=f"Eg = {e_cbm - e_vbm:.2f} eV",
+                                   yanchor="middle", showarrow=False,
+                                   font=dict(size=9, color="#aaa"))
+
+            _add_band_block(fig_band, 0.6, 1.4, vbm_b_e, cbm_b_e, "#636EFA", k_mat_b)
+            _add_band_block(fig_band, 1.8, 2.6, vbm_a_e, cbm_a_e, "#EF553B", k_mat_a)
+
+            # ΔEV arrow (between VBMs)
+            if abs(delta_ev) > 0.02:
+                fig_band.add_annotation(
+                    x=1.7, y=vbm_b_e,
+                    ax=1.7, ay=vbm_a_e,
+                    axref="x", ayref="y",
+                    text=f"ΔEV={delta_ev:.2f}",
+                    showarrow=True, arrowhead=3, arrowwidth=1.5,
+                    arrowcolor="#FFD700", font=dict(size=9, color="#FFD700"),
+                    xanchor="right",
+                )
+            # ΔEC arrow (between CBMs)
+            if delta_ec is not None and abs(delta_ec) > 0.02:
+                fig_band.add_annotation(
+                    x=1.7, y=cbm_b_e,
+                    ax=1.7, ay=cbm_a_e,
+                    axref="x", ayref="y",
+                    text=f"ΔEC={delta_ec:.2f}",
+                    showarrow=True, arrowhead=3, arrowwidth=1.5,
+                    arrowcolor="#00CC96", font=dict(size=9, color="#00CC96"),
+                    xanchor="right",
+                )
+
+            fig_band.update_layout(
+                xaxis=dict(
+                    tickvals=[1.0, 2.2],
+                    ticktext=[k_mat_b, k_mat_a],
+                    range=[0.2, 3.0], showgrid=False,
+                ),
+                yaxis=dict(
+                    title="Energy (eV)",
+                    range=[y_lo, y_hi],
+                    zeroline=True, zerolinecolor="#444",
+                ),
+                template="plotly_dark",
+                height=380,
+                margin=dict(l=60, r=20, t=20, b=40),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_band, use_container_width=True)
+
+        # ── Kraut 結果匯出 ────────────────────────────────────────────────────
+        kraut_row: dict = {
+            "材料 A": k_mat_a,
+            "材料 B": k_mat_b,
+            "VBM_A (eV)": k_vbm_a,
+            f"{k_cl_label_a}_bulk (eV)": k_cl_a,
+            "ΔCL_A = CL_A − VBM_A (eV)": round(delta_bulk_a, 4),
+            "VBM_B (eV)": k_vbm_b,
+            f"{k_cl_label_b}_bulk (eV)": k_cl_b,
+            "ΔCL_B = CL_B − VBM_B (eV)": round(delta_bulk_b, 4),
+            f"{k_cl_label_a}_interface (eV)": k_cl_a_int,
+            f"{k_cl_label_b}_interface (eV)": k_cl_b_int,
+            "ΔCL_interface (eV)": round(delta_cl_int, 4),
+            "ΔEV (eV)": round(delta_ev, 4),
+        }
+        if k_eg_a > 0:
+            kraut_row[f"Eg_A ({k_mat_a}) (eV)"] = k_eg_a
+        if k_eg_b > 0:
+            kraut_row[f"Eg_B ({k_mat_b}) (eV)"] = k_eg_b
+        if delta_ec is not None:
+            kraut_row["ΔEC (eV)"] = round(delta_ec, 4)
+        kraut_export_df = pd.DataFrame([kraut_row])
+        _render_download_card(
+            title="Kraut Method 結果 CSV",
+            description="保存所有輸入值與 ΔEV / ΔEC 計算結果，方便論文補充與日後追溯。",
+            input_label="檔名",
+            default_name=f"kraut_{k_mat_a}_{k_mat_b}_band_offset",
+            extension="csv",
+            button_label="下載 Kraut 結果 CSV",
+            data=kraut_export_df.to_csv(index=False).encode("utf-8"),
+            mime="text/csv",
+            input_key="kraut_csv_fname",
+            button_key="kraut_csv_dl",
+        )
+
+    # ── 匯出 ─────────────────────────────────────────────────────────────────
+    if export_frames or vbm_results:
+        st.divider()
+        st.subheader("匯出")
+        st.caption("研究常用：VBM 結果表與處理後光譜。")
+        exp_cols = st.columns(2)
+        with exp_cols[0]:
+            if vbm_results:
+                vbm_export_df = pd.DataFrame([
+                    {"資料集": n, "VBM (eV)": round(v + offset, 3)}
+                    for n, (v, _, __) in vbm_results.items()
+                ])
+                _render_download_card(
+                    title="VBM 結果 CSV",
+                    description="各資料集的 VBM 值（E_F − E_VBM），適合整理 band diagram 或與其他樣品比較。",
+                    input_label="檔名",
+                    default_name="xps_vbm_results",
+                    extension="csv",
+                    button_label="下載 VBM 結果 CSV",
+                    data=vbm_export_df.to_csv(index=False).encode("utf-8"),
+                    mime="text/csv",
+                    input_key="vb_vbm_csv_fname",
+                    button_key="vb_vbm_csv_dl",
+                )
+
+        export_items = list(export_frames.items())
+        if len(export_items) == 1:
+            fname, df = export_items[0]
+            base = fname.rsplit(".", 1)[0]
+            with exp_cols[1]:
+                _render_download_card(
+                    title=f"處理後光譜：{fname}",
+                    description="包含原始與背景扣除後欄位，適合重畫 VB 光譜或匯入其他分析工具。",
+                    input_label="檔名",
+                    default_name=f"{base}_vb_processed",
+                    extension="csv",
+                    button_label="下載處理後光譜 CSV",
+                    data=df.to_csv(index=False).encode("utf-8"),
+                    mime="text/csv",
+                    input_key="vb_spec_fname_0",
+                    button_key="vb_spec_dl_0",
+                )
+        elif len(export_items) > 1:
+            st.caption("**處理後光譜**")
+            for start in range(0, len(export_items), 2):
+                chunk = export_items[start:start + 2]
+                row_cols = st.columns(len(chunk))
+                for col, (fname, df) in zip(row_cols, chunk):
+                    base = fname.rsplit(".", 1)[0]
+                    with col:
+                        _render_download_card(
+                            title=f"處理後光譜：{fname}",
+                            description="包含原始與背景扣除後欄位，適合重畫 VB 光譜。",
+                            input_label="檔名",
+                            default_name=f"{base}_vb_processed",
+                            extension="csv",
+                            button_label="下載處理後光譜 CSV",
+                            data=df.to_csv(index=False).encode("utf-8"),
+                            mime="text/csv",
+                            input_key=f"vb_spec_fname_{fname}",
+                            button_key=f"vb_spec_dl_{fname}",
+                        )
 
 
 def run_xps_ui() -> None:
@@ -442,6 +1055,20 @@ def run_xps_ui() -> None:
 
     # ── sidebar ①②：靜態控制項 ────────────────────────────────────────────────────
     with st.sidebar:
+        st.markdown(
+            '<p style="font-size:11px;color:#666;letter-spacing:.08em;'
+            'text-transform:uppercase;margin:4px 0 4px 0;">分析模式</p>',
+            unsafe_allow_html=True,
+        )
+        xps_analysis_mode = st.radio(
+            "分析模式",
+            ["Core Level", "Valence Band"],
+            horizontal=True,
+            key="xps_analysis_mode",
+            label_visibility="collapsed",
+        )
+        st.divider()
+
         step_header(1, "載入檔案")
         uploaded_files = st.file_uploader(
             "上傳 XPS .txt 檔案（可多選）",
@@ -454,25 +1081,29 @@ def run_xps_ui() -> None:
         interp_points = 601
         step2_confirmed = st.session_state.get("step2_confirmed", False)
         _skip2 = st.session_state.get("skip_avg", False)
-        with st.expander(step_exp_label(2, "多檔平均", step2_confirmed or _skip2),
-                         expanded=not (step2_confirmed or _skip2)):
-            skip_avg = st.checkbox("跳過此步驟 ✓", key="skip_avg")
-            if not skip_avg:
-                do_average = st.checkbox("對所有載入的檔案做平均", value=False)
-                interp_points = st.number_input(
-                    "插值點數", min_value=100, max_value=5000, value=601, step=50
-                )
-                if do_average:
-                    show_individual = st.checkbox("疊加顯示原始個別曲線", value=False)
-            if skip_avg and not step2_confirmed:
-                st.session_state["step2_confirmed"] = True
-                step2_confirmed = True
-            if not skip_avg and not step2_confirmed:
-                if _next_btn("btn_step2_next", "step2_confirmed"):
+        if xps_analysis_mode == "Core Level":
+            with st.expander(step_exp_label(2, "多檔平均", step2_confirmed or _skip2),
+                             expanded=not (step2_confirmed or _skip2)):
+                skip_avg = st.checkbox("跳過此步驟 ✓", key="skip_avg")
+                if not skip_avg:
+                    do_average = st.checkbox("對所有載入的檔案做平均", value=False)
+                    interp_points = st.number_input(
+                        "插值點數", min_value=100, max_value=5000, value=601, step=50
+                    )
+                    if do_average:
+                        show_individual = st.checkbox("疊加顯示原始個別曲線", value=False)
+                if skip_avg and not step2_confirmed:
+                    st.session_state["step2_confirmed"] = True
                     step2_confirmed = True
-        skip_avg = st.session_state.get("skip_avg", False)
-        step2_confirmed = st.session_state.get("step2_confirmed", False)
-        step2_done = skip_avg or step2_confirmed
+                if not skip_avg and not step2_confirmed:
+                    if _next_btn("btn_step2_next", "step2_confirmed"):
+                        step2_confirmed = True
+            skip_avg = st.session_state.get("skip_avg", False)
+            step2_confirmed = st.session_state.get("step2_confirmed", False)
+            step2_done = skip_avg or step2_confirmed
+        else:
+            skip_avg = True
+            step2_done = True
 
     # ── 載入數據 ──────────────────────────────────────────────────────────────────
     if not uploaded_files:
@@ -498,6 +1129,14 @@ def run_xps_ui() -> None:
     x_max_global = float(all_x.max())
     overlap_min = float(max(x.min() for x, _ in data_dict.values()))
     overlap_max = float(min(x.max() for x, _ in data_dict.values()))
+
+    # ── Valence Band 模式分支 ─────────────────────────────────────────────────────
+    if st.session_state.get("xps_analysis_mode", "Core Level") == "Valence Band":
+        _run_valence_band_ui(
+            uploaded_files, data_dict,
+            x_min_global, x_max_global, overlap_min, overlap_max,
+        )
+        return
 
     _cur = st.session_state.get("display_range", (overlap_min, overlap_max))
     _e0 = float(min(_cur[0], _cur[1]))
@@ -1051,7 +1690,6 @@ def run_xps_ui() -> None:
         visible=bg_method != "none",
         state_key="xps_scroll_bg_plot",
         block="start",
-        flash=True,
     )
 
     # ── 圖二：歸一化結果 ─────────────────────────────────────────────────────────
@@ -1080,7 +1718,6 @@ def run_xps_ui() -> None:
             visible=True,
             state_key="xps_scroll_norm_plot",
             block="start",
-            flash=True,
         )
     else:
         auto_scroll_on_appear(
@@ -1113,7 +1750,6 @@ def run_xps_ui() -> None:
             visible=True,
             state_key="xps_scroll_periodic_table",
             block="start",
-            flash=True,
         )
         auto_scroll_on_change(
             "xps-periodic-table",
@@ -1124,7 +1760,6 @@ def run_xps_ui() -> None:
             ),
             state_key="xps_scroll_periodic_table_selected_elem",
             block="start",
-            flash=True,
         )
 
         # ── 執行擬合 ──────────────────────────────────────────────────────────────
@@ -1273,7 +1908,7 @@ def run_xps_ui() -> None:
                 # ── 原子濃度累積表 ─────────────────────────────────────────────
                 st.divider()
                 st.caption("原子濃度計算（先審核本次峰，再更新累積表）")
-                st.caption("目前 RSF 仍是元素層級近似值，適合初步比較；若要做嚴格定量，後續仍建議補 orbital/source 專屬 RSF。")
+                st.caption("RSF 來源欄：「軌域精確」表示已查到該峰對應軌域（如 2p3/2）的精確值；「元素層級近似」表示僅找到元素整體 RSF，誤差約 ±5–15%。")
                 st.caption("預設規則：衛星峰與自旋軌道次峰不納入；若同元素有多種軌域，預設只保留主要軌域。")
 
                 if "xps_quant_history" not in st.session_state:
@@ -1290,11 +1925,12 @@ def run_xps_ui() -> None:
                     quant_review_df,
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["資料集", "元素", "峰", "軌域族", "中心 (eV)", "面積", "RSF", "定量建議"],
+                    disabled=["資料集", "元素", "峰", "軌域族", "中心 (eV)", "面積", "RSF", "RSF來源", "定量建議"],
                     column_config={
                         "納入定量": st.column_config.CheckboxColumn("納入定量"),
                         "面積": st.column_config.NumberColumn("面積", format="%.6g"),
                         "中心 (eV)": st.column_config.NumberColumn("中心 (eV)", format="%.3f"),
+                        "RSF來源": st.column_config.TextColumn("RSF來源", width="medium"),
                     },
                     key=f"xps_quant_editor_{fit_target_used}_{elem_label}",
                 )
@@ -1346,14 +1982,12 @@ def run_xps_ui() -> None:
             visible=False,
             state_key="xps_scroll_periodic_table",
             block="start",
-            flash=True,
         )
         auto_scroll_on_change(
             "xps-periodic-table",
             trigger_value=None,
             state_key="xps_scroll_periodic_table_selected_elem",
             block="start",
-            flash=True,
         )
 
     history_records = st.session_state.get("xps_quant_history", [])
@@ -1413,7 +2047,7 @@ def run_xps_ui() -> None:
                 "history_record_count": int(len(history_records)),
                 "summary_table": _dataframe_records(quant_summary_export_df),
                 "detail_table": _dataframe_records(quant_detail_export_df),
-                "rsf_note": "目前使用元素層級近似 RSF；衛星峰與自旋軌道次峰預設不納入定量。",
+                "rsf_note": "RSF 採軌域精確值（如 2p3/2 子能階）；若無軌域資料則退回元素層級近似；衛星峰與自旋軌道次峰預設不納入定量。",
             },
         },
     }

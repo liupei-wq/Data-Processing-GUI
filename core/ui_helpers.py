@@ -98,57 +98,25 @@ def scroll_anchor(anchor_id: str) -> None:
     )
 
 
-def _emit_scroll_script(anchor_id: str, *, block: str = "center", flash: bool = False) -> None:
+def _emit_scroll_script(anchor_id: str, *, block: str = "start") -> None:
     target = json.dumps(anchor_id)
     block_mode = json.dumps(block)
-    flash_mode = "true" if flash else "false"
     script = """
         <script>
-        const findChartEl = () => {
-          const doc = window.parent.document;
-          const anchor = doc.getElementById(__TARGET__);
-          if (!anchor) return null;
-          const anchorEC = anchor.closest('[data-testid="element-container"]');
-          if (!anchorEC) return null;
-          let sib = anchorEC.nextElementSibling;
-          while (sib && sib.offsetHeight < 30) sib = sib.nextElementSibling;
-          if (!sib) return null;
-          return sib.querySelector('[data-testid="stPlotlyChart"]') || sib;
-        };
-
-        const applyOutline = (el, alpha) => {
-          el.style.outline = '5px solid rgba(255,220,0,' + alpha + ')';
-          el.style.outlineOffset = '8px';
-          el.style.borderRadius = '8px';
-        };
-        const clearOutline = (el) => {
-          el.style.outline = '';
-          el.style.outlineOffset = '';
-          el.style.borderRadius = '';
-        };
-
-        const doFlash = () => {
-          if (!__FLASH__) return;
-          const el = findChartEl();
-          if (!el) return;
-          applyOutline(el, 1);
-          setTimeout(() => clearOutline(el), 500);
-          setTimeout(() => applyOutline(el, 0.65), 900);
-          setTimeout(() => clearOutline(el), 1500);
-        };
-
-        const scrollToTarget = () => {
-          const doc = window.parent.document;
-          const anchor = doc.getElementById(__TARGET__);
-          if (!anchor) return;
-          anchor.scrollIntoView({ behavior: "smooth", block: __BLOCK__ });
-        };
-
-        scrollToTarget();
-        setTimeout(scrollToTarget, 250);
-        setTimeout(doFlash, 700);
+        (function() {
+          var TARGET = __TARGET__;
+          var BLOCK  = __BLOCK__;
+          var doScroll = function() {
+            try {
+              var anchor = window.parent.document.getElementById(TARGET);
+              if (anchor) anchor.scrollIntoView({ behavior: 'smooth', block: BLOCK });
+            } catch(e) {}
+          };
+          doScroll();
+          setTimeout(doScroll, 280);
+        })();
         </script>
-    """.replace("__TARGET__", target).replace("__BLOCK__", block_mode).replace("__FLASH__", flash_mode)
+    """.replace("__TARGET__", target).replace("__BLOCK__", block_mode)
     components.html(script, height=0, width=0)
 
 
@@ -157,12 +125,11 @@ def auto_scroll_on_appear(
     *,
     visible: bool,
     state_key: str,
-    block: str = "center",
-    flash: bool = False,
+    block: str = "start",
 ) -> None:
     prev_visible = bool(st.session_state.get(state_key, False))
     if visible and not prev_visible:
-        _emit_scroll_script(anchor_id, block=block, flash=flash)
+        _emit_scroll_script(anchor_id, block=block)
     st.session_state[state_key] = bool(visible)
 
 
@@ -171,13 +138,12 @@ def auto_scroll_on_change(
     *,
     trigger_value: object | None,
     state_key: str,
-    block: str = "center",
-    flash: bool = False,
+    block: str = "start",
 ) -> None:
     current_token = None
     if trigger_value is not None:
         current_token = json.dumps(trigger_value, ensure_ascii=False, sort_keys=True)
     prev_token = st.session_state.get(state_key)
     if current_token is not None and current_token != prev_token:
-        _emit_scroll_script(anchor_id, block=block, flash=flash)
+        _emit_scroll_script(anchor_id, block=block)
     st.session_state[state_key] = current_token

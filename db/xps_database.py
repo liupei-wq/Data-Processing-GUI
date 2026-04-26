@@ -287,6 +287,7 @@ FITTABLE_ELEMENTS = {s: d for s, d in ELEMENTS.items() if d["peaks"]}
 
 # ── Scofield RSF (Relative Sensitivity Factors) ───────────────────────────────
 # Relative to C 1s = 1.00, for Al Kα source, using the dominant orbital.
+# ELEMENT_RSF stores the *total* orbital RSF (e.g. 2p = 2p3/2 + 2p1/2 combined).
 # Values from Scofield (1976) cross-sections, commonly tabulated in XPS handbooks.
 ELEMENT_RSF: dict[str, float] = {
     "H":  0.11,  "Li": 0.02,  "Be": 0.04,  "B":  0.13,
@@ -306,6 +307,97 @@ ELEMENT_RSF: dict[str, float] = {
     "W":  9.54,  "Re": 10.71, "Pt": 25.50, "Au": 17.20,
     "Tl": 7.90,  "Pb": 7.32,  "Bi": 8.81,
 }
+
+# ── Orbital-level RSF for Al Kα source ────────────────────────────────────────
+# Keys: "Element orbital" e.g. "Ni 2p3/2", "Mo 3d5/2", "Au 4f7/2", "C 1s"
+# Sub-level RSFs split from ELEMENT_RSF using degeneracy ratios:
+#   2p: 2p3/2 = 2/3 × 2p_total,  2p1/2 = 1/3 × 2p_total
+#   3d: 3d5/2 = 3/5 × 3d_total,  3d3/2 = 2/5 × 3d_total
+#   4f: 4f7/2 = 4/7 × 4f_total,  4f5/2 = 3/7 × 4f_total
+# Use 2p3/2 RSF when fitting only the 2p3/2 peak area;
+# use the total 2p RSF only when integrating both doublet peaks together.
+ORBITAL_RSF: dict[str, float] = {
+    # ── Period 2: singlet 1s lines ─────────────────────────────────────────────
+    "H 1s": 0.11,  "Li 1s": 0.02, "Be 1s": 0.04, "B 1s":  0.13,
+    "C 1s": 1.00,  "N 1s":  1.77, "O 1s":  2.93, "F 1s":  4.43,
+    # ── Period 3: 2s / 2p lines ───────────────────────────────────────────────
+    "Na 2s": 1.32,  "Na 2p": 0.99,
+    "Mg 2s": 1.50,  "Mg 2p": 0.80,
+    "Al 2s": 1.05,  "Al 2p": 0.54,
+    "Si 2s": 1.11,  "Si 2p": 0.82,
+    "P 2s":  1.30,  "P 2p":  1.19,
+    "S 2p":  1.68,  "S 2p3/2":  1.12, "S 2p1/2":  0.56,
+    "Cl 2p": 2.16,  "Cl 2p3/2": 1.44, "Cl 2p1/2": 0.72,
+    # ── 3d transition metals: 2p lines ────────────────────────────────────────
+    "K 2p":   5.25,  "K 2p3/2":   3.50,  "K 2p1/2":   1.75,
+    "Ca 2p":  6.31,  "Ca 2p3/2":  4.21,  "Ca 2p1/2":  2.10,
+    "Sc 2p":  7.26,  "Sc 2p3/2":  4.84,  "Sc 2p1/2":  2.42,
+    "Ti 2p":  7.81,  "Ti 2p3/2":  5.21,  "Ti 2p1/2":  2.60,
+    "V 2p":   9.08,  "V 2p3/2":   6.05,  "V 2p1/2":   3.03,
+    "Cr 2p":  13.96, "Cr 2p3/2":  9.31,  "Cr 2p1/2":  4.65,
+    "Mn 2p":  15.86, "Mn 2p3/2":  10.57, "Mn 2p1/2":  5.29,
+    "Fe 2p":  12.42, "Fe 2p3/2":  8.28,  "Fe 2p1/2":  4.14,
+    "Co 2p":  14.61, "Co 2p3/2":  9.74,  "Co 2p1/2":  4.87,
+    "Ni 2p":  21.10, "Ni 2p3/2":  14.07, "Ni 2p1/2":  7.03,
+    "Cu 2p":  26.57, "Cu 2p3/2":  17.71, "Cu 2p1/2":  8.86,
+    "Zn 2p":  27.00, "Zn 2p3/2":  18.00, "Zn 2p1/2":  9.00,
+    # ── Post-transition metals / metalloids ───────────────────────────────────
+    "Ga 2p":  8.54,  "Ga 3d":  1.62,
+    "Ge 2p":  5.80,  "Ge 3d":  1.24,
+    "As 2p":  6.50,  "As 3d":  1.60,
+    "Se 3d":  1.89,  "Br 3d":  2.22,
+    # ── Period 5 transition metals: 3d lines ──────────────────────────────────
+    "Sr 3d":  4.92,  "Sr 3d5/2":  2.95,  "Sr 3d3/2":  1.97,
+    "Y 3d":   5.95,  "Y 3d5/2":   3.57,  "Y 3d3/2":   2.38,
+    "Zr 3d":  7.10,  "Zr 3d5/2":  4.26,  "Zr 3d3/2":  2.84,
+    "Nb 3d":  7.70,  "Nb 3d5/2":  4.62,  "Nb 3d3/2":  3.08,
+    "Mo 3d":  9.50,  "Mo 3d5/2":  5.70,  "Mo 3d3/2":  3.80,
+    "Ru 3d":  10.31, "Ru 3d5/2":  6.19,  "Ru 3d3/2":  4.12,
+    "Rh 3d":  11.09, "Rh 3d5/2":  6.65,  "Rh 3d3/2":  4.44,
+    "Pd 3d":  22.00, "Pd 3d5/2":  13.20, "Pd 3d3/2":  8.80,
+    "Ag 3d":  22.28, "Ag 3d5/2":  13.37, "Ag 3d3/2":  8.91,
+    "Cd 3d":  14.77, "Cd 3d5/2":  8.86,  "Cd 3d3/2":  5.91,
+    "In 3d":  6.40,  "In 3d5/2":  3.84,  "In 3d3/2":  2.56,
+    "Sn 3d":  7.67,  "Sn 3d5/2":  4.60,  "Sn 3d3/2":  3.07,
+    "Sb 3d":  6.79,  "Sb 3d5/2":  4.07,  "Sb 3d3/2":  2.72,
+    "Te 3d":  7.43,  "Te 3d5/2":  4.46,  "Te 3d3/2":  2.97,
+    "I 3d":   8.21,  "I 3d5/2":   4.93,  "I 3d3/2":   3.28,
+    # ── Ba, La, Ce: 3d lines ──────────────────────────────────────────────────
+    "Ba 3d":  8.68,  "Ba 3d5/2":  5.21,  "Ba 3d3/2":  3.47,
+    "La 3d":  9.93,  "La 3d5/2":  5.96,  "La 3d3/2":  3.97,
+    "Ce 3d":  10.90, "Ce 3d5/2":  6.54,  "Ce 3d3/2":  4.36,
+    # ── 5d metals: 4f lines ───────────────────────────────────────────────────
+    "W 4f":   9.54,  "W 4f7/2":   5.45,  "W 4f5/2":   4.09,
+    "Re 4f":  10.71, "Re 4f7/2":  6.12,  "Re 4f5/2":  4.59,
+    "Pt 4f":  25.50, "Pt 4f7/2":  14.57, "Pt 4f5/2":  10.93,
+    "Au 4f":  17.20, "Au 4f7/2":  9.83,  "Au 4f5/2":  7.37,
+    "Tl 4f":  7.90,  "Tl 4f7/2":  4.51,  "Tl 4f5/2":  3.39,
+    "Pb 4f":  7.32,  "Pb 4f7/2":  4.18,  "Pb 4f5/2":  3.14,
+    "Bi 4f":  8.81,  "Bi 4f7/2":  5.04,  "Bi 4f5/2":  3.77,
+}
+
+import re as _re
+_ORBITAL_LABEL_RE = _re.compile(r'(\d[spdf](?:\d+/\d+)?)')
+
+
+def get_orbital_rsf(
+    element: str, label: str, source: str = "Al Kα"
+) -> tuple[float | None, str]:
+    """Return (rsf_value, source_description) for a specific XPS peak.
+
+    Tries orbital-specific lookup first (e.g. 'Ni 2p3/2'), then falls back to
+    element-level ELEMENT_RSF.  source_description describes the lookup path.
+    """
+    m = _ORBITAL_LABEL_RE.search(str(label))
+    if m:
+        orbital_key = f"{element} {m.group(1)}"
+        val = ORBITAL_RSF.get(orbital_key)
+        if val is not None:
+            return val, f"軌域精確 ({orbital_key})"
+    val = ELEMENT_RSF.get(element)
+    if val is not None:
+        return val, f"元素層級近似 ({element})"
+    return None, "未知"
 
 # ── Spin-orbit doublet information ────────────────────────────────────────────
 # be_sep   : expected BE separation from major (2p3/2 / 3d5/2 / 4f7/2) to minor

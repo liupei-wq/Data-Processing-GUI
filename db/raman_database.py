@@ -54,6 +54,34 @@ RAMAN_REFERENCES: dict[str, list[dict]] = {
         {"pos": 750, "label": "Eg",  "strength": 80,  "note": "c-Al₂O₃ Eg mode (strong)"},
     ],
 
+    # ── Sapphire α-Al₂O₃ a-plane (11-20) ─────────────────────────────────────
+    # Same 7 modes as c-plane; relative intensities differ due to backscattering
+    # geometry along [11-20]: 645 A₁g and 750 Eg are typically strongest.
+    # Refs: Porto & Krishnan J. Chem. Phys. 1967; Shim & Duffy PRB 2000
+    "Sapphire α-Al₂O₃ (a-plane)": [
+        {"pos": 378, "label": "Eg",  "strength": 55,  "note": "a-Al₂O₃ Eg mode"},
+        {"pos": 418, "label": "A₁g", "strength": 70,  "note": "a-Al₂O₃ A₁g mode"},
+        {"pos": 432, "label": "Eg",  "strength": 25,  "note": "a-Al₂O₃ Eg mode (shoulder of 418)"},
+        {"pos": 451, "label": "Eg",  "strength": 65,  "note": "a-Al₂O₃ Eg mode"},
+        {"pos": 578, "label": "Eg",  "strength": 50,  "note": "a-Al₂O₃ Eg mode"},
+        {"pos": 645, "label": "A₁g", "strength": 100, "note": "a-Al₂O₃ A₁g mode (strongest in a-plane geometry)"},
+        {"pos": 750, "label": "Eg",  "strength": 90,  "note": "a-Al₂O₃ Eg mode (very strong in a-plane)"},
+    ],
+
+    # ── Sapphire α-Al₂O₃ m-plane (10-10) ─────────────────────────────────────
+    # Non-polar m-cut; sometimes informally referred to as "b-plane" in some labs.
+    # All 7 modes remain Raman-active; intensities shift vs. c/a-plane geometries.
+    # Refs: Porto & Krishnan J. Chem. Phys. 1967; Mayer et al. J. Appl. Phys. 2003
+    "Sapphire α-Al₂O₃ (m-plane)": [
+        {"pos": 378, "label": "Eg",  "strength": 45,  "note": "m-Al₂O₃ Eg mode"},
+        {"pos": 418, "label": "A₁g", "strength": 65,  "note": "m-Al₂O₃ A₁g mode"},
+        {"pos": 432, "label": "Eg",  "strength": 20,  "note": "m-Al₂O₃ Eg mode (shoulder)"},
+        {"pos": 451, "label": "Eg",  "strength": 55,  "note": "m-Al₂O₃ Eg mode"},
+        {"pos": 578, "label": "Eg",  "strength": 45,  "note": "m-Al₂O₃ Eg mode"},
+        {"pos": 645, "label": "A₁g", "strength": 85,  "note": "m-Al₂O₃ A₁g mode (strong)"},
+        {"pos": 750, "label": "Eg",  "strength": 80,  "note": "m-Al₂O₃ Eg mode (strong)"},
+    ],
+
     # ── ZnO (wurtzite, C₆ᵥ) ──────────────────────────────────────────────────
     # Refs: Damen et al. PR 1966; Calleja & Cardona PRB 1977
     "ZnO": [
@@ -148,5 +176,52 @@ RAMAN_REFERENCES: dict[str, list[dict]] = {
         {"pos": 498,  "label": "A₁g", "strength": 65, "note": "α-Ga₂O₃ A₁g mode (strong)"},
         {"pos": 596,  "label": "Eg",  "strength": 40, "note": "α-Ga₂O₃ Eg mode"},
         {"pos": 881,  "label": "A₁g", "strength": 25, "note": "α-Ga₂O₃ A₁g mode (weak)"},
+    ],
+
+    # ── Ta₂O₅ (β-phase, orthorhombic / amorphous thin film) ──────────────────
+    # Peaks broad in amorphous films; crystalline β-Ta₂O₅ shows sharper features.
+    # Refs: Liegeard et al. Thin Solid Films 2003; Androulidaki et al. phys. stat. sol. 2006
+    "Ta₂O₅": [
+        {"pos": 100,  "label": "δ",   "strength": 25,  "note": "Ta-O bending (broad, amorphous films)"},
+        {"pos": 250,  "label": "mix", "strength": 45,  "note": "Ta₂O₅ mixed mode (broad)"},
+        {"pos": 480,  "label": "ν",   "strength": 55,  "note": "Ta-O-Ta stretching"},
+        {"pos": 660,  "label": "ν",   "strength": 100, "note": "Ta-O stretching (main peak)"},
+        {"pos": 850,  "label": "ν_as","strength": 35,  "note": "Ta-O asymmetric stretching"},
+    ],
+
+    # ── CeO₂ (fluorite, Fm3̄m) ────────────────────────────────────────────────
+    # Only one first-order mode (F₂g) in perfect crystal; defect peaks appear in
+    # nanoparticles and oxygen-vacancy-rich films.
+    # Refs: McBride et al. J. Appl. Phys. 1994; Weber et al. PRB 1993
+    "CeO₂": [
+        {"pos": 260,  "label": "2TA", "strength": 15,  "note": "CeO₂ second-order TA (very weak)"},
+        {"pos": 465,  "label": "F₂g", "strength": 100, "note": "CeO₂ F₂g O-Ce-O bending (main peak)"},
+        {"pos": 600,  "label": "D",   "strength": 35,  "note": "CeO₂ defect/oxygen-vacancy band"},
+        {"pos": 1180, "label": "2LO", "strength": 10,  "note": "CeO₂ 2LO overtone (very weak)"},
+    ],
+
+    # ── SrTiO₃ (cubic perovskite, Pm3̄m) ──────────────────────────────────────
+    # Nominally Raman-inactive (centrosymmetric); peaks appear via disorder,
+    # strain, or surface effects in thin films and ceramics.
+    # Refs: Nilsen & Skinner J. Chem. Phys. 1968; Scott PRB 1971
+    "SrTiO₃": [
+        {"pos": 175,  "label": "TO1", "strength": 20,  "note": "SrTiO₃ TO1 (disorder-activated, weak)"},
+        {"pos": 250,  "label": "2TA", "strength": 45,  "note": "SrTiO₃ broad 2TA band"},
+        {"pos": 470,  "label": "TO3", "strength": 40,  "note": "SrTiO₃ TO3 (broad in films)"},
+        {"pos": 540,  "label": "LO3", "strength": 55,  "note": "SrTiO₃ LO3 (most prominent in thin films)"},
+        {"pos": 795,  "label": "LO4", "strength": 30,  "note": "SrTiO₃ LO4 (weak)"},
+    ],
+
+    # ── Mo₂Ti₂C₃ MXene (double-ordered MXene, hexagonal) ────────────────────
+    # Synthesised from Mo₂Ti₂AlC₃ MAX phase by selective Al etching.
+    # All peaks are broad (FWHM 20–60 cm⁻¹); surface terminations (O/OH/F) shift
+    # the low-frequency A₁g modes.
+    # Refs: Halim et al. Electrochim. Acta 2018; Anasori et al. Nat. Rev. Mater. 2017
+    "Mo₂Ti₂C₃ (MXene)": [
+        {"pos": 150,  "label": "A₁g", "strength": 55,  "note": "Mo₂Ti₂C₃ out-of-plane A₁g (surface-group sensitive)"},
+        {"pos": 200,  "label": "A₁g", "strength": 50,  "note": "Mo₂Ti₂C₃ A₁g mode"},
+        {"pos": 258,  "label": "Eg",  "strength": 35,  "note": "Mo₂Ti₂C₃ in-plane Eg mode"},
+        {"pos": 460,  "label": "A₁g", "strength": 40,  "note": "Mo₂Ti₂C₃ A₁g (broad feature)"},
+        {"pos": 600,  "label": "A₁g", "strength": 25,  "note": "Mo₂Ti₂C₃ A₁g carbon-related mode"},
     ],
 }

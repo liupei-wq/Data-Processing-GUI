@@ -204,6 +204,60 @@ def build_xrd_peak_table(
     })
 
 
+def scherrer_crystallite_size(
+    two_theta_deg: float,
+    fwhm_deg: float,
+    wavelength_angstrom: float,
+    K: float = 0.9,
+    instrument_broadening_deg: float = 0.0,
+    broadening_correction: str = "none",
+) -> float:
+    """Scherrer formula: D (nm) = K*λ / (β*cosθ). Returns NaN on invalid input."""
+    if not (np.isfinite(two_theta_deg) and np.isfinite(fwhm_deg)
+            and fwhm_deg > 0 and wavelength_angstrom > 0 and two_theta_deg > 0):
+        return np.nan
+    beta = float(fwhm_deg)
+    b_inst = float(instrument_broadening_deg)
+    if broadening_correction == "gaussian" and beta > b_inst > 0:
+        beta = float(np.sqrt(max(0.0, beta ** 2 - b_inst ** 2)))
+    elif broadening_correction == "lorentzian" and beta > b_inst > 0:
+        beta = beta - b_inst
+    if beta <= 0:
+        return np.nan
+    beta_rad = np.deg2rad(beta)
+    theta_rad = np.deg2rad(float(two_theta_deg) / 2.0)
+    cos_theta = float(np.cos(theta_rad))
+    if cos_theta <= 0 or beta_rad <= 0:
+        return np.nan
+    return float(K * wavelength_angstrom / (beta_rad * cos_theta)) / 10.0  # Å → nm
+
+
+def build_scherrer_table(
+    peak_df: pd.DataFrame,
+    wavelength_angstrom: float,
+    K: float = 0.9,
+    instrument_broadening_deg: float = 0.0,
+    broadening_correction: str = "none",
+) -> pd.DataFrame:
+    if peak_df.empty or "FWHM_deg" not in peak_df.columns:
+        return pd.DataFrame()
+    df = peak_df.copy()
+    d_nm_vals = [
+        scherrer_crystallite_size(
+            float(row.get("2theta_deg", np.nan)),
+            float(row.get("FWHM_deg", np.nan)),
+            wavelength_angstrom,
+            K=K,
+            instrument_broadening_deg=instrument_broadening_deg,
+            broadening_correction=broadening_correction,
+        )
+        for _, row in df.iterrows()
+    ]
+    df["D_Scherrer_nm"] = d_nm_vals
+    df["D_Scherrer_A"] = [d * 10.0 if np.isfinite(d) else np.nan for d in d_nm_vals]
+    return df
+
+
 def _build_export_filename(stem: str, extension: str) -> str:
     clean_stem = str(stem or "").strip() or "export"
     clean_ext = str(extension or "").strip().lstrip(".")
@@ -489,6 +543,10 @@ def run_xrd_ui() -> None:
     do_average = False
     show_individual = False
     interp_points = 2001
+    scherrer_enabled = False
+    scherrer_K = 0.9
+    scherrer_inst_broadening = 0.0
+    scherrer_correction = "none"
 
     with st.sidebar:
         s2 = st.session_state.get("xrd_s2", False)
@@ -827,6 +885,37 @@ def run_xrd_ui() -> None:
         else:
             skip_ref = False
 
+    with st.sidebar:
+        with st.expander("Scherrer 晶粒尺寸", expanded=False):
+            scherrer_enabled = st.checkbox("啟用 Scherrer 計算", value=False, key="xrd_scherrer_on")
+            if scherrer_enabled:
+                scherrer_K = float(st.number_input(
+                    "K 值（形狀因子）",
+                    min_value=0.5, max_value=2.0, value=0.9, step=0.01, format="%.2f",
+                    key="xrd_scherrer_K",
+                ))
+                scherrer_inst_broadening = float(st.number_input(
+                    "儀器展寬 β_inst (°)  ← 0 = 不校正",
+                    min_value=0.0, max_value=2.0, value=0.0, step=0.001, format="%.4f",
+                    key="xrd_scherrer_inst_b",
+                ))
+                scherrer_correction = st.radio(
+                    "展寬校正方式",
+                    ["none", "gaussian", "lorentzian"],
+                    format_func=lambda v: {
+                        "none": "不校正",
+                        "gaussian": "Gaussian：√(β²−β_inst²)",
+                        "lorentzian": "Lorentzian：β − β_inst",
+                    }[v],
+                    key="xrd_scherrer_correction",
+                    horizontal=False,
+                )
+                st.caption(
+                    "K = 0.9 適用球形晶粒，K = 1.0 適用立方體；"
+                    "儀器展寬通常由 LaB₆ 或 Si 標準品 FWHM 量測得到。"
+                    "若有應力/晶格畸變建議額外做 Williamson-Hall plot。"
+                )
+
     r_range = st.slider(
         "顯示範圍 — 2θ (degree)",
         min_value=x_min_g, max_value=x_max_g,
@@ -1140,7 +1229,6 @@ def run_xrd_ui() -> None:
             visible=True,
             state_key="xrd_scroll_gauss_plot",
             block="start",
-            flash=True,
         )
         if not gaussian_fit_export_df.empty:
             fit_display = gaussian_fit_export_df.copy().round({
@@ -1187,7 +1275,6 @@ def run_xrd_ui() -> None:
             visible=True,
             state_key="xrd_scroll_norm_plot",
             block="start",
-            flash=True,
         )
     else:
         auto_scroll_on_appear(
@@ -1212,7 +1299,6 @@ def run_xrd_ui() -> None:
             visible=True,
             state_key="xrd_scroll_log_plot",
             block="start",
-            flash=True,
         )
     else:
         auto_scroll_on_appear(
@@ -1222,6 +1308,81 @@ def run_xrd_ui() -> None:
         )
 
     peak_export_df = pd.concat(auto_peak_tables, ignore_index=True) if auto_peak_tables else pd.DataFrame()
+
+    # ── Scherrer 晶粒尺寸 ─────────────────────────────────────────────────────
+    scherrer_df = pd.DataFrame()
+    if scherrer_enabled:
+        if peak_export_df.empty:
+            st.info("Scherrer 計算需要自動尋峰結果，請先啟用「參考峰比對」或調整顯示範圍使峰位可被偵測。")
+        else:
+            scherrer_df = build_scherrer_table(
+                peak_export_df,
+                wavelength_angstrom,
+                K=scherrer_K,
+                instrument_broadening_deg=scherrer_inst_broadening,
+                broadening_correction=scherrer_correction,
+            )
+            st.subheader("Scherrer 晶粒尺寸")
+            corr_label = {
+                "none": "無儀器展寬校正",
+                "gaussian": f"Gaussian 校正（β_inst = {scherrer_inst_broadening:.4f}°）",
+                "lorentzian": f"Lorentzian 校正（β_inst = {scherrer_inst_broadening:.4f}°）",
+            }.get(scherrer_correction, "")
+            st.caption(
+                f"K = {scherrer_K}，λ = {wavelength_angstrom:.5f} Å（{wavelength_name}），{corr_label}。"
+                "D = Kλ / (β cosθ)，β = FWHM（rad），θ = Bragg angle。"
+            )
+            if not scherrer_df.empty:
+                display_cols = [c for c in [
+                    "Dataset", "Peak", "2theta_deg", "d_spacing_A",
+                    "FWHM_deg", "D_Scherrer_nm", "D_Scherrer_A",
+                    "Relative_Intensity_pct",
+                ] if c in scherrer_df.columns]
+                st.dataframe(
+                    scherrer_df[display_cols].round({
+                        "2theta_deg": 4, "d_spacing_A": 5,
+                        "FWHM_deg": 4, "D_Scherrer_nm": 2,
+                        "D_Scherrer_A": 1, "Relative_Intensity_pct": 1,
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                # 各資料集摘要
+                if "Dataset" in scherrer_df.columns and "D_Scherrer_nm" in scherrer_df.columns:
+                    valid = scherrer_df.dropna(subset=["D_Scherrer_nm"])
+                    if not valid.empty:
+                        summary = (
+                            valid.groupby("Dataset")["D_Scherrer_nm"]
+                            .agg(["mean", "std", "min", "max", "count"])
+                            .rename(columns={
+                                "mean": "D 平均 (nm)", "std": "D std (nm)",
+                                "min": "D 最小 (nm)", "max": "D 最大 (nm)",
+                                "count": "峰數",
+                            })
+                            .reset_index()
+                        )
+                        st.caption("各資料集晶粒尺寸統計摘要（nm）")
+                        st.dataframe(
+                            summary.round({
+                                "D 平均 (nm)": 2, "D std (nm)": 2,
+                                "D 最小 (nm)": 2, "D 最大 (nm)": 2,
+                            }),
+                            use_container_width=True, hide_index=True,
+                        )
+                        # 顯示 metric 卡片（前 4 個資料集）
+                        datasets_with_d = summary["Dataset"].tolist()[:4]
+                        if datasets_with_d:
+                            metric_cols = st.columns(len(datasets_with_d))
+                            for mc, ds in zip(metric_cols, datasets_with_d):
+                                row = summary[summary["Dataset"] == ds].iloc[0]
+                                d_mean = row["D 平均 (nm)"]
+                                d_std = row.get("D std (nm)", np.nan)
+                                delta_str = f"± {d_std:.1f} nm" if np.isfinite(d_std) and d_std > 0 else None
+                                mc.metric(
+                                    label=ds[:20],
+                                    value=f"{d_mean:.1f} nm",
+                                    delta=delta_str,
+                                )
 
     reference_match_df = pd.DataFrame()
     if run_reference_matching:
@@ -1380,6 +1541,13 @@ def run_xrd_ui() -> None:
             "auto_detected_peaks": _dataframe_records(peak_export_df),
             "reference_peaks": _dataframe_records(reference_df),
             "reference_matches": _dataframe_records(reference_match_df),
+            "scherrer": {
+                "enabled": bool(scherrer_enabled),
+                "K": float(scherrer_K),
+                "instrument_broadening_deg": float(scherrer_inst_broadening),
+                "correction": scherrer_correction,
+                "results": _dataframe_records(scherrer_df),
+            } if scherrer_enabled else {"enabled": False},
         }
 
         st.subheader("匯出")
@@ -1387,6 +1555,19 @@ def run_xrd_ui() -> None:
 
         st.markdown("**研究常用**")
         st.caption("最常拿來做圖、整理結果與和其他樣品比較的檔案。")
+        if not scherrer_df.empty:
+            _render_download_card(
+                title="Scherrer 晶粒尺寸 CSV",
+                description=f"各峰的晶粒尺寸 D（nm 與 Å），K = {scherrer_K}，λ = {wavelength_angstrom:.5f} Å，含 FWHM 與 d-spacing。",
+                input_label="檔名",
+                default_name="xrd_scherrer_size",
+                extension="csv",
+                button_label="下載 Scherrer CSV",
+                data=scherrer_df.to_csv(index=False).encode("utf-8"),
+                mime="text/csv",
+                input_key="xrd_scherrer_fname",
+                button_key="xrd_scherrer_dl",
+            )
         if not gaussian_fit_export_df.empty:
             _render_download_card(
                 title="高斯中心結果 CSV",
