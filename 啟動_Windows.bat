@@ -42,68 +42,45 @@ if not defined PYTHON (
     exit /b 1
 )
 
-echo [1/4] Checking Python packages...
-if "%PYTHON%"=="py" (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "py -c \"import streamlit\"" >nul 2>&1
+echo [1/3] Finding an available local port...
+REM Try default Streamlit port first for faster startup
+set "APP_PORT=8501"
+for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":8501 "') do set "APP_PORT="
+if not defined APP_PORT (
+    echo [Info] Using port 8501 (Streamlit default)
+    set "APP_PORT=8501"
 ) else (
-    "%PYTHON%" -c "import streamlit" >nul 2>&1
-)
-if not "%errorlevel%"=="0" (
-    echo [Error] Streamlit is not installed.
-    echo Please run the package installer first.
-    pause
-    exit /b 1
-)
-
-echo [2/4] Finding an available local port...
-set "APP_PORT="
-for %%P in (8511 8512 8513 8514 8515 8516 8517 8518 8519 8520) do (
-    curl.exe -s --max-time 1 http://localhost:%%P/_stcore/health >nul 2>&1
-    if not "!errorlevel!"=="0" (
-        if not defined APP_PORT set "APP_PORT=%%P"
+    REM If 8501 is busy, find next available
+    for %%P in (8502 8503 8504 8505 8506 8507 8508 8509 8510) do (
+        set "FOUND="
+        for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":%%P "') do set "FOUND=1"
+        if not defined FOUND (
+            set "APP_PORT=%%P"
+            goto PORT_FOUND
+        )
+    )
+    if not defined APP_PORT (
+        echo [Error] Ports 8501-8510 all look busy.
+        echo Close old Streamlit windows or restart, then try again.
+        pause
+        exit /b 1
     )
 )
-
-if not defined APP_PORT (
-    echo [Error] Ports 8511-8520 all look busy.
-    echo Close old Streamlit windows or restart Windows, then try again.
-    pause
-    exit /b 1
-)
+:PORT_FOUND
 
 set "APP_URL=http://localhost:%APP_PORT%"
-set "HEALTH_URL=%APP_URL%/_stcore/health"
-set "LOG_FILE=%~dp0streamlit_launcher.log"
 
-echo [3/4] Starting Streamlit on %APP_URL% ...
-echo Launching %APP_URL% > "%LOG_FILE%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -WindowStyle Hidden -FilePath '%PYTHONW%' -ArgumentList @('-m','streamlit','run','app.py','--server.port','%APP_PORT%','--server.headless','true','--server.fileWatcherType','none','--server.runOnSave','false','--browser.gatherUsageStats','false') -WorkingDirectory '%CD%'" >nul 2>&1
-if not "%errorlevel%"=="0" (
-    echo [Warning] Detached launch failed; trying fallback start...
-    start "Streamlit Server %APP_PORT%" /min "%PYTHON%" -m streamlit run app.py --server.port %APP_PORT% --server.headless true --server.fileWatcherType none --server.runOnSave false --browser.gatherUsageStats false
-)
+echo [2/3] Starting Streamlit on %APP_URL% ...
+REM Launch in background with optimized settings
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -WindowStyle Hidden -FilePath '%PYTHONW%' -ArgumentList @('-m','streamlit','run','app.py','--server.port','%APP_PORT%') -WorkingDirectory '%CD%'" >nul 2>&1
+if "%errorlevel%"=="0" goto QUICK_OPEN
 
-set /a COUNT=0
-:WAIT
-curl.exe -s --max-time 1 %HEALTH_URL% >nul 2>&1
-if "%errorlevel%"=="0" goto OPEN
-set /a COUNT+=1
-if %COUNT% geq 30 goto FAILED
-timeout /t 1 /nobreak >nul
-goto WAIT
+echo [Warning] PowerShell launch failed; trying direct start...
+start "Streamlit" /min "%PYTHONW%" -m streamlit run app.py --server.port %APP_PORT%
 
-:OPEN
-echo [4/4] Opening browser...
+:QUICK_OPEN
+echo [3/3] Opening browser...
 echo URL: %APP_URL%
 if "%NO_BROWSER%"=="1" exit /b 0
 start "" "%APP_URL%"
 exit /b 0
-
-:FAILED
-echo [Error] Streamlit did not respond in time.
-echo See log file:
-echo %LOG_FILE%
-echo Try running this command manually:
-echo "%PYTHON%" -m streamlit run app.py --server.port %APP_PORT%
-pause
-exit /b 1
