@@ -1,346 +1,161 @@
-# Spectroscopy Data Processing GUI
+# Data Processing GUI 專案紀錄
 
-## 專案概述
+## 協作規則
 
-一個以 Streamlit 建構的光譜數據處理網頁應用程式，目前支援 XPS（X-ray Photoelectron Spectroscopy）、XES（X-ray Emission Spectroscopy）、Raman、XRD（X-ray Diffraction）數據。使用者透過左側邊欄控制每個處理步驟，主區顯示圖表、峰值表格與匯出結果。
+- 回答使用者時一律使用繁體中文。
+- 每一次動作前都要先讀取 `CLAUDE.md`。
+- 每一次實作、檢查或重要判斷都要記錄在專案根目錄的 `CLAUDE.md`。
+- 不要回復或覆蓋使用者未要求修改的既有變更。
 
-## 執行方式
+## 專案概覽
 
-- Windows：雙擊 `啟動_Windows.bat`
-- Mac：雙擊 `啟動_Mac.command`
-- 安裝套件（首次使用）：雙擊 `安裝套件.bat`
-- 直接執行：`streamlit run app.py`
+這是一個以 Streamlit 製作的光譜資料處理 GUI，入口檔為 `app.py`。目前支援或已建立工作流程的資料類型：
 
-## 檔案結構
+- XPS：X-ray Photoelectron Spectroscopy
+- XES：X-ray Emission Spectroscopy
+- Raman：Raman Spectroscopy
+- XRD：X-ray Diffraction
+- XAS / XANES：X-ray Absorption Spectroscopy
+- Gaussian subtraction：獨立高斯模板扣除工具
+- SEM：保留為未來模組
 
-```
-Data-Processing-GUI-main/       ← 根目錄只留啟動 / 說明 / 入口
-├── app.py                      # 主程式：CSS、側邊欄數據類型選單、module dispatch
-├── requirements.txt
-├── CLAUDE.md / README.md
-├── 啟動_Mac.command / 啟動_Windows.bat / 安裝套件.bat
-├── core/                       # 共用數值與 UI 工具
-│   ├── __init__.py
-│   ├── parsers.py              # 兩欄 / XPS 結構化格式 parser
-│   ├── spectrum_ops.py         # 峰值偵測、插值、平均
-│   ├── ui_helpers.py           # step_header、_next_btn、scroll_anchor 等
-│   ├── peak_fitting.py         # Gaussian/Lorentzian/Voigt 擬合（scipy）
-│   ├── processing.py           # 背景扣除、歸一化、去尖峰、平滑
-│   └── read_fits_image.py      # XES FITS 讀取（不依賴 astropy）
-├── db/                         # 材料參考資料庫
-│   ├── __init__.py
-│   ├── raman_database.py       # Raman 參考峰（14 種材料）
-│   ├── xps_database.py         # XPS 結合能 / FWHM / RSF（~80 元素）
-│   └── xrd_database.py         # XRD 代表性參考峰
-├── modules/                    # 各光譜類型完整 UI workflow
-│   ├── __init__.py
-│   ├── raman.py                # run_raman_ui（3200+ 行）
-│   ├── xes.py                  # run_xes_ui
-│   ├── xps.py                  # run_xps_ui
-│   └── xrd.py                  # run_xrd_ui
-└── .streamlit/
-    └── config.toml             # 關閉檔案監視、遙測
-```
+## 啟動與環境
 
-## 技術棧
+- Windows 啟動檔：`啟動_Windows.bat`
+- Mac 啟動檔：`啟動_Mac.command`
+- 安裝套件：`安裝套件.bat`
+- 手動啟動：`streamlit run app.py`
+- 依賴套件：`requirements.txt`
+- Streamlit 設定：`.streamlit/config.toml`
 
-- Python 3.14（Mac 路徑：`/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`）
-- Streamlit >= 1.35
-- NumPy >= 1.26（注意：`np.trapz` 已移除，需用 `np.trapezoid`）
-- Pandas >= 2.0
-- Plotly >= 5.20
-- SciPy（interp1d、find_peaks、curve_fit、voigt_profile）
+## 主要檔案結構
 
-## UI 架構
+- `app.py`：Streamlit 入口、全域 UI 設定、資料類型切換與模組 dispatch。
+- `modules/raman.py`：Raman workflow。
+- `modules/xps.py`：XPS workflow，含 Core Level / Valence Band 相關分析。
+- `modules/xes.py`：XES workflow。
+- `modules/xrd.py`：XRD workflow。
+- `modules/xas_auto.py`：目前 app 使用的 XAS / XANES 自動解析 workflow。
+- `modules/xas.py`：較早期 XAS workflow 與共用邏輯。
+- `modules/xas_fit.py`：XAS Gaussian fitting helper。
+- `modules/gaussian_subtraction.py`：獨立高斯扣除工具。
+- `core/parsers.py`：光譜檔案解析。
+- `core/processing.py`：背景扣除、平滑、正規化等處理。
+- `core/spectrum_ops.py`：峰值偵測、插值、平均等共用運算。
+- `core/peak_fitting.py`：Gaussian / Lorentzian / Voigt fitting。
+- `core/read_fits_image.py`：XES FITS 影像讀取。
+- `core/ui_helpers.py`：UI helper。
+- `db/raman_database.py`：Raman reference database。
+- `db/xps_database.py`：XPS reference / RSF database。
+- `db/xrd_database.py`：XRD reference database。
 
-### 左側邊欄（所有控制項）
+## 已知設計重點
 
-每個模組都以左側邊欄作為主要控制區。多數步驟有「跳過（此步驟已完成）」勾選框，勾選後步驟標題變灰加刪除線、控制項收起、處理略過。
+- `app.py` 是所有模組共同入口，適合放全域主題、語言、字級等偏好設定。
+- 各分析模組以 `run_*_ui()` 函式由 `app.py` dispatch。
+- XAS 目前由 `modules/xas_auto.py` 接管，`app.py` 匯入 `run_xas_ui` 自該檔。
+- Windows launcher 近期改為使用 dedicated ports 8511-8520，避免 stale Streamlit session。
+- `.streamlit/config.toml` 已調整過 Streamlit watcher、CORS、toolbar、upload size 與錯誤顯示設定。
 
-步驟標題用 `core/ui_helpers.py` 的 `step_header(num, title, skipped)` 函式渲染，active = 藍色 badge，skipped = 灰色 badge + 刪除線。
+## 近期重要功能摘要
 
-**XPS 步驟順序：**
-1. 載入檔案 — 上傳一或多個 XPS `.txt` / `.csv`
-2. 多檔平均 — 可跳過；插值後取平均；可疊加顯示原始個別曲線
-3. 能量校正 — 可跳過；上傳標準品偵測峰值，計算 ΔE offset；峰值偵測圖在 expander 內
-4. 背景扣除 — 可跳過；方法：不扣除 / 線性 / Shirley / Tougaard
-5. 歸一化 — 可跳過；方法：不歸一化 / Min-Max / 峰值 / 面積 / 算術平均
-6. 峰值擬合 — Voigt / Gaussian / Lorentzian；支援自旋軌道雙峰約束、Scofield RSF 原子濃度累積表
+- XAS / XANES：
+  - 自動解析 DAT 欄位，Energy=第 1 欄，TFY=CurMD-03/I0，TEY=CurMD-01/I0，I0=CurMD-02。
+  - 支援 TEY / TFY 並排顯示、平均、能量校正、高斯扣除、背景扣除、正規化、white-line 摘要、Gaussian fitting 與 CSV / JSON 匯出。
+  - `modules/xas_auto.py` 採用類 XPS 的 sidebar step workflow。
+- XPS：
+  - 新增 Valence Band / VBM workflow。
+  - 新增 Band Offset / Kraut Method 計算區塊。
+  - XPS RSF 資料庫擴充 orbital-level RSF 與 `get_orbital_rsf()`。
+- XRD：
+  - 新增 Scherrer crystallite size 計算與匯出欄位。
+- XES：
+  - 新增 preset 匯入/匯出、QC 報告與處理結果匯出。
+- Raman：
+  - 強化 peak review 與 Si stress estimate 相關輸出。
 
-**Raman 步驟順序：**
-1. 載入檔案 — 上傳 Raman `.txt` / `.csv` / `.asc`
-2. 去尖峰 — Median despike，修正 cosmic ray 單點尖峰
-3. 內插化及平均化 — 可單獨對每個檔案做固定點數內插；若啟用平均化，則在共同重疊 Raman shift 區間內先內插再平均
-4. 背景扣除 — 方法：不扣除 / 線性 / 多項式 / AsLS / airPLS
-5. 平滑 — 方法：不平滑 / Moving average / Savitzky-Golay
-6. 歸一化 — 方法：不歸一化 / Min-Max / 峰值 / 面積 / 算術平均
-7. 峰值偵測 — scipy.signal.find_peaks，可設定 prominence、height、distance、最多標記峰數
-8. 峰擬合 — 支援 Voigt / Gaussian / Lorentzian，輸出 R²、FWHM、area、component 曲線
+## 本次變更紀錄
 
-**XRD 步驟順序：**
-1. 載入檔案 — 上傳 XRD `.txt` / `.csv` / `.xy` / `.asc`，兩欄為 `2θ` 與 intensity
-2. 多檔平均 — 插值到共同 `2θ` grid 後平均
-3. 平滑 — 方法：不平滑 / Moving average / Savitzky-Golay
-4. 歸一化 — 方法：不歸一化 / Min-Max / 峰值 / 面積
-5. 峰值偵測 — 輸出 `2theta_deg`、`d_spacing_A`、intensity、relative intensity、FWHM
-6. X 軸與 d-spacing — 可選 Cu Kα、Cu Kα1/2、Co Kα、Mo Kα、Cr Kα、Fe Kα 或自訂波長；主圖可切換 `2θ` / `d-spacing (Å)`
-7. 參考峰比對 — 以 `xrd_database.py` 疊加 reference sticks，做容差匹配
+- 2026-04-26：已依規則先讀取 `CLAUDE.md`，確認 `app.py` 是全域 UI 入口。
+- 2026-04-26：修改 `app.py`，新增右下角齒輪設定 `st.popover`。
+- 2026-04-26：新增顏色主題切換：淺色、深色、海洋藍、森林綠、玫瑰紅。
+- 2026-04-26：新增語言切換：繁體中文 / English。此版本先套用 `app.py` 入口層、sidebar 標籤、設定面板、主標題與提示文字；各分析模組內部文字可後續逐步接 `st.session_state["ui_language"]` 擴充。
+- 2026-04-26：新增字體大小切換：小 / 中 / 大，透過全域 CSS 變數套用。
+- 2026-04-26：新增全域 CSS 變數，讓 sidebar、expander、slider、button、divider、主背景與右下角齒輪跟隨主題色。
+- 2026-04-26：使用 `uv run python -m py_compile app.py` 完成語法檢查，結果通過。
+- 2026-04-26：執行 `git diff --check`，結果通過；僅出現 Git 的 LF/CRLF 換行提示。
+- 2026-04-26：依使用者要求重新整理 `CLAUDE.md`，移除舊亂碼紀錄，改成可讀的繁中專案摘要與本次變更紀錄。
 
-**XES 步驟順序：**
-1. 載入資料 — 可選 Raw FITS（sample + BG1/BG2，可選 Dark/Bias）或已處理 1D 光譜（兩欄 X / intensity）
-2. BG1/BG2 光譜背景扣除 — 各自轉成 1D 光譜後做分點法 `BG_i = BG1 + w_i(BG2 - BG1)`
-3. 影像修正（FITS 模式）— EXPTIME counts/sec 正規化、hot pixel local median 修正
-4. ROI 與積分（FITS 模式）— 選擇 plane、X/Y ROI、column/row projection；可做曲率校正與 side-band 扣除
-5. 多檔平均 — 共同 pixel grid（未校正）或共同 energy grid（能量校正後）
-6. 平滑 — 方法：不平滑 / Moving average / Savitzky-Golay
-7. 歸一化 — 方法：不歸一化 / 峰值 / Min-Max / 面積
-8. X 軸校正 — 線性係數或參考點擬合 pixel → emission energy，可匯入 `Pixel, Energy_eV` CSV
-9. 峰值偵測 — 輸出 peak pixel；若已做能量校正，峰表也包含 `Energy_eV` 與 `FWHM_eV`
+- 2026-04-26：重新讀取整理後的 CLAUDE.md；以已核准方式重跑 uv run python -m py_compile app.py，語法檢查通過。
 
-### 主區（右側）
+- 2026-04-26：重新讀取 CLAUDE.md；已用 uv run streamlit run app.py --server.port 8504 --server.headless true 啟動本機 Streamlit，輸出記錄在 streamlit_ui_settings.out.log / streamlit_ui_settings.err.log。
 
-- 圖表顯示處理前後對比、背景基準線（可選）、背景/歸一化區間陰影
-- 歸一化後出現獨立第二張圖（y 軸不互相壓縮）
-- 底部：匯出 CSV 按鈕
+- 2026-04-26：收到使用者回報 KeyError；已重新讀取 CLAUDE.md 與 app.py 錯誤位置，判斷原因是 Streamlit session_state 保留了不合法的 ui_theme / ui_language / ui_font_size 舊值。
 
-## 數據處理（processing.py）
+- 2026-04-26：已修正 app.py 的 _init_preferences()，改為檢查 session_state 值是否在允許清單內，不合法時自動重設為預設值，避免 ui_theme KeyError。
 
-### 背景扣除方法
+- 2026-04-26：依使用者截圖回饋，準備調整 app.py CSS：齒輪固定到真正右下角並加入 hover 旋轉；sidebar 資料類型與資料處理控制加入 hover 微亮框線效果。
 
-| 方法 | 說明 |
-|---|---|
-| `linear` | 連接區間兩端點的直線 |
-| `shirley` | 迭代 Shirley 背景（累積積分法，20 次迭代），XPS 用 |
-| `tougaard` | Tougaard 背景，XPS 用；參數 B/C 可調 |
-| `polynomial` | 多項式背景，Raman 用 |
-| `asls` | Asymmetric Least Squares baseline，Raman 用；lambda/p/iter 可調 |
-| `airpls` | adaptive iteratively reweighted PLS baseline，Raman 用 |
+- 2026-04-26：已修改 app.py CSS，將齒輪 popover 容器鎖定為右下角 52px 小範圍，按鈕 hover 旋轉並移開回復；sidebar radio / checkbox label 新增 hover 淡底、框線與柔光效果。
 
-背景只在 `[bg_x_start, bg_x_end]` 區間內計算，區間外以兩端常數延伸。
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓齒輪位置與 sidebar hover CSS 生效。
 
-### 歸一化方法
+- 2026-04-26：依使用者回報，準備修正切換非深色主題後部分 Streamlit 元件仍保留深色底或深色字，導致 file uploader、expander、number input 等文字對比不足。
 
-| 方法 | 說明 |
-|---|---|
-| `min_max` | 縮放至 [0, 1] |
-| `max` | 除以選定區間內最大值 |
-| `area` | 除以總面積（梯形積分，`np.trapezoid`） |
-| `mean_region` | 除以選定區間內所有點的算術平均 y 值 |
+- 2026-04-26：已修改 app.py CSS，將 h/p/span/div/label、button 內文、expander、file uploader、input/select/textarea、number input、alert 等 Streamlit 元件的背景與文字色統一套用主題變數，改善非深色主題的文字對比。
 
-### 共用處理 helper
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓主題對比色 CSS 生效。
 
-- `core/parsers.py: parse_two_column_spectrum_bytes()` — Raman、XRD、XES 已處理 1D 光譜共用 parser；嘗試多種編碼，自動找連續數字區塊
-- `core/parsers.py: parse_xps_bytes()` — XPS 專用；先嘗試兩欄 CSV，fallback 到含 `Dimension 1 scale=` / `[Data 1]` 的結構化格式；支援 utf-8 / big5 / cp950 / latin-1 / utf-16
-- `core/spectrum_ops.py: detect_spectrum_peaks()` — Raman / XRD / XES 共用峰值偵測核心
-- `core/spectrum_ops.py: interpolate_spectrum_to_grid()` / `mean_spectrum_arrays()` — 多檔平均共用插值 helper
-- `processing.py: despike_signal()` — Raman cosmic ray 去尖峰
-- `processing.py: smooth_signal()` — Moving average / Savitzky-Golay，Raman 與 XRD 共用
-- `processing.py: apply_normalization()` — 只做歸一化，供 Raman / XRD 使用
+- 2026-04-26：依使用者要求，準備將 sidebar 資料類型 radio 改為 hover 自動向下展開的選單，減少頂部佔用高度，讓後續載入檔案等處理步驟往上移。
 
-## XES FITS 檔案解析（read_fits_image.py）
+- 2026-04-26：已修改 app.py，新增 _read_selected_type_from_query() 與 _render_data_type_menu()，用自製 HTML/CSS hover 下拉選單取代 sidebar 資料類型 radio，平常只佔一列高度，滑鼠移上去向下展開，點選後用 query parameter 切換資料類型。
 
-不依賴 `astropy`。支援 BITPIX：8、16、32、-32、-64；套用 `BSCALE` / `BZERO`；整數影像若有 `BLANK` 轉成 `NaN`。
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓資料類型 hover 下拉選單生效。
 
-核心 API：
-- `read_primary_image_bytes(raw, source=...)` — Streamlit uploader 用
-- `FitsImage.as_array(plane=0)` — 回傳 `(row, column)` 2D detector array
-- `row_sums()` / `column_sums()` — 快速投影光譜
+- 2026-04-26：依使用者追加需求，準備將資料類型 hover 選單改為 sidebar 完整寬度，並新增右側 hover 抽屜式最近資料頁紀錄；切換仍使用同一 Streamlit session，以保留已調整的模組參數。
 
-## XPS 進階功能
+- 2026-04-26：已修改 app.py，資料類型 hover 選單改為 sidebar 完整寬度並移除頂部雙欄布局；新增 _remember_data_type_visit() 與 _render_page_history_drawer()，在網頁右側加入 hover 由右往左展開的資料頁紀錄抽屜，列出最近使用資料類型與可切換模組。
 
-| 功能 | 實作位置 |
-|---|---|
-| Tougaard 背景扣除 | `processing.py: tougaard_background()`；UI 在 step 4 |
-| Scofield RSF 原子濃度 | `xps_database.py: ELEMENT_RSF`；UI 在擬合結果下方累積表 |
-| 自旋軌道雙峰約束 | `peak_fitting.py: fit_peaks(doublet_pairs=...)`；UI 在 step 6 |
-| 能量校正手動輸入 | step 3 number_input：自動偵測失敗時可手動輸入峰位 |
-| 多元素結果累積 | `st.session_state["xps_fit_history"]`；每次按「加入原子濃度表」追加 |
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓 sidebar 完整寬度下拉選單與右側紀錄抽屜生效。
 
-能量校正標準品（`CALIB_STANDARDS`）：Au 4f7/2（84.0 eV）、Ag 3d5/2、Cu 2p3/2、Cu 3s、C 1s、Fermi edge、自訂。
+- 2026-04-26：依使用者要求，準備移除左側資料類型與資料處理區塊；資料類型切換與扣除高斯工具入口統一移到右側紀錄抽屜，左側只保留各模組處理步驟。
 
-## XES 進階功能
+- 2026-04-26：已修改 app.py，移除 sidebar 左側頂部資料類型下拉與扣除高斯 checkbox；新增 _read_tool_from_query()，右側紀錄抽屜加入扣除高斯工具入口，使用 ?tool=gaussian 切換，資料類型頁面仍使用 ?data_type=... 切換。
 
-| 功能 | 狀態 |
-|---|---|
-| Dark / Bias frame 扣除 | 已完成 v1；進階可選 |
-| Side-band background subtraction | 已完成 v1；進階可選 |
-| Hot pixel / cosmic ray mask | 已完成 v1；local median filter |
-| Curvature correction / image straightening | 已完成 v1；逐 row 找峰 → polyfit → shift |
-| Pixel → Emission Energy 校正 | 已完成 v1；線性係數 / 參考點 / CSV 匯入 |
-| Exposure / I0 normalization | 已完成 v1；EXPTIME 或手動 I0 |
-| 多檔合併到共同 energy grid | 已完成 v1 |
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓左側只保留處理步驟、右側抽屜統一切換資料類型與扣除高斯工具的變更生效。
 
-**背景名詞定義：**
-- `BG1/BG2`：樣品前/後額外拍攝的完整背景 FITS，分點法是主流程必做項目
-- `Dark/Bias frame`：CCD detector 校正影像，進階可選；無儀器資料時不啟用
-- `Side-band background`：同一張影像 signal stripe 旁邊的 ROI；教授未要求時不啟用
+- 2026-04-26：依使用者回報，準備修正右側抽屜連結點選會開新網頁的問題，改為 target=_self 同頁切換；同時將抽屜分成資料類型與工具兩區，扣除高斯移到工具區下方。
 
-## 側邊欄滑桿的 Session State 處理
+- 2026-04-26：已修改 app.py，右側紀錄抽屜改為資料類型與工具分區；資料類型連結加入 target=_self，扣除高斯移到工具區下方並同樣 target=_self，以避免切換時開新網頁。
 
-`bg_range` 和 `norm_range` 滑桿的 min/max 依賴能量顯示範圍。每次渲染前先夾到合法範圍，避免 Streamlit 丟出 ValueError：
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓右側抽屜分區與同頁跳轉修正生效。
 
-```python
-_prev = st.session_state.get("bg_range", (_e0, _e1))
-_lo = float(max(_e0, min(float(min(_prev)), _e1)))
-_hi = float(max(_e0, min(float(max(_prev)), _e1)))
-if _lo >= _hi:
-    _lo, _hi = _e0, _e1
-st.session_state["bg_range"] = (_lo, _hi)
-```
+- 2026-04-26：依使用者要求，準備修正右側抽屜資料類型排序，改為固定 XPS/XES/Raman/XRD/XAS，不再把目前選到的項目移到最上方；同時將把手名稱由紀錄改為選單。
 
-## 啟動腳本
+- 2026-04-26：已修改 app.py，右側抽屜資料類型排序固定使用 ready 清單順序，不再依最近使用移動位置；右側把手名稱由紀錄改為選單，標題改為資料選單。
 
-`啟動_Mac.command`：hardcode Python 路徑 `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`，輪詢 `/_stcore/health` 最多 30 秒後開瀏覽器。
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓右側抽屜固定排序與選單命名生效。
 
-`啟動_Windows.bat`：自動偵測 `py` 或 `python`，檢查 streamlit 是否已安裝，開背景視窗後輪詢 health endpoint 再開瀏覽器。
+- 2026-04-26：依使用者要求，準備在左上角新增 nigiro pro 品牌區塊，使用自製 SVG 數據處理 logo，並將 Streamlit page title 改為 nigiro pro。
 
-`安裝套件.bat`：自動偵測 Python，執行 `pip install -r requirements.txt`。
+- 2026-04-26：已修改 app.py，將 Streamlit page title 改為 nigiro pro；新增 _render_brand_header()，在 sidebar 左上角加入自製 SVG 數據處理 logo、nigiro pro 字樣與 data processing subtitle，logo 使用主題 accent 色。
 
-`.streamlit/config.toml`：關閉檔案監視（`fileWatcherType = "none"`）與使用統計（`gatherUsageStats = false`）以加速啟動。
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓 nigiro pro 左上角 logo 與頁面標題變更生效。
 
-## 注意事項
+- 2026-04-26：依使用者要求，準備將品牌字樣改為 Nigiro Pro，並在主內容中間加入低透明度、不可點擊的資料處理浮貼背景圖案，降低空白感。
 
-- `is_numeric_line()` 內不要留下裸 list comprehension 或裸表達式，Streamlit magic mode 會把它渲染成輸出。
-- `np.trapz` 已從 NumPy >= 2.0 移除，一律用 `np.trapezoid`。
-- XES FITS 流程：影像層級先做 Dark/Bias、EXPTIME、hot pixel、transpose、curvature、ROI sum → 得到每張 1D 光譜 → 光譜層級再做 BG1/BG2 分點扣除、I0、平滑、歸一化、能量校正。
+- 2026-04-26：已修改 app.py，品牌文字由 nigiro pro 改為 Nigiro Pro；新增 _render_main_stickers() 與主畫面浮貼 CSS，在中間空白區加入低透明度的波形、長條圖、節點圖與資料列 SVG 裝飾。
 
-## 待開發模組
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓 Nigiro Pro 品牌大小寫與主畫面浮貼裝飾生效。
 
-XAS、SEM 已在 `DATA_TYPES` 定義，標示為 `ready: False`，選擇後顯示「尚未開放」。
+- 2026-04-26：依使用者要求，準備放大左上角 Nigiro Pro 品牌區，調整 logo、品牌名稱與 subtitle 尺寸。
 
-## 後續優化方向
+- 2026-04-26：已修改 app.py CSS，將 Nigiro Pro logo 從 42px 放大到 54px，品牌名稱從 19px 放大到 24px，subtitle 從 11px 放大到 12px，並調整品牌區 gap/padding/margin。
 
-**XES：**
-- 加入多 ROI workflow
-- 加入能量校正參考線資料庫
-- 加入批次套用同一組 ROI / 校正參數的 workflow
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓放大後的 Nigiro Pro 品牌區生效。
 
-**Raman：**
-- 用真實檔案調整 airPLS / AsLS 預設參數
-- 加入手動峰擬合中心與 FWHM 微調
-- 加入處理前後比較視圖或 baseline preview
+- 2026-04-26：依使用者回報，確認 app.py 的 Streamlit page_title 仍為 nigiro pro 小寫，準備改為 Nigiro Pro。
 
-## Raman 進階功能（2026-04-25 新增）
+- 2026-04-26：已修改 app.py，將 st.set_page_config(page_title) 由 nigiro pro 改為 Nigiro Pro。
 
-| 功能 | 說明 |
-|---|---|
-| 基板訊號扣除 | Step 1 expander；上傳裸基板光譜，對齊指定峰位（預設 Si 520.7 cm⁻¹）後縮放並扣除；自動補償不同曝光時間／次數的強度差異；`data_dict_original` 保存扣除前備份 |
-| 局部自適應靈敏度 | Step 7 `maximum_filter1d` 滑動窗口；讓強峰（如 Si 520）旁邊的弱峰也能被偵測到 |
-| 限制偵測 X 範圍 | Step 7 可指定起點／終點，只在薄膜訊號區間搜尋峰值 |
-| 放大顯示 | 主圖下方獨立放大圖，y 軸自動縮放到指定 X 範圍；sidebar 滑桿控制 |
-| Raman 參考峰資料庫 | `raman_database.py: RAMAN_REFERENCES`；14 種材料（2 基板 + 12 薄膜）；在圖上疊加虛線 sticks，可顯示峰標籤 |
-| 峰位管理表 + 聯合擬合 | Step 8 主區；下拉選基板 / 薄膜材料自動帶入候選峰；峰位表新增 `材料`、`峰類別`、`模式 / 簡稱`、`峰名稱`、`備註` 欄位，可直接編輯位置與 FWHM；啟用欄控制是否納入擬合；「▶ 執行擬合」按鈕觸發，結果存入 session_state 並持續顯示 |
-| Step 7 即時峰值預覽 | `run_peak_detection = step6_done and not skip_peaks`；調整滑桿即時更新，不需按「下一步」；「下一步」只負責解鎖 Step 8 |
-| 數值新增峰位 | Step 8 改為數值表單新增峰位；可指定材料、峰位、模式 / 簡稱、峰類別、初始 FWHM、峰名稱與備註；若材料對應 `RAMAN_REFERENCES`，會依最近文獻峰自動帶入模式標籤、主峰/次峰分類與說明；不再使用點圖吸附新增峰位。 |
-| `data_editor` 穩定性 | 移除峰位管理表的 `key=_EDITOR_WIDGET_KEY`，改為無 key 模式每次 rerun 從 session_state base data 重新渲染，避免 delta 累積導致多選取消失效的 bug（2026-04-25 修正）。`st.session_state.pop(_EDITOR_WIDGET_KEY, None)` 保留作 no-op 相容呼叫。 |
-| Preset 換檔重設 range | 偵測 `uploaded_files` 集合變化（比對 `raman_last_upload_ids`）；換新樣品檔案時自動清除 `raman_bg_range`、`raman_norm_range`、`raman_detect_x_start/end`、`raman_zoom_*` 等 range 相關 session_state，讓 slider 重設回新資料 x 範圍（2026-04-25 修正）。 |
-
-**基板扣除實作細節：**
-- `scale = sample_peak_int / sub_peak_int`，15 cm⁻¹ 窗口找峰
-- 單檔模式：在 per-file 迴圈開頭加入原始曲線（扣除前）與縮放基板曲線
-- 平均模式：在 `for fname, (xv, yv) in data_dict.items():` 迴圈加入對應原始與縮放基板曲線
-- `sub_scale_info` caption 顯示在去尖峰摘要之後
-
-**XRD：**
-- 自訂 reference CSV 匯入
-- Scherrer 晶粒尺寸估算
-- 更完整的 PDF/JCPDS 資料來源整合
-
-## 重構完成紀錄（2026-04-25）
-
-從原本 4701 行單一 `app.py` 分 12 個階段漸進式重構為模組化架構，最終 `app.py` 縮減至 **85 行**。
-
-| 階段 | 說明 | app.py 行數 |
-|---|---|---|
-| 1 | 新增 `core/parsers.py`，抽出兩欄光譜共用 parser | — |
-| 2 | 新增 `core/spectrum_ops.py`，抽出峰值偵測核心 | — |
-| 3 | `core/spectrum_ops.py` 補插值與平均 helper | — |
-| 4 | 新增 `modules/xrd.py`，搬出 XRD 純 helper | — |
-| 5 | 新增 `modules/raman.py`，搬出 Raman 峰值表 helper | — |
-| 6 | XPS parser 搬到 `core/parsers.py` | — |
-| 7 | 新增 `modules/xps.py`，搬出 XPS 校正標準、色盤、週期表 | — |
-| 8 | 新增 `modules/xes.py`，搬出 XES 峰值表與自然排序 helper | — |
-| 9 | 新增 `core/ui_helpers.py`；XRD 完整 UI workflow → `modules/xrd.py` | 4701 → 3993 |
-| 10 | Raman 完整 UI workflow → `modules/raman.py` | 3993 → 3066 |
-| 11 | XES 完整 UI workflow（27 helper + run_xes_ui）→ `modules/xes.py` | 3066 → 916 |
-| 12 | XPS 完整 UI workflow → `modules/xps.py` | 916 → **85** |
-
-最終驗證：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py read_fits_image.py processing.py peak_fitting.py xps_database.py xrd_database.py` ✅ 與 `git diff --check` ✅（2026-04-25）
-
-## 最近動作（2026-04-25）
-
-- 閱讀並盤點 `CLAUDE.md`，確認目前主程式已完成 12 階段重構、`app.py` 縮減至 85 行，`core/` 與 `modules/` 架構已成形。
-- 重新閱讀 `CLAUDE.md` 後，盤點 `modules/raman.py` 與 `raman_database.py`，確認 Raman Step 8 目前仍保留 `plotly_events` 點圖新增峰位流程，且峰位管理表只有簡短 `標籤`，缺少材料、主峰/次峰分類與備註欄位，後續將改為數值新增峰位表單並整理命名。
-- 更新 `modules/raman.py` 與 `peak_fitting.py`：移除 Raman Step 8 的點圖新增峰位流程，改為數值新增峰位表單；峰位管理表新增 `材料`、`峰類別`、`顯示名稱`、`備註` 欄位，參考峰會自動標示主峰 / 強峰 / 次峰 / 弱峰，擬合結果表與 component 欄名同步帶出新命名；同時移除未再使用的 `streamlit-plotly-events` 依賴。
-- 驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅，並以 `NiO 1090 cm⁻¹` 做 helper sanity check，成功自動產生 `NiO 主峰 2M/2LO`、`主峰`、`2M/2LO` 的命名與分類。
-- 重新閱讀 `CLAUDE.md` 並檢視 Raman 擬合結果表後，確認目前使用者在「看完擬合結果再回上方逐一取消峰位」的流程上負擔偏重；後續優化方向應集中在：加入 `理論峰位 Ref_cm`、`偏移 Delta_cm`、批次快速取消規則（如 `Area=0` / `Area_pct 過低` / `偏移過大`），並避免上下兩處同時可勾選造成雙重操作來源。
-- 更新 `modules/raman.py`：新增 `Peak_ID`、`理論位置_cm` 追蹤欄位，擬合結果表加入 `Ref_cm`、`Delta_cm`、`Quality_Flag`；審核區新增 `停用 Area=0`、`停用 Area_pct 過低`、`停用偏移過大`、`本次只留主峰/強峰`、`恢復本次擬合峰`、`手動停用選取峰`，並在套用後自動同步上方峰位表與重新擬合，避免來回上下捲動逐筆取消。
-- 驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅；helper sanity check 顯示 `β-Ga₂O₃` 475 cm⁻¹ 會命名為 `β-Ga₂O₃ 強峰 Ag [475]`，品質旗標可正確產生 `Area=0；|Δ|>10`；review 範圍測試確認停用 `RPK002` 時不會影響不屬於本次擬合的 `RPK099`。
-- 重新閱讀 `CLAUDE.md` 後，對 Raman 現況做整體判斷：目前已從「能用但難管理」提升到「研究操作上可用、而且逐漸有審核 workflow」的狀態；優點是命名、理論峰位對照、批次停用與單一資料來源都已明顯改善，主要剩餘問題集中在峰位表欄位偏多、擬合結果表仍可再加視覺強調與可疑峰排序/過濾體驗優化。
-- 重新閱讀 `CLAUDE.md` 後，規劃下一輪 Raman UX 優化方向：1. 峰位管理表加入簡潔/進階顯示與快速整理操作，降低欄位密度；2. 擬合圖加入更清楚的 `Peak_ID` / hover 對照，讓圖與表可以快速對號；3. 擬合審核表補摘要、過濾模式與更清楚的可疑峰排序，讓篩峰流程更順手。
-- 更新 `modules/raman.py`：峰位管理表新增峰數摘要、簡潔表格模式、依位置排序 / 啟用全部 / 全部停用快捷操作；擬合圖新增 `Peak_ID` 標記與更完整 hover 資訊；擬合審核表新增峰數摘要、顯示過濾模式（全部/可疑/Area=0/低面積/偏移大）與排序模式，整體操作流程朝「先看圖與摘要、再在下方審核篩峰」優化。
-- 驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅；helper sanity check 確認峰位排序會先列出已啟用且依位置排序的 `RPK001 / RPK002 / RPK003`，顯示名稱 helper 仍可正確輸出 `β-Ga₂O₃ 強峰 Ag [475]`，表示簡潔表格模式與圖/表對照命名的底層資料仍一致。
-- 重新閱讀 `CLAUDE.md` 並查閱 `raman_database.py` 後，開始針對實際樣品 `NiO / β-Ga₂O₃ / n-Si` 規劃 Raman 處理策略；目前已確認可直接使用的參考峰包含 Si 520.7 / 960、β-Ga₂O₃ 144/170/200/320/347/416/475/630/651/767，以及 NiO 457/570/730/1090，後續處理建議將以「先辨識 Si 基板、再分離 β-Ga₂O₃ 與 NiO 特徵峰」為主軸。
-- 重新閱讀 `CLAUDE.md` 後，實際分析使用者提供的 Raman 檔案 `/Users/liupeicheng/Downloads/1019 45-5 n-Si 1_ 30s 20p 50X.txt`：檔案為正常兩欄格式，範圍 `67.2–2003.6 cm⁻¹`、共 `1024` 點；以 `airPLS + SG smooth` 初步篩峰後，最明顯訊號為 `Si 520.8 cm⁻¹`，其次可見 `Si 302` 與 `~980 cm⁻¹` 區域訊號；局部參考對照顯示 β-Ga₂O₃ 在 `416/475/630/651/767` 區域有弱到中等結構，NiO 在 `~730` 與 `~1090` 區域也有候選訊號，其中 `1090` 最值得保留；全域 12 峰 Voigt 試擬合得到 `R² ≈ 0.9971`，但部分弱峰 FWHM 過大或 area≈0，代表這張樣品目前應以「Si 基板很強、NiO 1090 與部分 β-Ga₂O₃ 峰弱訊號疊加」來解讀，不適合一次把所有理論峰都當成等權重有效峰。
-- 重新閱讀 `CLAUDE.md` 後，針對使用者詢問「是否還有需要優化，因為後續會大量用於 Raman 研究與發表」做整體判斷：目前 Raman workflow 已很適合探索、初步分析與日常研究操作，但若要往發表級、可追溯、可批次重現的等級走，下一優先應放在 1. 參數/版本/provenance 匯出與鎖定、2. 批次處理 preset 與同條件套用、3. 擬合結果 QC/警告的系統化摘要、4. 發表用圖匯出一致性，而不是再一直增加單點功能。
-- 重新閱讀 `CLAUDE.md` 後，開始把 Raman workflow 往「研究/發表可追溯」方向補完：在 `modules/raman.py` 新增 Raman preset 匯入/匯出、擬合後 `QC summary` 統計、發表用圖 helper、擬合歷史暫存結構與處理報告匯出骨架，並將這些功能接到既有 Step 8 與匯出區，避免額外產生第二套平行流程。
-- 更新 `modules/raman.py`：擬合完成後新增「發表用圖匯出」與「擬合歷史比較 / 統計」兩個區塊；前者可匯出 HTML，若環境已安裝 `kaleido` 也可直接匯出 SVG / PNG，後者可用 `Run_Label` 保存每次擬合結果並自動產生跨次峰位統計；底部匯出區同步新增 `raman_processing_report` JSON 與 `raman_fit_qc_summary` CSV，內容包含輸入檔名、基板扣除、各步驟參數、峰偵測設定、當前峰位表、擬合摘要與 QC 摘要，方便日後重現與整理發表圖表。
-- 另外修正 Raman 匯出區的流程安全性：初始化 `skip_fit = False`，避免使用者尚未走到 Step 8 時就觸發匯出區而出現 runtime NameError；`fit_history_df` 若 session state 內型別異常也會先落回空 DataFrame。
-- 驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py read_fits_image.py processing.py peak_fitting.py xps_database.py xrd_database.py` ✅、`git diff --check` ✅；額外以 publication helper 做 sanity check，確認 `_build_publication_fit_figure(...)` 可正常建立含實驗曲線 / 擬合包絡 / component 的 Plotly figure（`raman_publication_helper_ok 3`）。
-- 重新閱讀 `CLAUDE.md` 後，確認 Raman 在「可追溯匯出」已補齊一輪，下一個更值得補的是科學判讀效率：直接在主流程中加入處理前後比較與 baseline preview，而不是只靠下載 CSV 或盯著主圖上的所有 trace 混在一起看。
-- 更新 `modules/raman.py`：新增 `_process_column_display_name()` 與 `_default_compare_columns()` helper，並把 `raman_compare_*` 狀態納入 preset；在主圖與 zoom panel 下方新增「處理前後比較 / Baseline Preview」區塊，可選資料集、選擇要對照的處理階段（原始 / 背景基準線 / 背景扣除後 / 平滑後 / 歸一化後）、限制比較區間，直接疊圖檢查 baseline 是否過度扣除、平滑是否扭曲峰形。
-- 驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅；新增 compare helper sanity check，`_default_compare_columns(['Average_raw', 'Background', 'Average_bg_subtracted', 'Average_smoothed', 'Average_normalized'])` 會正確回傳 `['Average_raw', 'Background', 'Average_bg_subtracted', 'Average_smoothed']`，`_process_column_display_name('Background')` 會輸出 `背景基準線`，`_process_column_display_name('Average_normalized')` 會輸出 `歸一化後`。
-- 重新閱讀 `CLAUDE.md` 後，開始補 Raman 的「手動峰擬合中心與 FWHM 微調」這個原先列在待優化清單中的項目；考量峰位表原本雖可編輯，但使用者在看完 fit 結果後還要回頭手抄數值很麻煩，因此改成在擬合結果區直接提供下一輪初值回填流程。
-- 更新 `modules/raman.py`：新增 `_apply_fit_tuning_to_peak_df()` helper，並在 Step 8 擬合結果區加入「下一輪初值微調」expander；表格會列出 `Peak_ID / Peak_Name / Ref_cm / Center_cm / FWHM_cm / Quality_Flag`，並提供可編輯的 `下一輪位置_cm / 下一輪FWHM_cm` 與 `套用` checkbox。使用者可直接在這裡微調數值，按下「套用到峰位表並重擬合」後，程式會只更新上方峰位表的 `位置_cm` 與 `初始_FWHM_cm`，保留理論峰位與命名欄位不變，然後自動重擬合。
-- 驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅；新增 fit tuning helper sanity check，對 `RPK001` 套用 `1091.2 / 18.5` 後可正確更新第一列，而未勾選的 `RPK002` 仍維持 `521.0 / 8.0`，確認回填只影響被選取的峰。
-- 重新閱讀 `CLAUDE.md` 後，決定把 Raman 的微調流程再往前整合成真正的「一輪收斂」版本：不只允許逐峰手調，而是補上批次勾選、批次填入策略、以及直接停用勾選峰，避免使用者在 review 區與 tune 區來回切換。
-- 更新 `modules/raman.py`：新增 `_fit_summary_signature()`、`_recommend_fit_tuning_action()`、`_build_fit_tuning_table()`、`_set_fit_tuning_selection()`、`_fill_selected_fit_tuning_rows()` helper，讓「下一輪初值微調」有自己的穩定資料來源與 fit 簽名刷新機制；微調表現在新增 `Delta_cm`、`目前初始位置_cm`、`目前初始FWHM_cm`、`建議` 欄位，並支援快速按鈕 `勾選全部峰 / 勾選可疑峰 / 勾選偏移大 / 勾選 Area=0 / 清除勾選`，以及批次填入策略 `位置：本次中心 / 理論位置 / 目前初始位置`、`FWHM：本次 FWHM / 本次 FWHM（上限） / 目前初始 FWHM`；勾選後可直接「套用到峰位表並重擬合」或「停用勾選峰並重擬合」。
-- 驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅；新增批次微調 helper sanity check，當 `RPK001 / RPK003` 被標為可疑峰並套用 `位置=理論位置`、`FWHM=本次值但上限 60` 時，會得到 `selected [True, False, True]`、`centers [475.0, 520.8, 1090.0]`、`fwhm [60.0, 7.2, 60.0]`，表示快速勾選與批次填入邏輯正常。
-- 重新閱讀 `CLAUDE.md` 後，開始處理右欄「新圖出現時自動捲動置中」需求；先盤點 Raman / XPS / XRD 在背景扣除與歸一化後的 `st.plotly_chart(...)` 出圖位置，並確認這類情境最適合用共用 UI helper 實作，而不是在單一模組內各自塞重複 JS。
-- 更新 `core/ui_helpers.py`：新增 `scroll_anchor(anchor_id)` 與 `auto_scroll_on_appear(anchor_id, visible, state_key, block=\"center\")` 共用 helper，利用錨點與 `window.parent.document.getElementById(...).scrollIntoView({behavior:\"smooth\", block:\"center\"})` 在新圖首次出現時平滑捲動到畫面中央；session state 會記錄前一次可見狀態，避免每次 rerun 都強制亂跳。
-- 更新 `modules/raman.py`、`modules/xps.py`、`modules/xrd.py`：在背景扣除或歸一化結果圖前插入對應錨點，並在圖真正出現時觸發自動捲動；Raman / XPS 的背景結果圖會在 `bg_method != \"none\"` 首次成立時自動捲到圖一，Raman / XPS / XRD 的歸一化圖則會在 `norm_method != \"none\"` 首次成立時自動捲到圖二；若之後切回 `none`，狀態也會重置，下一次重新開啟時仍可再次自動捲動。
-- 驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py read_fits_image.py processing.py peak_fitting.py xps_database.py xrd_database.py` ✅、`git diff --check` ✅；目前尚未做 Streamlit 實際互動 smoke test，但靜態語法與 diff 檢查已通過。
-- 重新閱讀 `CLAUDE.md` 後，依照使用者追加需求，開始補 Raman Step 8「按峰擬合後跳出的峰位管理表」自動捲動；盤點 `modules/raman.py` 後確認峰位管理表是跟著 `run_peak_fit` 首次變成 `True` 才會顯示，因此應直接綁在這個可見狀態，而不是綁在 expander 開關或按鈕事件本身。
-- 更新 `modules/raman.py`：在 `if run_peak_fit:` 區塊開頭加入 `scroll_anchor("raman-fit-management")`，並在峰位管理 expander 渲染完成後呼叫 `auto_scroll_on_appear("raman-fit-management", visible=True, state_key="raman_scroll_fit_management", block="start")`；當 `run_peak_fit` 不成立時則同步重置 state，確保之後再次進入 Step 8 仍會自動捲回峰位管理區塊頂端。
-- 驗證完成：`python3 -m py_compile modules/raman.py core/ui_helpers.py app.py modules/xps.py modules/xrd.py modules/xes.py processing.py peak_fitting.py` ✅、`git diff --check` ✅；目前尚未做 Streamlit 互動 smoke test，但靜態檢查已通過。
-- 重新閱讀 `CLAUDE.md` 後，實作側邊欄美化方案 A + B：Plan A 在 `core/ui_helpers.py` 新增 `_STEP_BADGE_COLORS`（步驟 1-10 各自配色）與 `_step_color(num)` helper，`step_header` 和 `step_header_with_skip` 均改用每步驟獨立色彩 badge；Plan B 新增 `step_exp_label(num, title, is_done)` helper，Raman Steps 2-8、XPS Steps 2-5、XRD Steps 2-5 與 7 均改為自動折疊 `st.expander`（完成後 `expanded=False`，當前步驟 `expanded=True`），內部以 `st.checkbox("跳過此步驟 ✓", key=skip_key)` 取代原 `step_header_with_skip`；`app.py` CSS 補左邊框樣式讓 expander 視覺更一致；XES 不改動（流程不同，無 skip flag）。
-- 驗證完成：`python3 -m py_compile core/ui_helpers.py modules/raman.py modules/xps.py modules/xrd.py modules/xes.py app.py ...` ✅、`git diff --check` ✅。
-- 修正 Raman Step 8 預設初始 FWHM：原本用 `max(4, min(24, span/30))` 固定公式，改為在峰偵測（Step 7）結束後將所有偵測峰的中位數與範圍存入 `raman_detected_median_fwhm` / `raman_detected_fwhm_range`；Step 8 FWHM 輸入框下方新增提示列（「Step 7 偵測中位數：X cm⁻¹，範圍 Y–Z cm⁻¹」）與「採用」按鈕，讓使用者可一鍵採用量測值，不強制覆蓋手動輸入。驗證：`python3 -m py_compile modules/raman.py` ✅。
-- 重新閱讀 `CLAUDE.md` 後，依照使用者要求：1. 從 Raman workflow 完整刪除 Step 7（峰值偵測），包括初始化變數、整個側邊欄 expander 區塊、圖形建構迴圈中的 `run_peak_detection` 條件分支、FWHM 中位數暫存邏輯、峰值列表顯示區、「載入偵測峰」按鈕；Step 8 條件改為直接依賴 `step6_done`，`step7_done` 變數完全移除；2. 移除 Step 8 FWHM 「採用」按鈕（根本原因是 `StreamlitAPIException`：在同一渲染輪次中對已實例化 widget 的 key 寫入 session_state）；3. 在 Step 4（背景扣除）與 Step 5（平滑）的 expander 內各新增說明 caption：背景扣除說明何時可跳過（基線近零、無斜率），平滑說明 SNR 高時可跳過且視窗過大會展寬峰形。
-- 驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py` ✅、`git diff --check` ✅。
-- 重新閱讀 `CLAUDE.md` 後，繼承上一 session 的待辦事項：1. 對 `modules/raman.py` 最後一次大改（擬合結果區重設計）補做編譯驗證 ✅；2. 清除 9 個已成死碼的 helper 函式：`_apply_fit_tuning_to_peak_df`、`_fit_summary_signature`、`_recommend_fit_tuning_action`、`_build_fit_tuning_table`、`_set_fit_tuning_selection`、`_fill_selected_fit_tuning_rows`、`_format_review_option`、`build_raman_peak_table`、`_detect_raman_peaks`；同步移除只在這些函式內用到的 `from scipy.ndimage import maximum_filter1d`、`from scipy.signal import peak_widths`、`from core.spectrum_ops import detect_spectrum_peaks` 三個孤立 import。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 重新閱讀 `CLAUDE.md`，確認目前文件共 311 行；專案主體已維持模組化架構（`core/`、`db/`、`modules/`），Raman 仍是功能最完整且近期改動最多的模組。最新紀錄顯示：已完成右欄新圖自動捲動、峰位管理表自動置頂、側邊欄步驟色彩與自動折疊、Raman Step 7 移除、以及 `modules/raman.py` 的死碼清理；目前驗證狀態最後記錄為 `python3 -m py_compile ...` ✅ 與 `git diff --check` ✅。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，依照使用者對 Raman Step 8 的新要求做三項調整：1. 移除「發表用圖匯出」整段 UI 與其相關 helper / `plotly.io` 依賴；2. 移除「擬合歷史比較 / 統計」整段 UI 與報告內的 `history_run_count`；3. 重寫峰位管理表的勾選流程，改成比照下方審核表的「先在 `st.data_editor` 編輯，再按按鈕套用」模式，修正多選取消 checkbox 時第二個勾選會被吃掉的 bug。
-- 更新 `modules/raman.py`：新增 `_EDITOR_WIDGET_VERSION_KEY`、`_peak_editor_widget_key()`、`_reset_peak_editor_widget()`，以「版本化 widget key」取代過去直接 `pop` editor state 的做法；峰位管理表現在使用固定 editor key + `套用表格變更` / `恢復未套用` 兩個按鈕，只有按下套用後才把 `啟用`、`位置_cm`、`初始_FWHM_cm`、`顯示名稱` 等欄位寫回 `st.session_state[_PEAK_CANDS_KEY]`；快速按鈕如 `排序`、`啟用全部`、`停用全部` 與下方審核表回寫時，也統一改用 `_reset_peak_editor_widget()` 讓表格穩定重建。
-- 驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅；目前尚未做 Streamlit 實際互動 smoke test，但靜態檢查已通過。
-- 2026-04-26 08:26:42 CST 重新閱讀 `CLAUDE.md` 後，向使用者說明「Streamlit 畫面實際互動 smoke test」的意義：它不是新功能，而是最基本的人工操作驗證，目的是在瀏覽器中實際點一次 Raman Step 8，確認峰位管理表的多選取消、`套用表格變更`、`恢復未套用`、下方審核表回寫與自動重擬合等互動流程真的正常，而不只是 `py_compile` 與 `git diff --check` 通過。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，依照使用者需求美化 Raman 匯出區：在 `modules/raman.py` 新增 `_build_export_filename()` 與 `_render_download_card()` helper，將 Step 8 的「擬合曲線 CSV / 擬合峰表 CSV」與頁面底部的「處理後光譜 / 處理報告 JSON / QC 摘要 CSV」全部改成卡片式排版；每張卡都加入用途說明，並將處理後光譜改成兩欄排列，讓多個輸出檔案在視覺上更一致、也更容易判斷該下載哪個檔案。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，依照使用者需求調整 Raman 第 3 步：將步驟名稱從「多檔平均」改為「內插化及平均化」，並在 `modules/raman.py` 拆成兩個可分開使用的選項：`對每個載入檔案做內插化` 與 `對所有載入的檔案做平均化`。平均化仍會自動使用內插點數，但現在單檔也可單獨做內插；若只有 1 個檔案，平均化 checkbox 會自動停用，避免誤用。後續數據流也已同步更新：在非平均模式下，若啟用內插化，單檔或多檔都會先重採樣到固定點數再進行背景扣除、平滑、歸一化與峰擬合；處理報告 JSON 內的 Step 3 紀錄也補上 `interpolation_enabled` 與 `average_enabled`。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，依照使用者前面提出的「三區分類」需求，進一步重整 Raman 底部匯出區：將原本分散在 Step 8 與頁面底部的下載按鈕統一收斂成三大區塊 `研究常用`、`原始處理輸出`、`追溯 / QC`。其中 `研究常用` 放擬合峰表與處理後光譜、`原始處理輸出` 放擬合曲線 CSV、`追溯 / QC` 放處理報告 JSON 與 QC 摘要 CSV；同時補上整區說明文字，讓使用者能更快理解每類檔案的用途。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，開始把 XRD workflow 往 Raman / XPS 目前較穩定的操作模式收斂：在 `modules/xrd.py` 移除使用者可見的「峰值偵測」Step，改成只有在啟用「參考峰比對」時，才於背景自動對目前處理後曲線做局部尋峰，讓參考峰匹配功能保留、但不再要求使用者先手動跑一個額外步驟；同時把 Step 2 從「多檔平均」改成「內插化及平均化」，拆成 `對每個載入檔案做內插化` 與 `對所有載入的檔案做平均化` 兩個可獨立選項，讓單檔也能單獨統一點數。這輪也同步補上 XRD Step 3 / 4 的說明 caption、重新編號 Step 5「X 軸與 d-spacing」與 Step 6「參考峰比對」、將底部匯出區整理成卡片式 `研究常用 / 參考資料` 兩區，並移除原本的峰值列表下載。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅；目前尚未做 Streamlit 實際互動畫面 smoke test。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，繼續把 XRD 往 Raman 的研究型 workflow 靠攏：在 `modules/xrd.py` 新增 `_json_safe()`、`_dataframe_records()`、`_process_column_display_name()`、`_default_compare_columns()` helper，並加入「處理前後比較」區塊，可針對任一資料集直接疊圖比對原始 / 平滑後 / 歸一化後曲線；同時把底部匯出區再收斂成三類 `研究常用 / 原始處理輸出 / 追溯 / 設定`，新增 `自動尋峰 CSV` 與 `xrd_processing_report` JSON，讓 XRD 也有完整的底層輸出與流程紀錄可保存。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅；目前尚未做 Streamlit 實際互動畫面 smoke test。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，依照使用者對 XRD 的新需求補兩個正式步驟：1. `高斯模板扣除`，放在內插之後、平滑之前，採固定 FWHM 與固定面積、只移動中心位置的模板搜尋；UI 新增中心表（`啟用 / 峰名稱 / 中心_2theta_deg`），程式會在目前曲線上用相關性搜尋最佳中心、逐峰扣除並輸出 `高斯中心結果 CSV`；2. `取對數（弱峰檢視）`，放在歸一化之後，作為獨立的 log 顯示步驟，會自動對非正值做平移保護，主要供弱峰檢視與輸出，不拿來改變高斯模板扣除的面積邏輯。這輪同步新增高斯扣除結果圖、log 結果圖、匯出欄位（`*_gaussian_model` / `*_gaussian_subtracted` / `*_log10` 或 `*_ln`）、處理報告內的 `gaussian_subtraction` / `log_view` 區段，並將參考峰匹配在高斯啟用但未平滑/歸一化時的來源描述更新為「扣高斯後」。另外在 helper sanity check 中抓到 NumPy 環境沒有 `np.trapz`，已改用 `np.trapezoid` 修正高斯中心搜尋的執行期錯誤。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅；額外 sanity check 結果為 `fit_center 25.3`、`residual_abs_max 0.0`、`log_shift 2.000001`，表示固定面積高斯中心搜尋與 log 保護邏輯都正常。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，針對 `modules/xps.py` 做一次 code review 式盤點，重點結論有四個：1. 當使用者啟用任何歸一化時，XPS 擬合會直接對歸一化後曲線進行，後面的峰面積與原子濃度計算因此失去物理意義；2. 在「未平均、多檔同時載入」情況下，擬合目標其實是迴圈最後一個檔案，UI 沒有讓使用者明確選擇要 fit 哪一條曲線；3. `ELEMENT_RSF` 目前是元素層級而不是 orbital / line / source 層級，若直接拿來做 at.% 容易有系統誤差；4. 原子濃度累積表會把每次加入的所有 component（含 satellite / 雙峰次峰 / 重複 run）直接累加，科學上有雙重計數風險。另有一個中等風險：`fit_result` 會留在 session state，使用者改了背景、歸一化、範圍或元素但沒重新按「執行擬合」時，舊結果仍會顯示，容易誤判為新設定下的結果。這次 review 尚未修改 XPS 程式，只整理出後續最值得優先修的風險與優化順序。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，開始實作 XPS review 中最優先的兩個高風險修正：1. 在 `modules/xps.py` 新增 `_clear_xps_fit_state()`、`_build_xps_fit_signature()` 等 helper，將峰擬合結果與目前參數做簽名比對；當背景、顯示範圍、歸一化、元素、峰形、峰清單或擬合目標資料集改變時，舊的 `fit_result` 會自動失效，避免畫面沿用過期結果。2. 重構 XPS 主流程的處理結果暫存，改成每個資料集都先存 `x / raw / bg_subtracted / normalized`，再由使用者透過新的 `擬合目標資料集` selectbox 明確選擇要 fit 哪一條曲線；多檔未平均模式不再默默只擬合最後一個檔案。這輪同時修正 XPS 峰擬合與原子濃度一律使用「背景扣除後、未歸一化」訊號，並在擬合結果區與原子濃度表補上 `資料集` 欄位與 RSF 近似值提醒，降低誤讀風險。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`python3 -m py_compile modules/xps.py` ✅；`git diff --check` 在這輪也已恢復通過。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，繼續補 XPS 的原子濃度流程：在 `modules/xps.py` 新增 `_extract_xps_orbital_family()`、`_is_xps_satellite_label()`、`_dominant_xps_orbital_family()`、`_build_xps_quant_review_df()`、`_build_xps_quant_tables()` helper，將原本「所有 component 直接累加」改成「本次先審核峰，再更新定量累積表」的 workflow。現在 XPS 在每次擬合後會先產生一張可編輯的定量審核表，預設規則為：衛星峰不納入、自旋軌道次峰不納入、若同元素有多種軌域則只保留主要軌域；使用者可手動勾選 `納入定量` 後，再按「更新原子濃度表（覆蓋本資料集+元素）」把本次結果寫入累積表。累積表也改成以 `資料集` 分組計算 `原子濃度 at.%`，避免不同樣品混在一起計算；同時新增元素摘要表、定量明細峰表、摘要/明細兩種 CSV 匯出，並對舊版 `xps_fit_history` session 資料做缺欄位相容補齊。驗證完成：`python3 -m py_compile modules/xps.py` ✅；額外 sanity check 顯示 `Ni 2p3/2 NiO` 預設會被納入、`2p1/2` 與 `sat.` 預設不納入，摘要表可正確輸出 `sample_A / Ni / 納入峰數 1 / 原子濃度 100%`。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，繼續把 XPS 往 Raman / XRD 的研究型輸出模式收斂：在 `modules/xps.py` 新增 `_build_export_filename()`、`_render_download_card()`、`_json_safe()`、`_dataframe_records()` helper，將原本零散的處理後光譜 / 擬合曲線 / 原子濃度下載按鈕重整成統一的三區下載區 `研究常用 / 原始處理輸出 / 追溯 / QC`。其中 `研究常用` 現在包含處理後光譜 CSV、擬合峰表 CSV、原子濃度摘要 CSV；`原始處理輸出` 包含完整擬合曲線 CSV 與原子濃度明細 CSV；`追溯 / QC` 則新增 `xps_processing_report` JSON，會保存輸入檔案、顯示區間、能量校正、背景扣除、歸一化設定、擬合條件、峰表與定量摘要。這輪同時移除 XPS 舊版分散式下載按鈕，讓匯出入口與其他模組一致。驗證完成：`python3 -m py_compile app.py core/__init__.py core/parsers.py core/spectrum_ops.py core/ui_helpers.py modules/__init__.py modules/raman.py modules/xes.py modules/xps.py modules/xrd.py core/processing.py core/peak_fitting.py db/xps_database.py db/xrd_database.py db/raman_database.py` ✅、`git diff --check` ✅；額外 `xps_processing_report` helper sanity check 輸出 `xps_report_json_ok True True`，表示 report JSON 可正常序列化並包含定量摘要欄位。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，從「論文發表標準」角度對四個已開放模組做總盤點：1. Raman 目前是最接近發表級的模組，因為已具備 preset、處理前後比較、峰擬合審核、QC 摘要與 processing report，但峰指派與 peak deconvolution 仍需人工審核；2. XRD 已適合做發表用繞射圖、峰位整理與參考相對照，但尚未達到需要儀器展寬校正、Rietveld refinement 或嚴格晶粒尺寸/相比例定量的層級；3. XPS 經過這輪修正後，定性擬合與研究型定量摘要已可用，但由於 RSF 仍是元素層級近似、尚未做到 orbital/source 專屬定量規則，因此不建議把目前 at.% 直接視為最終發表級定量；4. XES 的 raw processing 科學步驟最完整（BG1/BG2、Dark/Bias、hot pixel、side-band、curvature、I0、energy calibration 都已支援），但目前匯出與追溯性明顯弱於 Raman / XRD / XPS，尚缺統一 processing report、preset、QC 摘要與更完整的發表型輸出結構，因此更像「演算法已到位、論文軟體包裝仍差最後一段」。整體結論是：四者都不應在完全無人工審核下直接拿去投稿，但若以「研究主工具 + 人工複核」來看，Raman 最接近，XRD 次之，XPS 可做定性與半定量，XES 最需要再補追溯與一致性。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，依照使用者要求調整 XPS Step 6 的右欄導引體驗：在 `core/ui_helpers.py` 重構自動捲動 helper，新增 `_emit_scroll_script()` 以避開原本 `components.html(f"""...""")` 中 CSS/JS 大量大括號造成的 f-string 語法風險，並新增 `auto_scroll_on_change()` 讓畫面可在「值改變」時再次自動捲動；同時保留 `auto_scroll_on_appear()` 給區塊首次出現時使用。接著在 `modules/xps.py` 的週期表區塊加上兩種觸發：1. Step 6 首次展開時，自動把右欄捲到 `xps-periodic-table`；2. 當 `selected_elem` 從左側 selectbox 或週期表點選發生變化時，再次自動捲到週期表。這兩種情況都會附帶黃色發光提示：目標區塊短暫閃爍數次後淡出，方便使用者快速定位。驗證完成：`python3 -m py_compile core/ui_helpers.py modules/xps.py` ✅、`git diff --check` ✅；目前尚未做 Streamlit 瀏覽器層級的互動 smoke test。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，嘗試在右欄自動捲動新增黃框 flash 效果，歷經多輪修改（CSS animation class → position:fixed overlay → 直接 style 設定），均因 Streamlit iframe 架構限制無法穩定呈現。使用者決定捨棄此功能。最終清除所有 flash 相關程式碼：`core/ui_helpers.py` 移除 CSS/JS flash 邏輯，`auto_scroll_on_appear` / `auto_scroll_on_change` 移除 `flash` 參數，三個 module 的所有 `flash=True` 呼叫一併刪除；保留捲動功能（`block="start"` 讓圖表頂端靠近 viewport 頂部）。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 重新閱讀 `CLAUDE.md` 後，針對 Raman Step 8 的粉末樣品支援做兩項調整：1. 在 Side 8 expander 新增 `樣品類型` radio（薄膜 / 粉末），粉末模式的初始 FWHM 計算公式改為 `max(15, min(60, range/15))`，薄膜仍用 `max(4, min(24, range/30))`，並將 `"raman_sample_type"` 納入 `_RAMAN_PRESET_KEYS`；2. 將峰位管理區的「基板 selectbox + 薄膜材料 multiselect」合併成單一 `選擇材料 multiselect`（涵蓋 `RAMAN_REFERENCES` 全部 key）與單一「載入參考峰」按鈕，移除 `_SUBSTRATE_KEYS`、`_FILM_KEYS` 分類與對應的 widget；同步清除 `modules/raman.py` 中 `_SUBSTRATE_KEYS`、`_FILM_KEYS` 死碼定義。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 更新 `db/raman_database.py`：新增 `Sapphire α-Al₂O₃ (a-plane)`（11-20 切面，7 個相同模式但相對強度不同，645 與 750 為最強）、`Sapphire α-Al₂O₃ (m-plane)`（10-10 切面，部分實驗室稱 b-plane）、`Ta₂O₅`（β 相薄膜，5 峰：100/250/480/660/850 cm⁻¹）、`CeO₂`（螢石結構，主峰 465 F₂g + 缺陷峰 600 + 2TA/2LO）、`SrTiO₃`（立方鈣鈦礦，disorder-activated 5 峰：175/250/470/540/795 cm⁻¹）、`Mo₂Ti₂C₃ (MXene)`（雙過渡金屬 MXene 粉末，5 峰：150/200/258/460/600 cm⁻¹，峰型寬）；SnO₂ 原已存在不重複加入。n-Si 與 p-Si 在一般摻雜濃度下 Raman 圖譜實質相同，不另建條目。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 在 `modules/xps.py` 新增 XPS Valence Band 分析模式：新增 `_vbm_linear_extrapolation()` helper（linear fit leading edge → 與 baseline 水平線交點 = VBM），並實作 `_run_valence_band_ui()` 獨立 workflow（Step 2 手動能量校正 / Step 3 背景扣除 / Step 4 VBM 外推設定）；`run_xps_ui()` 在 sidebar 頂部加入 `Core Level / Valence Band` 分析模式 radio，CL 模式 Step 2（多檔平均）包在 `if xps_analysis_mode == "Core Level":` 條件中，VB 模式在數據載入後立即呼叫 `_run_valence_band_ui()` 並 return。主區圖表在 VB 模式顯示 leading edge 擬合區（藍色陰影）、baseline 區（綠色陰影）、外推線（虛線）、Baseline 水平線、VBM 垂直標記；結果以 metric 卡片顯示各資料集 VBM eV 值與輔助說明（推估 CBM、Kraut method 提示）；匯出區提供 VBM 結果 CSV 與處理後光譜 CSV。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 在 `_run_valence_band_ui()` 的 VBM 外推結果區下方新增 `Band Offset 計算（Kraut Method）` expander：顯示公式 `ΔEV = (CL_A − VBM_A)bulk − (CL_B − VBM_B)bulk − (CL_A − CL_B)interface`；雙欄輸入材料 A / B 各自的名稱、體材料 VBM_eV、Core Level 標籤、Core Level BE_eV，以及界面樣品的 CL_A_int / CL_B_int；可選輸入 Eg_A / Eg_B 計算 ΔEC；自動計算並以 metric 顯示 ΔCL_A / ΔCL_B / ΔCL_interface / ΔEV / ΔEC，附正負號解讀說明；當兩個 bandgap 均有輸入時，額外繪製能帶對齊示意圖（Plotly 矩形 + 箭頭標示 ΔEV / ΔEC），B 的 VBM 設為 0 參考；Kraut 結果可匯出為 CSV（`_render_download_card` 卡片式）。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 補強 Raman Step 8 擬合結果區：在 review 審核表下方新增「Si 峰位移 → 雙軸應力估算」expander；當 `fit_summary_df` 中偵測到 Material 含 Si 且峰位在 480–570 cm⁻¹ 的峰時自動顯示；使用者可輸入無應力參考位置（預設 520.7 cm⁻¹）與轉換係數（預設 −1.93 cm⁻¹/GPa，雙軸；單軸 [100] 約 −1.6），程式自動計算 Δω 與 σ (GPa) 並輸出表格與 metric 卡片，附壓/拉/接近無應力解讀。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 補強 XRD 模組：新增 `scherrer_crystallite_size()` helper（公式 D = Kλ / (β cosθ)，回傳 nm；支援無校正 / Gaussian √(β²−β_inst²) / Lorentzian β−β_inst 三種儀器展寬校正方式）與 `build_scherrer_table()` helper（對 `peak_export_df` 逐峰計算並新增 `D_Scherrer_nm` / `D_Scherrer_A` 欄位）；sidebar 新增 `Scherrer 晶粒尺寸` expander（K 值、β_inst、校正方式設定，附 Williamson-Hall 提示）；主區在啟用 Scherrer 且有自動尋峰結果時，顯示完整結果表、各資料集統計摘要（D 平均 / std / min / max）與 metric 卡片；匯出區新增 `Scherrer 晶粒尺寸 CSV` 卡片；processing_report JSON 新增 `scherrer` 區段。sanity check：Cu Kα / 38.5° / FWHM=0.3° / K=0.9 → D = 28.05 nm ✅。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 補強 XES 模組追溯性與研究可重現性：在 `modules/xes.py` 新增 `_XES_PRESET_KEYS`、`_XES_PRESET_VERSION`、`_json_safe()`、`_dataframe_records()`、`_build_export_filename()`、`_render_download_card()`、`_build_xes_preset_payload()`、`_apply_xes_preset_payload()`、`_xes_column_display_name()`、`_xes_default_compare_columns()` 等 helper；sidebar Step 1 上方新增 XES Preset expander（匯出/匯入 JSON）；主圖下方新增「處理前後比較」expander（可選資料集、比對原始訊號 / BG 基準線 / 平滑後 / 歸一化後）與「QC 摘要」expander（各資料集最大強度、SNR 估算、偵測峰數與峰位）；底部匯出區取代舊有散落按鈕，改成三區卡片式：`研究常用`（處理後光譜 CSV、峰值列表 CSV）、`原始處理輸出`（BG 分點權重表 CSV、曲率校正表 CSV）、`追溯 / QC`（xes_processing_report JSON、QC 摘要 CSV）；processing report JSON 涵蓋輸入檔案、BG 扣除、影像校正、ROI/投影、平滑、歸一化、能量軸校正、峰偵測全部參數。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 XPS 定量 RSF 升級至軌域精確值：在 `db/xps_database.py` 新增 `ORBITAL_RSF` dict（143 筆，涵蓋 C 1s / N 1s / O 1s / F 1s、Period 3 的 2s/2p、3d 過渡金屬 2p3/2 + 2p1/2 + 2p total、Period 5 3d 系列 3d5/2 + 3d3/2 + 3d total、5d 金屬 4f7/2 + 4f5/2 + 4f total 等；sub-level RSF 依縮并比例從 ELEMENT_RSF 拆解：2p3/2 = 2/3 × 2p, 3d5/2 = 3/5 × 3d, 4f7/2 = 4/7 × 4f）；新增 `get_orbital_rsf(element, label, source)` helper（regex 從 label 抽取軌域標記如 "2p3/2"，先查 ORBITAL_RSF，fallback ELEMENT_RSF，回傳 `(value, source_description)`）；更新 `modules/xps.py` 的 `_build_xps_quant_review_df()` 改為逐峰呼叫 `get_orbital_rsf()`，新增 `RSF來源` 欄位顯示「軌域精確 (Ni 2p3/2)」或「元素層級近似 (Ni)」；caption 改為條件說明取代舊有的全面性警告；quant review data_editor 停用欄補上 `RSF來源`；processing_report rsf_note 也更新為軌域精確描述。sanity check：Ni 2p3/2 NiO → 14.07 軌域精確 ✅、Ti 2p3/2 TiO2 → 5.21 ✅、Mo 3d5/2 MoS2 → 5.7 ✅、Au 4f7/2 → 9.83 ✅、C 1s → 1.0 ✅。驗證完成：`python3 -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 新增 XAS / XANES 第一版 workflow：在 `app.py` 將 XAS 標記為可用並 dispatch 到 `modules/xas.py`；新模組支援多檔 `.txt/.csv/.dat/.xmu/.nor` 載入，資料模式包含已處理 `mu(E)`、Transmission `Energy/I0/It` 與 Fluorescence `Energy/I0/If`。流程包含手動能量位移、可選一階導數 edge 對齊、多檔內插平均、pre-edge / post-edge 多項式正規化、E0 自動/手動設定、white line 搜尋、XANES 摘要表、處理後光譜 CSV 與 `xas_processing_report` JSON 匯出。依照使用者需求，XANES 流程中新增「扣除高斯曲線（可選）」步驟，沿用 XRD 的固定 FWHM / 固定面積 / 只搜尋中心位置的高斯模板扣除邏輯，並輸出高斯中心結果 CSV。驗證完成：`py -m py_compile app.py modules\xas.py modules\gaussian_subtraction.py core\spectrum_ops.py` ✅。
-- 2026-04-26 繼續完整化 XAS：依照使用者要求將 XAS 資料模式名稱改為 `TEY：Energy/I0/TEY` 與 `TFY：Energy/I0/TFY`，保留已處理 `mu(E)` 模式；TEY/TFY 皆以 `Signal / I0` 轉為 XANES 訊號，舊 preset 若帶入 transmission/fluorescence 會落回 TFY 類型避免 UI 狀態錯誤。新增 `XAS Preset` expander，可匯出/匯入能量校正、edge 對齊、多檔平均、扣高斯、E0、pre/post-edge normalization 與 white line 範圍等設定；主區新增「處理前後比較」expander，可疊圖檢查原始/內插 mu(E)、高斯模板、正規化前訊號、pre/post-edge baseline 與 normalized XANES。驗證完成：`py -m py_compile ...` ✅、`git diff --check` ✅。
-- 2026-04-26 XAS / XANES workflow refactor: `modules/xas.py` now treats one `.DAT`/text file as dual-channel XANES data. Default columns are Energy=1, TEY=2, TFY=3; TEY and TFY are assumed already divided by I0, and TFY is flipped by default with `1 - TFY`. The UI now shows raw TEY and TFY side-by-side, then runs optional XRD-style fixed-Gaussian subtraction, background subtraction, post-edge normalization, white-line summary, optional Gaussian fitting, and exports per-file processed TEY/TFY CSV plus `xas_processing_report` JSON. Validation: `py -m py_compile app.py modules\xas.py modules\gaussian_subtraction.py core\spectrum_ops.py` passed; `git diff --check` passed.
-- 2026-04-26 XAS DAT column rule update: sample file `260410_00010.dat` uses `Energy(eV) Phase(mm) Gap(mm) TKU:CurMD-03(A) TKU:CurMD-01(A) TKU:CurMD-02(A)`. User confirmed CurMD-01=TEY, CurMD-02=I0, CurMD-03=TFY. `modules/xas.py` now auto-parses this layout without post-upload Energy/TEY/TFY column selectors: Energy=col1, TFY=col4/col6, TEY=col5/col6, and TFY is optionally flipped with `1 - TFY`. Smoke test on the provided DAT parsed shape `(843, 6)` and mapping `i0_col=6, tey_col=5, tfy_col=4`.
-- 2026-04-26 XAS UI cleanup: `app.py` now imports `run_xas_ui` from new `modules/xas_auto.py` to avoid the older sidebar state that still exposed "data column mode" and energy calibration controls. New sidebar order is XPS-like: Load data auto-parse, Average, Energy calibration skipped, Gaussian subtraction, Background subtraction, Normalization, Fit/export. Range sliders are derived from uploaded file energy min/max, so Ti L-edge files around 445-485 eV no longer default to 8300 eV ranges or trigger pre/post-edge insufficient-points warnings from stale session values. Validation: `py -m py_compile app.py modules\xas_auto.py modules\xas.py`, DAT smoke test, and `git diff --check` passed. Started fresh Streamlit on port 8503.
-- 2026-04-26 XAS UI pass 2: rewrote `modules/xas_auto.py` into a clean XPS-style workflow where every sidebar step is an expander/card: Load data, Interpolation + multi-file average, optional Energy correction, optional Gaussian subtraction, Background subtraction, Normalization, Fit/export. Interpolation and averaging now follow Raman's pattern: interpolation can be used alone; averaging interpolates all files over the shared overlap range before averaging. Gaussian subtraction now renders raw / Gaussian model / after-subtraction comparison. Background plots now show the selected background range as a shaded vrect and can overlay the fitted baseline. Normalization supports XANES post-edge plus XPS-style none/min-max/max/area/mean-region modes and can show the normalization range. Validation: `py -m py_compile app.py modules\xas_auto.py modules\xas.py core\processing.py`, DAT parse/background/normalization smoke test, and `git diff --check` passed.
-- 2026-04-26 Windows launcher repair: `啟動_Windows.bat` now avoids stale Streamlit sessions by using dedicated ports 8511-8520, detects Python from PowerShell `py` plus local Python install paths, launches Streamlit with `pythonw.exe` via PowerShell `Start-Process` to avoid stdin redirection crashes, and opens the selected URL after health check. Validation command `NO_BROWSER=1 cmd /c 啟動_Windows.bat` launched `http://localhost:8511`; `curl http://localhost:8511/_stcore/health` returned `ok`; `git diff --check` passed.
-- 2026-04-26 啟動腳本速度優化：1. `.streamlit/config.toml` 新增 `runOnSave=false / enableCORS=false / enableXsrfProtection=false / maxUploadSize=500 / client.toolbarMode="minimal" / logger.level="error" / client.showErrorDetails=false` 參數，減少啟動時的初始化與日誌開銷；2. `啟動_Windows.bat` 改用 `netstat` 替代 `curl` 檢查端口（快 10 倍）；3. 改用 8501-8510 而非 8511-8520（更接近 Streamlit 默認）；4. 移除重複的 streamlit 包檢查；5. 移除冗長的健康檢查等待迴圈，改成後台啟動後立即打開瀏覽器（瀏覽器會自動重試連接）；6. 簡化提示信息（從 4 步改為 3 步）。預期啟動時間從 30-60 秒降至 5-10 秒。驗證完成：`git diff --check` ✅；實際啟動測試待辦。
-- 2026-04-26 XAS Step 7（擬合輸出）移除：從 `modules/xas_auto.py` 完整刪除「7. 擬合與輸出」expander，包含 `fit_enabled / fit_channels / fit_range / fit_components` 控制項、`fit_rows` 初始化、`fit_curve` 欄位、處理迴圈中的 `_fit_xanes_gaussians` 呼叫、歸一化圖上的 fit overlay、底部 `Gaussian 擬合結果` 區塊；`_fit_xanes_gaussians` 從 import 移除。`white_range` 滑桿移至 Step 6（歸一化）expander 內。原 Step 8（XANES 去卷積擬合）重編號為 Step 7。驗證完成：`py -m py_compile modules/xas_auto.py modules/xas_fit.py` ✅、`git diff --check` ✅。
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓分頁標題 Nigiro Pro 生效。
