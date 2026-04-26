@@ -357,3 +357,15 @@ Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與
 - 最近曾重啟 8504 Streamlit 服務，health check 回傳 `ok`。
 
 - 2026-04-26：重新讀取 CLAUDE.md 後完成驗證；uv run python -m py_compile app.py modules\xas_auto.py 通過，git diff --check 通過。
+
+- 2026-04-26：依使用者回報，準備調暗非深色主題（light/ocean/forest/rose），降低背景、surface、sidebar 亮度，保留可讀性但避免刺眼。
+
+- 2026-04-26：已修改 app.py 的 light/ocean/forest/rose 主題色，降低背景、surface、sidebar 亮度，改用較柔和的中低亮度配色，避免非深色主題過亮刺眼。
+
+- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓調暗後的非深色主題生效。
+
+- 2026-04-26：修正右下角設定齒輪 popover 在非深色主題下對比不足的問題；新增 popover 內容層、標題、radio label、選取與 hover 狀態的主題化 CSS，讓設定面板背景、文字、邊框跟隨目前主題並維持可讀性。驗證：`uv run python -m py_compile app.py` 通過，`git diff --check` 通過。
+
+- 2026-04-26：修正右下角設定 popover 出現厚黑外框的問題；將 BaseWeb popover 外層改為透明、移除外層 padding/border/shadow，並把卡片背景、邊框、陰影套在 stPopoverBody / stVerticalBlockBorderWrapper 內容層。驗證：`uv run python -m py_compile app.py` 通過，`git diff --check` 通過。
+
+- 2026-04-26：依使用者回饋微調右下角設定 popover；保留外框但將外框 padding 縮到 8px，內部設定卡改為 12px 圓角與緊湊 padding，並重新整理標題、radio 標籤、選項 pill 的字距與行距。驗證：`uv run python -m py_compile app.py` 通過，`git diff --check` 通過。

@@ -17,16 +17,16 @@ THEMES = {
     "light": {
         "label_zh": "淺色",
         "label_en": "Light",
-        "bg": "#f6f8fb",
-        "surface": "#ffffff",
-        "surface_alt": "#edf2f7",
-        "text": "#18202a",
-        "muted": "#5f6b7a",
-        "sidebar": "#f0f4f8",
-        "sidebar_text": "#202936",
-        "border": "#d8e0ea",
-        "accent": "#2563eb",
-        "accent_soft": "rgba(37, 99, 235, 0.14)",
+        "bg": "#dfe5ed",
+        "surface": "#edf2f6",
+        "surface_alt": "#d5dde7",
+        "text": "#15202b",
+        "muted": "#526171",
+        "sidebar": "#d4dce7",
+        "sidebar_text": "#172333",
+        "border": "#aeb9c8",
+        "accent": "#1f5fbf",
+        "accent_soft": "rgba(31, 95, 191, 0.18)",
         "button_text": "#ffffff",
     },
     "dark": {
@@ -47,46 +47,46 @@ THEMES = {
     "ocean": {
         "label_zh": "海洋藍",
         "label_en": "Ocean",
-        "bg": "#f1fbff",
-        "surface": "#ffffff",
-        "surface_alt": "#e6f6fb",
-        "text": "#12323f",
-        "muted": "#506c78",
-        "sidebar": "#e7f6fb",
-        "sidebar_text": "#12323f",
-        "border": "#b9dbe6",
-        "accent": "#0087a8",
-        "accent_soft": "rgba(0, 135, 168, 0.16)",
+        "bg": "#cfe1e8",
+        "surface": "#e2edf1",
+        "surface_alt": "#c1d8e1",
+        "text": "#102f3a",
+        "muted": "#496772",
+        "sidebar": "#bdd5df",
+        "sidebar_text": "#102f3a",
+        "border": "#8fb5c3",
+        "accent": "#007b99",
+        "accent_soft": "rgba(0, 123, 153, 0.20)",
         "button_text": "#ffffff",
     },
     "forest": {
         "label_zh": "森林綠",
         "label_en": "Forest",
-        "bg": "#f5faf4",
-        "surface": "#ffffff",
-        "surface_alt": "#eaf4e7",
-        "text": "#1f3024",
-        "muted": "#5f705f",
-        "sidebar": "#edf6ea",
-        "sidebar_text": "#1f3024",
-        "border": "#c8dec3",
-        "accent": "#2f7d42",
-        "accent_soft": "rgba(47, 125, 66, 0.16)",
+        "bg": "#d7e3d2",
+        "surface": "#e7eee3",
+        "surface_alt": "#cbdcc5",
+        "text": "#1b2f20",
+        "muted": "#536b57",
+        "sidebar": "#c8dbc2",
+        "sidebar_text": "#1b2f20",
+        "border": "#9fb794",
+        "accent": "#2c733d",
+        "accent_soft": "rgba(44, 115, 61, 0.20)",
         "button_text": "#ffffff",
     },
     "rose": {
         "label_zh": "玫瑰紅",
         "label_en": "Rose",
-        "bg": "#fff7f8",
-        "surface": "#ffffff",
-        "surface_alt": "#faedf0",
-        "text": "#3b2028",
-        "muted": "#775d64",
-        "sidebar": "#fbf0f2",
-        "sidebar_text": "#3b2028",
-        "border": "#eccbd2",
-        "accent": "#c03259",
-        "accent_soft": "rgba(192, 50, 89, 0.16)",
+        "bg": "#ead8dc",
+        "surface": "#f2e5e8",
+        "surface_alt": "#dfc8ce",
+        "text": "#3a1c27",
+        "muted": "#745964",
+        "sidebar": "#dec7cd",
+        "sidebar_text": "#3a1c27",
+        "border": "#bd99a4",
+        "accent": "#b72f56",
+        "accent_soft": "rgba(183, 47, 86, 0.20)",
         "button_text": "#ffffff",
     },
 }
@@ -418,6 +418,95 @@ div[data-testid="stPopover"] > button:hover {{
 
 [data-baseweb="popover"] {{
     z-index: 10001;
+    background: transparent !important;
+}}
+
+[data-baseweb="popover"] > div {{
+    background: transparent !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 14px !important;
+    box-shadow: none !important;
+    overflow: hidden !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stPopoverBody"] {{
+    background: transparent !important;
+    border: 1px solid var(--app-border) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24) !important;
+    padding: 8px !important;
+    overflow: hidden !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stVerticalBlockBorderWrapper"] {{
+    background: var(--app-surface) !important;
+    border: 0 !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    overflow: hidden !important;
+    padding: 12px 14px !important;
+    min-width: 272px !important;
+    max-width: 300px !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stPopoverBody"] > div,
+[data-baseweb="popover"] [data-testid="stVerticalBlock"],
+[data-baseweb="popover"] [data-testid="stRadio"] {{
+    background: var(--app-surface) !important;
+}}
+
+[data-baseweb="popover"] *,
+[data-baseweb="popover"] label,
+[data-baseweb="popover"] label p,
+[data-baseweb="popover"] h1,
+[data-baseweb="popover"] h2,
+[data-baseweb="popover"] h3,
+[data-baseweb="popover"] h4,
+[data-baseweb="popover"] h5,
+[data-baseweb="popover"] h6 {{
+    color: var(--app-text) !important;
+}}
+
+[data-baseweb="popover"] h3 {{
+    font-size: calc(var(--app-font-size) + 1px) !important;
+    line-height: 1.25 !important;
+    margin: 0 0 12px 0 !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stMarkdownContainer"] p {{
+    line-height: 1.25 !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stRadio"] {{
+    margin: 0 0 12px 0 !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stRadio"] > label {{
+    font-weight: 700 !important;
+    margin-bottom: 6px !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stRadio"] div[role="radiogroup"] {{
+    gap: 7px 12px !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stRadio"] label {{
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 5px 8px !important;
+    min-height: 30px !important;
+    align-items: center !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stRadio"] label:has(input:checked) {{
+    background: var(--app-accent-soft) !important;
+    border-color: var(--app-accent) !important;
+}}
+
+[data-baseweb="popover"] [data-testid="stRadio"] label:hover {{
+    background: color-mix(in srgb, var(--app-accent-soft) 72%, var(--app-surface-alt) 28%) !important;
+    border-color: color-mix(in srgb, var(--app-accent) 68%, transparent) !important;
 }}
 
 [data-testid="stMetric"],
