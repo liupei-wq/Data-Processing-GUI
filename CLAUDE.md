@@ -1,15 +1,16 @@
-# Data Processing GUI 專案紀錄
+# Nigiro Pro 專案紀錄
 
 ## 協作規則
 
 - 回答使用者時一律使用繁體中文。
 - 每一次動作前都要先讀取 `CLAUDE.md`。
-- 每一次實作、檢查或重要判斷都要記錄在專案根目錄的 `CLAUDE.md`。
+- 每一次實作、檢查、重啟、重要判斷都要記錄在專案根目錄的 `CLAUDE.md`。
 - 不要回復或覆蓋使用者未要求修改的既有變更。
+- 目前 PowerShell profile 會出現執行原則警告，通常不影響指令結果。
 
-## 專案概覽
+## 專案定位
 
-這是一個以 Streamlit 製作的光譜資料處理 GUI，入口檔為 `app.py`。目前支援或已建立工作流程的資料類型：
+Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與材料分析資料處理。入口檔為 `app.py`，目前支援：
 
 - XPS：X-ray Photoelectron Spectroscopy
 - XES：X-ray Emission Spectroscopy
@@ -17,145 +18,342 @@
 - XRD：X-ray Diffraction
 - XAS / XANES：X-ray Absorption Spectroscopy
 - Gaussian subtraction：獨立高斯模板扣除工具
-- SEM：保留為未來模組
+- SEM：目前只保留為未來模組，尚未開放
 
 ## 啟動與環境
 
-- Windows 啟動檔：`啟動_Windows.bat`
-- Mac 啟動檔：`啟動_Mac.command`
+- Windows 啟動：`啟動_Windows.bat`
+- Mac 啟動：`啟動_Mac.command`
 - 安裝套件：`安裝套件.bat`
 - 手動啟動：`streamlit run app.py`
-- 依賴套件：`requirements.txt`
+- 目前測試服務常用：`uv run streamlit run app.py --server.port 8504 --server.headless true`
+- 依賴：`requirements.txt`
+  - `streamlit`
+  - `pandas`
+  - `numpy`
+  - `plotly`
+  - `scipy`
+  - `lmfit`
 - Streamlit 設定：`.streamlit/config.toml`
+  - `fileWatcherType = "none"`，所以修改後通常要重啟服務才會立即看到新版
+  - `maxUploadSize = 500`
+  - `toolbarMode = "minimal"`
+  - `showErrorDetails = false`
 
-## 主要檔案結構
+## 架構總覽
 
-- `app.py`：Streamlit 入口、全域 UI 設定、資料類型切換與模組 dispatch。
-- `modules/raman.py`：Raman workflow。
-- `modules/xps.py`：XPS workflow，含 Core Level / Valence Band 相關分析。
-- `modules/xes.py`：XES workflow。
-- `modules/xrd.py`：XRD workflow。
-- `modules/xas_auto.py`：目前 app 使用的 XAS / XANES 自動解析 workflow。
-- `modules/xas.py`：較早期 XAS workflow 與共用邏輯。
-- `modules/xas_fit.py`：XAS Gaussian fitting helper。
-- `modules/gaussian_subtraction.py`：獨立高斯扣除工具。
-- `core/parsers.py`：光譜檔案解析。
-- `core/processing.py`：背景扣除、平滑、正規化等處理。
-- `core/spectrum_ops.py`：峰值偵測、插值、平均等共用運算。
-- `core/peak_fitting.py`：Gaussian / Lorentzian / Voigt fitting。
-- `core/read_fits_image.py`：XES FITS 影像讀取。
-- `core/ui_helpers.py`：UI helper。
-- `db/raman_database.py`：Raman reference database。
-- `db/xps_database.py`：XPS reference / RSF database。
-- `db/xrd_database.py`：XRD reference database。
+- `app.py`
+  - 全域入口、品牌、主題、語言、字級、右下角齒輪設定
+  - 左上角 `Nigiro Pro` 品牌區與 SVG logo
+  - 右側 hover「資料選單」抽屜，用同頁 query parameter 切換資料類型與工具
+  - 主內容浮貼裝飾
+  - dispatch 到各模組的 `run_*_ui()`
+- `modules/`
+  - 各資料類型的 Streamlit UI 與 workflow
+- `core/`
+  - parser、背景扣除、正規化、峰值偵測、峰擬合、FITS 讀取、UI helper
+- `db/`
+  - Raman、XPS、XRD 的參考資料庫
 
-## 已知設計重點
+## 全域 UI 現況
 
-- `app.py` 是所有模組共同入口，適合放全域主題、語言、字級等偏好設定。
-- 各分析模組以 `run_*_ui()` 函式由 `app.py` dispatch。
-- XAS 目前由 `modules/xas_auto.py` 接管，`app.py` 匯入 `run_xas_ui` 自該檔。
-- Windows launcher 近期改為使用 dedicated ports 8511-8520，避免 stale Streamlit session。
-- `.streamlit/config.toml` 已調整過 Streamlit watcher、CORS、toolbar、upload size 與錯誤顯示設定。
+- 產品名稱：`Nigiro Pro`
+- 分頁名稱：`Nigiro Pro`
+- 左上角品牌區：
+  - 自製 SVG 數據處理 logo
+  - `Nigiro Pro`
+  - `data processing`
+- 右下角齒輪設定：
+  - 主題：淺色、深色、海洋藍、森林綠、玫瑰紅
+  - 語言：繁體中文 / English
+  - 字體大小：小 / 中 / 大
+  - hover 時齒輪旋轉，移開會轉回
+- 右側資料選單抽屜：
+  - hover 從右往左滑出
+  - 上區：資料類型 XPS / XES / Raman / XRD / XAS
+  - 下區：工具，包含扣除高斯
+  - 順序固定，不會因選取而跳到第一個
+  - 使用 `target="_self"` 同頁切換，不開新分頁
+- 左側 sidebar：
+  - 只放目前模組的處理步驟
+  - 不再放資料類型選單與扣除高斯入口
 
-## 近期重要功能摘要
+## 資料類型評估
 
-- XAS / XANES：
-  - 自動解析 DAT 欄位，Energy=第 1 欄，TFY=CurMD-03/I0，TEY=CurMD-01/I0，I0=CurMD-02。
-  - 支援 TEY / TFY 並排顯示、平均、能量校正、高斯扣除、背景扣除、正規化、white-line 摘要、Gaussian fitting 與 CSV / JSON 匯出。
-  - `modules/xas_auto.py` 採用類 XPS 的 sidebar step workflow。
-- XPS：
-  - 新增 Valence Band / VBM workflow。
-  - 新增 Band Offset / Kraut Method 計算區塊。
-  - XPS RSF 資料庫擴充 orbital-level RSF 與 `get_orbital_rsf()`。
-- XRD：
-  - 新增 Scherrer crystallite size 計算與匯出欄位。
-- XES：
-  - 新增 preset 匯入/匯出、QC 報告與處理結果匯出。
-- Raman：
-  - 強化 peak review 與 Si stress estimate 相關輸出。
+### XPS
 
-## 本次變更紀錄
+檔案：`modules/xps.py`
 
-- 2026-04-26：已依規則先讀取 `CLAUDE.md`，確認 `app.py` 是全域 UI 入口。
-- 2026-04-26：修改 `app.py`，新增右下角齒輪設定 `st.popover`。
-- 2026-04-26：新增顏色主題切換：淺色、深色、海洋藍、森林綠、玫瑰紅。
-- 2026-04-26：新增語言切換：繁體中文 / English。此版本先套用 `app.py` 入口層、sidebar 標籤、設定面板、主標題與提示文字；各分析模組內部文字可後續逐步接 `st.session_state["ui_language"]` 擴充。
-- 2026-04-26：新增字體大小切換：小 / 中 / 大，透過全域 CSS 變數套用。
-- 2026-04-26：新增全域 CSS 變數，讓 sidebar、expander、slider、button、divider、主背景與右下角齒輪跟隨主題色。
-- 2026-04-26：使用 `uv run python -m py_compile app.py` 完成語法檢查，結果通過。
-- 2026-04-26：執行 `git diff --check`，結果通過；僅出現 Git 的 LF/CRLF 換行提示。
-- 2026-04-26：依使用者要求重新整理 `CLAUDE.md`，移除舊亂碼紀錄，改成可讀的繁中專案摘要與本次變更紀錄。
+定位：最完整、功能最重的定量分析 workflow。適合處理 XPS core-level 與 valence-band 資料。
 
-- 2026-04-26：重新讀取整理後的 CLAUDE.md；以已核准方式重跑 uv run python -m py_compile app.py，語法檢查通過。
+主要能力：
 
-- 2026-04-26：重新讀取 CLAUDE.md；已用 uv run streamlit run app.py --server.port 8504 --server.headless true 啟動本機 Streamlit，輸出記錄在 streamlit_ui_settings.out.log / streamlit_ui_settings.err.log。
+- XPS 檔案解析與載入
+- 多檔平均
+- 能量校正
+- 背景扣除
+- 正規化
+- 峰值擬合
+- Core Level / Valence Band 模式切換
+- VBM 線性外推
+- Band Offset / Kraut Method
+- XPS 定量表格與 RSF review
+- 匯出處理結果、報告與表格
 
-- 2026-04-26：收到使用者回報 KeyError；已重新讀取 CLAUDE.md 與 app.py 錯誤位置，判斷原因是 Streamlit session_state 保留了不合法的 ui_theme / ui_language / ui_font_size 舊值。
+資料來源：
 
-- 2026-04-26：已修正 app.py 的 _init_preferences()，改為檢查 session_state 值是否在允許清單內，不合法時自動重設為預設值，避免 ui_theme KeyError。
+- `core/parsers.py`
+- `core/processing.py`
+- `core/peak_fitting.py`
+- `db/xps_database.py`
 
-- 2026-04-26：依使用者截圖回饋，準備調整 app.py CSS：齒輪固定到真正右下角並加入 hover 旋轉；sidebar 資料類型與資料處理控制加入 hover 微亮框線效果。
+評估：
 
-- 2026-04-26：已修改 app.py CSS，將齒輪 popover 容器鎖定為右下角 52px 小範圍，按鈕 hover 旋轉並移開回復；sidebar radio / checkbox label 新增 hover 淡底、框線與柔光效果。
+- 成熟度高，功能完整。
+- 風險在於檔案很大、狀態很多，後續修改要避免破壞既有 session key。
+- 若要做 UI 改版，應小步切分，不要一次重構整個 XPS。
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓齒輪位置與 sidebar hover CSS 生效。
+### XES
 
-- 2026-04-26：依使用者回報，準備修正切換非深色主題後部分 Streamlit 元件仍保留深色底或深色字，導致 file uploader、expander、number input 等文字對比不足。
+檔案：`modules/xes.py`
 
-- 2026-04-26：已修改 app.py CSS，將 h/p/span/div/label、button 內文、expander、file uploader、input/select/textarea、number input、alert 等 Streamlit 元件的背景與文字色統一套用主題變數，改善非深色主題的文字對比。
+定位：FITS 影像與 1D 光譜混合型 XES workflow，功能廣且偏儀器資料處理。
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓主題對比色 CSS 生效。
+主要能力：
 
-- 2026-04-26：依使用者要求，準備將 sidebar 資料類型 radio 改為 hover 自動向下展開的選單，減少頂部佔用高度，讓後續載入檔案等處理步驟往上移。
+- FITS 原始影像讀取
+- BG1/BG2 前後背景扣除
+- Dark/Bias frame
+- Hot pixel 修正
+- ROI 積分
+- side-band background
+- 曲率校正 / image straightening
+- 多檔平均
+- 平滑
+- 正規化
+- X 軸校正
+- 峰值偵測
+- Preset 匯入/匯出
+- QC 摘要與報告
 
-- 2026-04-26：已修改 app.py，新增 _read_selected_type_from_query() 與 _render_data_type_menu()，用自製 HTML/CSS hover 下拉選單取代 sidebar 資料類型 radio，平常只佔一列高度，滑鼠移上去向下展開，點選後用 query parameter 切換資料類型。
+資料來源：
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓資料類型 hover 下拉選單生效。
+- `core/read_fits_image.py`
+- `core/spectrum_ops.py`
+- `core/processing.py`
 
-- 2026-04-26：依使用者追加需求，準備將資料類型 hover 選單改為 sidebar 完整寬度，並新增右側 hover 抽屜式最近資料頁紀錄；切換仍使用同一 Streamlit session，以保留已調整的模組參數。
+評估：
 
-- 2026-04-26：已修改 app.py，資料類型 hover 選單改為 sidebar 完整寬度並移除頂部雙欄布局；新增 _remember_data_type_visit() 與 _render_page_history_drawer()，在網頁右側加入 hover 由右往左展開的資料頁紀錄抽屜，列出最近使用資料類型與可切換模組。
+- 功能完整但流程複雜。
+- 最大風險是影像座標、ROI、曲率校正、I0 / exposure normalization 的交互關係。
+- 適合保持目前 step workflow，不建議把影像與 1D 光譜流程混在同一個大函式之外再硬拆。
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓 sidebar 完整寬度下拉選單與右側紀錄抽屜生效。
+### Raman
 
-- 2026-04-26：依使用者要求，準備移除左側資料類型與資料處理區塊；資料類型切換與扣除高斯工具入口統一移到右側紀錄抽屜，左側只保留各模組處理步驟。
+檔案：`modules/raman.py`
 
-- 2026-04-26：已修改 app.py，移除 sidebar 左側頂部資料類型下拉與扣除高斯 checkbox；新增 _read_tool_from_query()，右側紀錄抽屜加入扣除高斯工具入口，使用 ?tool=gaussian 切換，資料類型頁面仍使用 ?data_type=... 切換。
+定位：Raman 光譜處理與材料參考峰比對 workflow。
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓左側只保留處理步驟、右側抽屜統一切換資料類型與扣除高斯工具的變更生效。
+主要能力：
 
-- 2026-04-26：依使用者回報，準備修正右側抽屜連結點選會開新網頁的問題，改為 target=_self 同頁切換；同時將抽屜分成資料類型與工具兩區，扣除高斯移到工具區下方。
+- Raman 檔案載入
+- Preset 匯入/匯出
+- 基板訊號扣除
+- 去尖峰 / cosmic ray 處理
+- 內插與多檔平均
+- 背景扣除
+- 平滑
+- 正規化
+- 峰候選管理
+- 參考資料庫峰比對
+- 峰擬合
+- Si 峰位移應力估算
+- 處理前後比較與匯出
 
-- 2026-04-26：已修改 app.py，右側紀錄抽屜改為資料類型與工具分區；資料類型連結加入 target=_self，扣除高斯移到工具區下方並同樣 target=_self，以避免切換時開新網頁。
+資料來源：
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓右側抽屜分區與同頁跳轉修正生效。
+- `db/raman_database.py`
+- `core/processing.py`
+- `core/spectrum_ops.py`
+- `core/peak_fitting.py`
 
-- 2026-04-26：依使用者要求，準備修正右側抽屜資料類型排序，改為固定 XPS/XES/Raman/XRD/XAS，不再把目前選到的項目移到最上方；同時將把手名稱由紀錄改為選單。
+評估：
 
-- 2026-04-26：已修改 app.py，右側抽屜資料類型排序固定使用 ready 清單順序，不再依最近使用移動位置；右側把手名稱由紀錄改為選單，標題改為資料選單。
+- 功能非常多，偏分析工作站型。
+- 峰位候選與 reference mapping 是核心價值。
+- 後續要新增材料或峰資料，優先改 `db/raman_database.py`，不要寫死在 UI。
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓右側抽屜固定排序與選單命名生效。
+### XRD
 
-- 2026-04-26：依使用者要求，準備在左上角新增 nigiro pro 品牌區塊，使用自製 SVG 數據處理 logo，並將 Streamlit page title 改為 nigiro pro。
+檔案：`modules/xrd.py`
 
-- 2026-04-26：已修改 app.py，將 Streamlit page title 改為 nigiro pro；新增 _render_brand_header()，在 sidebar 左上角加入自製 SVG 數據處理 logo、nigiro pro 字樣與 data processing subtitle，logo 使用主題 accent 色。
+定位：XRD pattern 處理、參考峰比對、晶粒尺寸分析。
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓 nigiro pro 左上角 logo 與頁面標題變更生效。
+主要能力：
 
-- 2026-04-26：依使用者要求，準備將品牌字樣改為 Nigiro Pro，並在主內容中間加入低透明度、不可點擊的資料處理浮貼背景圖案，降低空白感。
+- XRD 檔案載入
+- 內插與多檔平均
+- 高斯模板扣除
+- 平滑
+- 正規化
+- log transform 弱峰檢視
+- 2theta / d-spacing 軸切換
+- 參考峰比對
+- Scherrer crystallite size
+- 匯出 peak table、Scherrer table、處理報告
 
-- 2026-04-26：已修改 app.py，品牌文字由 nigiro pro 改為 Nigiro Pro；新增 _render_main_stickers() 與主畫面浮貼 CSS，在中間空白區加入低透明度的波形、長條圖、節點圖與資料列 SVG 裝飾。
+資料來源：
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓 Nigiro Pro 品牌大小寫與主畫面浮貼裝飾生效。
+- `db/xrd_database.py`
+- `core/spectrum_ops.py`
+- `core/processing.py`
 
-- 2026-04-26：依使用者要求，準備放大左上角 Nigiro Pro 品牌區，調整 logo、品牌名稱與 subtitle 尺寸。
+評估：
 
-- 2026-04-26：已修改 app.py CSS，將 Nigiro Pro logo 從 42px 放大到 54px，品牌名稱從 19px 放大到 24px，subtitle 從 11px 放大到 12px，並調整品牌區 gap/padding/margin。
+- 結構相對清楚，功能集中。
+- Scherrer 功能已具備，但需提醒使用者 FWHM、儀器展寬、波長與 K 值會強烈影響結果。
+- 參考資料擴充應集中在 `db/xrd_database.py`。
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓放大後的 Nigiro Pro 品牌區生效。
+### XAS / XANES
 
-- 2026-04-26：依使用者回報，確認 app.py 的 Streamlit page_title 仍為 nigiro pro 小寫，準備改為 Nigiro Pro。
+目前 app 使用檔案：`modules/xas_auto.py`
 
-- 2026-04-26：已修改 app.py，將 st.set_page_config(page_title) 由 nigiro pro 改為 Nigiro Pro。
+舊版 / helper 檔案：`modules/xas.py`、`modules/xas_fit.py`
 
-- 2026-04-26：重新讀取 CLAUDE.md；已重啟 8504 Streamlit 服務並確認 health check 回傳 ok，讓分頁標題 Nigiro Pro 生效。
+定位：自動解析 DAT 欄位的 XAS / XANES workflow，主要處理 TEY / TFY。
+
+目前欄位規則：
+
+- Energy：第 1 欄
+- TFY：CurMD-03 / I0
+- TEY：CurMD-01 / I0
+- I0：CurMD-02
+- TFY 可選擇 `1 - TFY` 翻轉
+
+目前 sidebar 順序：
+
+1. 載入資料
+2. 內插與多檔平均
+3. 能量校正（可選）
+4. 背景扣除
+5. 歸一化
+6. 扣除高斯曲線（可選）
+7. XANES 去卷積擬合（可選）
+
+主要能力：
+
+- DAT 自動欄位解析
+- TEY / TFY 雙通道處理
+- 內插與平均
+- 能量位移校正
+- 背景扣除
+- post-edge / min-max / max / area / mean-region 正規化
+- White line 搜尋
+- 高斯模板扣除
+- XANES 去卷積擬合
+- 二階微分輔助峰位識別
+- CSV / JSON 匯出
+
+評估：
+
+- 目前是活躍開發中的模組，需求變動較頻繁。
+- `modules/xas_auto.py` 是 app 實際入口，若改 XAS UI，優先改這個檔。
+- `modules/xas.py` 保留了較早期邏輯與 helper，可作參考，但不要誤以為 app 正在直接使用它。
+- 高斯扣除目前 UI 在歸一化後方，但實際 processing pipeline 仍是在背景與歸一化前先計算 gaussian model / after-gaussian，再用 after-gaussian 做背景與歸一化。若未來使用者要求「真正對 normalized 後曲線扣高斯」，需要調整計算順序，不只是 UI 順序。
+
+### Gaussian Subtraction 工具
+
+檔案：`modules/gaussian_subtraction.py`
+
+定位：獨立工具，不綁定單一資料類型，用於兩欄光譜資料的固定高斯模板扣除。
+
+主要能力：
+
+- 載入兩欄光譜
+- 設定中心、FWHM、峰高 / 面積
+- 固定模板扣除
+- 結果繪圖與 CSV 匯出
+
+評估：
+
+- 適合作為快速工具入口。
+- 目前入口在右側資料選單的「工具」區，使用 `?tool=gaussian` 同頁切換。
+
+## 共用核心評估
+
+### `core/parsers.py`
+
+- 負責通用兩欄光譜解析與 XPS 結構化解析。
+- 會嘗試多種編碼與格式。
+- 建議所有新光譜 parser 優先集中到這裡或呼叫這裡的 helper。
+
+### `core/processing.py`
+
+- 背景扣除：linear、polynomial、AsLS、airPLS、Shirley、Tougaard。
+- 去尖峰、平滑、正規化。
+- 是多個模組共用的核心，修改需保守。
+
+### `core/spectrum_ops.py`
+
+- 峰值偵測、內插、平均、高斯模板扣除。
+- XRD / Raman / XES / XAS 都可能使用其中功能。
+
+### `core/peak_fitting.py`
+
+- Gaussian / Lorentzian / Voigt profile 與 fitting。
+- XPS、Raman 等峰擬合依賴它。
+
+### `core/read_fits_image.py`
+
+- XES FITS 讀取核心。
+- 支援 primary image、header parsing、row/column sums。
+
+### `core/ui_helpers.py`
+
+- step header、skip button、scroll helper。
+- 現有 step workflow 高度依賴這些 UI helper。
+
+## 資料庫評估
+
+- `db/raman_database.py`
+  - Raman 材料與 reference peaks。
+  - 新增材料應優先改這裡。
+- `db/xps_database.py`
+  - XPS 元素資訊、RSF、orbital-level RSF。
+  - `get_orbital_rsf()` 是目前 XPS 定量 review 的重要 helper。
+- `db/xrd_database.py`
+  - XRD reference sticks。
+  - 新增相、材料、reference peak 應改這裡。
+
+## 目前主要風險與注意事項
+
+- 多數檔案中的中文在終端顯示會 mojibake，但 Python 檔通常仍可執行；修改中文字串時要小心編碼。
+- `CLAUDE.md` 曾多次出現亂碼，現在已重新整理為乾淨版本；後續應盡量用 UTF-8 寫入。
+- `fileWatcherType = "none"`，修改後請重啟 Streamlit。
+- `app.py` 的右側抽屜使用 query parameter 切換：
+  - `?data_type=XPS`
+  - `?tool=gaussian`
+- 同頁切換通常會保留 `st.session_state`，但上傳檔案 widget 可能受 Streamlit widget 生命週期限制；若要完全保存跨模組上傳檔案，需要額外做資料快取層。
+- XPS、Raman、XES 檔案很大，重構要分段做。
+- XAS 目前 UI 順序已改為高斯扣除在歸一化後，但實際計算順序仍需另行評估。
+
+## 近期重要變更紀錄
+
+- 2026-04-26：將產品名稱與頁籤名稱調整為 `Nigiro Pro`。
+- 2026-04-26：新增左上角 Nigiro Pro SVG logo 與品牌區，並放大 logo 與字體。
+- 2026-04-26：新增右下角齒輪設定，支援主題、語言、字級切換。
+- 2026-04-26：新增多主題 CSS，改善淺色與彩色主題的文字對比。
+- 2026-04-26：新增右側 hover 資料選單抽屜，資料類型與工具統一由右側切換。
+- 2026-04-26：移除左側頂部資料類型與扣除高斯入口，左側只保留模組處理步驟。
+- 2026-04-26：資料選單固定順序，不再依最近點選移動。
+- 2026-04-26：新增主畫面低透明度資料處理浮貼裝飾。
+- 2026-04-26：XAS sidebar 順序調整為背景扣除、歸一化、高斯扣除、XANES 去卷積擬合。
+- 2026-04-26：本次重新評估所有資料處理類型，並重寫 `CLAUDE.md`。
+
+## 驗證紀錄
+
+- XAS 步驟重排後曾執行：`uv run python -m py_compile modules\xas_auto.py`，通過。
+- 最近曾執行：`git diff --check`，通過，僅有 Git LF/CRLF 提示。
+- 最近曾重啟 8504 Streamlit 服務，health check 回傳 `ok`。
+
+- 2026-04-26：重新讀取 CLAUDE.md 後完成驗證；uv run python -m py_compile app.py modules\xas_auto.py 通過，git diff --check 通過。

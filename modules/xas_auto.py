@@ -1,4 +1,4 @@
-"""Auto-parsed XAS/XANES workflow for beamline DAT files."""
+﻿"""Auto-parsed XAS/XANES workflow for beamline DAT files."""
 
 from __future__ import annotations
 
@@ -136,44 +136,6 @@ def run_xas_ui() -> None:
             ))
             st.caption("目前只做整體 Energy 軸平移；未啟用時完全跳過。")
 
-        with st.expander("4. 扣除高斯曲線（可選）", expanded=False):
-            step_header(4, "扣除高斯曲線（可選）")
-            gaussian_enabled = st.checkbox("啟用高斯扣除", value=False, key="xas_gaussian_enabled")
-            gaussian_channels = st.multiselect("套用通道", CHANNELS, default=CHANNELS, key="xas_gaussian_channels", disabled=not gaussian_enabled)
-
-            # ── FWHM ──────────────────────────────────────────────
-            _fwhm_cur = max(0.05, min(30.0, float(st.session_state.get("xas_gaussian_fwhm", 2.0))))
-            st.session_state["_xas_gaussian_fwhm_sl"] = _fwhm_cur
-            def _on_fwhm_sl():
-                st.session_state["xas_gaussian_fwhm"] = st.session_state["_xas_gaussian_fwhm_sl"]
-            st.slider("FWHM 拉桿 (eV)", 0.05, 30.0, step=0.05,
-                      key="_xas_gaussian_fwhm_sl", on_change=_on_fwhm_sl,
-                      disabled=not gaussian_enabled)
-            gaussian_fwhm = float(st.number_input("固定 FWHM 精確輸入 (eV)", min_value=0.000001, step=0.01, format="%.4f", disabled=not gaussian_enabled, key="xas_gaussian_fwhm"))
-
-            # ── 峰高 → 面積 ───────────────────────────────────────
-            _ht_cur = max(0.0001, min(2.0, float(st.session_state.get("xas_gaussian_height", 0.01))))
-            st.session_state["_xas_gaussian_height_sl"] = _ht_cur
-            def _on_height_sl():
-                st.session_state["xas_gaussian_height"] = st.session_state["_xas_gaussian_height_sl"]
-            st.slider("峰高 拉桿", 0.0001, 2.0, step=0.0005, format="%.4f",
-                      key="_xas_gaussian_height_sl", on_change=_on_height_sl,
-                      disabled=not gaussian_enabled)
-            gaussian_peak_height = float(st.number_input("峰高 精確輸入（直接從圖上讀取）", min_value=0.0, step=0.0005, format="%.5f", disabled=not gaussian_enabled, key="xas_gaussian_height"))
-            gaussian_area = gaussian_peak_height * gaussian_fwhm * 1.0645
-            if gaussian_enabled:
-                st.caption(f"換算面積 = {gaussian_area:.5f}")
-
-            # ── 中心搜尋半寬 ───────────────────────────────────────
-            _search_cur = max(0.0, min(20.0, float(st.session_state.get("xas_gaussian_search", 2.0))))
-            st.session_state["_xas_gaussian_search_sl"] = _search_cur
-            def _on_search_sl():
-                st.session_state["xas_gaussian_search"] = st.session_state["_xas_gaussian_search_sl"]
-            st.slider("中心搜尋半寬 拉桿 (eV)", 0.0, 20.0, step=0.1,
-                      key="_xas_gaussian_search_sl", on_change=_on_search_sl,
-                      disabled=not gaussian_enabled)
-            gaussian_search = float(st.number_input("中心搜尋半寬 精確輸入 (eV)", min_value=0.0, step=0.1, format="%.4f", disabled=not gaussian_enabled, key="xas_gaussian_search"))
-
         bg_default = _range_from_energy(energy_min, energy_max, 0.02, 0.18)
         edge_default = _range_from_energy(energy_min, energy_max, 0.35, 0.65)
         norm_default = _range_from_energy(energy_min, energy_max, 0.78, 0.98)
@@ -195,8 +157,8 @@ def run_xas_ui() -> None:
         show_norm_region = True
         white_range = white_default
 
-        with st.expander("5. 背景扣除", expanded=False):
-            step_header(5, "背景扣除")
+        with st.expander("4. 背景扣除", expanded=False):
+            step_header(4, "背景扣除")
             bg_enabled = st.checkbox("啟用背景扣除", value=False, key="xas_bg_enabled")
             bg_method = st.selectbox(
                 "背景方法",
@@ -233,8 +195,8 @@ def run_xas_ui() -> None:
             bg_ranges = {"TEY": bg_range_tey, "TFY": bg_range_tfy}
             bg_order = int(st.number_input("多項式階數", min_value=0, max_value=5, value=1, key="xas_bg_order", disabled=not (bg_enabled and bg_method == "polynomial")))
 
-        with st.expander("6. 歸一化", expanded=False):
-            step_header(6, "歸一化")
+        with st.expander("5. 歸一化", expanded=False):
+            step_header(5, "歸一化")
             norm_method = st.selectbox(
                 "歸一化方式",
                 ["none", "post_edge", "min_max", "max", "area", "mean_region"],
@@ -256,6 +218,44 @@ def run_xas_ui() -> None:
             show_norm_region = st.checkbox("疊加顯示歸一化區間", value=True, key="xas_show_norm_region", disabled=norm_method == "none")
             white_range = st.slider("White line 搜尋範圍 (eV)", float(energy_min), float(energy_max), _slider_range_value("xas2_white_range", white_default, energy_min, energy_max), float(energy_step), key="xas2_white_range")
 
+        with st.expander("6. 扣除高斯曲線（可選）", expanded=False):
+            step_header(6, "扣除高斯曲線（可選）")
+            gaussian_enabled = st.checkbox("啟用高斯扣除", value=False, key="xas_gaussian_enabled")
+            gaussian_channels = st.multiselect("套用通道", CHANNELS, default=CHANNELS, key="xas_gaussian_channels", disabled=not gaussian_enabled)
+
+            # ── FWHM ──────────────────────────────────────────────
+            _fwhm_cur = max(0.05, min(30.0, float(st.session_state.get("xas_gaussian_fwhm", 2.0))))
+            st.session_state["_xas_gaussian_fwhm_sl"] = _fwhm_cur
+            def _on_fwhm_sl():
+                st.session_state["xas_gaussian_fwhm"] = st.session_state["_xas_gaussian_fwhm_sl"]
+            st.slider("FWHM 拉桿 (eV)", 0.05, 30.0, step=0.05,
+                      key="_xas_gaussian_fwhm_sl", on_change=_on_fwhm_sl,
+                      disabled=not gaussian_enabled)
+            gaussian_fwhm = float(st.number_input("固定 FWHM 精確輸入 (eV)", min_value=0.000001, step=0.01, format="%.4f", disabled=not gaussian_enabled, key="xas_gaussian_fwhm"))
+
+            # ── 峰高 → 面積 ───────────────────────────────────────
+            _ht_cur = max(0.0001, min(2.0, float(st.session_state.get("xas_gaussian_height", 0.01))))
+            st.session_state["_xas_gaussian_height_sl"] = _ht_cur
+            def _on_height_sl():
+                st.session_state["xas_gaussian_height"] = st.session_state["_xas_gaussian_height_sl"]
+            st.slider("峰高 拉桿", 0.0001, 2.0, step=0.0005, format="%.4f",
+                      key="_xas_gaussian_height_sl", on_change=_on_height_sl,
+                      disabled=not gaussian_enabled)
+            gaussian_peak_height = float(st.number_input("峰高 精確輸入（直接從圖上讀取）", min_value=0.0, step=0.0005, format="%.5f", disabled=not gaussian_enabled, key="xas_gaussian_height"))
+            gaussian_area = gaussian_peak_height * gaussian_fwhm * 1.0645
+            if gaussian_enabled:
+                st.caption(f"換算面積 = {gaussian_area:.5f}")
+
+            # ── 中心搜尋半寬 ───────────────────────────────────────
+            _search_cur = max(0.0, min(20.0, float(st.session_state.get("xas_gaussian_search", 2.0))))
+            st.session_state["_xas_gaussian_search_sl"] = _search_cur
+            def _on_search_sl():
+                st.session_state["xas_gaussian_search"] = st.session_state["_xas_gaussian_search_sl"]
+            st.slider("中心搜尋半寬 拉桿 (eV)", 0.0, 20.0, step=0.1,
+                      key="_xas_gaussian_search_sl", on_change=_on_search_sl,
+                      disabled=not gaussian_enabled)
+            gaussian_search = float(st.number_input("中心搜尋半寬 精確輸入 (eV)", min_value=0.0, step=0.1, format="%.4f", disabled=not gaussian_enabled, key="xas_gaussian_search"))
+
         # ── Step 7：XANES 去卷積擬合 ──────────────────────────────────────
         with st.expander("7. XANES 去卷積擬合（可選）", expanded=False):
             step_header(7, "XANES 去卷積擬合")
@@ -263,7 +263,7 @@ def run_xas_ui() -> None:
                 st.warning("需要安裝 lmfit：pip install lmfit")
             deconv_enabled = st.checkbox("啟用去卷積擬合", value=False, key="xas_deconv_enabled")
             if deconv_enabled:
-                st.caption("請先完成歸一化（Step 6），再使用此功能。擬合在歸一化後的數據上進行。")
+                st.caption("請先完成歸一化（Step 5），再使用此功能。擬合在歸一化後的數據上進行。")
 
                 # 擬合目標
                 _deconv_dataset_options = list(st.session_state.get("_xas_processed_keys", []))
@@ -695,7 +695,7 @@ def run_xas_ui() -> None:
                             mime="text/csv", key="xas_deconv_peaks_download",
                         )
         else:
-            st.info("請先在 Step 6 完成歸一化，並在左側 Step 7 選擇正確的資料集與通道。")
+            st.info("請先在 Step 5 完成歸一化，並在左側 Step 7 選擇正確的資料集與通道。")
 
     gaussian_df = pd.concat(gaussian_rows, ignore_index=True) if gaussian_rows else pd.DataFrame()
     if gaussian_enabled and not gaussian_df.empty:
