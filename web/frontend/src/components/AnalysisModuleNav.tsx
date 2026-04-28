@@ -8,8 +8,8 @@ export const ANALYSIS_MODULES: {
 }[] = [
   { id: 'raman', label: 'Raman', detail: 'Raman Spectroscopy', ready: true },
   { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction', ready: true },
-  { id: 'xps', label: 'XPS', detail: 'Coming soon', ready: false },
-  { id: 'xas', label: 'XAS', detail: 'Coming soon', ready: false },
+  { id: 'xps', label: 'XPS', detail: 'X-ray Photoelectron Spectroscopy', ready: true },
+  { id: 'xas', label: 'XAS', detail: 'X-ray Absorption', ready: true },
   { id: 'xes', label: 'XES', detail: 'Coming soon', ready: false },
   { id: 'sem', label: 'SEM', detail: 'Coming soon', ready: false },
 ]

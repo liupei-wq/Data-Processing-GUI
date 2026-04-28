@@ -1,0 +1,316 @@
+"""XPS API endpoints."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+
+from core.parsers import parse_xps_bytes
+from core.peak_fitting import fit_peaks
+from core.processing import apply_background, apply_normalization, smooth_signal
+from core.spectrum_ops import detect_spectrum_peaks, interpolate_spectrum_to_grid, mean_spectrum_arrays
+
+router = APIRouter()
+
+
+# ── pydantic models ───────────────────────────────────────────────────────────
+
+class ParsedFile(BaseModel):
+    name: str
+    x: List[float]
+    y: List[float]
+    n_points: int
+
+
+class ParseResponse(BaseModel):
+    files: List[ParsedFile]
+    errors: List[str] = Field(default_factory=list)
+
+
+class DatasetInput(BaseModel):
+    name: str
+    x: List[float]
+    y: List[float]
+
+
+class ProcessParams(BaseModel):
+    interpolate: bool = False
+    n_points: int = 1000
+    average: bool = False
+    energy_shift: float = 0.0
+    bg_enabled: bool = False
+    bg_method: str = "linear"        # linear | shirley | tougaard | polynomial | asls | airpls
+    bg_x_start: Optional[float] = None
+    bg_x_end: Optional[float] = None
+    bg_poly_deg: int = 3
+    bg_baseline_lambda: float = 1e5
+    bg_baseline_p: float = 0.01
+    bg_baseline_iter: int = 20
+    bg_tougaard_B: float = 2866.0
+    bg_tougaard_C: float = 1643.0
+    smooth_method: str = "none"      # none | moving_average | savitzky_golay
+    smooth_window: int = 5
+    smooth_poly: int = 3
+    norm_method: str = "none"        # none | min_max | max | area
+    norm_x_start: Optional[float] = None
+    norm_x_end: Optional[float] = None
+
+
+class ProcessRequest(BaseModel):
+    datasets: List[DatasetInput]
+    params: ProcessParams
+
+
+class DatasetOutput(BaseModel):
+    name: str
+    x: List[float]
+    y_raw: List[float]
+    y_background: Optional[List[float]] = None
+    y_processed: List[float]
+
+
+class ProcessResponse(BaseModel):
+    datasets: List[DatasetOutput]
+    average: Optional[DatasetOutput] = None
+
+
+class PeakDetectParams(BaseModel):
+    x: List[float]
+    y: List[float]
+    prominence: float = 0.05
+    min_distance: float = 0.3
+    max_peaks: int = 20
+
+
+class DetectedPeak(BaseModel):
+    binding_energy: float
+    intensity: float
+    rel_intensity: float
+    fwhm_ev: Optional[float] = None
+
+
+class PeakDetectResponse(BaseModel):
+    peaks: List[DetectedPeak]
+
+
+class InitPeak(BaseModel):
+    center: float
+    fwhm: float
+    amplitude: float
+
+
+class FitRequest(BaseModel):
+    x: List[float]
+    y: List[float]
+    peaks: List[InitPeak]
+    profile: str = "voigt"
+    maxfev: int = 20000
+
+
+class FitPeakRow(BaseModel):
+    Peak_Name: str
+    Center_eV: float
+    FWHM_eV: float
+    Area: float
+    Height: float
+    Area_pct: Optional[float] = None
+
+
+class FitResponse(BaseModel):
+    y_fit: List[float]
+    y_individual: List[List[float]]
+    residuals: List[float]
+    peaks: List[FitPeakRow]
+
+
+# ── endpoints ─────────────────────────────────────────────────────────────────
+
+@router.post("/parse", response_model=ParseResponse)
+async def parse_xps_files(files: List[UploadFile] = File(...)):
+    results: list[ParsedFile] = []
+    errors: list[str] = []
+
+    for uf in files:
+        raw = await uf.read()
+        x, y, err = parse_xps_bytes(raw)
+        if err or x is None or y is None:
+            errors.append(f"{uf.filename}: {err or '解析失敗'}")
+            continue
+        if len(x) < 2:
+            errors.append(f"{uf.filename}: 資料點不足")
+            continue
+        results.append(ParsedFile(
+            name=uf.filename or "unknown",
+            x=x.tolist(),
+            y=y.tolist(),
+            n_points=len(x),
+        ))
+
+    return ParseResponse(files=results, errors=errors)
+
+
+@router.post("/process", response_model=ProcessResponse)
+def process_xps(req: ProcessRequest):
+    p = req.params
+    if not req.datasets:
+        raise HTTPException(status_code=400, detail="沒有資料集")
+
+    outputs: list[DatasetOutput] = []
+
+    for ds in req.datasets:
+        x = np.array(ds.x, dtype=float)
+        y = np.array(ds.y, dtype=float)
+
+        # energy shift
+        x = x + p.energy_shift
+
+        # interpolation
+        if p.interpolate:
+            x_grid = np.linspace(float(x.min()), float(x.max()), int(p.n_points))
+            y = np.interp(x_grid, x, y)
+            x = x_grid
+
+        y_raw = y.copy()
+        y_bg: np.ndarray | None = None
+
+        # background subtraction
+        if p.bg_enabled:
+            x_start = p.bg_x_start if p.bg_x_start is not None else float(x.min())
+            x_end = p.bg_x_end if p.bg_x_end is not None else float(x.max())
+            y_sub, bg_curve = apply_background(
+                x, y,
+                method=p.bg_method,
+                bg_x_start=x_start,
+                bg_x_end=x_end,
+                poly_deg=p.bg_poly_deg,
+                baseline_lambda=p.bg_baseline_lambda,
+                baseline_p=p.bg_baseline_p,
+                baseline_iter=p.bg_baseline_iter,
+                tougaard_B=p.bg_tougaard_B,
+                tougaard_C=p.bg_tougaard_C,
+            )
+            y = y_sub
+            y_bg = bg_curve
+
+        # smoothing
+        if p.smooth_method != "none":
+            y, _ = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
+
+        # normalization
+        if p.norm_method != "none":
+            _, y = apply_normalization(
+                x, y,
+                norm_method=p.norm_method,
+                x_start=p.norm_x_start,
+                x_end=p.norm_x_end,
+            )
+
+        outputs.append(DatasetOutput(
+            name=ds.name,
+            x=x.tolist(),
+            y_raw=y_raw.tolist(),
+            y_background=y_bg.tolist() if y_bg is not None else None,
+            y_processed=y.tolist(),
+        ))
+
+    # average
+    average_out: DatasetOutput | None = None
+    if p.average and len(outputs) > 1:
+        try:
+            x_ref = np.array(outputs[0].x)
+            arrays = [np.interp(x_ref, np.array(d.x), np.array(d.y_processed)) for d in outputs]
+            y_avg = np.mean(arrays, axis=0)
+            average_out = DatasetOutput(
+                name="平均",
+                x=x_ref.tolist(),
+                y_raw=y_avg.tolist(),
+                y_processed=y_avg.tolist(),
+            )
+        except Exception:
+            pass
+
+    return ProcessResponse(datasets=outputs, average=average_out)
+
+
+@router.post("/peaks", response_model=PeakDetectResponse)
+def detect_xps_peaks(req: PeakDetectParams):
+    x = np.array(req.x, dtype=float)
+    y = np.array(req.y, dtype=float)
+
+    if len(x) < 4:
+        return PeakDetectResponse(peaks=[])
+
+    y_max = float(y.max())
+    if y_max == 0:
+        return PeakDetectResponse(peaks=[])
+
+    # XPS x-axis may be reversed (high BE → low BE); detect_spectrum_peaks needs ascending x
+    flipped = x[-1] < x[0]
+    if flipped:
+        x = x[::-1]
+        y = y[::-1]
+
+    peaks_raw = detect_spectrum_peaks(
+        x, y,
+        prominence=req.prominence * y_max,
+        min_distance_x=req.min_distance,
+        max_peaks=req.max_peaks,
+    )
+
+    detected: list[DetectedPeak] = []
+    for pk in peaks_raw:
+        detected.append(DetectedPeak(
+            binding_energy=float(pk.get("two_theta", pk.get("x", 0))),
+            intensity=float(pk.get("intensity", 0)),
+            rel_intensity=float(pk.get("rel_intensity", 0)),
+            fwhm_ev=float(pk.get("fwhm_deg", 0)) if pk.get("fwhm_deg") else None,
+        ))
+
+    return PeakDetectResponse(peaks=detected)
+
+
+@router.post("/fit", response_model=FitResponse)
+def fit_xps_peaks(req: FitRequest):
+    x = np.array(req.x, dtype=float)
+    y = np.array(req.y, dtype=float)
+
+    if len(x) < 4 or not req.peaks:
+        raise HTTPException(status_code=400, detail="資料或峰值參數不足")
+
+    init_peaks = [
+        {
+            "center": pk.center,
+            "fwhm": pk.fwhm,
+            "amplitude": pk.amplitude,
+        }
+        for pk in req.peaks
+    ]
+
+    try:
+        result = fit_peaks(x, y, init_peaks, profile=req.profile, maxfev=req.maxfev)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"擬合失敗：{exc}") from exc
+
+    total_area = sum(abs(pk.get("Area", 0)) for pk in result.get("peaks", []))
+
+    rows: list[FitPeakRow] = []
+    for i, pk in enumerate(result.get("peaks", []), 1):
+        area = float(pk.get("Area", 0))
+        rows.append(FitPeakRow(
+            Peak_Name=str(pk.get("Peak_Name", f"Peak {i}")),
+            Center_eV=float(pk.get("Center", 0)),
+            FWHM_eV=float(pk.get("FWHM", 0)),
+            Area=area,
+            Height=float(pk.get("Height", 0)),
+            Area_pct=round(100 * abs(area) / total_area, 2) if total_area > 0 else 0,
+        ))
+
+    return FitResponse(
+        y_fit=result.get("y_fit", []),
+        y_individual=result.get("y_individual", []),
+        residuals=result.get("residuals", []),
+        peaks=rows,
+    )

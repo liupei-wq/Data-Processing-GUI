@@ -678,6 +678,34 @@ Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與
 - step header、skip button、scroll helper。
 - 現有 step workflow 高度依賴這些 UI helper。
 
+## 2026-04-29 網站版 XAS 搬運
+
+- 重新讀取 `CLAUDE.md` 後，確認剩餘模組的搬運優先序：XAS（731行）> XPS（2649行）> XES（3047行），本輪先做 XAS。
+- 判斷 `modules/xas_auto.py` 與 `modules/xas.py` 有 streamlit 與 plotly import，不可直接 import 到後端；解析工具函式改為直接複製到 router 中，避免依賴問題。
+- 新增後端 `web/backend/routers/xas.py`：
+  - 自帶解析工具：`_is_numeric_line`、`_parse_xas_table_bytes`、`_prepare_tey_tfy_auto`
+  - 支援 6 欄 beamline DAT（Energy/Phase/Gap/CurMD-03-TFY/CurMD-01-TEY/CurMD-02-I0）與簡單 3 欄格式
+  - `POST /api/xas/parse`：解析多個 DAT 檔案，回傳 TEY + TFY + 欄位映射
+  - `POST /api/xas/process`：內插、多檔平均、能量位移、背景扣除、歸一化（min_max/max/area/post_edge）、White Line 搜尋
+- 修改 `web/backend/main.py`：掛入 XAS router，prefix `/api/xas`。
+- 新增 `web/frontend/src/types/xas.ts`：ParsedXasFile、ProcessParams、ProcessedDataset 等型別。
+- 新增 `web/frontend/src/api/xas.ts`：parseFiles、processData 兩個 API 函式。
+- 新增 `web/frontend/src/pages/XAS.tsx`：
+  - 可拖曳 resize 左側 sidebar，狀態存 localStorage
+  - 6 個處理步驟：載入 / 內插+平均 / 能量校正 / 背景扣除 / 歸一化 / White Line
+  - TEY 與 TFY 雙圖分開顯示，White Line 以虛線標示
+  - 摘要卡：資料集數量、能量範圍、White Line eV
+  - Post-edge 歸一化結果表：edge step、White Line
+  - 匯出：處理後光譜 CSV、摘要 CSV
+- 修改 `web/frontend/src/App.tsx`：import XAS、WorkspaceId 加入 `workflow-xas`、handleModuleSelect 加入 xas 分支、main 加入 `{workspace === 'workflow-xas' && <XAS .../>}`。
+- 修改 `web/frontend/src/components/AnalysisModuleNav.tsx`：XAS `ready: false` 改為 `ready: true`，detail 改為 `X-ray Absorption`。
+- 驗證：`python3 -m py_compile` ✅，`git diff --check` ✅。
+
+### 本輪 XAS 未搬的功能（刻意留下）
+- 高斯模板扣除：可後補（API + UI 較複雜）
+- XANES 去卷積擬合：過於複雜，暫不搬
+- 二階微分輔助：可後補
+
 ## 資料庫評估
 
 - `db/raman_database.py`
