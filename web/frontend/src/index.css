@@ -6,17 +6,21 @@
 
 @layer base {
   :root {
-    --bg-canvas: #07111f;
-    --panel-border: rgba(148, 163, 184, 0.14);
-    --text-main: #e2e8f0;
+    --bg-canvas: #0b1017;
+    --bg-gradient:
+      radial-gradient(circle at 18% 12%, rgba(59, 130, 246, 0.12), transparent 24%),
+      radial-gradient(circle at 82% 8%, rgba(56, 189, 248, 0.08), transparent 20%),
+      linear-gradient(180deg, #0e141d 0%, #090d13 100%);
+    --panel-bg: linear-gradient(180deg, rgba(17, 23, 34, 0.96) 0%, rgba(10, 14, 21, 0.93) 100%);
+    --panel-border: rgba(91, 112, 145, 0.24);
+    --text-main: #d8e0eb;
+    --orb-left: rgba(37, 99, 235, 0.12);
+    --orb-right: rgba(14, 165, 233, 0.08);
   }
 
   html {
     min-height: 100%;
-    background:
-      radial-gradient(circle at top left, rgba(34, 211, 238, 0.18), transparent 30%),
-      radial-gradient(circle at 85% 10%, rgba(56, 189, 248, 0.12), transparent 24%),
-      linear-gradient(180deg, #091321 0%, #050b15 100%);
+    background: var(--bg-gradient);
   }
 
   body {
@@ -38,51 +42,20 @@
   }
 
   .glass-panel {
-    background:
-      linear-gradient(180deg, rgba(15, 23, 42, 0.84) 0%, rgba(9, 15, 28, 0.74) 100%);
+    background: var(--panel-bg);
     border: 1px solid var(--panel-border);
     box-shadow:
-      0 24px 80px rgba(2, 6, 23, 0.42),
-      inset 0 1px 0 rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(20px);
+      0 24px 70px rgba(2, 6, 23, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(14px);
   }
-}
-
-.brand-mark {
-  position: relative;
-  display: grid;
-  height: 3.8rem;
-  width: 3.8rem;
-  place-items: center;
-  border-radius: 1.4rem;
-  background: radial-gradient(circle at 35% 30%, rgba(103, 232, 249, 0.28), rgba(7, 17, 31, 0.7));
-  border: 1px solid rgba(103, 232, 249, 0.16);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.brand-mark__ring,
-.brand-mark__core {
-  position: absolute;
-  border-radius: 999px;
-}
-
-.brand-mark__ring {
-  inset: 0.7rem;
-  border: 1px solid rgba(125, 211, 252, 0.34);
-}
-
-.brand-mark__core {
-  height: 0.8rem;
-  width: 0.8rem;
-  background: linear-gradient(135deg, #a5f3fc, #38bdf8);
-  box-shadow: 0 0 24px rgba(103, 232, 249, 0.45);
 }
 
 .hero-orb {
   position: absolute;
   border-radius: 999px;
-  filter: blur(40px);
-  opacity: 0.65;
+  filter: blur(56px);
+  opacity: 0.55;
 }
 
 .hero-orb-left {
@@ -90,7 +63,7 @@
   top: 4rem;
   height: 14rem;
   width: 14rem;
-  background: rgba(14, 165, 233, 0.16);
+  background: var(--orb-left, transparent);
 }
 
 .hero-orb-right {
@@ -98,19 +71,27 @@
   top: 8rem;
   height: 12rem;
   width: 12rem;
-  background: rgba(34, 211, 238, 0.12);
+  background: var(--orb-right, transparent);
 }
 
 .hero-grid {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(148, 163, 184, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.03) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65), transparent 85%);
+    linear-gradient(rgba(148, 163, 184, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.018) 1px, transparent 1px);
+  background-size: 54px 54px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.72), transparent 90%);
 }
 
 .sidebar-scroll::-webkit-scrollbar { width: 4px; }
 .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
 .sidebar-scroll::-webkit-scrollbar-thumb { @apply rounded-full bg-slate-600; }
+
+.workspace-float-card {
+  position: absolute;
+  border: 1px solid rgba(59, 130, 246, 0.14);
+  background: rgba(10, 18, 29, 0.26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(8px);
+}

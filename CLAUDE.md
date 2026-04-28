@@ -702,6 +702,29 @@ Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與
 - XPS、Raman、XES 檔案很大，重構要分段做。
 - XAS 目前 UI 順序已改為高斯扣除在歸一化後，但實際計算順序仍需另行評估。
 
+## 2026-04-29 網站版前端 UI 整理
+
+- 重新讀取 `CLAUDE.md`，比對圖片確認要改的內容。
+- 修改 `web/frontend/src/index.css`：
+  - 預設主題改為「深灰」（#111827），不再是帶藍光的深藍色
+  - 使用 CSS 自訂屬性 (`--bg-gradient`, `--panel-bg`, `--panel-border`, `--orb-left/right`) 支援三種主題切換
+  - 新增 `[data-theme="black"]`（純黑 #080808）
+  - 新增 `[data-theme="navy"]`（原深藍/青色光暈主題）
+  - `html` 背景與 `.glass-panel` 背景均改用 CSS var，跟隨主題切換
+- 修改 `web/frontend/src/App.tsx`：
+  - 移除「網站原型」與「Railway 上線」兩個 badge
+  - 移除「模組」與「技術棧」兩個資訊卡
+  - 新增主題切換器（深灰 / 純黑 / 深藍），用 `useEffect` 把 `data-theme` 寫到 `<html>`，並存 `localStorage`
+  - 說明文字縮短為「光譜與材料分析科學數據處理平台。」
+- 修改 `web/frontend/src/pages/XRD.tsx`：
+  - 刪除「目前模組 XRD」資訊卡
+  - 頂部網格改為 `grid-cols-1 sm:grid-cols-3`（原 sm:grid-cols-2 xl:grid-cols-4）
+  - 高斯模板扣除狀態卡：改成只有 `params.gaussian_enabled` 為 true 才渲染
+  - 弱峰檢視狀態卡：改成只有 `logViewParams.enabled` 才渲染
+  - 自動尋峰狀態卡：改成只有 `peakParams.enabled` 才渲染
+  - Scherrer 卡：未啟用時收起細節，只顯示標題與一個 checkbox；啟用後才展開 K / 儀器展寬 / 展寬修正控制項
+- `git diff --check` 通過
+
 ## 近期重要變更紀錄
 
 - 2026-04-26：將產品名稱與頁籤名稱調整為 `Nigiro Pro`。
@@ -1113,3 +1136,47 @@ cd web/frontend && npm install && npm run dev
 - 限制：
   - 目前執行環境仍然沒有 `npm`，因此這一輪仍無法做 Vite / TypeScript build 驗證
   - 這次補的是「自動尋峰 UI + 峰表」，還不是完整的 Scherrer / 參考峰匹配結果表
+
+## 2026-04-29 網站版 UI 回調查
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求開始處理網站版 UI，目標是把目前部署後的頁面視覺拉回接近部署前的樣子。
+- 參考依據：
+  - 使用者提供的舊版畫面截圖
+  - 先前 `網站殼層與品牌升級` 這輪對 `web/frontend/src/` 的殼層改動
+- 這一階段先做調查，不直接改動功能流程，優先確認：
+  - 哪些檔案控制目前網站版外框與主視覺
+  - 哪些檔案控制左側步驟卡與內容區空狀態
+- 調查結果：
+  - `App.tsx` 目前還保留大面積網站 header，與截圖中的桌面分析台風格不一致。
+  - `XRD.tsx` 上方資訊卡過多，主內容空狀態也偏產品 landing，不像舊版工作區。
+  - `ProcessingPanel.tsx` 雖然功能齊，但樣式仍是淺色表單拼接，不像截圖中的深色步驟卡。
+  - Git 較早 commit 的網站版也不是目標樣式，不能直接回退 commit 解決。
+- 已決定本輪改法：
+  - `web/frontend/src/App.tsx`：移除大 header，改為單純承載工作區。
+  - `web/frontend/src/pages/XRD.tsx`：把品牌區、模組選單、工作區標題與空狀態整合進單頁版面。
+  - `web/frontend/src/components/ProcessingPanel.tsx`：把步驟區塊改成更像舊版但更乾淨的深色卡片。
+  - 視需要補改 `FileUpload.tsx` 與 `index.css`，讓整體語言一致。
+
+## 2026-04-29 網站版 UI 回調實作
+
+- 重新讀取 `CLAUDE.md` 後，已開始實際修改網站版前端 UI。
+- 已修改檔案：
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+  - `web/frontend/src/components/FileUpload.tsx`
+  - `web/frontend/src/index.css`
+- 本輪實作重點：
+  - 移除網站版原本的大型 header，改成直接進入分析工作區。
+  - 把品牌區與模組按鈕放回左側，讓整體更接近部署前的桌面分析台視覺。
+  - 把主內容上方多張資訊卡縮成一排狀態膠囊，避免畫面過度像 landing page。
+  - 重做空狀態：改成長條提示訊息加上大面積空工作區，視覺方向接近使用者提供的舊截圖。
+  - `ProcessingPanel.tsx` 全面改成深色步驟卡，步驟號獨立顯示，樣式比舊版更整齊。
+  - 把 Scherrer 參數控制移進左側步驟區，避免右側再堆控制卡。
+  - `FileUpload.tsx` 改成與新步驟卡一致的深色上傳區塊。
+  - `index.css` 調整全域背景、玻璃面板強度與空狀態浮動裝飾樣式。
+- 驗證：
+  - `git diff --check` 通過。
+- 限制：
+  - 目前環境仍然沒有 `npm`，因此這一輪無法做 Vite / TypeScript build 驗證，也無法直接起前端畫面做瀏覽器確認。
+  - 這次是依照使用者提供的截圖與現有網站結構做視覺回調，不是還原某個舊 commit 的逐像素版本。

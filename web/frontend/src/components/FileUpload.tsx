@@ -29,19 +29,24 @@ export default function FileUpload({ onFiles, isLoading }: Props) {
       className={[
         'cursor-pointer rounded-[22px] border border-dashed p-5 text-center transition-all',
         isDragActive
-          ? 'border-cyan-300 bg-cyan-300/12 shadow-[0_0_0_1px_rgba(125,211,252,0.15)]'
-          : 'border-white/16 bg-slate-950/35 hover:border-cyan-300/40 hover:bg-white/6',
+          ? 'border-sky-300/80 bg-sky-400/10 shadow-[0_0_0_1px_rgba(125,211,252,0.18)]'
+          : 'border-[#385171] bg-[#202938] hover:border-sky-400/45 hover:bg-[#233044]',
         isLoading ? 'cursor-not-allowed opacity-50' : '',
       ].join(' ')}
     >
       <input {...getInputProps()} />
-      <div className="mb-2 text-3xl">◫</div>
+      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-300/20 bg-sky-400/10 text-2xl text-sky-100">
+        ↑
+      </div>
       {isDragActive ? (
-        <p className="text-sm font-medium text-cyan-100">放開以載入檔案</p>
+        <p className="text-sm font-medium text-sky-100">放開以載入檔案</p>
       ) : (
         <>
-          <p className="text-sm font-medium text-slate-100">拖曳或點擊上傳</p>
-          <p className="mt-1 text-xs text-slate-400">.txt / .csv / .xy / .asc / .dat</p>
+          <div className="inline-flex rounded-xl border border-sky-300/55 bg-sky-400/10 px-4 py-2 text-base font-semibold text-slate-100">
+            Upload
+          </div>
+          <p className="mt-4 text-sm font-medium text-slate-100">拖曳或點擊上傳 XRD 檔案</p>
+          <p className="mt-1 text-xs text-slate-400">500MB per file • TXT, CSV, XY, ASC, DAT</p>
         </>
       )}
     </div>

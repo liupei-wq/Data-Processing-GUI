@@ -189,6 +189,13 @@ function buildReferenceMatches(
     })
 }
 
+const MODULE_CHOICES = [
+  { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction', active: true },
+  { id: 'raman', label: 'Raman', detail: 'Coming soon', active: false },
+  { id: 'xps', label: 'XPS', detail: 'Coming soon', active: false },
+  { id: 'xas', label: 'XAS', detail: 'Coming soon', active: false },
+] as const
+
 export default function XRD() {
   const [rawFiles, setRawFiles] = useState<ParsedFile[]>([])
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
@@ -347,60 +354,113 @@ export default function XRD() {
   }, [])
 
   return (
-    <div className="flex h-full flex-col gap-4 xl:flex-row">
-      <aside className="glass-panel flex shrink-0 flex-col overflow-hidden rounded-[28px] border border-white/10 xl:w-[23rem]">
-        <div className="border-b border-white/10 px-4 py-4 sm:px-5">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <h2 className="font-display text-lg tracking-[0.08em] text-white">XRD 工作區</h2>
-            <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-100">
-              Live
-            </span>
+    <div className="min-h-screen xl:grid xl:grid-cols-[23rem_minmax(0,1fr)]">
+      <aside className="glass-panel flex min-h-screen flex-col overflow-hidden border-r border-white/8 xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0">
+        <div className="border-b border-white/10 px-6 py-8">
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] border border-sky-300/25 bg-[radial-gradient(circle_at_30%_30%,rgba(96,165,250,0.42),rgba(30,41,59,0.85))] shadow-[0_10px_30px_rgba(37,99,235,0.18)]">
+              <span className="font-display text-3xl font-bold tracking-[0.04em] text-white">N</span>
+            </div>
+            <div>
+              <div className="font-display text-[2rem] font-semibold leading-none text-slate-100">
+                Nigiro Pro
+              </div>
+              <div className="mt-2 text-[0.95rem] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                Data Processing
+              </div>
+            </div>
           </div>
-          <p className="text-xs leading-5 text-slate-400">
-            上傳一份或多份 XRD 圖譜，依序平滑、歸一化、比對參考峰，並匯出處理後光譜。
-          </p>
         </div>
 
-        <div className="sidebar-scroll flex-1 overflow-y-auto p-3 sm:p-4">
-          <div className="mb-3 grid grid-cols-3 gap-2">
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+        <div className="border-b border-white/10 px-6 py-5">
+          <p className="text-sm font-semibold text-slate-200">分析模組</p>
+          <div className="mt-3 space-y-2">
+            {MODULE_CHOICES.map(module => (
+              <button
+                key={module.id}
+                type="button"
+                disabled={!module.active}
+                className={[
+                  'flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition-colors',
+                  module.active
+                    ? 'border-sky-400/40 bg-sky-400/10 text-slate-50'
+                    : 'border-white/8 bg-white/[0.02] text-slate-500 opacity-70',
+                ].join(' ')}
+              >
+                <div className="flex items-center gap-3">
+                  <span
+                    className={[
+                      'h-4 w-4 rounded-full border',
+                      module.active
+                        ? 'border-rose-300 bg-rose-400'
+                        : 'border-slate-500 bg-transparent',
+                    ].join(' ')}
+                  />
+                  <div>
+                    <div className="text-sm font-semibold">{module.label}</div>
+                    <div className="text-[11px] text-slate-500">{module.detail}</div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-b border-white/10 px-6 py-5">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
               <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">檔案</p>
               <p className="mt-1 text-sm font-semibold text-slate-100">{rawFiles.length}</p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
               <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">X 軸</p>
               <p className="mt-1 text-sm font-semibold text-slate-100">
                 {xMode === 'twotheta' ? '2θ' : 'd'}
               </p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
               <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">參考相</p>
               <p className="mt-1 text-sm font-semibold text-slate-100">{selectedRefs.length}</p>
             </div>
           </div>
+        </div>
 
-          <div className="mb-3 overflow-hidden rounded-[22px] border border-white/10 bg-white/5">
-            <div className="border-b border-white/10 bg-white/5 px-3 py-2.5">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-300">
-                1. 載入檔案
-              </span>
+        <div className="sidebar-scroll flex-1 overflow-y-auto px-4 py-5">
+          <div className="mb-3 overflow-hidden rounded-[22px] border border-[#2d3d54] bg-[#151b24] shadow-[0_10px_30px_rgba(0,0,0,0.16)]">
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/18 text-sm font-semibold text-emerald-200">
+                  1
+                </span>
+                <div>
+                  <div className="text-base font-semibold text-slate-100">載入檔案</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">支援多檔上傳與後續平均</div>
+                </div>
+              </div>
             </div>
-            <div className="space-y-3 p-3">
+            <div className="border-t border-[#253246] p-4 pt-3">
+              <div className="mb-3 text-sm font-medium text-slate-200">上傳 XRD 檔案（可多選）</div>
               <FileUpload onFiles={handleFiles} isLoading={isLoading} />
               {rawFiles.length > 0 && (
-                <div className="space-y-1.5">
-                  {rawFiles.map(f => (
+                <div className="mt-3 space-y-1.5">
+                  {rawFiles.map(file => (
                     <div
-                      key={f.name}
-                      className="flex items-center gap-2 rounded-xl border border-white/8 bg-slate-950/35 px-2.5 py-2 text-xs text-slate-300"
+                      key={file.name}
+                      className="flex items-center gap-2 rounded-xl border border-white/8 bg-[#1a212d] px-3 py-2 text-xs text-slate-300"
                     >
                       <span className="text-emerald-300">✓</span>
-                      <span className="truncate">{f.name}</span>
-                      <span className="shrink-0 text-slate-500">({f.x.length} pts)</span>
+                      <span className="truncate">{file.name}</span>
+                      <span className="shrink-0 text-slate-500">({file.x.length} pts)</span>
                     </div>
                   ))}
                   <button
-                    onClick={() => { setRawFiles([]); setResult(null); setRefPeaks([]) }}
+                    type="button"
+                    onClick={() => {
+                      setRawFiles([])
+                      setResult(null)
+                      setRefPeaks([])
+                      setDetectedPeaks([])
+                    }}
                     className="text-xs font-medium text-rose-300 transition-colors hover:text-rose-200"
                   >
                     清除全部
@@ -432,170 +492,42 @@ export default function XRD() {
             onRefMatchParamsChange={setRefMatchParams}
             peakParams={peakParams}
             onPeakParamsChange={setPeakParams}
+            scherrerParams={scherrerParams}
+            onScherrerParamsChange={setScherrerParams}
           />
         </div>
       </aside>
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">目前模組</p>
-            <p className="mt-2 font-display text-lg tracking-[0.08em] text-white">XRD</p>
-            <p className="mt-2 text-xs leading-5 text-slate-400">圖譜處理、參考峰疊加、匯出，一站完成。</p>
-          </div>
-          <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">波長</p>
-            <p className="mt-2 text-lg font-semibold text-white">{wavelength.toFixed(4)} Å</p>
-            <p className="mt-2 text-xs leading-5 text-slate-400">預設光源控制 2θ 與 d-spacing 的 X 軸換算。</p>
-          </div>
-          <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">資料集</p>
-            <p className="mt-2 text-lg font-semibold text-white">
-              {activeDataset ? activeDataset.name : '等待中'}
-            </p>
-            <p className="mt-2 text-xs leading-5 text-slate-400">
-              {result
-                ? `已載入 ${result.datasets.length} 個資料集`
-                : '從左側載入檔案以開始處理流程。'}
-            </p>
-          </div>
-          <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">參考峰疊加</p>
-            <p className="mt-2 text-lg font-semibold text-white">{selectedRefs.length} 個已啟用</p>
-            <p className="mt-2 text-xs leading-5 text-slate-400">疊加參考粉末峰位，快速辨識相位候選。</p>
-          </div>
-          <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">高斯模板扣除</p>
-                <p className="mt-2 text-lg font-semibold text-white">
-                  {params.gaussian_enabled ? `${activeGaussianFits.length} 個中心已擬合` : '未啟用'}
-                </p>
-              </div>
-              {params.gaussian_enabled && (
-                <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    FWHM {params.gaussian_fwhm.toFixed(3)} deg
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    height {params.gaussian_height.toFixed(3)}
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    area {(params.gaussian_height * params.gaussian_fwhm * 1.0645).toFixed(3)}
-                  </span>
-                </div>
-              )}
+      <div className="min-w-0 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+        <div className="mx-auto w-full max-w-[1500px]">
+          <div className="mb-8">
+            <div className="flex flex-wrap items-baseline gap-3">
+              <h1 className="font-display text-4xl font-semibold tracking-[0.02em] text-slate-100">
+                XRD
+              </h1>
+              <span className="text-lg text-slate-400">X-ray Diffraction</span>
             </div>
+            <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,rgba(71,85,105,0.65),rgba(71,85,105,0.1))]" />
           </div>
-          <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">弱峰檢視</p>
-                <p className="mt-2 text-lg font-semibold text-white">
-                  {logViewParams.enabled ? `${logViewParams.method} 已啟用` : '未啟用'}
-                </p>
-              </div>
-              {logViewParams.enabled && (
-                <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    method {logViewParams.method}
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    floor {logViewParams.floor_value}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">自動尋峰</p>
-                <p className="mt-2 text-lg font-semibold text-white">
-                  {peakParams.enabled ? `已偵測 ${detectedPeaks.length} 個峰` : '未啟用'}
-                </p>
-              </div>
-              {peakParams.enabled && (
-                <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    顯著性 {peakParams.prominence.toFixed(2)}
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    最小峰距 {peakParams.min_distance.toFixed(2)} deg
-                  </span>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    最多 {peakParams.max_peaks} 個
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Scherrer</p>
-                <p className="mt-2 text-lg font-semibold text-white">
-                  {scherrerParams.enabled ? '晶粒尺寸計算已啟用' : '未啟用'}
-                </p>
-                <p className="mt-2 text-xs leading-5 text-slate-400">
-                  以偵測峰的 FWHM 直接估算晶粒尺寸。結果對展寬假設非常敏感，僅供快速篩選，不建議直接用於發表。
-                </p>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <label className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">啟用</span>
-                  <input
-                    type="checkbox"
-                    checked={scherrerParams.enabled}
-                    onChange={e => setScherrerParams(p => ({ ...p, enabled: e.target.checked }))}
-                    className="accent-cyan-300"
-                  />
-                </label>
-                <label className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">K</span>
-                  <input
-                    type="number"
-                    value={scherrerParams.k}
-                    min={0.1}
-                    max={2}
-                    step={0.01}
-                    onChange={e => setScherrerParams(p => ({ ...p, k: Number(e.target.value) }))}
-                    className="w-full rounded border border-white/10 bg-slate-950/50 px-2 py-1.5 text-slate-100 focus:outline-none"
-                  />
-                </label>
-                <label className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">儀器展寬 (deg)</span>
-                  <input
-                    type="number"
-                    value={scherrerParams.instrument_broadening_deg}
-                    min={0}
-                    max={5}
-                    step={0.001}
-                    onChange={e => setScherrerParams(p => ({ ...p, instrument_broadening_deg: Number(e.target.value) }))}
-                    className="w-full rounded border border-white/10 bg-slate-950/50 px-2 py-1.5 text-slate-100 focus:outline-none"
-                  />
-                </label>
-                <label className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">展寬修正</span>
-                  <select
-                    value={scherrerParams.broadening_correction}
-                    onChange={e => setScherrerParams(p => ({
-                      ...p,
-                      broadening_correction: e.target.value as ScherrerParams['broadening_correction'],
-                    }))}
-                    className="w-full rounded border border-white/10 bg-slate-950/50 px-2 py-1.5 text-slate-100 focus:outline-none"
-                  >
-                    <option value="none">不修正</option>
-                    <option value="gaussian">Gaussian</option>
-                    <option value="lorentzian">Lorentzian</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <div className="glass-panel rounded-[30px] p-4 sm:p-5 lg:p-6">
+          <div className="mb-6 flex flex-wrap gap-3">
+            <div className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-slate-300">
+              波長 <span className="ml-2 font-semibold text-slate-100">{wavelength.toFixed(4)} Å</span>
+            </div>
+            <div className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-slate-300">
+              資料集 <span className="ml-2 font-semibold text-slate-100">{activeDataset ? activeDataset.name : '未載入'}</span>
+            </div>
+            <div className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-slate-300">
+              參考峰 <span className="ml-2 font-semibold text-slate-100">{selectedRefs.length} 個</span>
+            </div>
+            {peakParams.enabled && (
+              <div className="rounded-full border border-sky-400/20 bg-sky-400/10 px-4 py-2 text-sm text-sky-100">
+                自動尋峰 {detectedPeaks.length} 個
+              </div>
+            )}
+          </div>
+
+          <div className="glass-panel rounded-[30px] p-4 sm:p-5 lg:p-6">
           {error && (
             <div className="mb-4 rounded-[22px] border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
               ⚠️ {error}
@@ -610,19 +542,44 @@ export default function XRD() {
           )}
 
           {!result && !isLoading && (
-            <div className="flex min-h-[28rem] flex-col items-center justify-center rounded-[28px] border border-dashed border-white/12 bg-slate-950/25 px-6 text-center">
-              <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-[24px] border border-cyan-300/20 bg-cyan-300/10 text-4xl">
-                ⟐
+            <div className="min-h-[38rem]">
+              <div className="rounded-[24px] border border-sky-400/18 bg-sky-400/12 px-6 py-5 text-xl font-semibold text-slate-100">
+                請在左側上傳一個或多個 XRD 檔案。
               </div>
-              <p className="font-display text-2xl tracking-[0.08em] text-white">從這裡開始 XRD 分析</p>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-slate-400">
-                從左側面板載入一份或多份光譜，再依序調整平滑、歸一化，並在同一頁面比對候選參考峰。
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2 text-xs text-slate-300">
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">TXT</span>
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">CSV</span>
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">XY</span>
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">ASC</span>
+
+              <div className="relative mt-12 min-h-[26rem] overflow-hidden rounded-[32px] border border-white/6 bg-[rgba(6,10,16,0.28)]">
+                <div className="workspace-float-card left-[24%] top-[6%] h-36 w-56 rounded-[26px] rotate-[-6deg] opacity-70" />
+                <div className="workspace-float-card right-[18%] top-[2%] h-32 w-48 rounded-[24px] rotate-[7deg] opacity-70" />
+                <div className="workspace-float-card left-[8%] bottom-[8%] h-32 w-44 rounded-[22px] rotate-[-8deg] opacity-65" />
+                <div className="workspace-float-card right-[34%] bottom-[12%] h-36 w-52 rounded-[24px] rotate-[4deg] opacity-65" />
+
+                <svg className="absolute left-[25%] top-[10%] h-28 w-52 opacity-40" viewBox="0 0 220 120" fill="none">
+                  <path d="M10 92C34 70 56 66 74 72C86 76 95 69 101 58C107 47 117 41 131 45C164 54 196 42 208 34" stroke="#2f6fbd" strokeWidth="6" strokeLinecap="round" />
+                  <circle cx="87" cy="67" r="5" fill="#5d85bb" />
+                  <circle cx="149" cy="55" r="5" fill="#5d85bb" />
+                </svg>
+                <svg className="absolute right-[19%] top-[5%] h-24 w-36 opacity-35" viewBox="0 0 160 120" fill="none">
+                  <rect x="18" y="34" width="20" height="44" rx="4" fill="#2f6fbd" />
+                  <rect x="58" y="18" width="20" height="60" rx="4" fill="#73829a" />
+                  <rect x="98" y="34" width="20" height="44" rx="4" fill="#25497b" />
+                  <rect x="138" y="18" width="20" height="60" rx="4" fill="#5d6370" />
+                </svg>
+                <svg className="absolute left-[10%] bottom-[14%] h-24 w-36 opacity-35" viewBox="0 0 160 90" fill="none">
+                  <path d="M18 60L114 44" stroke="#566270" strokeWidth="6" strokeLinecap="round" />
+                  <path d="M26 82L122 66" stroke="#566270" strokeWidth="6" strokeLinecap="round" />
+                  <path d="M30 34L126 62" stroke="#566270" strokeWidth="6" strokeLinecap="round" />
+                  <circle cx="30" cy="34" r="9" fill="#2f6fbd" />
+                  <circle cx="102" cy="66" r="9" fill="#2f6fbd" />
+                  <circle cx="132" cy="56" r="9" fill="#25497b" />
+                </svg>
+                <svg className="absolute right-[28%] bottom-[15%] h-28 w-48 opacity-35" viewBox="0 0 200 120" fill="none">
+                  <path d="M34 54L96 32L158 70" stroke="#2a3442" strokeWidth="6" strokeLinecap="round" />
+                  <path d="M34 54L106 90L158 70" stroke="#2a3442" strokeWidth="6" strokeLinecap="round" />
+                  <circle cx="34" cy="54" r="12" fill="#295189" />
+                  <circle cx="96" cy="32" r="9" fill="#5d6370" />
+                  <circle cx="106" cy="90" r="8" fill="#4a5565" />
+                  <circle cx="158" cy="70" r="13" fill="#25497b" />
+                </svg>
               </div>
             </div>
           )}
