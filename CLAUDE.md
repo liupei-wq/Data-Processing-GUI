@@ -503,3 +503,50 @@ cd web/frontend && npm install && npm run dev
   - `啟動_Mac.command` 修改
   - `啟動_Windows.bat` 刪除
 - 結論：GitHub 已成功接上，之後只要照一般流程 `git add` → `git commit` → `git push` 即可推回 `liupei-wq/Data-Processing-GUI`。首次 push 仍可能需要 GitHub 驗證（瀏覽器登入、credential helper 或 personal access token），但 repo 連線與分支追蹤已完成。
+
+## 2026-04-29 網站架設下一步建議
+
+- 重新讀取 `CLAUDE.md` 的 Web 版本段落，並再次確認 `web/`、`web/backend/`、`web/frontend/` 目錄存在。
+- 目前網站版的現況判斷沒有改變：已經有 FastAPI + React + Dockerfile + Railway 設定，但只有 XRD 完成 web 化，其他模組尚未搬移。
+- 對使用者的建議路線：
+  1. 先把現有 `web/` 版本在本機跑通，確認 XRD 前後端與 API 都正常。
+  2. 本機跑通後，再把目前 Git 變更 commit 並 push 到 `liupei-wq/Data-Processing-GUI`。
+  3. 接著在 Railway 上先部署目前的 XRD 網站原型，不要等全部模組做完才第一次部署。
+  4. 上線後再依序擴充下一個模組，優先選 `Raman` 或 `XAS`，不要先碰 `XPS`。
+- 原因：現在最缺的不是新架構，而是把既有網站骨架從「有檔案」變成「可本機跑、可部署、可迭代」；先完成第一個可用的網站節點，比同時搬所有模組更穩定。
+
+## 2026-04-29 免費部署平台比對
+
+- 重新讀取 `CLAUDE.md` 後，查詢多個官方定價頁，目的是找「對 FastAPI + React + Dockerfile 真的可免費使用」的平台，而不是只有前端免費的平台。
+- 查詢結果摘要：
+  - Railway：有 Free / Trial，但長期不應假設為零成本，且之後容易進入付費。
+  - Render：官方仍提供 Free web services 與 free static sites，適合測試與 side project，但 free web service 15 分鐘閒置會 spin down，下一次喚醒約需 1 分鐘，且每月有 750 free instance hours，不適合正式 production。
+  - Google Cloud Run：官方有 always free tier，按用量計費，適合容器化應用；但需要 Google Cloud 帳號與 billing 設定，部署複雜度高於 Render。
+  - Oracle Cloud Free Tier：官方仍提供 Always Free 資源，可長期免費，但主機型部署需要自己處理 VM、Docker、反向代理與維運，操作成本最高。
+  - Fly.io：新用戶目前不適合當「免費方案」推薦，官方說明中的 free allowances 已屬 legacy 舊方案。
+  - Vercel / Netlify：前端免費方案仍存在，但更適合純前端或前後端拆開部署；不適合直接拿來當你現在這個 FastAPI + React 單容器網站的首選主機。
+- 針對本專案的判斷：
+  - 如果目標是「最省事的免費測試部署」，首選 Render。
+  - 如果目標是「盡量長期免費」，首選 Oracle Cloud Free Tier，但維運成本高很多。
+  - 如果目標是「維持現有 Docker 架構又想吃免費額度」，Cloud Run 可行，但操作門檻高於 Render。
+
+## 2026-04-29 Render 免費部署支援
+
+- 重新讀取 `CLAUDE.md` 後，決定直接以 Render 作為本專案的免費部署首選，原因是它比 Oracle Cloud 與 Cloud Run 更省事，適合目前這個 XRD 網站原型階段。
+- 檢查 `web/Dockerfile` 後發現一個部署風險：frontend 目錄目前沒有 `package-lock.json`，但原本 Dockerfile 使用 `npm ci`，在 Render build 時很容易直接失敗。
+- 已修改 `web/Dockerfile`：安裝前端依賴時改成「若有 `package-lock.json` 則 `npm ci`，否則 `npm install`」，降低首次部署失敗風險。
+- 已新增專案根目錄 `render.yaml`，使用 Render Blueprint 定義一個 `web` service：
+  - `runtime: docker`
+  - `plan: free`
+  - `dockerfilePath: ./web/Dockerfile`
+  - `dockerContext: .`
+  - `healthCheckPath: /health`
+  - `autoDeployTrigger: commit`
+- 已更新 `README.md`，補上：
+  - Streamlit 桌面版的較正確啟動說明
+  - `web/` 網站版本機啟動方式
+  - Render 免費部署步驟與限制
+- 驗證：
+  - 重新檢視 `render.yaml`、`web/Dockerfile`、`README.md` 內容
+  - `git diff --check` 通過
+- 結論：專案現在已具備「推上 GitHub 後，用 Render 免費方案直接部署」的基本設定，不必再手動逐項填 Dockerfile 與 health check。

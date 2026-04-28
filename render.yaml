@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: data-processing-gui-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./web/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
