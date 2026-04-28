@@ -330,6 +330,299 @@ Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與
 - 這個環境沒有 `npm`，指令回應為 `zsh:1: command not found: npm`。
 - 因此目前無法在本機直接跑 `npm run build` 或 `npm run dev` 驗證 React 端編譯是否完全通過。
 - 目前能確認的是程式碼結構、型別串接與差異檢查已完成；最終前端執行驗證仍要靠你本機或 Render 實際部署測試。
+
+## 2026-04-29 新增：網站版 XRD 參考峰匹配結果表
+
+- 重新讀取 `CLAUDE.md` 後，比對 `modules/xrd.py` 的 `match_xrd_reference_peaks(...)` 舊版邏輯，再決定網站版這一輪先用最小改動方式補齊前端工作流。
+- 判斷：
+  - 先不新增新的 FastAPI 匹配 endpoint。
+  - 先直接使用網站版既有的 `detectedPeaks` 與 `reference-peaks` 回傳結果，在前端做「最近峰匹配」。
+  - 這樣可以保持規則接近 Streamlit 舊版，同時避免把 API 面先擴大。
+
+### 本輪修改檔案
+
+- `web/frontend/src/types/xrd.ts`
+- `web/frontend/src/components/ProcessingPanel.tsx`
+- `web/frontend/src/pages/XRD.tsx`
+
+### 本輪新增內容
+
+- `web/frontend/src/types/xrd.ts`
+  - 新增 `ReferenceMatchParams`
+    - `min_rel_intensity`
+    - `tolerance_deg`
+    - `only_show_matched`
+  - 新增 `ReferenceMatchRow`
+
+- `web/frontend/src/components/ProcessingPanel.tsx`
+  - 在「6. 參考峰比對」補上控制項：
+    - 最小參考相對強度 (%)
+    - 匹配容差 (deg)
+    - 比對表只顯示匹配項
+  - 補上說明文字，明確標示這是快速相辨識用途，不是完整 PDF/JCPDS 卡。
+
+- `web/frontend/src/pages/XRD.tsx`
+  - 新增 `buildReferenceMatches(...)`
+  - 規則與 Streamlit 舊版一致方向：
+    - 對每個參考峰找最近的觀測峰
+    - 計算 `Δ2θ`
+    - 用容差判斷是否匹配
+  - 對參考峰先套用最小相對強度門檻，再拿去做圖表 overlay 與匹配
+  - 新增 `Reference Peak Matching` 結果區塊
+  - 結果表目前顯示：
+    - `Phase`
+    - `hkl`
+    - `Ref 2θ`
+    - `Ref d`
+    - `Ref I (%)`
+    - `Obs 2θ`
+    - `Obs d`
+    - `Obs Intensity`
+    - `Δ2θ`
+    - `Matched`
+  - 若未啟用自動尋峰、沒有符合強度門檻的參考峰、或目前容差下沒有匹配，都會顯示對應提示。
+
+### 本輪檢查
+
+- 已重新檢查：
+  - `web/frontend/src/pages/XRD.tsx`
+  - `web/frontend/src/types/xrd.ts`
+- `git diff --check` 已執行，沒有格式錯誤。
+
+### 目前限制
+
+- 這一輪的參考峰匹配仍然是前端計算，不是後端正式 API。
+- 目前網站版匹配對象是「目前主畫面正在看的處理後曲線 + 自動尋峰結果」，不是像 Streamlit 舊版那樣可再往多資料集報表方向延伸。
+- 執行環境依然沒有 `npm`，所以仍無法本機做 React build 驗證。
+
+## 2026-04-29 新增：網站版 XRD log 弱峰檢視
+
+- 重新讀取 `CLAUDE.md` 後，比對 `modules/xrd.py` 的 log 檢視做法。
+- 判斷：
+  - Streamlit 舊版的 log 轉換是「純顯示用途」，不是拿來當後續分析基礎。
+  - 網站版這一輪也維持同樣原則：主圖、尋峰、Scherrer、參考峰匹配仍然以線性處理後曲線為基礎，不會因為啟用 log 檢視而改掉分析結果。
+
+### 本輪修改檔案
+
+- `web/frontend/src/types/xrd.ts`
+- `web/frontend/src/components/ProcessingPanel.tsx`
+- `web/frontend/src/components/SpectrumChart.tsx`
+- `web/frontend/src/pages/XRD.tsx`
+
+### 本輪新增內容
+
+- `web/frontend/src/types/xrd.ts`
+  - 新增 `LogViewParams`
+    - `enabled`
+    - `method`
+    - `floor_value`
+
+- `web/frontend/src/components/ProcessingPanel.tsx`
+  - 新增「5. 取對數（弱峰檢視）」區塊
+  - 可設定：
+    - 是否啟用
+    - `log10 / ln`
+    - `floor`
+  - UI 說明已明確寫出：這一步只改顯示，不改尋峰、Scherrer、參考峰匹配。
+
+- `web/frontend/src/components/SpectrumChart.tsx`
+  - 新增 `displayMode`
+  - 新增 `logFloorValue`
+  - 新增內部 `safeLogTransform(...)`
+  - `linear / log10 / ln` 三種顯示模式共用同一個圖表元件
+  - log 顯示時不疊參考峰、不顯示 detected peaks，避免視覺與意義混淆
+
+- `web/frontend/src/pages/XRD.tsx`
+  - 新增 `logViewParams` 狀態
+  - 主資訊卡新增 `Weak-Peak View` 狀態摘要
+  - 在主圖下方新增 `Log Weak-Peak View` 區塊
+  - 第二張圖會使用目前處理後曲線做 `log10` 或 `ln` 顯示
+  - `floor` 已實際接進圖表元件，不是只有 UI 假控制
+
+### 本輪檢查
+
+- 已重新檢查：
+  - `web/frontend/src/types/xrd.ts`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+  - `web/frontend/src/components/SpectrumChart.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+- `git diff --check` 已執行，沒有格式錯誤。
+
+### 目前限制
+
+- 這一輪只有補「顯示型」log 檢視，沒有把 log 曲線納入 CSV 匯出。
+- 目前 log 圖不疊參考峰，也不標 detected peaks，這是刻意簡化，避免把弱峰顯示和線性匹配判讀混在一起。
+- 執行環境仍然沒有 `npm`，所以無法在本機做 React build 驗證。
+
+## 2026-04-29 新增：網站版 XRD 高斯模板扣除
+
+- 重新讀取 `CLAUDE.md` 後，比對 `modules/xrd.py` 與 `core/spectrum_ops.py`。
+- 判斷：
+  - 舊版高斯模板扣除的核心演算法其實已經抽到 `core/spectrum_ops.py`。
+  - 網站版這一輪不再複製一份演算法，而是直接重用 `fit_fixed_gaussian_templates(...)`。
+  - 高斯模板扣除屬於正式處理流程的一部分，不是單純顯示，因此這次直接擴充 `/api/xrd/process` 的輸入與輸出，而不是做成獨立前端假效果。
+
+### 本輪修改檔案
+
+- `web/backend/routers/xrd.py`
+- `web/frontend/src/types/xrd.ts`
+- `web/frontend/src/components/ProcessingPanel.tsx`
+- `web/frontend/src/components/GaussianSubtractionChart.tsx`
+- `web/frontend/src/pages/XRD.tsx`
+
+### 本輪新增內容
+
+- `web/backend/routers/xrd.py`
+  - `ProcessParams` 新增：
+    - `gaussian_enabled`
+    - `gaussian_fwhm`
+    - `gaussian_height`
+    - `gaussian_search_half_width`
+    - `gaussian_centers`
+  - `DatasetOutput` 新增：
+    - `y_gaussian_model`
+    - `y_gaussian_subtracted`
+    - `gaussian_fits`
+  - `/process` 現在流程改為：
+    - `interpolate`
+    - `average`
+    - `Gaussian subtraction`
+    - `smooth`
+    - `normalize`
+  - 若啟用高斯模板扣除，即使原本未勾選內插化，也會先依 `n_points` 建立等距網格後再做扣除，這和 Streamlit 舊版邏輯一致方向。
+  - 高斯結果直接重用 `core/spectrum_ops.py` 的 `fit_fixed_gaussian_templates(...)`。
+  - 另外把 list 預設值改成 `Field(default_factory=...)`，避免可變預設值污染狀態。
+
+- `web/frontend/src/types/xrd.ts`
+  - `ProcessParams` 新增高斯扣除參數
+  - 新增：
+    - `GaussianCenter`
+    - `GaussianFitRow`
+  - `ProcessedDataset` 新增高斯相關欄位
+
+- `web/frontend/src/components/ProcessingPanel.tsx`
+  - 新增「3. 高斯模板扣除」區塊
+  - 可設定：
+    - 是否啟用
+    - 固定 FWHM
+    - 固定高度
+    - 中心搜尋半寬
+    - 高斯中心列表
+  - 可新增 / 刪除多個中心，並逐個設定：
+    - `enabled`
+    - `name`
+    - `center 2θ`
+  - 介面會即時顯示由 `height * fwhm * 1.0645` 換算的面積。
+
+- `web/frontend/src/components/GaussianSubtractionChart.tsx`
+  - 新增專用圖表元件
+  - 會同時顯示：
+    - 原始曲線
+    - Gaussian template
+    - 扣除後曲線
+  - 支援 `2θ / d-spacing` 切換
+
+- `web/frontend/src/pages/XRD.tsx`
+  - 主資訊卡新增 `Gaussian Subtraction` 狀態摘要
+  - 在主圖下方新增 `Gaussian Template Subtraction` 區塊
+  - 顯示高斯對照圖與中心結果表
+  - 結果表目前顯示：
+    - `Peak`
+    - `Seed 2θ`
+    - `Fitted 2θ`
+    - `Shift`
+    - `FWHM`
+    - `Area`
+    - `Height`
+
+### 本輪檢查
+
+- 已重新檢查：
+  - `web/backend/routers/xrd.py`
+  - `web/frontend/src/types/xrd.ts`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+  - `web/frontend/src/components/GaussianSubtractionChart.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+- `git diff --check` 已執行，沒有格式錯誤。
+
+### 目前限制
+
+- 這一輪只把高斯模板扣除接進網站版工作流，還沒有把高斯結果納入 CSV 匯出。
+- 高斯中心列表目前是前端表單管理，不是像 Streamlit 舊版那種 data editor 形式。
+- 沒有 `npm`，因此目前仍無法在本機直接做 React build 驗證。
+
+## 2026-04-29 新增：網站版 XRD 匯出區補強
+
+- 重新讀取 `CLAUDE.md` 後，比對 `modules/xrd.py` 的匯出段落，確認網站版目前缺的不只是「下載處理後光譜」，而是缺完整的分析輸出與流程追溯。
+- 判斷：
+  - 這一輪先不擴 API。
+  - 直接在前端用目前已有的狀態資料與計算結果，補齊 CSV / JSON 匯出。
+  - 原本單一的「下載處理後光譜 CSV」保留，但擴成完整匯出區。
+
+### 本輪修改檔案
+
+- `web/frontend/src/pages/XRD.tsx`
+
+### 本輪新增內容
+
+- 新增通用 CSV 工具：
+  - `csvEscape(...)`
+  - `toCsv(...)`
+  - `downloadFile(...)`
+- 把原本單一匯出按鈕改成三區塊匯出面板：
+  - `研究常用`
+  - `分析表格`
+  - `追溯 / 設定`
+
+### 目前網站版可下載的檔案
+
+- `研究常用`
+  - 處理後光譜 CSV
+  - 目前資料集詳細 CSV
+    - `2theta`
+    - `d-spacing`
+    - `raw`
+    - `gaussian_model`
+    - `gaussian_subtracted`
+    - `processed`
+    - 若啟用 log 檢視，會再加上 `log10` 或 `ln` 欄位
+  - Scherrer CSV
+  - 高斯中心結果 CSV
+
+- `分析表格`
+  - 自動尋峰 CSV
+  - 參考峰 CSV
+  - 參考匹配 CSV
+
+- `追溯 / 設定`
+  - 處理報告 JSON
+  - 內容包含：
+    - 輸入檔名
+    - 目前資料集
+    - 波長設定
+    - 處理參數
+    - log 設定
+    - 參考峰匹配設定
+    - 尋峰設定與結果摘要
+    - Scherrer 參數與結果
+    - 高斯中心結果
+
+### 補充實作細節
+
+- 詳細資料集 CSV 的 log 欄位不是逐點硬取對數，而是先比照目前網站版 log 圖的平移規則，再寫出 `log10` 或 `ln` 數值，避免下載值和畫面顯示不一致。
+- 匯出檔名目前使用固定預設值或以目前資料集名稱衍生，不像 Streamlit 舊版那樣提供每個下載卡自訂檔名欄位。
+
+### 本輪檢查
+
+- 已重新檢查 `web/frontend/src/pages/XRD.tsx`
+- `git diff --check` 已執行，沒有格式錯誤。
+- 已確認沒有殘留舊的 `downloadCsv(...)` 呼叫。
+
+### 目前限制
+
+- 目前仍沒有把所有資料整包打成單一 zip。
+- 目前 JSON 報告偏向前端工作流摘要，還不是完全對齊 Streamlit 舊版的完整研究存檔格式。
+- 沒有 `npm`，因此這一輪仍無法本機做 React build 驗證。
 - `modules/xas.py` 保留了較早期邏輯與 helper，可作參考，但不要誤以為 app 正在直接使用它。
 - 高斯扣除目前 UI 在歸一化後方，但實際 processing pipeline 仍是在背景與歸一化前先計算 gaussian model / after-gaussian，再用 after-gaussian 做背景與歸一化。若未來使用者要求「真正對 normalized 後曲線扣高斯」，需要調整計算順序，不只是 UI 順序。
 

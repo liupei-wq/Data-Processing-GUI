@@ -13,16 +13,20 @@
 import { useState, useEffect, useCallback } from 'react'
 import type {
   DetectedPeak,
+  LogViewParams,
   ParsedFile,
   PeakDetectionParams,
   ProcessResult,
   RefPeak,
+  ReferenceMatchParams,
+  ReferenceMatchRow,
   ScherrerParams,
   XMode,
   WavelengthPreset,
 } from '../types/xrd'
 import { detectPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
 import FileUpload from '../components/FileUpload'
+import GaussianSubtractionChart from '../components/GaussianSubtractionChart'
 import SpectrumChart from '../components/SpectrumChart'
 import ProcessingPanel, {
   DEFAULT_PARAMS,
@@ -30,7 +34,47 @@ import ProcessingPanel, {
 } from '../components/ProcessingPanel'
 import type { ProcessParams } from '../types/xrd'
 
-function csvContent(result: ProcessResult): string {
+type CsvCell = string | number | null | undefined
+
+function csvEscape(value: CsvCell): string {
+  if (value == null) return ''
+  const raw = String(value)
+  if (/[",\n]/.test(raw)) {
+    return `"${raw.replace(/"/g, '""')}"`
+  }
+  return raw
+}
+
+function toCsv(headers: string[], rows: CsvCell[][]): string {
+  return [
+    headers.map(csvEscape).join(','),
+    ...rows.map(row => row.map(csvEscape).join(',')),
+  ].join('\n')
+}
+
+function downloadFile(content: string, filename: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function twoThetaToD(twoThetaDeg: number, wavelengthAngstrom: number): number | null {
+  if (!(twoThetaDeg > 0 && wavelengthAngstrom > 0)) return null
+  const theta = (twoThetaDeg * Math.PI) / 360
+  const sinTheta = Math.sin(theta)
+  if (!(sinTheta > 0)) return null
+  return wavelengthAngstrom / (2 * sinTheta)
+}
+
+function safeLogValue(value: number, shift: number, method: LogViewParams['method'], floorValue: number) {
+  const shifted = Math.max(value + shift, floorValue)
+  return method === 'ln' ? Math.log(shifted) : Math.log10(shifted)
+}
+
+function processedSpectrumCsv(result: ProcessResult): string {
   const ds = result.average ?? result.datasets[0]
   if (!ds) return ''
   const headers = ['2theta_deg', ...result.datasets.map(d => `${d.name}_processed`)]
@@ -38,16 +82,37 @@ function csvContent(result: ProcessResult): string {
     x.toFixed(4),
     ...result.datasets.map(d => d.y_processed[i]?.toFixed(4) ?? ''),
   ])
-  return [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+  return toCsv(headers, rows)
 }
 
-function downloadCsv(content: string, filename: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: 'text/csv' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
+function detailedDatasetCsv(
+  dataset: ProcessResult['datasets'][number],
+  wavelength: number,
+  logViewParams: LogViewParams,
+): string {
+  const headers = ['2theta_deg', 'd_spacing_A', 'raw', 'gaussian_model', 'gaussian_subtracted', 'processed']
+  const processedMin = dataset.y_processed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
+  const logShift = logViewParams.enabled && processedMin <= 0
+    ? Math.abs(processedMin) + logViewParams.floor_value
+    : logViewParams.floor_value
+  if (logViewParams.enabled) headers.push(`${logViewParams.method}_processed`)
+  const rows = dataset.x.map((x, idx) => {
+    const processed = dataset.y_processed[idx]
+    const dSpacing = twoThetaToD(x, wavelength)
+    const row: CsvCell[] = [
+      x.toFixed(4),
+      dSpacing == null ? '' : dSpacing.toFixed(4),
+      dataset.y_raw[idx]?.toFixed(6) ?? '',
+      dataset.y_gaussian_model?.[idx]?.toFixed(6) ?? '',
+      dataset.y_gaussian_subtracted?.[idx]?.toFixed(6) ?? '',
+      processed?.toFixed(6) ?? '',
+    ]
+    if (logViewParams.enabled) {
+      row.push(Number.isFinite(processed) ? safeLogValue(processed, logShift, logViewParams.method, logViewParams.floor_value).toFixed(6) : '')
+    }
+    return row
+  })
+  return toCsv(headers, rows)
 }
 
 function scherrerCrystalliteSizeNm(
@@ -78,6 +143,52 @@ function scherrerCrystalliteSizeNm(
   return (k * wavelengthAngstrom) / (betaRad * cosTheta) / 10
 }
 
+function buildReferenceMatches(
+  referencePeaks: RefPeak[],
+  observedPeaks: DetectedPeak[],
+  toleranceDeg: number,
+): ReferenceMatchRow[] {
+  if (referencePeaks.length === 0) return []
+
+  return [...referencePeaks]
+    .sort((a, b) => a.two_theta - b.two_theta)
+    .map((refPeak) => {
+      if (observedPeaks.length === 0) {
+        return {
+          material: refPeak.material,
+          hkl: refPeak.hkl,
+          ref_two_theta: refPeak.two_theta,
+          ref_d_spacing: refPeak.d_spacing,
+          ref_rel_i: refPeak.rel_i,
+          observed_two_theta: null,
+          observed_d_spacing: null,
+          observed_intensity: null,
+          delta_two_theta: null,
+          matched: false,
+        }
+      }
+
+      const closest = observedPeaks.reduce((best, peak) => {
+        const delta = Math.abs(peak.two_theta - refPeak.two_theta)
+        if (best == null || delta < best.delta) return { peak, delta }
+        return best
+      }, null as { peak: DetectedPeak; delta: number } | null)
+
+      return {
+        material: refPeak.material,
+        hkl: refPeak.hkl,
+        ref_two_theta: refPeak.two_theta,
+        ref_d_spacing: refPeak.d_spacing,
+        ref_rel_i: refPeak.rel_i,
+        observed_two_theta: closest?.peak.two_theta ?? null,
+        observed_d_spacing: closest?.peak.d_spacing ?? null,
+        observed_intensity: closest?.peak.intensity ?? null,
+        delta_two_theta: closest?.delta ?? null,
+        matched: closest != null && closest.delta <= toleranceDeg,
+      }
+    })
+}
+
 export default function XRD() {
   const [rawFiles, setRawFiles] = useState<ParsedFile[]>([])
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
@@ -85,6 +196,16 @@ export default function XRD() {
   const [refMaterials, setRefMaterials] = useState<string[]>([])
   const [selectedRefs, setSelectedRefs] = useState<string[]>([])
   const [refPeaks, setRefPeaks] = useState<RefPeak[]>([])
+  const [logViewParams, setLogViewParams] = useState<LogViewParams>({
+    enabled: false,
+    method: 'log10',
+    floor_value: 0.000001,
+  })
+  const [refMatchParams, setRefMatchParams] = useState<ReferenceMatchParams>({
+    min_rel_intensity: 10,
+    tolerance_deg: 0.3,
+    only_show_matched: true,
+  })
   const [xMode, setXMode] = useState<XMode>('twotheta')
   const [wavelengthPreset, setWavelengthPreset] = useState<WavelengthPreset>('Cu Kα (1.5406 Å)')
   const [customWavelength, setCustomWavelength] = useState(1.5406)
@@ -107,6 +228,17 @@ export default function XRD() {
   const wavelength =
     wavelengthPreset === 'Custom' ? customWavelength : WAVELENGTH_MAP[wavelengthPreset]
   const activeDataset = result?.average ?? result?.datasets[0] ?? null
+  const activeGaussianFits = activeDataset?.gaussian_fits ?? []
+  const filteredRefPeaks = refPeaks.filter(peak => peak.rel_i >= refMatchParams.min_rel_intensity)
+  const referenceMatches = buildReferenceMatches(
+    filteredRefPeaks,
+    detectedPeaks,
+    refMatchParams.tolerance_deg,
+  )
+  const visibleReferenceMatches = refMatchParams.only_show_matched
+    ? referenceMatches.filter(row => row.matched)
+    : referenceMatches
+  const matchedReferenceCount = referenceMatches.filter(row => row.matched).length
   const scherrerRows = detectedPeaks.map(peak => ({
     ...peak,
     crystallite_nm: scherrerCrystalliteSizeNm(
@@ -118,6 +250,37 @@ export default function XRD() {
       scherrerParams.broadening_correction,
     ),
   }))
+  const processingReport = {
+    report_type: 'xrd_processing_report',
+    created_at: new Date().toISOString(),
+    module: 'xrd',
+    input_files: rawFiles.map(file => file.name),
+    selected_dataset: activeDataset?.name ?? null,
+    dataset_count: result?.datasets.length ?? 0,
+    wavelength: {
+      preset: wavelengthPreset,
+      angstrom: wavelength,
+    },
+    processing: params,
+    log_view: logViewParams,
+    reference_matching: {
+      selected_refs: selectedRefs,
+      ...refMatchParams,
+      matched_count: matchedReferenceCount,
+      total_reference_lines: referenceMatches.length,
+    },
+    peak_detection: {
+      ...peakParams,
+      detected_count: detectedPeaks.length,
+    },
+    scherrer: {
+      ...scherrerParams,
+      rows: scherrerRows,
+    },
+    gaussian_fit_rows: activeGaussianFits,
+    reference_peaks: filteredRefPeaks,
+    reference_matches: referenceMatches,
+  }
 
   useEffect(() => {
     fetchReferences().then(setRefMaterials).catch(console.error)
@@ -264,6 +427,10 @@ export default function XRD() {
             refMaterials={refMaterials}
             selectedRefs={selectedRefs}
             onSelectedRefsChange={setSelectedRefs}
+            logViewParams={logViewParams}
+            onLogViewParamsChange={setLogViewParams}
+            refMatchParams={refMatchParams}
+            onRefMatchParamsChange={setRefMatchParams}
             peakParams={peakParams}
             onPeakParamsChange={setPeakParams}
           />
@@ -297,6 +464,49 @@ export default function XRD() {
             <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Reference Overlay</p>
             <p className="mt-2 text-lg font-semibold text-white">{selectedRefs.length} active</p>
             <p className="mt-2 text-xs leading-5 text-slate-400">Overlay powder references to inspect phase candidates faster.</p>
+          </div>
+          <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Gaussian Subtraction</p>
+                <p className="mt-2 text-lg font-semibold text-white">
+                  {params.gaussian_enabled ? `${activeGaussianFits.length} fitted center${activeGaussianFits.length === 1 ? '' : 's'}` : 'Disabled'}
+                </p>
+              </div>
+              {params.gaussian_enabled && (
+                <div className="flex flex-wrap gap-2 text-xs text-slate-300">
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                    FWHM {params.gaussian_fwhm.toFixed(3)} deg
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                    height {params.gaussian_height.toFixed(3)}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                    area {(params.gaussian_height * params.gaussian_fwhm * 1.0645).toFixed(3)}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Weak-Peak View</p>
+                <p className="mt-2 text-lg font-semibold text-white">
+                  {logViewParams.enabled ? `${logViewParams.method} enabled` : 'Disabled'}
+                </p>
+              </div>
+              {logViewParams.enabled && (
+                <div className="flex flex-wrap gap-2 text-xs text-slate-300">
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                    method {logViewParams.method}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
+                    floor {logViewParams.floor_value}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
           <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -424,11 +634,107 @@ export default function XRD() {
             <>
               <SpectrumChart
                 result={result}
-                refPeaks={refPeaks}
+                refPeaks={filteredRefPeaks}
                 detectedPeaks={detectedPeaks}
                 xMode={xMode}
                 wavelength={wavelength}
               />
+
+              {logViewParams.enabled && (
+                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-white">Log Weak-Peak View</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">
+                        This view only changes how the processed spectrum is displayed, so weak peaks
+                        and broad tails are easier to inspect. It does not change peak detection,
+                        Scherrer, or reference matching.
+                      </p>
+                    </div>
+                    <span className="text-xs text-slate-500">
+                      {logViewParams.method} with floor {logViewParams.floor_value}
+                    </span>
+                  </div>
+                  <SpectrumChart
+                    result={result}
+                    refPeaks={[]}
+                    detectedPeaks={[]}
+                    xMode={xMode}
+                    wavelength={wavelength}
+                    displayMode={logViewParams.method}
+                    logFloorValue={logViewParams.floor_value}
+                    showReferencePeaks={false}
+                    showDetectedPeaks={false}
+                    minHeight={360}
+                  />
+                </div>
+              )}
+
+              {params.gaussian_enabled && (
+                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-white">Gaussian Template Subtraction</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">
+                        Uses fixed-area and fixed-FWHM Gaussian templates, then only lets each center
+                        move within the local search window. This is useful when you want a more
+                        stable estimate of where known peaks actually sit before later processing.
+                      </p>
+                    </div>
+                    <span className="text-xs text-slate-500">
+                      search ±{params.gaussian_search_half_width.toFixed(3)} deg
+                    </span>
+                  </div>
+
+                  {activeDataset?.y_gaussian_model && activeDataset?.y_gaussian_subtracted ? (
+                    <>
+                      <GaussianSubtractionChart
+                        dataset={activeDataset}
+                        xMode={xMode}
+                        wavelength={wavelength}
+                      />
+                      {activeGaussianFits.length > 0 ? (
+                        <div className="mt-4 overflow-x-auto">
+                          <table className="min-w-full text-left text-sm">
+                            <thead>
+                              <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
+                                <th className="px-3 py-3 font-medium">Peak</th>
+                                <th className="px-3 py-3 font-medium">Seed 2θ</th>
+                                <th className="px-3 py-3 font-medium">Fitted 2θ</th>
+                                <th className="px-3 py-3 font-medium">Shift</th>
+                                <th className="px-3 py-3 font-medium">FWHM</th>
+                                <th className="px-3 py-3 font-medium">Area</th>
+                                <th className="px-3 py-3 font-medium">Height</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {activeGaussianFits.map((fit, idx) => (
+                                <tr key={`${fit.Peak_Name}-${idx}`} className="border-b border-white/5 text-slate-200 last:border-b-0">
+                                  <td className="px-3 py-3 font-medium">{fit.Peak_Name}</td>
+                                  <td className="px-3 py-3">{fit.Seed_Center.toFixed(4)}</td>
+                                  <td className="px-3 py-3">{fit.Fitted_Center.toFixed(4)}</td>
+                                  <td className="px-3 py-3">{fit.Shift.toFixed(4)}</td>
+                                  <td className="px-3 py-3">{fit.Fixed_FWHM.toFixed(4)}</td>
+                                  <td className="px-3 py-3">{fit.Fixed_Area.toFixed(4)}</td>
+                                  <td className="px-3 py-3">{fit.Template_Height.toFixed(4)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="mt-4 rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                          目前沒有可用的高斯中心結果。請檢查中心列表是否有啟用、中心位置是否落在目前資料範圍內。
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                      高斯模板扣除已啟用，但目前結果集中還沒有可顯示的模型與扣除後曲線。
+                    </div>
+                  )}
+                </div>
+              )}
 
               {peakParams.enabled && (
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
@@ -532,28 +838,292 @@ export default function XRD() {
                 </div>
               )}
 
-              <div className="mt-4 flex flex-col gap-3 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-white">Export Processed Spectrum</p>
+              {selectedRefs.length > 0 && (
+                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-white">Reference Peak Matching</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">
+                        Uses the current auto-detected peaks and finds the nearest observed peak for
+                        each selected reference line. This is a quick screening table, not a final
+                        phase identification report.
+                      </p>
+                    </div>
+                    <span className="text-xs text-slate-500">
+                      {matchedReferenceCount} / {referenceMatches.length} matched
+                    </span>
+                  </div>
+
+                  {!peakParams.enabled ? (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                      參考峰匹配需要先啟用自動尋峰，因為目前網站版會直接使用尋峰結果來做最近峰比對。
+                    </div>
+                  ) : filteredRefPeaks.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                      目前條件下沒有符合最小相對強度門檻的參考峰。可以降低強度門檻或改選其他參考相位。
+                    </div>
+                  ) : visibleReferenceMatches.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                      目前容差下沒有匹配到參考峰。可以放寬容差，或重新調整平滑與尋峰條件。
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
+                            <th className="px-3 py-3 font-medium">Phase</th>
+                            <th className="px-3 py-3 font-medium">hkl</th>
+                            <th className="px-3 py-3 font-medium">Ref 2θ</th>
+                            <th className="px-3 py-3 font-medium">Ref d</th>
+                            <th className="px-3 py-3 font-medium">Ref I (%)</th>
+                            <th className="px-3 py-3 font-medium">Obs 2θ</th>
+                            <th className="px-3 py-3 font-medium">Obs d</th>
+                            <th className="px-3 py-3 font-medium">Obs Intensity</th>
+                            <th className="px-3 py-3 font-medium">Δ2θ</th>
+                            <th className="px-3 py-3 font-medium">Matched</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visibleReferenceMatches.map((row, idx) => (
+                            <tr
+                              key={`${row.material}-${row.hkl}-${row.ref_two_theta}-${idx}`}
+                              className="border-b border-white/5 text-slate-200 last:border-b-0"
+                            >
+                              <td className="px-3 py-3 font-medium">{row.material}</td>
+                              <td className="px-3 py-3">{row.hkl || '-'}</td>
+                              <td className="px-3 py-3">{row.ref_two_theta.toFixed(4)}</td>
+                              <td className="px-3 py-3">{row.ref_d_spacing.toFixed(4)}</td>
+                              <td className="px-3 py-3">{row.ref_rel_i.toFixed(1)}</td>
+                              <td className="px-3 py-3">
+                                {row.observed_two_theta == null ? 'N/A' : row.observed_two_theta.toFixed(4)}
+                              </td>
+                              <td className="px-3 py-3">
+                                {row.observed_d_spacing == null ? 'N/A' : row.observed_d_spacing.toFixed(4)}
+                              </td>
+                              <td className="px-3 py-3">
+                                {row.observed_intensity == null ? 'N/A' : row.observed_intensity.toFixed(2)}
+                              </td>
+                              <td className="px-3 py-3">
+                                {row.delta_two_theta == null ? 'N/A' : row.delta_two_theta.toFixed(4)}
+                              </td>
+                              <td className="px-3 py-3">
+                                <span
+                                  className={[
+                                    'rounded-full px-2.5 py-1 text-[11px] font-semibold',
+                                    row.matched
+                                      ? 'border border-emerald-300/20 bg-emerald-400/10 text-emerald-200'
+                                      : 'border border-rose-300/20 bg-rose-400/10 text-rose-200',
+                                  ].join(' ')}
+                                >
+                                  {row.matched ? 'Yes' : 'No'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                <div className="mb-4">
+                  <p className="text-sm font-semibold text-white">Export</p>
                   <p className="mt-1 text-xs leading-5 text-slate-400">
-                    Download the current processed traces as CSV for further fitting, reporting, or
-                    external analysis.
+                    Download processed spectra, peak tables, matching tables, Gaussian center
+                    results, and a JSON report of the current XRD workflow.
                   </p>
                 </div>
-                <div className="flex flex-col items-start gap-2 sm:items-end">
-                  <button
-                    onClick={() => {
-                      const csv = csvContent(result)
-                      downloadCsv(csv, 'xrd_processed.csv')
-                    }}
-                    className="rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 transition-transform hover:-translate-y-0.5 hover:bg-cyan-200"
-                  >
-                    下載處理後光譜 CSV
-                  </button>
-                  <span className="text-xs text-slate-500">
-                    {result.datasets.length} 個資料集
-                    {result.average ? ' (含平均)' : ''}
-                  </span>
+
+                <div className="grid gap-4 xl:grid-cols-3">
+                  <div className="rounded-[22px] border border-white/10 bg-slate-950/25 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">研究常用</p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      <button
+                        onClick={() => {
+                          downloadFile(processedSpectrumCsv(result), 'xrd_processed.csv', 'text/csv')
+                        }}
+                        className="rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 transition-transform hover:-translate-y-0.5 hover:bg-cyan-200"
+                      >
+                        下載處理後光譜 CSV
+                      </button>
+                      {activeDataset && (
+                        <button
+                          onClick={() => {
+                            downloadFile(
+                              detailedDatasetCsv(activeDataset, wavelength, logViewParams),
+                              `${activeDataset.name.replace(/\.[^.]+$/, '')}_detailed.csv`,
+                              'text/csv',
+                            )
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          下載目前資料集詳細 CSV
+                        </button>
+                      )}
+                      {scherrerParams.enabled && scherrerRows.length > 0 && (
+                        <button
+                          onClick={() => {
+                            downloadFile(
+                              toCsv(
+                                ['two_theta_deg', 'd_spacing_A', 'intensity', 'relative_intensity_pct', 'fwhm_deg', 'D_nm', 'D_A'],
+                                scherrerRows.map(row => [
+                                  row.two_theta.toFixed(4),
+                                  row.d_spacing.toFixed(4),
+                                  row.intensity.toFixed(2),
+                                  row.rel_intensity.toFixed(1),
+                                  row.fwhm_deg.toFixed(4),
+                                  row.crystallite_nm == null ? '' : row.crystallite_nm.toFixed(6),
+                                  row.crystallite_nm == null ? '' : (row.crystallite_nm * 10).toFixed(6),
+                                ]),
+                              ),
+                              'xrd_scherrer.csv',
+                              'text/csv',
+                            )
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          下載 Scherrer CSV
+                        </button>
+                      )}
+                      {activeGaussianFits.length > 0 && (
+                        <button
+                          onClick={() => {
+                            downloadFile(
+                              toCsv(
+                                ['peak_name', 'seed_center_2theta_deg', 'fitted_center_2theta_deg', 'shift_deg', 'fixed_fwhm_deg', 'fixed_area', 'template_height'],
+                                activeGaussianFits.map(row => [
+                                  row.Peak_Name,
+                                  row.Seed_Center.toFixed(4),
+                                  row.Fitted_Center.toFixed(4),
+                                  row.Shift.toFixed(4),
+                                  row.Fixed_FWHM.toFixed(4),
+                                  row.Fixed_Area.toFixed(4),
+                                  row.Template_Height.toFixed(4),
+                                ]),
+                              ),
+                              'xrd_gaussian_centers.csv',
+                              'text/csv',
+                            )
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          下載高斯中心結果 CSV
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[22px] border border-white/10 bg-slate-950/25 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">分析表格</p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      {peakParams.enabled && detectedPeaks.length > 0 && (
+                        <button
+                          onClick={() => {
+                            downloadFile(
+                              toCsv(
+                                ['two_theta_deg', 'd_spacing_A', 'intensity', 'relative_intensity_pct', 'fwhm_deg'],
+                                detectedPeaks.map(row => [
+                                  row.two_theta.toFixed(4),
+                                  row.d_spacing.toFixed(4),
+                                  row.intensity.toFixed(2),
+                                  row.rel_intensity.toFixed(1),
+                                  row.fwhm_deg.toFixed(4),
+                                ]),
+                              ),
+                              'xrd_detected_peaks.csv',
+                              'text/csv',
+                            )
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          下載自動尋峰 CSV
+                        </button>
+                      )}
+                      {filteredRefPeaks.length > 0 && (
+                        <button
+                          onClick={() => {
+                            downloadFile(
+                              toCsv(
+                                ['material', 'hkl', 'two_theta_deg', 'd_spacing_A', 'relative_intensity_pct'],
+                                filteredRefPeaks.map(row => [
+                                  row.material,
+                                  row.hkl,
+                                  row.two_theta.toFixed(4),
+                                  row.d_spacing.toFixed(4),
+                                  row.rel_i.toFixed(1),
+                                ]),
+                              ),
+                              'xrd_reference_peaks.csv',
+                              'text/csv',
+                            )
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          下載參考峰 CSV
+                        </button>
+                      )}
+                      {referenceMatches.length > 0 && (
+                        <button
+                          onClick={() => {
+                            downloadFile(
+                              toCsv(
+                                ['material', 'hkl', 'ref_two_theta_deg', 'ref_d_spacing_A', 'ref_relative_intensity_pct', 'obs_two_theta_deg', 'obs_d_spacing_A', 'obs_intensity', 'delta_two_theta_deg', 'matched'],
+                                referenceMatches.map(row => [
+                                  row.material,
+                                  row.hkl,
+                                  row.ref_two_theta.toFixed(4),
+                                  row.ref_d_spacing.toFixed(4),
+                                  row.ref_rel_i.toFixed(1),
+                                  row.observed_two_theta == null ? '' : row.observed_two_theta.toFixed(4),
+                                  row.observed_d_spacing == null ? '' : row.observed_d_spacing.toFixed(4),
+                                  row.observed_intensity == null ? '' : row.observed_intensity.toFixed(2),
+                                  row.delta_two_theta == null ? '' : row.delta_two_theta.toFixed(4),
+                                  row.matched ? 'true' : 'false',
+                                ]),
+                              ),
+                              'xrd_reference_matches.csv',
+                              'text/csv',
+                            )
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          下載參考匹配 CSV
+                        </button>
+                      )}
+                      {!peakParams.enabled && filteredRefPeaks.length === 0 && (
+                        <p className="text-xs leading-5 text-slate-500">
+                          啟用自動尋峰或參考峰比對後，這裡才會有對應的分析表格可下載。
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[22px] border border-white/10 bg-slate-950/25 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">追溯 / 設定</p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      <button
+                        onClick={() => {
+                          downloadFile(
+                            JSON.stringify(processingReport, null, 2),
+                            'xrd_processing_report.json',
+                            'application/json',
+                          )
+                        }}
+                        className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                      >
+                        下載處理報告 JSON
+                      </button>
+                      <p className="text-xs leading-5 text-slate-500">
+                        會保存目前波長、處理參數、log 設定、高斯中心、尋峰結果、匹配結果與 Scherrer 結果摘要。
+                      </p>
+                      <span className="text-xs text-slate-500">
+                        {result.datasets.length} 個資料集
+                        {result.average ? ' (含平均)' : ''}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </>

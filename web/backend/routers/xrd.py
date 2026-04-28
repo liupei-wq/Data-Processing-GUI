@@ -16,13 +16,14 @@ from typing import List, Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from scipy.signal import peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.processing import smooth_signal, apply_normalization
 from core.spectrum_ops import (
     detect_spectrum_peaks,
+    fit_fixed_gaussian_templates,
     interpolate_spectrum_to_grid,
     mean_spectrum_arrays,
 )
@@ -67,6 +68,11 @@ class ProcessParams(BaseModel):
     interpolate: bool = False
     n_points: int = 1000
     average: bool = False
+    gaussian_enabled: bool = False
+    gaussian_fwhm: float = 0.2
+    gaussian_height: float = 100.0
+    gaussian_search_half_width: float = 0.5
+    gaussian_centers: List["GaussianCenterInput"] = Field(default_factory=list)
     smooth_method: str = "none"       # none | moving_average | savitzky_golay
     smooth_window: int = 11
     smooth_poly: int = 3
@@ -80,11 +86,30 @@ class ProcessRequest(BaseModel):
     params: ProcessParams
 
 
+class GaussianCenterInput(BaseModel):
+    enabled: bool = True
+    name: str = ""
+    center: float
+
+
+class GaussianFitRow(BaseModel):
+    Peak_Name: str
+    Seed_Center: float
+    Fitted_Center: float
+    Shift: float
+    Fixed_FWHM: float
+    Fixed_Area: float
+    Template_Height: float
+
+
 class DatasetOutput(BaseModel):
     name: str
     x: List[float]
     y_raw: List[float]
+    y_gaussian_model: Optional[List[float]] = None
+    y_gaussian_subtracted: Optional[List[float]] = None
     y_processed: List[float]
+    gaussian_fits: List[GaussianFitRow] = Field(default_factory=list)
 
 
 class ProcessResponse(BaseModel):
@@ -130,6 +155,9 @@ class RefPeaksResponse(BaseModel):
     peaks: List[RefPeak]
 
 
+ProcessParams.model_rebuild()
+
+
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/parse", summary="Parse uploaded XRD files")
@@ -151,9 +179,9 @@ async def parse_files(files: List[UploadFile] = File(...)):
 @router.post("/process", response_model=ProcessResponse, summary="Process XRD data")
 def process_data(req: ProcessRequest):
     """
-    Apply interpolation, averaging, smoothing, and normalization.
+    Apply interpolation, optional fixed Gaussian subtraction, smoothing, and normalization.
 
-    Processing order: interpolate → average → smooth → normalize
+    Processing order: interpolate → average → Gaussian subtraction → smooth → normalize
     """
     if not req.datasets:
         raise HTTPException(status_code=400, detail="No datasets provided")
@@ -166,7 +194,7 @@ def process_data(req: ProcessRequest):
     for ds in datasets:
         x = np.array(ds.x, dtype=float)
         y = np.array(ds.y, dtype=float)
-        if params.interpolate and params.n_points >= 2:
+        if (params.interpolate or params.gaussian_enabled) and params.n_points >= 2:
             x_grid = np.linspace(x.min(), x.max(), params.n_points)
             y = interpolate_spectrum_to_grid(x, y, x_grid)
             x = x_grid
@@ -180,27 +208,19 @@ def process_data(req: ProcessRequest):
         x_max = min(p[1].max() for p in processed_pairs)
         if x_min >= x_max:
             raise HTTPException(status_code=400, detail="Files have no overlapping x range")
-        x_grid = np.linspace(x_min, x_max, params.n_points if params.interpolate else 500)
+        x_grid = np.linspace(
+            x_min,
+            x_max,
+            params.n_points if (params.interpolate or params.gaussian_enabled) else 500,
+        )
         interped = [interpolate_spectrum_to_grid(x, y, x_grid) for _, x, y in processed_pairs]
         y_avg = mean_spectrum_arrays(interped)
-        y_avg_proc = _apply_smooth_norm(x_grid, y_avg, params)
-        average_output = DatasetOutput(
-            name="Average",
-            x=x_grid.tolist(),
-            y_raw=y_avg.tolist(),
-            y_processed=y_avg_proc.tolist(),
-        )
+        average_output = _build_dataset_output("Average", x_grid, y_avg, params)
 
     # ── 3. Smooth + normalize each dataset ───────────────────────────────────
     output_datasets: list[DatasetOutput] = []
     for name, x, y in processed_pairs:
-        y_proc = _apply_smooth_norm(x, y, params)
-        output_datasets.append(DatasetOutput(
-            name=name,
-            x=x.tolist(),
-            y_raw=y.tolist(),
-            y_processed=y_proc.tolist(),
-        ))
+        output_datasets.append(_build_dataset_output(name, x, y, params))
 
     return ProcessResponse(datasets=output_datasets, average=average_output)
 
@@ -215,6 +235,40 @@ def _apply_smooth_norm(x: np.ndarray, y: np.ndarray, params: ProcessParams) -> n
                                 norm_x_start=params.norm_x_start,
                                 norm_x_end=params.norm_x_end)
     return y_out
+
+
+def _build_dataset_output(name: str, x: np.ndarray, y: np.ndarray, params: ProcessParams) -> DatasetOutput:
+    gaussian_model: Optional[np.ndarray] = None
+    gaussian_subtracted: Optional[np.ndarray] = None
+    gaussian_fits: list[GaussianFitRow] = []
+    smooth_input = y
+
+    if params.gaussian_enabled:
+        fixed_area = float(params.gaussian_height) * float(params.gaussian_fwhm) * 1.0645
+        centers = [center.model_dump() for center in params.gaussian_centers]
+        model_arr, subtracted_arr, fit_rows = fit_fixed_gaussian_templates(
+            x,
+            y,
+            centers,
+            fixed_fwhm=float(params.gaussian_fwhm),
+            fixed_area=fixed_area,
+            search_half_width=float(params.gaussian_search_half_width),
+        )
+        gaussian_model = model_arr
+        gaussian_subtracted = subtracted_arr
+        smooth_input = subtracted_arr
+        gaussian_fits = [GaussianFitRow(**row) for row in fit_rows]
+
+    y_proc = _apply_smooth_norm(x, smooth_input, params)
+    return DatasetOutput(
+        name=name,
+        x=x.tolist(),
+        y_raw=y.tolist(),
+        y_gaussian_model=None if gaussian_model is None else gaussian_model.tolist(),
+        y_gaussian_subtracted=None if gaussian_subtracted is None else gaussian_subtracted.tolist(),
+        y_processed=y_proc.tolist(),
+        gaussian_fits=gaussian_fits,
+    )
 
 
 @router.post("/peaks", response_model=PeakDetectResponse, summary="Auto-detect XRD peaks")

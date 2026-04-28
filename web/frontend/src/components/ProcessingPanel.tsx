@@ -6,7 +6,14 @@
  */
 
 import { useState, type ReactNode } from 'react'
-import type { PeakDetectionParams, ProcessParams, XMode, WavelengthPreset } from '../types/xrd'
+import type {
+  LogViewParams,
+  PeakDetectionParams,
+  ProcessParams,
+  ReferenceMatchParams,
+  XMode,
+  WavelengthPreset,
+} from '../types/xrd'
 
 // ── re-exported so callers don't need to import from types ───────────────────
 export type { XMode, WavelengthPreset }
@@ -15,6 +22,13 @@ export const DEFAULT_PARAMS: ProcessParams = {
   interpolate: false,
   n_points: 1000,
   average: false,
+  gaussian_enabled: false,
+  gaussian_fwhm: 0.2,
+  gaussian_height: 100,
+  gaussian_search_half_width: 0.5,
+  gaussian_centers: [
+    { enabled: true, name: 'Peak 1', center: 30 },
+  ],
   smooth_method: 'none',
   smooth_window: 11,
   smooth_poly: 3,
@@ -125,6 +139,10 @@ interface Props {
   refMaterials: string[]
   selectedRefs: string[]
   onSelectedRefsChange: (refs: string[]) => void
+  logViewParams: LogViewParams
+  onLogViewParamsChange: (p: LogViewParams) => void
+  refMatchParams: ReferenceMatchParams
+  onRefMatchParamsChange: (p: ReferenceMatchParams) => void
   peakParams: PeakDetectionParams
   onPeakParamsChange: (p: PeakDetectionParams) => void
 }
@@ -142,11 +160,21 @@ export default function ProcessingPanel({
   refMaterials,
   selectedRefs,
   onSelectedRefsChange,
+  logViewParams,
+  onLogViewParamsChange,
+  refMatchParams,
+  onRefMatchParamsChange,
   peakParams,
   onPeakParamsChange,
 }: Props) {
   const set = <K extends keyof ProcessParams>(key: K, value: ProcessParams[K]) =>
     onChange({ ...params, [key]: value })
+  const setLogView = <K extends keyof LogViewParams>(key: K, value: LogViewParams[K]) =>
+    onLogViewParamsChange({ ...logViewParams, [key]: value })
+  const setRefMatch = <K extends keyof ReferenceMatchParams>(
+    key: K,
+    value: ReferenceMatchParams[K],
+  ) => onRefMatchParamsChange({ ...refMatchParams, [key]: value })
   const setPeak = <K extends keyof PeakDetectionParams>(key: K, value: PeakDetectionParams[K]) =>
     onPeakParamsChange({ ...peakParams, [key]: value })
 
@@ -179,8 +207,117 @@ export default function ProcessingPanel({
         />
       </Section>
 
-      {/* ── 3. Smooth ────────────────────────────────────────────────────── */}
-      <Section title="3. 平滑">
+      {/* ── 3. Gaussian subtraction ─────────────────────────────────────── */}
+      <Section title="3. 高斯模板扣除" defaultOpen={false}>
+        <Checkbox
+          checked={params.gaussian_enabled}
+          onChange={v => set('gaussian_enabled', v)}
+          label="啟用高斯模板扣除"
+        />
+        {params.gaussian_enabled && (
+          <>
+            <NumberInput
+              label="固定 FWHM (deg)"
+              value={params.gaussian_fwhm}
+              min={0.001}
+              max={5}
+              step={0.001}
+              onChange={v => set('gaussian_fwhm', v)}
+            />
+            <NumberInput
+              label="固定高度"
+              value={params.gaussian_height}
+              min={0.000001}
+              max={1000000000}
+              step={1}
+              onChange={v => set('gaussian_height', v)}
+            />
+            <div className="rounded border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-500">
+              換算面積 = {(params.gaussian_height * params.gaussian_fwhm * 1.0645).toFixed(4)}
+            </div>
+            <NumberInput
+              label="中心搜尋半寬 (deg)"
+              value={params.gaussian_search_half_width}
+              min={0.001}
+              max={10}
+              step={0.01}
+              onChange={v => set('gaussian_search_half_width', v)}
+            />
+
+            <div className="space-y-2">
+              <Label>高斯中心列表</Label>
+              {params.gaussian_centers.map((center, idx) => (
+                <div key={`${center.name}-${idx}`} className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <Checkbox
+                      checked={center.enabled}
+                      onChange={v => set('gaussian_centers', params.gaussian_centers.map((item, itemIdx) => (
+                        itemIdx === idx ? { ...item, enabled: v } : item
+                      )))}
+                      label={`中心 ${idx + 1}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => set('gaussian_centers', params.gaussian_centers.filter((_, itemIdx) => itemIdx !== idx))}
+                      className="text-xs text-rose-500 hover:underline"
+                    >
+                      刪除
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <Label>峰名稱</Label>
+                      <input
+                        type="text"
+                        value={center.name}
+                        onChange={e => set('gaussian_centers', params.gaussian_centers.map((item, itemIdx) => (
+                          itemIdx === idx ? { ...item, name: e.target.value } : item
+                        )))}
+                        className="w-full text-xs border border-slate-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                    <NumberInput
+                      label="中心 2θ (deg)"
+                      value={center.center}
+                      min={0}
+                      max={180}
+                      step={0.01}
+                      onChange={v => set('gaussian_centers', params.gaussian_centers.map((item, itemIdx) => (
+                        itemIdx === idx ? { ...item, center: v } : item
+                      )))}
+                    />
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  const lastCenter = params.gaussian_centers.length > 0
+                    ? params.gaussian_centers[params.gaussian_centers.length - 1].center
+                    : 30
+                  set('gaussian_centers', [
+                    ...params.gaussian_centers,
+                    {
+                      enabled: true,
+                      name: `Peak ${params.gaussian_centers.length + 1}`,
+                      center: lastCenter,
+                    },
+                  ])
+                }}
+                className="w-full rounded border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600"
+              >
+                新增高斯中心
+              </button>
+            </div>
+            <p className="text-xs text-slate-400">
+              這一步會先用固定面積與固定 FWHM 的高斯模板，只允許中心位置在局部範圍內移動，適合把已知峰附近的影響先扣掉。
+            </p>
+          </>
+        )}
+      </Section>
+
+      {/* ── 4. Smooth ────────────────────────────────────────────────────── */}
+      <Section title="4. 平滑">
         <div>
           <Label>方法</Label>
           <Select
@@ -206,8 +343,8 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      {/* ── 4. Normalize ─────────────────────────────────────────────────── */}
-      <Section title="4. 歸一化">
+      {/* ── 5. Normalize ─────────────────────────────────────────────────── */}
+      <Section title="5. 歸一化">
         <div>
           <Label>方法</Label>
           <Select
@@ -223,8 +360,43 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      {/* ── 5. Wavelength ────────────────────────────────────────────────── */}
-      <Section title="5. 波長 / X 軸">
+      {/* ── 6. Log weak-peak view ───────────────────────────────────────── */}
+      <Section title="6. 取對數（弱峰檢視）" defaultOpen={false}>
+        <Checkbox
+          checked={logViewParams.enabled}
+          onChange={v => setLogView('enabled', v)}
+          label="建立 log 顯示曲線"
+        />
+        {logViewParams.enabled && (
+          <>
+            <div>
+              <Label>方法</Label>
+              <Select
+                value={logViewParams.method}
+                onChange={v => setLogView('method', v as LogViewParams['method'])}
+                options={[
+                  { value: 'log10', label: 'log10' },
+                  { value: 'ln', label: '自然對數 ln' },
+                ]}
+              />
+            </div>
+            <NumberInput
+              label="地板值 floor"
+              value={logViewParams.floor_value}
+              min={0.000000001}
+              max={1}
+              step={0.000001}
+              onChange={v => setLogView('floor_value', v)}
+            />
+            <p className="text-xs text-slate-400">
+              這一步只用來看弱峰與寬尾巴，不改主圖、尋峰、Scherrer 或參考峰匹配的計算基礎。
+            </p>
+          </>
+        )}
+      </Section>
+
+      {/* ── 7. Wavelength ────────────────────────────────────────────────── */}
+      <Section title="7. 波長 / X 軸">
         <div>
           <Label>光源</Label>
           <Select
@@ -258,8 +430,29 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      {/* ── 6. Reference Peaks ───────────────────────────────────────────── */}
-      <Section title="6. 參考峰比對" defaultOpen={false}>
+      {/* ── 8. Reference Peaks ───────────────────────────────────────────── */}
+      <Section title="8. 參考峰比對" defaultOpen={false}>
+        <NumberInput
+          label="最小參考相對強度 (%)"
+          value={refMatchParams.min_rel_intensity}
+          min={1}
+          max={100}
+          step={1}
+          onChange={v => setRefMatch('min_rel_intensity', v)}
+        />
+        <NumberInput
+          label="匹配容差 (deg)"
+          value={refMatchParams.tolerance_deg}
+          min={0.01}
+          max={2}
+          step={0.01}
+          onChange={v => setRefMatch('tolerance_deg', v)}
+        />
+        <Checkbox
+          checked={refMatchParams.only_show_matched}
+          onChange={v => setRefMatch('only_show_matched', v)}
+          label="比對表只顯示匹配項"
+        />
         {refMaterials.length === 0 ? (
           <p className="text-xs text-slate-400">載入中…</p>
         ) : (
@@ -287,9 +480,12 @@ export default function ProcessingPanel({
             清除全部
           </button>
         )}
+        <p className="text-xs text-slate-400">
+          會拿目前自動尋峰結果去找最近的參考峰，適合做快速相辨識，不等同完整 PDF/JCPDS 卡。
+        </p>
       </Section>
 
-      <Section title="7. 自動尋峰" defaultOpen={false}>
+      <Section title="9. 自動尋峰" defaultOpen={false}>
         <Checkbox
           checked={peakParams.enabled}
           onChange={v => setPeak('enabled', v)}

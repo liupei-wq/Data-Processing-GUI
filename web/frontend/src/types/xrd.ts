@@ -12,6 +12,11 @@ export interface ProcessParams {
   interpolate: boolean
   n_points: number
   average: boolean
+  gaussian_enabled: boolean
+  gaussian_fwhm: number
+  gaussian_height: number
+  gaussian_search_half_width: number
+  gaussian_centers: GaussianCenter[]
   smooth_method: 'none' | 'moving_average' | 'savitzky_golay'
   smooth_window: number
   smooth_poly: number
@@ -20,12 +25,31 @@ export interface ProcessParams {
   norm_x_end: number | null
 }
 
+export interface GaussianCenter {
+  enabled: boolean
+  name: string
+  center: number
+}
+
+export interface GaussianFitRow {
+  Peak_Name: string
+  Seed_Center: number
+  Fitted_Center: number
+  Shift: number
+  Fixed_FWHM: number
+  Fixed_Area: number
+  Template_Height: number
+}
+
 /** One dataset in the process response */
 export interface ProcessedDataset {
   name: string
   x: number[]
   y_raw: number[]
+  y_gaussian_model: number[] | null
+  y_gaussian_subtracted: number[] | null
   y_processed: number[]
+  gaussian_fits: GaussianFitRow[]
 }
 
 /** Full response from /api/xrd/process */
@@ -51,6 +75,18 @@ export interface PeakDetectionParams {
   max_peaks: number
 }
 
+export interface ReferenceMatchParams {
+  min_rel_intensity: number
+  tolerance_deg: number
+  only_show_matched: boolean
+}
+
+export interface LogViewParams {
+  enabled: boolean
+  method: 'log10' | 'ln'
+  floor_value: number
+}
+
 export interface ScherrerParams {
   enabled: boolean
   k: number
@@ -65,6 +101,19 @@ export interface RefPeak {
   two_theta: number
   d_spacing: number
   rel_i: number
+}
+
+export interface ReferenceMatchRow {
+  material: string
+  hkl: string
+  ref_two_theta: number
+  ref_d_spacing: number
+  ref_rel_i: number
+  observed_two_theta: number | null
+  observed_d_spacing: number | null
+  observed_intensity: number | null
+  delta_two_theta: number | null
+  matched: boolean
 }
 
 /** X-axis display mode */

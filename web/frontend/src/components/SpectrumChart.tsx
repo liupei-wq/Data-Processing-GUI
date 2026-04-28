@@ -1,12 +1,19 @@
 import Plot from 'react-plotly.js'
 import type { DetectedPeak, ProcessResult, RefPeak, XMode } from '../types/xrd'
 
+type DisplayMode = 'linear' | 'log10' | 'ln'
+
 interface Props {
   result: ProcessResult
   refPeaks: RefPeak[]
   detectedPeaks: DetectedPeak[]
   xMode: XMode
   wavelength: number
+  displayMode?: DisplayMode
+  logFloorValue?: number
+  showReferencePeaks?: boolean
+  showDetectedPeaks?: boolean
+  minHeight?: number
 }
 
 const COLORS = [
@@ -19,10 +26,32 @@ function toD(twoTheta: number, wl: number): number {
   return wl / (2 * Math.sin(theta))
 }
 
-export default function SpectrumChart({ result, refPeaks, detectedPeaks, xMode, wavelength }: Props) {
+function safeLogTransform(values: number[], mode: Exclude<DisplayMode, 'linear'>, floorValue = 1e-6) {
+  const minVal = values.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
+  const shift = minVal <= 0 ? Math.abs(minVal) + floorValue : floorValue
+  const shifted = values.map(value => Math.max(value + shift, floorValue))
+  return shifted.map(value => (mode === 'ln' ? Math.log(value) : Math.log10(value)))
+}
+
+export default function SpectrumChart({
+  result,
+  refPeaks,
+  detectedPeaks,
+  xMode,
+  wavelength,
+  displayMode = 'linear',
+  logFloorValue = 1e-6,
+  showReferencePeaks = true,
+  showDetectedPeaks = true,
+  minHeight = 460,
+}: Props) {
   const datasets = result.average ? [result.average, ...result.datasets] : result.datasets
-  const showRaw = !result.average && result.datasets.length > 1
+  const showRaw = displayMode === 'linear' && !result.average && result.datasets.length > 1
   const convertX = (x: number[]) => (xMode === 'dspacing' ? x.map(v => toD(v, wavelength)) : x)
+  const transformY = (values: number[]) => {
+    if (displayMode === 'linear') return values
+    return safeLogTransform(values, displayMode, logFloorValue)
+  }
   const traces: Plotly.Data[] = []
 
   datasets.forEach((ds, i) => {
@@ -44,7 +73,7 @@ export default function SpectrumChart({ result, refPeaks, detectedPeaks, xMode, 
 
     traces.push({
       x: xDisplay,
-      y: ds.y_processed,
+      y: transformY(ds.y_processed),
       type: 'scatter',
       mode: 'lines',
       name: ds.name,
@@ -57,30 +86,32 @@ export default function SpectrumChart({ result, refPeaks, detectedPeaks, xMode, 
   const uniqueMats = [...new Set(refPeaks.map(p => p.material))]
   uniqueMats.forEach((m, i) => { matColors[m] = refColorPalette[i % refColorPalette.length] })
 
-  const allY = datasets.flatMap(ds => ds.y_processed)
+  const allY = datasets.flatMap(ds => transformY(ds.y_processed))
   const yMax = allY.length > 0 ? Math.max(...allY) : 1
 
-  uniqueMats.forEach(mat => {
-    const matPeaks = refPeaks.filter(p => p.material === mat)
-    const xPts: number[] = []
-    const yPts: number[] = []
-    matPeaks.forEach(p => {
-      const xVal = xMode === 'dspacing' ? p.d_spacing : p.two_theta
-      xPts.push(xVal, xVal, xVal)
-      yPts.push(0, (p.rel_i / 100) * yMax * 0.8, null as unknown as number)
+  if (showReferencePeaks && displayMode === 'linear') {
+    uniqueMats.forEach(mat => {
+      const matPeaks = refPeaks.filter(p => p.material === mat)
+      const xPts: number[] = []
+      const yPts: number[] = []
+      matPeaks.forEach(p => {
+        const xVal = xMode === 'dspacing' ? p.d_spacing : p.two_theta
+        xPts.push(xVal, xVal, xVal)
+        yPts.push(0, (p.rel_i / 100) * yMax * 0.8, null as unknown as number)
+      })
+      traces.push({
+        x: xPts,
+        y: yPts,
+        type: 'scatter',
+        mode: 'lines',
+        name: mat.split(' | ')[0],
+        line: { color: matColors[mat], width: 1.5, dash: 'dot' },
+        opacity: 0.8,
+      })
     })
-    traces.push({
-      x: xPts,
-      y: yPts,
-      type: 'scatter',
-      mode: 'lines',
-      name: mat.split(' | ')[0],
-      line: { color: matColors[mat], width: 1.5, dash: 'dot' },
-      opacity: 0.8,
-    })
-  })
+  }
 
-  if (detectedPeaks.length > 0) {
+  if (showDetectedPeaks && displayMode === 'linear' && detectedPeaks.length > 0) {
     traces.push({
       x: detectedPeaks.map(p => (xMode === 'dspacing' ? p.d_spacing : p.two_theta)),
       y: detectedPeaks.map(p => p.intensity),
@@ -111,7 +142,7 @@ export default function SpectrumChart({ result, refPeaks, detectedPeaks, xMode, 
       autorange: xMode === 'dspacing' ? 'reversed' : true,
     },
     yaxis: {
-      title: { text: 'Intensity (a.u.)', font: { size: 13 } },
+      title: { text: displayMode === 'linear' ? 'Intensity (a.u.)' : `${displayMode} Intensity`, font: { size: 13 } },
       showgrid: true,
       gridcolor: 'rgba(148, 163, 184, 0.14)',
       zeroline: false,
@@ -145,7 +176,7 @@ export default function SpectrumChart({ result, refPeaks, detectedPeaks, xMode, 
         data={traces}
         layout={layout}
         config={{ scrollZoom: true, displaylogo: false, responsive: true }}
-        style={{ width: '100%', minHeight: '460px' }}
+        style={{ width: '100%', minHeight: `${minHeight}px` }}
         useResizeHandler
       />
     </div>
