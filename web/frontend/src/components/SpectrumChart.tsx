@@ -1,42 +1,34 @@
 import Plot from 'react-plotly.js'
-import type { ProcessResult, RefPeak, XMode } from '../types/xrd'
+import type { DetectedPeak, ProcessResult, RefPeak, XMode } from '../types/xrd'
 
 interface Props {
   result: ProcessResult
   refPeaks: RefPeak[]
+  detectedPeaks: DetectedPeak[]
   xMode: XMode
   wavelength: number
 }
 
-// Color palette for multiple datasets
 const COLORS = [
-  '#2563eb', '#dc2626', '#16a34a', '#d97706',
-  '#7c3aed', '#0891b2', '#db2777', '#65a30d',
+  '#38bdf8', '#fb7185', '#34d399', '#f59e0b',
+  '#a78bfa', '#22d3ee', '#f472b6', '#a3e635',
 ]
 
-/** Convert 2θ → d-spacing (Å) using Bragg's law */
 function toD(twoTheta: number, wl: number): number {
   const theta = (twoTheta * Math.PI) / 360
   return wl / (2 * Math.sin(theta))
 }
 
-/** Build Plotly data + layout for the XRD chart */
-export default function SpectrumChart({ result, refPeaks, xMode, wavelength }: Props) {
+export default function SpectrumChart({ result, refPeaks, detectedPeaks, xMode, wavelength }: Props) {
   const datasets = result.average ? [result.average, ...result.datasets] : result.datasets
   const showRaw = !result.average && result.datasets.length > 1
-
-  // Helper: convert x array based on display mode
-  const convertX = (x: number[]) =>
-    xMode === 'dspacing' ? x.map(v => toD(v, wavelength)) : x
-
-  // ── traces ────────────────────────────────────────────────────────────────
+  const convertX = (x: number[]) => (xMode === 'dspacing' ? x.map(v => toD(v, wavelength)) : x)
   const traces: Plotly.Data[] = []
 
   datasets.forEach((ds, i) => {
     const color = COLORS[i % COLORS.length]
     const xDisplay = convertX(ds.x)
 
-    // Raw trace (thin, semi-transparent) – only shown for multi-file non-average mode
     if (showRaw) {
       traces.push({
         x: xDisplay,
@@ -50,7 +42,6 @@ export default function SpectrumChart({ result, refPeaks, xMode, wavelength }: P
       })
     }
 
-    // Processed trace (main line)
     traces.push({
       x: xDisplay,
       y: ds.y_processed,
@@ -61,17 +52,14 @@ export default function SpectrumChart({ result, refPeaks, xMode, wavelength }: P
     })
   })
 
-  // ── reference peak sticks ─────────────────────────────────────────────────
   const matColors: Record<string, string> = {}
   const refColorPalette = ['#f97316', '#8b5cf6', '#06b6d4', '#84cc16', '#f43f5e']
   const uniqueMats = [...new Set(refPeaks.map(p => p.material))]
   uniqueMats.forEach((m, i) => { matColors[m] = refColorPalette[i % refColorPalette.length] })
 
-  // Find max y for scaling reference sticks
   const allY = datasets.flatMap(ds => ds.y_processed)
   const yMax = allY.length > 0 ? Math.max(...allY) : 1
 
-  // One trace per material (for grouped legend)
   uniqueMats.forEach(mat => {
     const matPeaks = refPeaks.filter(p => p.material === mat)
     const xPts: number[] = []
@@ -86,43 +74,80 @@ export default function SpectrumChart({ result, refPeaks, xMode, wavelength }: P
       y: yPts,
       type: 'scatter',
       mode: 'lines',
-      name: mat.split(' | ')[0],   // short name for legend
+      name: mat.split(' | ')[0],
       line: { color: matColors[mat], width: 1.5, dash: 'dot' },
       opacity: 0.8,
     })
   })
 
-  // ── layout ────────────────────────────────────────────────────────────────
+  if (detectedPeaks.length > 0) {
+    traces.push({
+      x: detectedPeaks.map(p => (xMode === 'dspacing' ? p.d_spacing : p.two_theta)),
+      y: detectedPeaks.map(p => p.intensity),
+      type: 'scatter',
+      mode: 'markers',
+      name: 'Detected peaks',
+      marker: {
+        color: '#f8fafc',
+        size: 8,
+        symbol: 'diamond-open',
+        line: { color: '#38bdf8', width: 1.5 },
+      },
+      hovertemplate:
+        xMode === 'dspacing'
+          ? 'd = %{x:.4f} Å<br>Intensity = %{y:.2f}<extra>Detected peak</extra>'
+          : '2θ = %{x:.4f}<br>Intensity = %{y:.2f}<extra>Detected peak</extra>',
+    })
+  }
+
   const xLabel = xMode === 'dspacing' ? 'd-spacing (Å)' : '2θ (degrees)'
   const layout: Partial<Plotly.Layout> = {
     xaxis: {
       title: { text: xLabel, font: { size: 13 } },
       showgrid: true,
-      gridcolor: '#e2e8f0',
+      gridcolor: 'rgba(148, 163, 184, 0.14)',
       zeroline: false,
+      color: '#d9e4f0',
       autorange: xMode === 'dspacing' ? 'reversed' : true,
     },
     yaxis: {
       title: { text: 'Intensity (a.u.)', font: { size: 13 } },
       showgrid: true,
-      gridcolor: '#e2e8f0',
+      gridcolor: 'rgba(148, 163, 184, 0.14)',
       zeroline: false,
+      color: '#d9e4f0',
     },
-    legend: { x: 1, xanchor: 'right', y: 1, bgcolor: 'rgba(255,255,255,0.8)', bordercolor: '#e2e8f0', borderwidth: 1 },
+    legend: {
+      x: 1,
+      xanchor: 'right',
+      y: 1,
+      bgcolor: 'rgba(15, 23, 42, 0.72)',
+      bordercolor: 'rgba(148, 163, 184, 0.18)',
+      borderwidth: 1,
+      font: { color: '#d9e4f0' },
+    },
     margin: { l: 60, r: 20, t: 30, b: 60 },
-    paper_bgcolor: 'white',
-    plot_bgcolor: '#fafafa',
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(15, 23, 42, 0.52)',
+    font: { color: '#d9e4f0' },
     hovermode: 'x unified',
+    hoverlabel: {
+      bgcolor: 'rgba(15, 23, 42, 0.95)',
+      bordercolor: 'rgba(148, 163, 184, 0.22)',
+      font: { color: '#f8fafc' },
+    },
     autosize: true,
   }
 
   return (
-    <Plot
-      data={traces}
-      layout={layout}
-      config={{ scrollZoom: true, displaylogo: false, responsive: true }}
-      style={{ width: '100%', minHeight: '460px' }}
-      useResizeHandler
-    />
+    <div className="rounded-[28px] border border-white/10 bg-slate-950/28 p-3 sm:p-4">
+      <Plot
+        data={traces}
+        layout={layout}
+        config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+        style={{ width: '100%', minHeight: '460px' }}
+        useResizeHandler
+      />
+    </div>
   )
 }

@@ -6,10 +6,6 @@ interface Props {
   isLoading: boolean
 }
 
-/**
- * Drag-and-drop file upload zone.
- * Accepts .txt / .csv / .xy / .asc files.
- */
 export default function FileUpload({ onFiles, isLoading }: Props) {
   const onDrop = useCallback(
     (accepted: File[]) => {
@@ -31,21 +27,21 @@ export default function FileUpload({ onFiles, isLoading }: Props) {
     <div
       {...getRootProps()}
       className={[
-        'border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors',
+        'cursor-pointer rounded-[22px] border border-dashed p-5 text-center transition-all',
         isDragActive
-          ? 'border-blue-500 bg-blue-50'
-          : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50',
-        isLoading ? 'opacity-50 cursor-not-allowed' : '',
+          ? 'border-cyan-300 bg-cyan-300/12 shadow-[0_0_0_1px_rgba(125,211,252,0.15)]'
+          : 'border-white/16 bg-slate-950/35 hover:border-cyan-300/40 hover:bg-white/6',
+        isLoading ? 'cursor-not-allowed opacity-50' : '',
       ].join(' ')}
     >
       <input {...getInputProps()} />
-      <div className="text-2xl mb-1">📂</div>
+      <div className="mb-2 text-3xl">◫</div>
       {isDragActive ? (
-        <p className="text-sm text-blue-600 font-medium">放開以載入檔案</p>
+        <p className="text-sm font-medium text-cyan-100">放開以載入檔案</p>
       ) : (
         <>
-          <p className="text-sm text-slate-600 font-medium">拖曳或點擊上傳</p>
-          <p className="text-xs text-slate-400 mt-1">.txt / .csv / .xy / .asc</p>
+          <p className="text-sm font-medium text-slate-100">拖曳或點擊上傳</p>
+          <p className="mt-1 text-xs text-slate-400">.txt / .csv / .xy / .asc / .dat</p>
         </>
       )}
     </div>

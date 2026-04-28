@@ -258,6 +258,78 @@ Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與
 
 - 目前是活躍開發中的模組，需求變動較頻繁。
 - `modules/xas_auto.py` 是 app 實際入口，若改 XAS UI，優先改這個檔。
+
+## 2026-04-29 網站版 XRD 進度紀錄
+
+### Render 與網站骨架
+
+- 已確認 Render 網址 `https://data-processing-gui-web.onrender.com/` 可正常回應。
+- `/health` 正常回傳 `{"status":"ok"}`，代表 FastAPI 服務有起來。
+- 網站目前採用 `web/` 目錄下的 FastAPI + React 架構。
+- 前端品牌已改為 `Nigiro Pro`，XRD 首頁殼層、圖表區、上傳區、資訊卡與匯出區已重做。
+
+### XRD 已搬到網站版的功能
+
+- 檔案上傳與解析
+- 內插化與多檔平均
+- 平滑
+- 歸一化
+- 波長切換
+- `2θ / d-spacing` 切換
+- 參考峰 overlay
+- 處理後光譜 CSV 匯出
+- 自動尋峰 UI 與峰表
+
+### 2026-04-29 新增：Scherrer 晶粒尺寸分析
+
+本次先補網站版 XRD 的 Scherrer 基礎工作流，沒有碰 Streamlit 舊版。
+
+後端：
+
+- `web/backend/routers/xrd.py`
+  - 在 `/api/xrd/peaks` 使用 `scipy.signal.peak_widths(..., rel_height=0.5)` 計算峰寬。
+  - 將左右半高位置內插回實際 `2θ` 軸。
+  - `PeakRow` 新增 `fwhm_deg` 欄位，讓前端可直接使用。
+
+前端：
+
+- `web/frontend/src/types/xrd.ts`
+  - `DetectedPeak` 新增 `fwhm_deg`
+  - 新增 `ScherrerParams`
+- `web/frontend/src/pages/XRD.tsx`
+  - 新增 Scherrer 參數狀態：
+    - `enabled`
+    - `k`
+    - `instrument_broadening_deg`
+    - `broadening_correction`
+  - 新增 `scherrerCrystalliteSizeNm(...)` 前端計算函式。
+  - 支援 `none / gaussian / lorentzian` 三種儀器展寬修正模式。
+  - 在結果區新增 Scherrer 控制卡與結果表。
+  - 峰表新增 `FWHM (deg)` 欄位。
+
+目前網站版 XRD 的 Scherrer 結果表會顯示：
+
+- `2θ`
+- `FWHM (deg)`
+- `D (nm)`
+- `D (Å)`
+
+### 本次檢查結果
+
+- 已重新讀取 `CLAUDE.md` 後再執行本次檢查與修改。
+- 已檢查：
+  - `web/backend/routers/xrd.py`
+  - `web/frontend/src/types/xrd.ts`
+  - `web/frontend/src/pages/XRD.tsx`
+  - `web/frontend/src/components/SpectrumChart.tsx`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+- `git diff --check` 已執行，沒有回報格式錯誤。
+
+### 目前限制
+
+- 這個環境沒有 `npm`，指令回應為 `zsh:1: command not found: npm`。
+- 因此目前無法在本機直接跑 `npm run build` 或 `npm run dev` 驗證 React 端編譯是否完全通過。
+- 目前能確認的是程式碼結構、型別串接與差異檢查已完成；最終前端執行驗證仍要靠你本機或 Render 實際部署測試。
 - `modules/xas.py` 保留了較早期邏輯與 helper，可作參考，但不要誤以為 app 正在直接使用它。
 - 高斯扣除目前 UI 在歸一化後方，但實際 processing pipeline 仍是在背景與歸一化前先計算 gaussian model / after-gaussian，再用 after-gaussian 做背景與歸一化。若未來使用者要求「真正對 normalized 後曲線扣高斯」，需要調整計算順序，不只是 UI 順序。
 
@@ -550,3 +622,164 @@ cd web/frontend && npm install && npm run dev
   - 重新檢視 `render.yaml`、`web/Dockerfile`、`README.md` 內容
   - `git diff --check` 通過
 - 結論：專案現在已具備「推上 GitHub 後，用 Render 免費方案直接部署」的基本設定，不必再手動逐項填 Dockerfile 與 health check。
+
+## 2026-04-29 Oracle Cloud / Cloud Run / Railway 比較判斷
+
+- 重新讀取 `CLAUDE.md` 後，依使用者追問補查官方文件，目的不是比功能列表，而是確認「免費方案的代價」。
+- 針對 Oracle Cloud Free Tier：
+  - 優點是有 Always Free。
+  - 缺點是需要信用卡或可當信用卡使用的簽帳卡做驗證、可用容量受 capacity limits 影響、免費帳號沒有 Oracle Support 與 SLA、帳號閒置 30 天可能被視為 abandoned。
+  - 實務上它更像「給你免費雲主機資源」，不是像 Railway 那樣的低維運應用平台，所以部署 Docker、反向代理、SSL、更新流程、監控都比較偏自己處理。
+- 針對 Google Cloud Run：
+  - 優點是有 always free tier、容器支援很好。
+  - 缺點是要先有啟用 billing 的 Google Cloud project；Google 官方明寫即使只用 free services，project 也必須連到 active Cloud Billing account。
+  - Cloud Run 只適合 stateless container；官方也明講 stateful container 不能直接當 Cloud Run 服務部署。
+  - 實務上還需要碰 project、IAM、API 啟用、Cloud Build / Artifact Registry 等周邊設定，操作成本高於 Railway。
+- 針對 Railway：
+  - 優點仍然是最接近「應用平台」：可直接用 Dockerfile 或 Railpack build，並且內建比較直接的 deploy workflow。
+  - 缺點是免費資源較少，長期零成本不可假設，之後比較容易進入付費。
+- 判斷結論：
+  - 如果把「免費」放第一優先，Oracle Cloud 與 Cloud Run 都可以，但它們的缺點都是比 Railway 更難上手、更需要自己維運或理解雲端細節。
+  - 如果把「省時間、省腦力」放第一優先，Railway 或 Render 類平台仍然比較合理，只是免費通常不長久。
+
+## 2026-04-29 Render 部署後下一步建議
+
+- 重新讀取 `CLAUDE.md` 後，根據使用者已完成 Render 部署的現況，將建議焦點改為「部署後驗證與迭代順序」。
+- 判斷：Render 部署成功不代表網站版已完成；目前最重要的是確認 `onrender.com` 網址上的 XRD 流程真的可用，而不是立刻再切平台或擴充新模組。
+- 建議的下一步順序：
+  1. 先驗證 `/health` 是否正常，以及首頁是否能打開。
+  2. 實際上傳一組 XRD 檔案，確認 parse / process / chart / 下載 CSV 全流程正常。
+  3. 在 Render Dashboard 檢查 build logs 與 runtime logs，確認沒有隱性錯誤。
+  4. 確認目前免費版冷啟動可接受，再決定是否綁自訂網域。
+  5. 只有在 XRD 線上版本穩定後，才開始搬第二個模組，優先 `Raman` 或 `XAS`。
+- 理由：現在網站版仍屬原型，最需要的是把「已部署」變成「可驗證、可迭代、可示範」，而不是同時展開新的平台或功能面。
+
+## 2026-04-29 Render 線上網址驗證
+
+- 重新讀取 `CLAUDE.md` 後，針對使用者提供的 Render 網址 `https://data-processing-gui-web.onrender.com/` 做線上驗證。
+- 內建網頁抓取工具對該網址取頁不穩，因此改用實際 HTTP 請求檢查，避免把工具限制誤判成網站故障。
+- 在非沙箱網路環境下檢查首頁：
+  - `curl -I https://data-processing-gui-web.onrender.com/`
+  - 回應 `HTTP/2 200`
+  - `x-render-origin-server: uvicorn`
+- 在非沙箱網路環境下檢查健康檢查端點：
+  - `curl -i https://data-processing-gui-web.onrender.com/health`
+  - 回應 `HTTP/2 200`
+  - 內容為 `{"status":"ok"}`
+- 判斷：目前 Render 上的網站至少已經成功部署並啟動，首頁與後端健康檢查都正常；下一步應該改做實際 XRD 功能流程驗證，而不是再懷疑部署本身。
+
+## 2026-04-29 Railway 三人使用成本判斷
+
+- 重新讀取 `CLAUDE.md` 後，針對使用者「改成 Railway 給實驗室三個人用，應該不會到需要付費吧」這個問題查官方定價與服務模型。
+- 官方目前資訊重點：
+  - Railway `Free` 計畫是 `0 美元/月`，但只有 `每月 $1 的免費資源額度`。
+  - 新帳號 trial 結束後，會回到 `Free` 計畫，每月仍只有 `$1` 免費額度。
+  - Railway 的 `services` 是 `persistent services`，官方明寫是 always running 的長駐服務，像 web app / API 都屬於這類。
+  - 資源價格目前為：RAM `$10 / GB / month`、CPU `$20 / vCPU / month`，按分鐘累計。
+- 依這個專案情境做判斷：
+  - 成本主要不取決於「只有三個人用」，而取決於 Railway service 是長駐的。
+  - 就算流量不高，只要網站和 API 常駐，記憶體就會持續計費。
+  - 以官方 RAM 價格粗估，若服務平均佔用 `0.25 GB` RAM 一整月，光 RAM 成本就約 `$2.5/月`；若平均 `0.5 GB`，就約 `$5/月`，這還沒算 CPU 與 egress。
+- 結論：
+  - 不應假設 Railway 長期免費。
+  - 如果你們想要「不像 Render Free 那樣休眠」，那 Railway 很可能需要至少上 `Hobby $5/月` 的心理準備。
+  - 但若只有實驗室三人偶爾使用、流量不高，實際費用大概率仍落在低檔，通常比較像「接近 $5 或小幅超過」，而不是一下變很高。
+
+## 2026-04-29 「press」平台名稱判斷
+
+- 重新讀取 `CLAUDE.md` 後，針對使用者提到朋友好像是用「什麼 press」的平台，先做名稱判斷，避免把不同技術混在一起。
+- 最大機率的兩種可能：
+  - `WordPress`：網站內容管理系統與託管生態，適合部落格、形象站、內容站，不適合直接拿來部署目前這個 `FastAPI + React` 的科學資料處理網站。
+  - `Express`：Node.js 的後端框架，不是雲端部署平台；如果朋友說的是 Express，那是在講後端技術，不是在講主機服務。
+- 判斷：
+  - 如果朋友說的是 `WordPress`，那方向和這個專案不一樣，不建議硬套。
+  - 如果朋友說的是其他帶 `press` 的主機名稱，還需要更明確名稱才能比較。
+
+## 2026-04-29 Render 後續更新流程判斷
+
+- 重新讀取 `CLAUDE.md` 與目前 Git 狀態後，針對使用者詢問「之後推播更新會不會很困難」補查 Render 官方 deploy 文件。
+- 官方目前重點：
+  - 若 Render service 綁定 GitHub / GitLab / Bitbucket 的 branch，預設 `On Commit` 會在每次 push 或 merge 到該 branch 時自動 rebuild + redeploy。
+  - 可在 Dashboard 把 auto-deploy 設成 `On Commit`、`After CI Checks Pass` 或 `Off`。
+  - Render web service 預設 deploy 為 zero-downtime；如果新 deploy build 或啟動失敗，舊版本會繼續跑。
+  - 可以在 Dashboard 手動 deploy 最新 commit、deploy 指定 commit、clear build cache 後 deploy，或直接 rollback 到先前成功版本。
+- 依本專案情境判斷：
+  - 只要你維持現在這種 GitHub 連動部署，之後更新不難。
+  - 實際上每次更新通常只是：本機改檔 → 測一下 → `git add` → `git commit` → `git push`。
+  - 真正需要注意的不是 Render 操作，而是不要把未測過的改動直接 push 到連動 branch。
+- 建議：
+  - 若目前是自己和實驗室少量使用，可先維持 `On Commit`。
+  - 若之後改動變多，再考慮把 auto-deploy 改成 `After CI Checks Pass` 或先用測試 branch。
+
+## 2026-04-29 網站殼層與品牌升級
+
+- 重新讀取 `CLAUDE.md` 後，決定這一輪先不擴充新模組，而是優先把網站版從「可用內部工具」往「可展示原型」推進。
+- 已修改前端檔案：
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+  - `web/frontend/src/components/FileUpload.tsx`
+  - `web/frontend/src/components/SpectrumChart.tsx`
+  - `web/frontend/src/index.css`
+- 本輪改動重點：
+  - 把頂部品牌從 `Spectroscopy Lab` 換成 `Nigiro Pro`
+  - 新增較完整的產品殼層、品牌標記、狀態 badge、背景光暈與格線
+  - 將主畫面改成較適合桌機與手機的響應式版面，不再只像固定寬度的內部工具
+  - 為 XRD 頁補上資訊卡、較完整的空狀態與較明確的 export 區塊
+  - 調整上傳區與 Plotly 圖表的深色玻璃化風格，使線上版本更接近正式產品感
+- 驗證：
+  - 已重新檢查修改後的前端檔案內容
+  - `git diff --check` 通過
+- 限制：
+  - 嘗試在 `web/frontend/` 執行 `npm install` 做 build 驗證，但目前執行環境沒有 `npm`，錯誤為 `zsh:1: command not found: npm`
+  - 因此這一輪無法在本地端做 Vite / TypeScript build 驗證；這是工具缺失，不是直接證明前端程式正確或錯誤
+- 判斷：目前這一輪已先把網站的外觀層、品牌感與行動版基本可用性補強；下一步若要繼續「搞好網站」，最值得做的是補第二個模組，或在 XRD 頁增加更完整的分析輸出與使用說明。
+
+## 2026-04-29 XRD 網頁版覆蓋範圍判斷
+
+- 重新讀取 `CLAUDE.md` 後，比對 `modules/xrd.py` 與 `web/backend/routers/xrd.py`、`web/frontend/src/pages/XRD.tsx`、`web/frontend/src/components/ProcessingPanel.tsx`。
+- 判斷結果：XRD 並沒有完整搬到網站版，目前是「核心骨架已搬，但完整分析流程還沒搬完」。
+- 已搬到網站版的內容：
+  - 檔案上傳與解析
+  - 內插化 / 平均化
+  - 平滑
+  - 歸一化
+  - 波長切換
+  - 2θ / d-spacing 顯示切換
+  - 參考峰 overlay
+  - 處理後 CSV 匯出
+- 尚未完整搬到網站版的重要 XRD 能力：
+  - `log` 弱峰檢視
+  - 高斯模板扣除
+  - 參考峰匹配結果表
+  - Scherrer 晶粒尺寸分析
+  - 更完整的自動尋峰 UI / 峰表輸出
+  - 各種報表 / CSV 匯出與流程紀錄
+- 補充：雖然 `web/backend/routers/xrd.py` 已經有 `/api/xrd/peaks` endpoint，但目前前端頁面還沒有把這個能力完整接成使用者可操作的分析區塊。
+
+## 2026-04-29 XRD 自動尋峰 UI 補上
+
+- 重新讀取 `CLAUDE.md` 後，開始補 XRD 網頁版第一個缺口：把既有 `/api/xrd/peaks` 接成實際可操作的前端功能。
+- 已修改前端檔案：
+  - `web/frontend/src/types/xrd.ts`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+  - `web/frontend/src/components/SpectrumChart.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+- 本輪新增內容：
+  - 新增 `PeakDetectionParams` 型別
+  - 在左側 sidebar 新增「7. 自動尋峰」區塊，可設定：
+    - 是否啟用
+    - prominence
+    - 最小峰距
+    - 最多峰數
+  - 前端接上 `detectPeaks()` API 呼叫，會對目前顯示的處理後曲線做尋峰
+  - 圖表上新增 detected peaks 標記
+  - 主內容區新增 Auto-detected Peaks 峰表，顯示：
+    - 2θ
+    - d-spacing
+    - intensity
+    - relative intensity
+- 驗證：
+  - `git diff --check` 通過
+- 限制：
+  - 目前執行環境仍然沒有 `npm`，因此這一輪仍無法做 Vite / TypeScript build 驗證
+  - 這次補的是「自動尋峰 UI + 峰表」，還不是完整的 Scherrer / 參考峰匹配結果表

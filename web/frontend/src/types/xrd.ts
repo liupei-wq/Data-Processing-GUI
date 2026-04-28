@@ -40,6 +40,22 @@ export interface DetectedPeak {
   d_spacing: number
   intensity: number
   rel_intensity: number
+  fwhm_deg: number
+}
+
+/** Peak detection controls used by the frontend */
+export interface PeakDetectionParams {
+  enabled: boolean
+  prominence: number
+  min_distance: number
+  max_peaks: number
+}
+
+export interface ScherrerParams {
+  enabled: boolean
+  k: number
+  instrument_broadening_deg: number
+  broadening_correction: 'none' | 'gaussian' | 'lorentzian'
 }
 
 /** One reference peak from the database */

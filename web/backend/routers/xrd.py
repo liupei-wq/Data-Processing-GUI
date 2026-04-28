@@ -17,6 +17,7 @@ from typing import List, Optional
 import numpy as np
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
+from scipy.signal import peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.processing import smooth_signal, apply_normalization
@@ -105,6 +106,7 @@ class PeakRow(BaseModel):
     d_spacing: float
     intensity: float
     rel_intensity: float
+    fwhm_deg: float
 
 
 class PeakDetectResponse(BaseModel):
@@ -235,16 +237,23 @@ def detect_peaks(req: PeakDetectRequest):
     if len(idx) == 0:
         return PeakDetectResponse(peaks=[])
 
+    widths, _, left_ips, right_ips = peak_widths(y, idx, rel_height=0.5)
+    sample_axis = np.arange(len(x), dtype=float)
+    left_x = np.interp(left_ips, sample_axis, x)
+    right_x = np.interp(right_ips, sample_axis, x)
+
     y_max = float(np.max(y[y > 0])) if np.any(y > 0) else 1.0
     peaks = []
-    for i in idx:
+    for pos, i in enumerate(idx):
         tt = float(x[i])
         d = _two_theta_to_d(tt, req.wavelength)
+        fwhm_deg = abs(float(right_x[pos] - left_x[pos]))
         peaks.append(PeakRow(
             two_theta=round(tt, 4),
             d_spacing=round(d, 4),
             intensity=round(float(y[i]), 2),
             rel_intensity=round(float(y[i]) / y_max * 100, 1),
+            fwhm_deg=round(fwhm_deg, 5),
         ))
 
     return PeakDetectResponse(peaks=sorted(peaks, key=lambda p: p.two_theta))

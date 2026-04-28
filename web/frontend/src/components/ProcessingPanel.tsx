@@ -6,7 +6,7 @@
  */
 
 import { useState, type ReactNode } from 'react'
-import type { ProcessParams, XMode, WavelengthPreset } from '../types/xrd'
+import type { PeakDetectionParams, ProcessParams, XMode, WavelengthPreset } from '../types/xrd'
 
 // ── re-exported so callers don't need to import from types ───────────────────
 export type { XMode, WavelengthPreset }
@@ -125,6 +125,8 @@ interface Props {
   refMaterials: string[]
   selectedRefs: string[]
   onSelectedRefsChange: (refs: string[]) => void
+  peakParams: PeakDetectionParams
+  onPeakParamsChange: (p: PeakDetectionParams) => void
 }
 
 export default function ProcessingPanel({
@@ -140,9 +142,13 @@ export default function ProcessingPanel({
   refMaterials,
   selectedRefs,
   onSelectedRefsChange,
+  peakParams,
+  onPeakParamsChange,
 }: Props) {
   const set = <K extends keyof ProcessParams>(key: K, value: ProcessParams[K]) =>
     onChange({ ...params, [key]: value })
+  const setPeak = <K extends keyof PeakDetectionParams>(key: K, value: PeakDetectionParams[K]) =>
+    onPeakParamsChange({ ...peakParams, [key]: value })
 
   const toggleRef = (mat: string) => {
     onSelectedRefsChange(
@@ -280,6 +286,45 @@ export default function ProcessingPanel({
           >
             清除全部
           </button>
+        )}
+      </Section>
+
+      <Section title="7. 自動尋峰" defaultOpen={false}>
+        <Checkbox
+          checked={peakParams.enabled}
+          onChange={v => setPeak('enabled', v)}
+          label="啟用尋峰結果"
+        />
+        {peakParams.enabled && (
+          <>
+            <NumberInput
+              label="顯著性 prominence"
+              value={peakParams.prominence}
+              min={0.001}
+              max={1}
+              step={0.01}
+              onChange={v => setPeak('prominence', v)}
+            />
+            <NumberInput
+              label="最小峰距 (deg)"
+              value={peakParams.min_distance}
+              min={0.05}
+              max={10}
+              step={0.05}
+              onChange={v => setPeak('min_distance', v)}
+            />
+            <NumberInput
+              label="最多峰數"
+              value={peakParams.max_peaks}
+              min={1}
+              max={100}
+              step={1}
+              onChange={v => setPeak('max_peaks', v)}
+            />
+            <p className="text-xs text-slate-400">
+              尋峰會使用目前顯示的處理後曲線，適合先快速確認主要峰位。
+            </p>
+          </>
         )}
       </Section>
     </div>
