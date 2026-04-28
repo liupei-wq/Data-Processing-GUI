@@ -978,6 +978,16 @@ cd web/frontend && npm install && npm run dev
   - 如果你們想要「不像 Render Free 那樣休眠」，那 Railway 很可能需要至少上 `Hobby $5/月` 的心理準備。
   - 但若只有實驗室三人偶爾使用、流量不高，實際費用大概率仍落在低檔，通常比較像「接近 $5 或小幅超過」，而不是一下變很高。
 
+## 2026-04-29 切換至 Railway 部署
+
+- 重新讀取 `CLAUDE.md` 後，確認專案原本就有 `railway.toml` 與 `web/Dockerfile`，設計之初即以 Railway 為目標。
+- 發現 `railway.toml` 中 `[build]` 區塊有兩個錯誤：
+  1. `dockerfile` 不是 Railway 認識的欄位名稱，正確應為 `dockerfilePath`。
+  2. 缺少 `builder = "DOCKERFILE"`，Railway 會預設使用 Nixpacks 自動偵測，忽略你的 Dockerfile。
+- 已修正 `railway.toml`，加上 `builder = "DOCKERFILE"` 並將欄位名稱改為 `dockerfilePath = "web/Dockerfile"`。
+- 其餘設定維持不變：`startCommand`、`healthcheckPath`、`healthcheckTimeout` 均不需調整。
+- 下一步：push 最新 commit 到 GitHub，在 Railway Dashboard 新建 Service 連接 GitHub repo，Railway 會自動讀取 `railway.toml` 並 build Docker image。
+
 ## 2026-04-29 「press」平台名稱判斷
 
 - 重新讀取 `CLAUDE.md` 後，針對使用者提到朋友好像是用「什麼 press」的平台，先做名稱判斷，避免把不同技術混在一起。

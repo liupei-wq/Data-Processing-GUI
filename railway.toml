@@ -1,6 +1,7 @@
 [build]
 # Build context = repo root; Dockerfile is in web/
-dockerfile = "web/Dockerfile"
+builder = "DOCKERFILE"
+dockerfilePath = "web/Dockerfile"
 
 [deploy]
 # Railway sets $PORT automatically
