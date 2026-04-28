@@ -27,26 +27,26 @@ export default function FileUpload({ onFiles, isLoading }: Props) {
     <div
       {...getRootProps()}
       className={[
-        'cursor-pointer rounded-[22px] border border-dashed p-5 text-center transition-all',
+        'cursor-pointer rounded-[24px] border border-dashed p-5 text-center transition-all',
         isDragActive
-          ? 'border-sky-300/80 bg-sky-400/10 shadow-[0_0_0_1px_rgba(125,211,252,0.18)]'
-          : 'border-[#385171] bg-[#202938] hover:border-sky-400/45 hover:bg-[#233044]',
+          ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] shadow-[var(--card-shadow-soft)]'
+          : 'theme-block-soft border-[var(--input-border)] hover:border-[color:color-mix(in_srgb,var(--accent-strong)_42%,var(--input-border))] hover:bg-[var(--card-bg)]',
         isLoading ? 'cursor-not-allowed opacity-50' : '',
       ].join(' ')}
     >
       <input {...getInputProps()} />
-      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-300/20 bg-sky-400/10 text-2xl text-sky-100">
+      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[20px] border border-[var(--pill-border)] bg-[var(--pill-bg)] text-2xl text-[var(--accent)] shadow-[var(--card-shadow-soft)]">
         ↑
       </div>
       {isDragActive ? (
-        <p className="text-sm font-medium text-sky-100">放開以載入檔案</p>
+        <p className="text-sm font-medium text-[var(--accent)]">放開以載入檔案</p>
       ) : (
         <>
-          <div className="inline-flex rounded-xl border border-sky-300/55 bg-sky-400/10 px-4 py-2 text-base font-semibold text-slate-100">
+          <div className="theme-pill inline-flex rounded-2xl px-4 py-2 text-base font-semibold text-[var(--text-main)]">
             Upload
           </div>
-          <p className="mt-4 text-sm font-medium text-slate-100">拖曳或點擊上傳 XRD 檔案</p>
-          <p className="mt-1 text-xs text-slate-400">500MB per file • TXT, CSV, XY, ASC, DAT</p>
+          <p className="mt-4 text-sm font-medium text-[var(--text-main)]">拖曳或點擊上傳 XRD 檔案</p>
+          <p className="mt-1 text-xs text-[var(--text-soft)]">500MB per file • TXT, CSV, XY, ASC, DAT</p>
         </>
       )}
     </div>

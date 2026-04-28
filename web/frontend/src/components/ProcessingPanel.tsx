@@ -55,31 +55,31 @@ function Section({
   const [open, setOpen] = useState(defaultOpen)
 
   return (
-    <div className="overflow-hidden rounded-[22px] border border-[#2d3d54] bg-[#151b24] shadow-[0_10px_30px_rgba(0,0,0,0.16)]">
+    <div className="theme-block overflow-hidden rounded-[22px]">
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.03]"
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
       >
         <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-400/18 text-sm font-semibold text-emerald-200">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
             {step}
           </span>
           <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-slate-100">{title}</div>
-            {hint && <div className="mt-0.5 text-[11px] text-slate-500">{hint}</div>}
+            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
+            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
           </div>
         </div>
-        <span className="shrink-0 text-sm text-slate-500">{open ? '−' : '+'}</span>
+        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
       </button>
 
-      {open && <div className="border-t border-[#253246] p-4 pt-3 space-y-3">{children}</div>}
+      {open && <div className="space-y-3 border-t border-[var(--card-divider)] p-4 pt-3">{children}</div>}
     </div>
   )
 }
 
 function Label({ children }: { children: ReactNode }) {
-  return <label className="mb-1 block text-[12px] font-medium text-slate-300">{children}</label>
+  return <label className="mb-1 block text-[12px] font-medium text-[var(--text-main)]">{children}</label>
 }
 
 function Select({
@@ -95,7 +95,7 @@ function Select({
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
-      className="w-full rounded-xl border border-[#314258] bg-[#202938] px-3 py-2 text-sm text-slate-100 focus:border-sky-400/50 focus:outline-none"
+      className="theme-input w-full rounded-xl px-3 py-2 text-sm"
     >
       {options.map(option => (
         <option key={option.value} value={option.value}>
@@ -131,7 +131,7 @@ function NumberInput({
         max={max}
         step={step}
         onChange={e => onChange(Number(e.target.value))}
-        className="w-full rounded-xl border border-[#314258] bg-[#202938] px-3 py-2 text-sm text-slate-100 focus:border-sky-400/50 focus:outline-none"
+        className="theme-input w-full rounded-xl px-3 py-2 text-sm"
       />
     </div>
   )
@@ -147,12 +147,12 @@ function Checkbox({
   label: string
 }) {
   return (
-    <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#283548] bg-[#1a212d] px-3 py-2 text-sm text-slate-200 transition-colors hover:border-[#385171]">
+    <label className="theme-block-soft flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--text-main)] transition-colors hover:border-[color:color-mix(in_srgb,var(--accent-strong)_45%,var(--card-border))]">
       <input
         type="checkbox"
         checked={checked}
         onChange={e => onChange(e.target.checked)}
-        className="h-4 w-4 accent-sky-400"
+        className="h-4 w-4 accent-[var(--accent-strong)]"
       />
       <span>{label}</span>
     </label>
@@ -274,7 +274,7 @@ export default function ProcessingPanel({
               step={1}
               onChange={value => set('gaussian_height', value)}
             />
-            <div className="rounded-xl border border-[#283548] bg-[#1a212d] px-3 py-2 text-sm text-slate-300">
+            <div className="theme-block-soft rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
               換算面積 = {(params.gaussian_height * params.gaussian_fwhm * 1.0645).toFixed(4)}
             </div>
             <NumberInput
@@ -289,7 +289,7 @@ export default function ProcessingPanel({
             <div className="space-y-2">
               <Label>高斯中心列表</Label>
               {params.gaussian_centers.map((center, idx) => (
-                <div key={`${center.name}-${idx}`} className="rounded-2xl border border-[#283548] bg-[#1a212d] p-3">
+                <div key={`${center.name}-${idx}`} className="theme-block-soft rounded-2xl p-3">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <Checkbox
                       checked={center.enabled}
@@ -311,7 +311,7 @@ export default function ProcessingPanel({
                           params.gaussian_centers.filter((_, itemIdx) => itemIdx !== idx),
                         )
                       }
-                      className="text-xs text-rose-300 transition-colors hover:text-rose-200"
+                      className="text-xs text-[var(--accent-secondary)] transition-colors hover:opacity-80"
                     >
                       刪除
                     </button>
@@ -330,7 +330,7 @@ export default function ProcessingPanel({
                             ),
                           )
                         }
-                        className="w-full rounded-xl border border-[#314258] bg-[#202938] px-3 py-2 text-sm text-slate-100 focus:border-sky-400/50 focus:outline-none"
+                        className="theme-input w-full rounded-xl px-3 py-2 text-sm"
                       />
                     </div>
                     <NumberInput
@@ -367,7 +367,7 @@ export default function ProcessingPanel({
                     },
                   ])
                 }}
-                className="w-full rounded-xl border border-dashed border-[#395271] px-3 py-2 text-sm text-sky-200 transition-colors hover:border-sky-400/50 hover:bg-sky-400/8"
+                className="w-full rounded-xl border border-dashed border-[var(--pill-border)] bg-[var(--pill-bg)] px-3 py-2 text-sm font-medium text-[var(--accent)] transition-colors hover:opacity-90"
               >
                 新增高斯中心
               </button>
@@ -487,8 +487,8 @@ export default function ProcessingPanel({
                 className={[
                   'rounded-xl border px-3 py-2 text-sm transition-colors',
                   xMode === mode
-                    ? 'border-sky-400/50 bg-sky-400/15 text-sky-100'
-                    : 'border-[#314258] bg-[#202938] text-slate-300 hover:border-sky-400/40',
+                    ? 'theme-pill text-[var(--accent)]'
+                    : 'theme-input text-[var(--text-main)]',
                 ].join(' ')}
               >
                 {mode === 'twotheta' ? '2θ' : 'd-spacing'}
@@ -523,14 +523,14 @@ export default function ProcessingPanel({
         {refMaterials.length === 0 ? (
           <div className="text-sm text-slate-500">載入中…</div>
         ) : (
-          <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border border-[#283548] bg-[#1a212d] p-2">
+          <div className="theme-block-soft max-h-48 space-y-1 overflow-y-auto rounded-xl p-2">
             {refMaterials.map(material => (
-              <label key={material} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/[0.03]">
+              <label key={material} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-sm text-[var(--text-main)] transition-colors hover:bg-[var(--card-ghost)]">
                 <input
                   type="checkbox"
                   checked={selectedRefs.includes(material)}
                   onChange={() => toggleRef(material)}
-                  className="mt-0.5 h-4 w-4 shrink-0 accent-sky-400"
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-strong)]"
                 />
                 <span className="leading-5">{material}</span>
               </label>
@@ -541,7 +541,7 @@ export default function ProcessingPanel({
           <button
             type="button"
             onClick={() => onSelectedRefsChange([])}
-            className="text-xs text-rose-300 transition-colors hover:text-rose-200"
+            className="text-xs text-[var(--accent-secondary)] transition-colors hover:opacity-80"
           >
             清除全部
           </button>
@@ -625,7 +625,7 @@ export default function ProcessingPanel({
                 ]}
               />
             </div>
-            <p className="text-xs leading-5 text-slate-500">
+            <p className="text-xs leading-5 text-[var(--text-soft)]">
               這一步直接使用尋峰得到的 FWHM。結果對峰寬與儀器展寬設定很敏感，只適合快速比較。
             </p>
           </>

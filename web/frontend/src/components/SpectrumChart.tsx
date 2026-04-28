@@ -45,6 +45,15 @@ export default function SpectrumChart({
   showDetectedPeaks = true,
   minHeight = 460,
 }: Props) {
+  const cssVars = typeof window !== 'undefined'
+    ? getComputedStyle(document.documentElement)
+    : null
+  const chartGrid = cssVars?.getPropertyValue('--chart-grid').trim() || 'rgba(148, 163, 184, 0.14)'
+  const chartText = cssVars?.getPropertyValue('--chart-text').trim() || '#d9e4f0'
+  const chartBg = cssVars?.getPropertyValue('--chart-bg').trim() || 'rgba(15, 23, 42, 0.52)'
+  const chartLegendBg = cssVars?.getPropertyValue('--chart-legend-bg').trim() || 'rgba(15, 23, 42, 0.72)'
+  const chartHoverBg = cssVars?.getPropertyValue('--chart-hover-bg').trim() || 'rgba(15, 23, 42, 0.95)'
+  const chartHoverBorder = cssVars?.getPropertyValue('--chart-hover-border').trim() || 'rgba(148, 163, 184, 0.22)'
   const datasets = result.average ? [result.average, ...result.datasets] : result.datasets
   const showRaw = displayMode === 'linear' && !result.average && result.datasets.length > 1
   const convertX = (x: number[]) => (xMode === 'dspacing' ? x.map(v => toD(v, wavelength)) : x)
@@ -136,42 +145,42 @@ export default function SpectrumChart({
     xaxis: {
       title: { text: xLabel, font: { size: 13 } },
       showgrid: true,
-      gridcolor: 'rgba(148, 163, 184, 0.14)',
+      gridcolor: chartGrid,
       zeroline: false,
-      color: '#d9e4f0',
+      color: chartText,
       autorange: xMode === 'dspacing' ? 'reversed' : true,
     },
     yaxis: {
       title: { text: displayMode === 'linear' ? 'Intensity (a.u.)' : `${displayMode} Intensity`, font: { size: 13 } },
       showgrid: true,
-      gridcolor: 'rgba(148, 163, 184, 0.14)',
+      gridcolor: chartGrid,
       zeroline: false,
-      color: '#d9e4f0',
+      color: chartText,
     },
     legend: {
       x: 1,
       xanchor: 'right',
       y: 1,
-      bgcolor: 'rgba(15, 23, 42, 0.72)',
-      bordercolor: 'rgba(148, 163, 184, 0.18)',
+      bgcolor: chartLegendBg,
+      bordercolor: chartHoverBorder,
       borderwidth: 1,
-      font: { color: '#d9e4f0' },
+      font: { color: chartText },
     },
     margin: { l: 60, r: 20, t: 30, b: 60 },
     paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(15, 23, 42, 0.52)',
-    font: { color: '#d9e4f0' },
+    plot_bgcolor: chartBg,
+    font: { color: chartText },
     hovermode: 'x unified',
     hoverlabel: {
-      bgcolor: 'rgba(15, 23, 42, 0.95)',
-      bordercolor: 'rgba(148, 163, 184, 0.22)',
-      font: { color: '#f8fafc' },
+      bgcolor: chartHoverBg,
+      bordercolor: chartHoverBorder,
+      font: { color: chartText },
     },
     autosize: true,
   }
 
   return (
-    <div className="rounded-[28px] border border-white/10 bg-slate-950/28 p-3 sm:p-4">
+    <div className="theme-block-soft rounded-[28px] p-3 sm:p-4">
       <Plot
         data={traces}
         layout={layout}

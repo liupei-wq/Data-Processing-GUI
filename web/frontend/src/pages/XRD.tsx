@@ -355,25 +355,25 @@ export default function XRD() {
 
   return (
     <div className="min-h-screen xl:grid xl:grid-cols-[23rem_minmax(0,1fr)]">
-      <aside className="glass-panel flex min-h-screen flex-col overflow-hidden border-r border-white/8 xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0">
-        <div className="border-b border-white/10 px-6 py-8">
+      <aside className="glass-panel flex min-h-screen flex-col overflow-hidden xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0">
+        <div className="border-b border-[var(--card-divider)] px-6 py-8">
           <div className="flex items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] border border-sky-300/25 bg-[radial-gradient(circle_at_30%_30%,rgba(96,165,250,0.42),rgba(30,41,59,0.85))] shadow-[0_10px_30px_rgba(37,99,235,0.18)]">
-              <span className="font-display text-3xl font-bold tracking-[0.04em] text-white">N</span>
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] border border-[var(--pill-border)] bg-[radial-gradient(circle_at_30%_30%,color-mix(in_srgb,var(--accent-strong)_38%,white_8%),var(--card-bg-strong))] shadow-[var(--card-shadow)]">
+              <span className="font-display text-3xl font-bold tracking-[0.04em] text-[var(--accent-contrast)]">N</span>
             </div>
             <div>
-              <div className="font-display text-[2rem] font-semibold leading-none text-slate-100">
+              <div className="font-display text-[2rem] font-semibold leading-none text-[var(--text-muted)]">
                 Nigiro Pro
               </div>
-              <div className="mt-2 text-[0.95rem] font-semibold uppercase tracking-[0.18em] text-slate-400">
+              <div className="mt-2 text-[0.95rem] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">
                 Data Processing
               </div>
             </div>
           </div>
         </div>
 
-        <div className="border-b border-white/10 px-6 py-5">
-          <p className="text-sm font-semibold text-slate-200">分析模組</p>
+        <div className="border-b border-[var(--card-divider)] px-6 py-5">
+          <p className="text-sm font-semibold text-[var(--text-main)]">分析模組</p>
           <div className="mt-3 space-y-2">
             {MODULE_CHOICES.map(module => (
               <button
@@ -381,10 +381,10 @@ export default function XRD() {
                 type="button"
                 disabled={!module.active}
                 className={[
-                  'flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition-colors',
+                  'flex w-full items-center justify-between px-4 py-3 text-left transition-colors shadow-[var(--card-shadow-soft)]',
                   module.active
-                    ? 'border-sky-400/40 bg-sky-400/10 text-slate-50'
-                    : 'border-white/8 bg-white/[0.02] text-slate-500 opacity-70',
+                    ? 'theme-pill rounded-[24px] text-[var(--text-main)]'
+                    : 'theme-block-soft rounded-[16px] text-[var(--text-soft)] opacity-85',
                 ].join(' ')}
               >
                 <div className="flex items-center gap-3">
@@ -392,13 +392,13 @@ export default function XRD() {
                     className={[
                       'h-4 w-4 rounded-full border',
                       module.active
-                        ? 'border-rose-300 bg-rose-400'
-                        : 'border-slate-500 bg-transparent',
+                        ? 'border-[var(--accent-secondary)] bg-[var(--accent-secondary)]'
+                        : 'border-[var(--card-border)] bg-transparent',
                     ].join(' ')}
                   />
                   <div>
                     <div className="text-sm font-semibold">{module.label}</div>
-                    <div className="text-[11px] text-slate-500">{module.detail}</div>
+                    <div className="text-[11px] text-[var(--text-soft)]">{module.detail}</div>
                   </div>
                 </div>
               </button>
@@ -406,51 +406,51 @@ export default function XRD() {
           </div>
         </div>
 
-        <div className="border-b border-white/10 px-6 py-5">
+        <div className="border-b border-[var(--card-divider)] px-6 py-5">
           <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">檔案</p>
-              <p className="mt-1 text-sm font-semibold text-slate-100">{rawFiles.length}</p>
+            <div className="theme-block-soft rounded-[18px] px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{rawFiles.length}</p>
             </div>
-            <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">X 軸</p>
-              <p className="mt-1 text-sm font-semibold text-slate-100">
+            <div className="theme-block-soft rounded-[14px] px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">X 軸</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">
                 {xMode === 'twotheta' ? '2θ' : 'd'}
               </p>
             </div>
-            <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">參考相</p>
-              <p className="mt-1 text-sm font-semibold text-slate-100">{selectedRefs.length}</p>
+            <div className="theme-block-soft rounded-[22px] px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考相</p>
+              <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{selectedRefs.length}</p>
             </div>
           </div>
         </div>
 
         <div className="sidebar-scroll flex-1 overflow-y-auto px-4 py-5">
-          <div className="mb-3 overflow-hidden rounded-[22px] border border-[#2d3d54] bg-[#151b24] shadow-[0_10px_30px_rgba(0,0,0,0.16)]">
+          <div className="theme-block mb-3 overflow-hidden rounded-[24px]">
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <div className="flex items-center gap-3">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/18 text-sm font-semibold text-emerald-200">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
                   1
                 </span>
                 <div>
-                  <div className="text-base font-semibold text-slate-100">載入檔案</div>
-                  <div className="mt-0.5 text-[11px] text-slate-500">支援多檔上傳與後續平均</div>
+                  <div className="text-base font-semibold text-[var(--text-muted)]">載入檔案</div>
+                  <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">支援多檔上傳與後續平均</div>
                 </div>
               </div>
             </div>
-            <div className="border-t border-[#253246] p-4 pt-3">
-              <div className="mb-3 text-sm font-medium text-slate-200">上傳 XRD 檔案（可多選）</div>
+            <div className="border-t border-[var(--card-divider)] p-4 pt-3">
+              <div className="mb-3 text-sm font-medium text-[var(--text-main)]">上傳 XRD 檔案（可多選）</div>
               <FileUpload onFiles={handleFiles} isLoading={isLoading} />
               {rawFiles.length > 0 && (
                 <div className="mt-3 space-y-1.5">
                   {rawFiles.map(file => (
                     <div
                       key={file.name}
-                      className="flex items-center gap-2 rounded-xl border border-white/8 bg-[#1a212d] px-3 py-2 text-xs text-slate-300"
+                      className="theme-block-soft flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
                     >
-                      <span className="text-emerald-300">✓</span>
+                      <span className="text-[var(--accent-tertiary)]">✓</span>
                       <span className="truncate">{file.name}</span>
-                      <span className="shrink-0 text-slate-500">({file.x.length} pts)</span>
+                      <span className="shrink-0 text-[var(--text-soft)]">({file.x.length} pts)</span>
                     </div>
                   ))}
                   <button
@@ -461,7 +461,7 @@ export default function XRD() {
                       setRefPeaks([])
                       setDetectedPeaks([])
                     }}
-                    className="text-xs font-medium text-rose-300 transition-colors hover:text-rose-200"
+                    className="text-xs font-medium text-[var(--accent-secondary)] transition-colors hover:opacity-80"
                   >
                     清除全部
                   </button>
@@ -502,26 +502,26 @@ export default function XRD() {
         <div className="mx-auto w-full max-w-[1500px]">
           <div className="mb-8">
             <div className="flex flex-wrap items-baseline gap-3">
-              <h1 className="font-display text-4xl font-semibold tracking-[0.02em] text-slate-100">
+              <h1 className="font-display text-4xl font-semibold tracking-[0.02em] text-[var(--text-muted)]">
                 XRD
               </h1>
-              <span className="text-lg text-slate-400">X-ray Diffraction</span>
+              <span className="text-lg text-[var(--text-soft)]">X-ray Diffraction</span>
             </div>
-            <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,rgba(71,85,105,0.65),rgba(71,85,105,0.1))]" />
+            <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,color-mix(in_srgb,var(--card-border)_85%,transparent),transparent)]" />
           </div>
 
           <div className="mb-6 flex flex-wrap gap-3">
-            <div className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-slate-300">
-              波長 <span className="ml-2 font-semibold text-slate-100">{wavelength.toFixed(4)} Å</span>
+            <div className="theme-pill rounded-full px-4 py-2 text-sm text-[var(--text-main)]">
+              波長 <span className="ml-2 font-semibold text-[var(--text-muted)]">{wavelength.toFixed(4)} Å</span>
             </div>
-            <div className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-slate-300">
-              資料集 <span className="ml-2 font-semibold text-slate-100">{activeDataset ? activeDataset.name : '未載入'}</span>
+            <div className="theme-pill rounded-[18px] px-4 py-2 text-sm text-[var(--text-main)]">
+              資料集 <span className="ml-2 font-semibold text-[var(--text-muted)]">{activeDataset ? activeDataset.name : '未載入'}</span>
             </div>
-            <div className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-slate-300">
-              參考峰 <span className="ml-2 font-semibold text-slate-100">{selectedRefs.length} 個</span>
+            <div className="theme-pill rounded-[24px] px-4 py-2 text-sm text-[var(--text-main)]">
+              參考峰 <span className="ml-2 font-semibold text-[var(--text-muted)]">{selectedRefs.length} 個</span>
             </div>
             {peakParams.enabled && (
-              <div className="rounded-full border border-sky-400/20 bg-sky-400/10 px-4 py-2 text-sm text-sky-100">
+              <div className="rounded-[16px] border border-[var(--pill-border)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-medium text-[var(--accent)] shadow-[var(--card-shadow-soft)]">
                 自動尋峰 {detectedPeaks.length} 個
               </div>
             )}
@@ -529,25 +529,25 @@ export default function XRD() {
 
           <div className="glass-panel rounded-[30px] p-4 sm:p-5 lg:p-6">
           {error && (
-            <div className="mb-4 rounded-[22px] border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+            <div className="mb-4 rounded-[22px] border border-[color:color-mix(in_srgb,var(--accent-secondary)_28%,var(--card-border))] bg-[color:color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] px-4 py-3 text-sm text-[var(--text-main)]">
               ⚠️ {error}
             </div>
           )}
 
           {isLoading && (
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-medium text-cyan-100">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300" />
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[var(--pill-border)] bg-[var(--pill-bg)] px-3 py-1 text-xs font-medium text-[var(--accent)] shadow-[var(--card-shadow-soft)]">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--accent-strong)]" />
               處理中…
             </div>
           )}
 
           {!result && !isLoading && (
             <div className="min-h-[38rem]">
-              <div className="rounded-[24px] border border-sky-400/18 bg-sky-400/12 px-6 py-5 text-xl font-semibold text-slate-100">
+              <div className="rounded-[24px] border border-[var(--pill-border)] bg-[var(--pill-bg)] px-6 py-5 text-xl font-semibold text-[var(--text-main)] shadow-[var(--card-shadow-soft)]">
                 請在左側上傳一個或多個 XRD 檔案。
               </div>
 
-              <div className="relative mt-12 min-h-[26rem] overflow-hidden rounded-[32px] border border-white/6 bg-[rgba(6,10,16,0.28)]">
+              <div className="theme-block-soft relative mt-12 min-h-[26rem] overflow-hidden rounded-[32px]">
                 <div className="workspace-float-card left-[24%] top-[6%] h-36 w-56 rounded-[26px] rotate-[-6deg] opacity-70" />
                 <div className="workspace-float-card right-[18%] top-[2%] h-32 w-48 rounded-[24px] rotate-[7deg] opacity-70" />
                 <div className="workspace-float-card left-[8%] bottom-[8%] h-32 w-44 rounded-[22px] rotate-[-8deg] opacity-65" />

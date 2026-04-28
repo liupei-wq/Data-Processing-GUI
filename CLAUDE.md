@@ -1206,3 +1206,41 @@ cd web/frontend && npm install && npm run dev
   - Vite 提示輸出 chunk 過大（`index-U-DQL0kP.js` 約 5 MB）。
   - Node 對 `postcss.config.js` 顯示 module type warning。
   - 這兩項目前都是 warning，不是這次 build 失敗的原因。
+
+## 2026-04-29 主題系統與卡片層次升級
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求開始做第二輪 UI 風格調整。
+- 使用者需求重點：
+  - 增加白色、黑色與其他顏色主題可切換。
+  - 白色主題不要刺眼，要偏柔和。
+  - 卡片與區塊要混合圓形、圓角方形等不同形狀。
+  - 多加一些輔助色，不要全頁只剩單一色調。
+  - 卡片背後要有更明顯的立體陰影。
+  - 黑色主題不能整頁太單調，要有白框與輔助色搭配。
+- 本輪預定修改方向：
+  - `web/frontend/src/App.tsx`：補回主題切換 UI 與 `data-theme` 狀態管理。
+  - `web/frontend/src/index.css`：把主要色彩、陰影、卡片、輸入框改成 CSS variables，新增多組 theme。
+  - `web/frontend/src/pages/XRD.tsx`：讓左欄、主欄、狀態膠囊與空狀態跟著主題變化。
+  - `web/frontend/src/components/ProcessingPanel.tsx` / `FileUpload.tsx` / `SpectrumChart.tsx`：同步改成跟主題變數走，避免切主題時元件仍維持舊深色寫死樣式。
+- 已修改檔案：
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/index.css`
+  - `web/frontend/src/pages/XRD.tsx`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+  - `web/frontend/src/components/FileUpload.tsx`
+  - `web/frontend/src/components/SpectrumChart.tsx`
+- 本輪實作結果：
+  - 補回主題切換面板，新增 4 組主題：`midnight`、`pearl`、`ink`、`ocean`。
+  - `pearl` 主題採偏灰白與淺藍，不是高亮純白，避免刺眼。
+  - `ink` 主題改成接近黑底、白框、藍橘輔助色的組合，不再只剩單一黑灰。
+  - 背景、玻璃面板、卡片、輸入框、pill、圖表顏色、hover label 與陰影都改為 CSS variables 控制。
+  - 主題切換區本身也加入圓形與方形混搭的 swatch，呼應使用者提供的參考圖。
+  - 左側步驟卡、上傳區、品牌區統計卡、主內容狀態膠囊與空狀態卡片都加強陰影與層次。
+  - `SpectrumChart.tsx` 改成讀取 CSS 變數，讓圖表在白色與黑色主題下都能維持可讀性。
+  - 另外補一層 light theme override，處理尚未完全變數化的舊 Tailwind 文字色與邊框色。
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+  - 表示這輪主題、樣式與圖表設定修改沒有破壞前端編譯。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。
