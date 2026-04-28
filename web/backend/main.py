@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from routers import raman, xas, xps, xrd
+from routers import raman, xas, xes, xps, xrd
 
 app = FastAPI(title="Spectroscopy Web API", version="1.0.0")
 
@@ -38,6 +38,7 @@ app.include_router(xrd.router, prefix="/api/xrd", tags=["XRD"])
 app.include_router(raman.router, prefix="/api/raman", tags=["Raman"])
 app.include_router(xas.router, prefix="/api/xas", tags=["XAS"])
 app.include_router(xps.router, prefix="/api/xps", tags=["XPS"])
+app.include_router(xes.router, prefix="/api/xes", tags=["XES"])
 
 
 @app.get("/health")

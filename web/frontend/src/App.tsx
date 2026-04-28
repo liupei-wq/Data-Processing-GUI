@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { type AnalysisModuleId } from './components/AnalysisModuleNav'
 import Raman from './pages/Raman'
 import XAS from './pages/XAS'
+import XES from './pages/XES'
 import XPS from './pages/XPS'
 import XRD from './pages/XRD'
 import SingleProcessTool, { type SingleToolKind } from './pages/SingleProcessTool'
@@ -9,7 +10,7 @@ import SingleProcessTool, { type SingleToolKind } from './pages/SingleProcessToo
 type ThemeId = 'apricot' | 'pearl' | 'ocean' | 'ink' | 'ember' | 'forest'
 type FontId = 'ui' | 'kai' | 'serif'
 type FontScale = 'sm' | 'md' | 'lg'
-type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | `tool-${SingleToolKind}`
+type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes' | `tool-${SingleToolKind}`
 
 const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft' | 'square' }[] = [
   { id: 'apricot', label: '杏桃', tone: '暖奶油', shape: 'round' },
@@ -77,6 +78,7 @@ export default function App() {
     if (module === 'xrd') setWorkspace('workflow-xrd')
     if (module === 'xas') setWorkspace('workflow-xas')
     if (module === 'xps') setWorkspace('workflow-xps')
+    if (module === 'xes') setWorkspace('workflow-xes')
   }
 
   return (
@@ -217,6 +219,7 @@ export default function App() {
         {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} />}
         {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} />}
         {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} />}
+        {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} />}
         {workspace === 'tool-background' && <SingleProcessTool tool="background" />}
         {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" />}
         {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" />}
