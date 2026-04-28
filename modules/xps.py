@@ -1733,14 +1733,20 @@ def run_xps_ui() -> None:
                         _bg_hi = float(max(_e0, min(float(max(_prev_bg)), _e1)))
                         if _bg_lo >= _bg_hi:
                             _bg_lo, _bg_hi = _e0, _e1
-                        st.session_state["bg_range"] = (_bg_lo, _bg_hi)
-                        bg_range = st.slider(
-                            "背景計算區間 (eV)",
-                            min_value=_e0, max_value=_e1,
-                            step=0.01, format="%.2f eV",
-                            key="bg_range",
-                        )
-                        bg_x_start, bg_x_end = sorted(bg_range)
+                        st.caption("背景計算區間（左＝高 BE ／ 右＝低 BE，對應圖表方向）")
+                        _bgc1, _bgc2 = st.columns(2)
+                        with _bgc1:
+                            _bg_hi_in = float(st.number_input(
+                                "高 BE 端 (eV)", value=_bg_hi,
+                                step=0.1, format="%.2f", key="bg_hi",
+                            ))
+                        with _bgc2:
+                            _bg_lo_in = float(st.number_input(
+                                "低 BE 端 (eV)", value=_bg_lo,
+                                step=0.1, format="%.2f", key="bg_lo",
+                            ))
+                        st.session_state["bg_range"] = (_bg_lo_in, _bg_hi_in)
+                        bg_x_start, bg_x_end = sorted([_bg_lo_in, _bg_hi_in])
                         show_bg_baseline = st.checkbox("疊加顯示背景基準線", value=True)
                 if skip_bg and not step4_confirmed:
                     st.session_state["step4_confirmed"] = True
@@ -1781,14 +1787,20 @@ def run_xps_ui() -> None:
                         _nm_hi = float(max(_e0, min(float(max(_prev_nm)), _e1)))
                         if _nm_lo >= _nm_hi:
                             _nm_lo, _nm_hi = _e0, _e1
-                        st.session_state["norm_range"] = (_nm_lo, _nm_hi)
-                        norm_range = st.slider(
-                            "歸一化參考區間 (eV)",
-                            min_value=_e0, max_value=_e1,
-                            step=0.01, format="%.2f eV",
-                            key="norm_range",
-                        )
-                        norm_x_start, norm_x_end = sorted(norm_range)
+                        st.caption("歸一化參考區間（左＝高 BE ／ 右＝低 BE，對應圖表方向）")
+                        _nmc1, _nmc2 = st.columns(2)
+                        with _nmc1:
+                            _nm_hi_in = float(st.number_input(
+                                "高 BE 端 (eV)", value=_nm_hi,
+                                step=0.1, format="%.2f", key="norm_hi",
+                            ))
+                        with _nmc2:
+                            _nm_lo_in = float(st.number_input(
+                                "低 BE 端 (eV)", value=_nm_lo,
+                                step=0.1, format="%.2f", key="norm_lo",
+                            ))
+                        st.session_state["norm_range"] = (_nm_lo_in, _nm_hi_in)
+                        norm_x_start, norm_x_end = sorted([_nm_lo_in, _nm_hi_in])
                 if skip_norm and not step5_confirmed:
                     st.session_state["step5_confirmed"] = True
                     step5_confirmed = True
@@ -1905,35 +1917,52 @@ def run_xps_ui() -> None:
             st.divider()
             st.caption("⊕ 自訂峰（手動輸入，不受資料庫限制）")
 
-            if "custom_peak_n" not in st.session_state:
-                st.session_state["custom_peak_n"] = 0
+            # 用唯一 ID 清單管理自訂峰，支援個別刪除
+            if "custom_peak_ids" not in st.session_state:
+                _old_n = st.session_state.get("custom_peak_n", 0)
+                st.session_state["custom_peak_ids"] = list(range(_old_n))
+                st.session_state["custom_peak_counter"] = _old_n
 
             col_add, col_clear = st.columns(2)
             with col_add:
                 if st.button("＋ 新增自訂峰", use_container_width=True, key="btn_add_custom"):
-                    st.session_state["custom_peak_n"] += 1
+                    _new_id = st.session_state.get("custom_peak_counter", 0)
+                    st.session_state["custom_peak_ids"].append(_new_id)
+                    st.session_state["custom_peak_counter"] = _new_id + 1
+                    st.rerun()
             with col_clear:
                 if st.button("清除全部", use_container_width=True, key="btn_clear_custom"):
-                    for _ci in range(st.session_state["custom_peak_n"]):
-                        for _k in [f"cpk_lbl_{_ci}", f"cpk_be_{_ci}", f"cpk_fwhm_{_ci}"]:
+                    for _pid in st.session_state["custom_peak_ids"]:
+                        for _k in [f"cpk_lbl_{_pid}", f"cpk_be_{_pid}", f"cpk_fwhm_{_pid}"]:
                             st.session_state.pop(_k, None)
-                    st.session_state["custom_peak_n"] = 0
+                    st.session_state["custom_peak_ids"] = []
+                    st.rerun()
 
-            for ci in range(st.session_state["custom_peak_n"]):
+            for pid in list(st.session_state["custom_peak_ids"]):
+                _pidx = st.session_state["custom_peak_ids"].index(pid) + 1
                 with st.container(border=True):
+                    _hcol, _dcol = st.columns([5, 1])
+                    with _hcol:
+                        st.caption(f"自訂峰 #{_pidx}")
+                    with _dcol:
+                        if st.button("✕", key=f"btn_del_cpk_{pid}", help="刪除此峰"):
+                            st.session_state["custom_peak_ids"].remove(pid)
+                            for _k in [f"cpk_lbl_{pid}", f"cpk_be_{pid}", f"cpk_fwhm_{pid}"]:
+                                st.session_state.pop(_k, None)
+                            st.rerun()
                     c_lbl = st.text_input(
-                        f"標籤 #{ci + 1}", value=f"Custom {ci + 1}",
-                        key=f"cpk_lbl_{ci}",
+                        "標籤", value=f"Custom {pid + 1}",
+                        key=f"cpk_lbl_{pid}",
                     )
                     c_be = st.number_input(
-                        f"BE (eV) #{ci + 1}", value=530.0,
+                        "BE (eV)", value=530.0,
                         step=0.1, format="%.2f",
-                        key=f"cpk_be_{ci}",
+                        key=f"cpk_be_{pid}",
                     )
                     c_fwhm = st.number_input(
-                        f"FWHM (eV) #{ci + 1}", value=1.5,
+                        "FWHM (eV)", value=1.5,
                         min_value=0.05, step=0.05, format="%.2f",
-                        key=f"cpk_fwhm_{ci}",
+                        key=f"cpk_fwhm_{pid}",
                     )
                     init_peaks_selected.append({"label": c_lbl, "be": c_be, "fwhm": c_fwhm})
                     manual_centers.append(c_be)

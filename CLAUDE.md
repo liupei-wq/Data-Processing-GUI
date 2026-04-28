@@ -437,4 +437,6 @@ cd web/frontend && npm install && npm run dev
 
 - 2026-04-26：依使用者回饋微調右下角設定 popover；保留外框但將外框 padding 縮到 8px，內部設定卡改為 12px 圓角與緊湊 padding，並重新整理標題、radio 標籤、選項 pill 的字距與行距。驗證：`uv run python -m py_compile app.py` 通過，`git diff --check` 通過。
 - 2026-04-27：建立 Web 版本骨架（FastAPI + React）。後端 `web/backend/` 直接 import 現有 `core/` + `db/`，提供 XRD 五個 API endpoints；前端 `web/frontend/` 使用 React 18 + Vite + Tailwind + Plotly.js，實作拖曳上傳、平滑/歸一化/波長/參考峰 sidebar、互動圖表與 CSV 匯出。部署方案：`web/Dockerfile`（多階段 build）+ `railway.toml`（Railway 一鍵部署）。驗證：`python3 -m py_compile web/backend/main.py web/backend/routers/xrd.py` ✅。
+- 2026-04-28：修改 `啟動_Windows.bat`：新增 Streamlit 是否安裝的前置確認、改為有標題的可見視窗（`start "Nigiro Pro - Server" /min`）、加入 5 次 health check 等待、結尾 `pause` 讓使用者看到錯誤訊息。解決 CMD 視窗消失不見無法診斷問題。
+- 2026-04-28：XPS Core Level 背景扣除與歸一化的區間選取改為兩個 number_input（高 BE 端 / 低 BE 端），對應圖表右翻轉方向，避免 slider 左右與圖表左右相反的混淆。XPS 自訂峰從計數器改為唯一 ID 清單，每個峰新增「✕」個別刪除按鈕。驗證：`python3 -m py_compile modules/xps.py` ✅。
 - 2026-04-28：XPS Valence Band Band Offset → VBM 差值法：在材料 A / 材料 B 兩欄各新增「上傳 VB 光譜」功能，程式自動解析、套用能量校正與背景扣除、做 VBM 線性外推，並顯示光譜圖與 VBM metric。不上傳則退回原有「從主流程帶入 / 手動輸入」模式。用途：讓使用者直接比較 1019（NiO）與 1008（Ga₂O₃）兩個樣品的 VB 光譜，在同一頁面算出 ΔEV。驗證：`python3 -m py_compile modules/xps.py` ✅。
