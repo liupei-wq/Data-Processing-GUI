@@ -6,184 +6,21 @@
 - 每一次動作前都要先讀取 `CLAUDE.md`。
 - 每一次實作、檢查、重啟、重要判斷都要記錄在專案根目錄的 `CLAUDE.md`。
 - 不要回復或覆蓋使用者未要求修改的既有變更。
-- 目前 PowerShell profile 會出現執行原則警告，通常不影響指令結果。
+- **本資料夾只剩 `web/` 網頁版**，離線 Streamlit 版已移至獨立 GitHub repo：
+  `https://github.com/liupei-wq/Data-Processing-GUI-Desktop`
 
 ---
 
-## 專案定位
+## 兩個 GitHub 倉庫
 
-Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與材料分析資料處理。入口檔為 `app.py`，目前支援：
-
-- XPS：X-ray Photoelectron Spectroscopy
-- XES：X-ray Emission Spectroscopy
-- Raman：Raman Spectroscopy
-- XRD：X-ray Diffraction
-- XAS / XANES：X-ray Absorption Spectroscopy
-- Gaussian subtraction：獨立高斯模板扣除工具
-- SEM：目前只保留為未來模組，尚未開放
-
----
-
-## 啟動與環境
-
-- Windows 啟動：`啟動_Windows.bat`（純 ASCII，避免編碼問題）
-- Mac 啟動：`啟動_Mac.command`（需 `chmod +x` 與移除 quarantine）
-- 安裝套件：`安裝套件.bat`
-- 手動啟動：`streamlit run app.py`
-- 測試服務：`uv run streamlit run app.py --server.port 8504 --server.headless true`
-- 依賴：`requirements.txt`（streamlit / pandas / numpy / plotly / scipy / lmfit）
-- Streamlit 設定：`.streamlit/config.toml`（`fileWatcherType = "none"`，修改後需重啟）
-
----
-
-## 架構總覽（Streamlit 版）
-
-```
-app.py                → 全域入口、品牌、主題、語言、字級、右下角齒輪設定
-modules/              → 各資料類型 Streamlit UI & workflow
-  xps.py              ← 最完整，約 2649 行
-  xes.py              ← FITS 影像處理，約 3047 行
-  raman.py            ← 材料 DB 比對，完整 peak fitting
-  xrd.py              ← 參考峰比對、Scherrer 晶粒分析
-  xas_auto.py         ← 活躍開發中，主要 XAS 入口
-  gaussian_subtraction.py  ← 獨立工具
-core/
-  parsers.py          ← 通用兩欄光譜解析、XPS 結構化解析
-  processing.py       ← 背景扣除（Shirley/Tougaard/Linear/Poly/AsLS/airPLS）、平滑、歸一化
-  spectrum_ops.py     ← 峰偵測、插值、平均、高斯模板扣除
-  peak_fitting.py     ← Gaussian/Lorentzian/Voigt 擬合，含 maxfev 參數
-  read_fits_image.py  ← XES FITS 讀取核心
-  ui_helpers.py       ← step header、skip button
-db/
-  raman_database.py   ← 含 NiO TO(395)、TO+LO(870) 等材料峰資料
-  xps_database.py     ← 元素資訊、RSF、orbital RSF
-  xrd_database.py     ← XRD 參考 sticks
-  xes_database.py     ← XES 參考 emission lines（NiO / Ga2O3 / ...）
-```
-
----
-
-## Streamlit 全域 UI 現況
-
-- 產品名稱：`Nigiro Pro`，左上角 SVG logo + 品牌文字
-- 右側 hover 資料選單抽屜（query param 切換，不開新頁）
-- 右下角齒輪設定（主題 / 語言 / 字體大小，hover 展開）
-- 多主題：深色、淺色、海洋藍、森林綠、玫瑰紅
-
----
-
-## 各模組評估（Streamlit 版）
-
-### XPS（`modules/xps.py`，~2649 行）
-完整定量分析 workflow：能量校正、背景扣除、歸一化、峰擬合、VBM 外推、Band Offset、Kraut Method、RSF 定量表格。
-Core Level / Valence Band 模式切換。**修改時小步切分，避免破壞 session key。**
-
-### XES（`modules/xes.py`，~3047 行）—— 見下方詳細分析
-兩種模式：FITS 原始影像 / 已處理 1D 光譜。
-
-### Raman（`modules/raman.py`）
-去尖峰、內插、多檔平均、背景扣除、平滑、歸一化、材料 DB 比對、峰擬合、Si 應力估算。
-**新增材料優先改 `db/raman_database.py`。**
-
-### XRD（`modules/xrd.py`）
-內插、平均、高斯模板扣除、平滑、歸一化、log 弱峰、d-spacing 切換、參考峰比對、Scherrer 晶粒尺寸。
-**新增相優先改 `db/xrd_database.py`。**
-
-### XAS（`modules/xas_auto.py`，活躍開發中）
-TEY / TFY 雙通道，自動欄位解析，能量校正、背景扣除、歸一化、White Line、高斯扣除、XANES 去卷積擬合。
-
----
-
-## XES 模組邏輯詳細分析（`modules/xes.py`）
-
-### 兩種輸入模式
-
-**FITS 原始影像模式**（較複雜，網站版第一版不搬）
-```
-FITS file → Dark/Bias 扣除 → Hot pixel 修正 → 曝光正規化
-→ 曲率校正（拉直 emission line）→ ROI 積分 → Sideband BG 扣除
-→ BG1/BG2 分點扣除 → 1D 光譜
-```
-
-關鍵子步驟：
-- **Hot pixel**：`median_filter` 找出 > `threshold × 1.4826 × MAD` 的像素，替換為局部中位數
-- **曲率校正**：每 row 找 subpixel 峰位中心，對 `(row, center_column)` 做多項式擬合，各 row 橫移拉直
-- **ROI 積分**：沿列 sum/mean，得到 1D 光譜；sideband 是上下相鄰帶的均值背景
-- **BG1/BG2 權重**：`BG = BG1 + w × (BG2 - BG1)`，`w` 由 FITS header 時間戳或檔名順序決定
-
-**已處理 1D 光譜模式**（網站版第一版目標）
-- 上傳兩欄 CSV/DAT（可同時上傳 BG1、BG2 光譜）
-- 跳過 FITS/ROI/曲率校正，直接進 BG1/BG2 1D 插值扣除
-
-### 共用 1D 後處理流程（兩種模式都有）
-
-| 步驟 | 說明 |
-|---|---|
-| BG1/BG2 扣除 | 1D 插值，依樣品順序加權 |
-| I0 正規化 | 除以入射光通量（global 值或 CSV table） |
-| 多檔平均 | 先對齊共同 X 範圍，再插值平均 |
-| 平滑 | moving_average / savitzky_golay |
-| 歸一化 | min_max / max / area / reference_region |
-| X 軸校正 | Linear: `eV = offset + slope × pixel`；或從參考點 CSV 做多項式 |
-| 峰值偵測 | scipy find_peaks（prominence / height / distance / max_peaks） |
-| 能帶對齊 | VBM（由 XES）+ CBM（由 XAS）→ Eg、ΔEV、ΔEC 含誤差傳播 |
-
-### 能帶對齊（`_xes_band_alignment_summary`）
-```
-Eg_A = CBM_A - VBM_A
-ΔEV  = VBM_A - VBM_B
-ΔEC  = CBM_A - CBM_B
-sigma 用 quadrature 誤差傳播
-```
-
-### 參考資料（`db/xes_database.py`）
-- NiO：O K alpha (524.9 eV)、Ni L alpha (851.5 eV)、Ni L beta (868.0 eV)、Ni K alpha (7478.2 eV)
-- Ga2O3：O K alpha (524.9 eV)、Ga L alpha (1098.0 eV)、...
-- 格式：`{ material: { peaks: [{label, energy_eV, tolerance_eV, relative_intensity, meaning}] } }`
-
-### 網站版 XES 搬運策略
-
-| 功能 | 第一版（spectrum mode） | 備注 |
+| 倉庫 | 網址 | 用途 |
 |---|---|---|
-| 1D 光譜上傳（CSV/DAT） | ✅ 搬 | 核心功能 |
-| BG1/BG2 1D 扣除 | ✅ 搬 | `_xes_spectrum_background_curve` |
-| 多檔平均 | ✅ 搬 | |
-| 平滑 | ✅ 搬 | |
-| 歸一化 | ✅ 搬 | |
-| X 軸線性校正（offset + slope） | ✅ 搬 | |
-| 峰值偵測 | ✅ 搬 | 重用 `detect_spectrum_peaks` |
-| 參考峰 overlay | ✅ 搬 | `db/xes_database.py` |
-| 能帶對齊（VBM/CBM → Eg/ΔEV/ΔEC） | ✅ 搬 | |
-| FITS 影像模式 | ❌ 暫緩 | 複雜度最高，之後再做 |
-| I0 table CSV | ❌ 暫緩 | 可後補 |
-| Preset 匯入/匯出 | ❌ 暫緩 | 可後補 |
+| **Data-Processing-GUI** | https://github.com/liupei-wq/Data-Processing-GUI | 網頁版（Render / Railway 部署） |
+| **Data-Processing-GUI-Desktop** | https://github.com/liupei-wq/Data-Processing-GUI-Desktop | Streamlit 離線版 |
 
 ---
 
-## Web 版本（FastAPI + React）
-
-### 目前網站版模組狀態
-
-| 模組 | 狀態 | 後端 Router | 前端頁面 |
-|---|---|---|---|
-| **Raman** | ✅ 核心完成 | `web/backend/routers/raman.py` | `web/frontend/src/pages/Raman.tsx` |
-| **XRD** | ✅ 最完整 | `web/backend/routers/xrd.py` | `web/frontend/src/pages/XRD.tsx` |
-| **XAS** | ✅ 核心完成 | `web/backend/routers/xas.py` | `web/frontend/src/pages/XAS.tsx` |
-| **XPS** | ✅ 含進階功能 | `web/backend/routers/xps.py` | `web/frontend/src/pages/XPS.tsx` |
-| **XES** | ⚠️ 僅 1D 光譜模式 | `web/backend/routers/xes.py` | `web/frontend/src/pages/XES.tsx` |
-| SEM | ⏳ 未實作（Streamlit 版也無） | — | — |
-
-### 各模組進階功能缺口
-
-| 模組 | 尚未搬入的進階功能 |
-|---|---|
-| Raman | preset 匯入/匯出、Si 應力估算 |
-| XRD | 幾乎完整 |
-| XAS | 高斯扣除步驟、XANES 去卷積擬合、二階微分輔助 |
-| XPS | preset 匯入/匯出（次要） |
-| XES | **FITS 原始影像模式**（ROI、曲率校正、hot pixel、sideband BG 等），I0 table，preset |
-
-### 目錄結構
+## 網頁版目錄結構
 
 ```
 web/
@@ -194,7 +31,7 @@ web/
 │       ├── xrd.py           # XRD 5 個 endpoints（含 Scherrer、Gaussian）
 │       ├── raman.py         # Raman parse/process/peaks/references/fit
 │       ├── xas.py           # XAS parse/process（TEY/TFY 雙通道）
-│       ├── xps.py           # XPS parse/process/peaks/fit（含 Shirley/Tougaard）
+│       ├── xps.py           # XPS parse/process/peaks/fit/vbm/rsf
 │       └── xes.py           # XES parse/process/peaks/references（1D 光譜模式）
 ├── frontend/
 │   ├── package.json         # React 18 + Vite + Tailwind + Plotly.js
@@ -207,9 +44,10 @@ web/
 │       │   ├── Raman.tsx
 │       │   ├── XAS.tsx
 │       │   ├── XPS.tsx
+│       │   ├── XES.tsx
 │       │   └── SingleProcessTool.tsx  # 背景扣除 / 歸一化 / 高斯扣除 單一工具
 │       ├── components/
-│       │   ├── AnalysisModuleNav.tsx  # 固定順序模組切換（Raman/XRD/XPS/XAS/XES/SEM）
+│       │   ├── AnalysisModuleNav.tsx  # 固定順序模組切換
 │       │   ├── FileUpload.tsx
 │       │   ├── ProcessingPanel.tsx
 │       │   ├── SpectrumChart.tsx
@@ -217,33 +55,13 @@ web/
 │       ├── api/             # xrd.ts / raman.ts / xas.ts / xps.ts / xes.ts
 │       └── types/           # xrd.ts / raman.ts / xas.ts / xps.ts / xes.ts
 ├── Dockerfile               # 多階段 build（Node → Python + 靜態服務）
-└── (docker-compose.yml 已刪除，有 YAML 重複鍵錯誤)
 railway.toml                 # builder=DOCKERFILE，healthcheckPath=/health
 render.yaml                  # Render Blueprint，plan=free
 ```
 
-### API 端點總覽
+---
 
-| Prefix | 端點 | 說明 |
-|---|---|---|
-| `/api/xrd` | parse / process / peaks / references / reference-peaks | XRD 完整流程 |
-| `/api/raman` | parse / process / peaks / references / reference-peaks / fit | Raman + 峰擬合 |
-| `/api/xas` | parse / process | TEY+TFY 雙通道，energy/bg/norm/white-line |
-| `/api/xps` | parse / process / peaks / fit / vbm / rsf | Shirley/Tougaard 背景，峰擬合含 Area%，VBM 外推，RSF 定量 |
-| `/api/xes` | parse / process / peaks / references / reference-peaks | 1D 光譜模式，BG1/BG2 扣除，能帶對齊 |
-
-### 前端 App 路由（App.tsx）
-
-```typescript
-type WorkspaceId =
-  | 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes'
-  | `tool-background` | `tool-normalize` | `tool-gaussian`
-```
-
-- 右下角齒輪（hover 展開）：主題 6 種 / 字體 3 種 / 字級 3 種
-- 右側 hover 抽屜（`選單`）：單一處理工具（背景扣除/歸一化/高斯模板扣除）
-
-### 本機啟動
+## 本機啟動
 
 ```bash
 # Terminal 1：後端
@@ -254,75 +72,298 @@ cd web/frontend && npm install && npm run dev
 # 開 http://localhost:3000
 ```
 
-### 部署
+## 部署
 
-- **Render**（目前主力）：`render.yaml` 自動讀取，free plan，15 分鐘無流量會 spin down
+- **Render**（目前主力）：`render.yaml` 自動讀取，free plan，15 分鐘無流量 spin down
 - **Railway**：`railway.toml`，`builder=DOCKERFILE`，`$PORT` 由 Dockerfile CMD 的 `sh -c` 展開
-- **同一份 code**，不需要兩個版本
+- Render 網址：`https://data-processing-gui-web.onrender.com/`
 
 ---
 
-## 各 Web 模組實作重點
+## API 端點總覽
 
-### XRD（最早完成，功能最完整）
-- 後端：parse / process（含 Gaussian template 扣除） / peaks（含 fwhm_deg 供 Scherrer） / references / reference-peaks
-- 前端：Scherrer 晶粒分析、log 弱峰視圖、高斯模板扣除圖、參考峰匹配表、完整匯出（研究用 / 分析表格 / 追溯 JSON）
+| Prefix | 端點 | 說明 |
+|---|---|---|
+| `/api/xrd` | parse / process / peaks / references / reference-peaks | XRD 完整流程 |
+| `/api/raman` | parse / process / peaks / references / reference-peaks / fit | Raman + 峰擬合 |
+| `/api/xas` | parse / process | TEY+TFY 雙通道，energy/bg/norm/white-line |
+| `/api/xps` | parse / process / peaks / fit / vbm / rsf | Shirley/Tougaard 背景，峰擬合含 Area%，VBM 外推，RSF 定量 |
+| `/api/xes` | parse / process / peaks / references / reference-peaks | 1D 光譜模式，BG1/BG2 扣除，能帶對齊 |
 
-### Raman（功能最豐富）
-- 後端：parse / process（去尖峰/interpolate/avg/bg/smooth/norm） / peaks / references / reference-peaks / fit
-- 前端：峰位管理（從 DB 載入 / 手動新增 / 逐峰編輯）、峰擬合、可疑峰多選停用、自動二次擬合迴圈
-- NiO 峰資料：TO(395 cm⁻¹)、TO+LO(870 cm⁻¹) 已加入 `db/raman_database.py`
+---
+
+## 各模組完成度
+
+| 模組 | 狀態 | 後端 Router | 前端頁面 |
+|---|---|---|---|
+| **Raman** | ⚠️ 核心完成，缺 Si 應力 / preset | `routers/raman.py` | `pages/Raman.tsx` |
+| **XRD** | ✅ 最完整 | `routers/xrd.py` | `pages/XRD.tsx` |
+| **XAS** | ⚠️ 核心完成，缺 Gaussian 扣除 / XANES 去卷積 / 二階微分 | `routers/xas.py` | `pages/XAS.tsx` |
+| **XPS** | ✅ 含進階功能 | `routers/xps.py` | `pages/XPS.tsx` |
+| **XES** | ⚠️ 僅 1D 光譜模式，缺 FITS 影像模式 | `routers/xes.py` | `pages/XES.tsx` |
+| SEM | ⏳ 未實作 | — | — |
+
+---
+
+## 各模組待搬運功能詳細說明
+
+### ① XAS — 高斯模板扣除（`fit_fixed_gaussian_templates`）
+
+**用途**：在做背景扣除前，先用固定形狀的高斯模板扣掉已知的雜散峰（如 Bragg 峰、二階光）。
+
+**演算法**（來自 `core/spectrum_ops.py: fit_fixed_gaussian_templates`）：
+```
+輸入：energy array, signal, centers=[{name, center, enabled}], fixed_fwhm, fixed_area, search_half_width
+流程：
+  對每個 center point（按能量排序）：
+    1. 在 [seed_center ± search_half_width] 掃 161 個候選位置
+    2. 對每個候選位置，計算 score = ∫ positive_residual × gaussian_template dx
+    3. 選 score 最大的位置 → best_center
+    4. 在 best_center 建高斯模板，從 residual 中扣除
+  返回：(total_model, signal_after_subtraction, fit_rows)
+```
+
+**高斯模板參數**：
+- User 在圖上讀取峰高（`peak_height`）和設定 FWHM
+- `area = peak_height × fwhm × 1.0645`（高斯函數換算係數）
+- 模板 amplitude = area / (σ × √(2π))，σ = fwhm / 2.3548
+
+**網頁版後端需要新增**：
+- `POST /api/xas/gaussian-subtract`
+  - 輸入：`{ x, y, centers:[{name, center}], fwhm_ev, peak_height, search_half_width }`
+  - 輸出：`{ y_model, y_after, fit_rows:[{name, seed, fitted_center, shift, fwhm, area}] }`
+- 實作直接 copy `fit_fixed_gaussian_templates` 邏輯（不依賴 streamlit）
+
+**前端新增（XAS.tsx）**：
+- Sidebar 新步驟「高斯模板扣除」
+- 可新增多個高斯中心點（表格：name, center_eV, enabled）
+- 設定 FWHM 和峰高（告知使用者直接從圖上讀取）
+- 顯示「高斯對照圖」：原始 / 高斯模板 / 扣除後
+
+---
+
+### ② XAS — XANES 去卷積擬合（`run_xanes_fit`）
+
+**用途**：對歸一化後的 XANES 光譜，擬合 Step function + 多峰，分解各特徵峰的位置與強度。
+
+**演算法**（來自 `modules/xas_fit.py: run_xanes_fit`）：
+```
+輸入：energy, y_norm, peaks_df, fwhm_inst, fwhm_init, link_fwhm, include_step, e0, fit_range
+模型：
+  Step（Arctan）：center=E0(固定), amplitude=1.0(固定), sigma 自由擬合
+  每個峰（Gaussian 或 Lorentzian）：
+    center = 使用者指定 ± delta（偏移範圍）
+    amplitude > 0
+    sigma >= fwhm_inst/2.3548（儀器解析度下限）
+    link_fwhm=True → 所有峰 sigma 連動到 step_sigma（或第一峰）
+使用 lmfit 進行最小二乘擬合（method="leastsq"）
+回傳：success, y_fit, components dict, residual, r_factor, params_table
+```
+
+**r_factor 計算**：`r = Σ(y - y_fit)² / Σy²`（越小越好）
+
+**前端 peaks_df 格式**（DataFrame columns）：
+- `啟用`：bool
+- `峰形`：'Gaussian' | 'Lorentzian'
+- `中心_eV`：float
+- `偏移範圍_eV`：float（center 可偏移的 ±range）
+- `Peak_Name`：str（可空白）
+
+**網頁版後端需要新增**：
+- `POST /api/xas/deconv`
+  - 輸入：`{ x, y, peaks:[{center, delta, name, ptype}], fwhm_inst, fwhm_init, link_fwhm, include_step, e0, fit_lo, fit_hi }`
+  - 輸出：`{ success, y_fit, components:{prefix: y[]}, residual, r_factor, params_table, message }`
+- 需要 `lmfit` 依賴（已在 `web/backend/requirements.txt` 中）
+
+**前端新增（XAS.tsx）**：
+- Sidebar 新步驟「XANES 去卷積擬合」（僅在歸一化完成後啟用）
+- 設定擬合範圍、E0（自動或手動）、FWHM 儀器下限、連動 FWHM checkbox
+- 峰位管理表格（新增/刪除/啟用）
+- 執行擬合按鈕 → 顯示擬合圖（含各分量）+ 結果表格
+
+---
+
+### ③ XAS — 二階微分輔助（`second_derivative`）
+
+**用途**：二階微分峰谷對應邊緣特徵位置，輔助選取 XANES 峰位。
+
+**演算法**（來自 `modules/xas_fit.py: second_derivative`）：
+```python
+dy  = np.gradient(y, x)   # 一階微分
+d2y = np.gradient(dy, x)  # 二階微分（負值對應峰位）
+```
+
+**網頁版後端**：可在 `/api/xas/process` 回傳時加上 `y_d2y` 欄位，或獨立端點。
+前端在主圖下方疊加二階微分曲線（不同 y 軸，用 plotly secondary y-axis）。
+
+---
+
+### ④ Raman — Si 峰位移 → 雙軸應力估算
+
+**用途**：擬合後若有 Si 峰，自動計算薄膜應力。
+
+**演算法**（Anastassakis et al., 1990）：
+```
+觸發條件：擬合結果中有 Material 含 "Si"（正則 n-Si/p-Si/Si）且峰位在 480–570 cm⁻¹
+公式：
+  Δω = center - ref_pos          （ref_pos 預設 520.7 cm⁻¹，體矽）
+  σ (GPa) = Δω / coeff           （coeff 預設 -1.93 cm⁻¹/GPa，雙軸）
+解讀：
+  σ < -0.05 GPa → 壓應力（compressive）
+  σ >  0.05 GPa → 拉應力（tensile）
+  否則 → 接近無應力
+```
+
+**其他轉換係數參考**：
+- 雙軸 (100) Si：−1.93 cm⁻¹/GPa（最常用）
+- 單軸 [100]：約 −1.6 cm⁻¹/GPa
+
+**網頁版實作**：前端純計算（不需要後端 API）。
+在 Raman 擬合結果出現 Si 峰時，顯示應力計算卡片。
+輸入：ref_pos、coeff → 輸出：Δω、σ、應力解讀。
+
+---
+
+### ⑤ Raman — Preset 匯入/匯出
+
+**格式**（JSON）：`_build_raman_preset_payload` 產生的結構：
+```json
+{
+  "version": 1,
+  "params": { "smooth_method": ..., "bg_method": ..., "norm_method": ..., ... },
+  "peaks": [
+    { "Peak_ID": "P001", "Material": "NiO", "Peak_Name": "TO", "Center_cm": 395.0,
+      "FWHM_cm": 50.0, "amplitude": 1000.0, "enabled": true, "peak_type": "Lorentzian" }
+  ]
+}
+```
+
+**網頁版實作**：
+- 匯出：前端直接把當前 params + peakCandidates 序列化成 JSON 下載
+- 匯入：上傳 JSON → 解析 → 還原 params + peakCandidates 到 state
+
+---
+
+### ⑥ XES — FITS 原始影像模式（暫緩，最複雜）
+
+**流程**（已記錄，待實作）：
+```
+FITS → Dark/Bias 扣除 → Hot pixel（MAD × 1.4826 threshold，median_filter 替換）
+→ 曝光正規化 → 曲率校正（每 row 找 subpixel 中心 → 多項式擬合 → 橫移拉直）
+→ ROI 積分（沿列 sum/mean） → Sideband BG 扣除
+→ BG1/BG2 1D 分點插值扣除
+```
+**依賴**：`astropy` (FITS 讀取)、`scipy.ndimage.median_filter`（hot pixel）
+**建議**：需先新增 `POST /api/xes/parse-fits` 端點，處理 FITS 影像解析。
+
+---
+
+### ⑦ XES — I0 正規化（暫緩，可後補）
+
+使用者上傳一個 CSV（兩欄：dataset_name, i0_value），
+對各光譜除以對應的 I0 值（入射光通量），實作簡單。
+
+---
+
+## 各 Web 模組實作重點（現況）
+
+### XRD（最完整）
+- parse / process（含 Gaussian template 扣除） / peaks（含 fwhm_deg 供 Scherrer） / references / reference-peaks
+- Scherrer 晶粒分析、log 弱峰視圖、高斯模板扣除圖、參考峰匹配表
+
+### Raman
+- parse / process（去尖峰/interpolate/avg/bg/smooth/norm） / peaks / references / reference-peaks / fit
+- 峰位管理（從 DB 載入 / 手動新增 / 逐峰編輯）、峰擬合、可疑峰多選停用
 
 ### XAS（TEY/TFY 雙通道）
-- 後端 parser：`_is_numeric_line` / `_parse_xas_table_bytes` / `_prepare_tey_tfy_auto` 直接寫在 router（不依賴 streamlit imports）
+- parser：`_is_numeric_line` / `_parse_xas_table_bytes` / `_prepare_tey_tfy_auto` 直接寫在 router
 - 支援 6 欄同步輻射 DAT（Energy/Phase/Gap/TFY/TEY/I0）與 3 欄格式
-- 後邊緣歸一化：`_normalize_post_edge(x, y, edge_region, norm_region)` → `(y - pre_mean) / edge_step`
-- 前端：TEY（藍）+ TFY（紫）分開繪圖，White Line 橘色虛線標記，post-edge 摘要表
+- 後邊緣歸一化：`(y - pre_mean) / edge_step`，E0 自動由最大導數決定
+- 前端：TEY（藍）+ TFY（紫）分開繪圖，White Line 橘色虛線標記
 
-### XPS（x 軸反轉，含進階分析）
-- 後端使用 `core/parsers.parse_xps_bytes`（支援多格式多編碼）
-- 背景：Shirley / Tougaard（B=2866/C=1643）/ Linear / Polynomial / AsLS / airPLS
-- 峰偵測時自動偵測並翻轉反向 x 軸（高 BE 在左）
-- 前端：圖表 `autorange: 'reversed'`，自動尋峰後可逐峰「加入擬合」或「全部加入」
+### XPS（含進階分析）
+- 背景：Shirley / Tougaard(B=2866/C=1643) / Linear / Polynomial / AsLS / airPLS
+- 峰偵測時自動偵測並翻轉反向 x 軸（高 BE 在左），圖表 `autorange: 'reversed'`
 - **Core Level / Valence Band 模式切換**（sidebar 頂端 toggle）
-- **Valence Band 模式額外功能**：
-  - Step 9 VBM 外推：用戶設定邊緣區域與基準線區域 → 呼叫 `POST /api/xps/vbm` → 顯示 VBM + 外推線圖
-  - Step 10 能帶偏移：VBM差值法（ΔEV = VBM_A − VBM_B，含 quadrature σ）或 Kraut Method（6 個輸入值），前端計算，顯示結果卡
-- **RSF 定量分析**（Core/VB 兩模式均可，擬合後出現）：
-  - 每個擬合峰可填入元素（如 Ni）與軌域（如 2p3/2）
-  - 呼叫 `POST /api/xps/rsf` → 查詢 Scofield ORBITAL_RSF / ELEMENT_RSF
-  - 前端計算 Atomic% = (Area/RSF) / Σ(Area/RSF) × 100
-  - 可匯出 RSF 定量 CSV
+- **VBM 外推**（步驟 9，VB 模式）：`POST /api/xps/vbm`
+  - edge 區域線性擬合 → 外推至 baseline level → VBM
+  - `vbm = (baseline_mean - intercept) / slope`
+- **能帶偏移**（步驟 10，VB 模式）：前端純計算
+  - VBM差值法：ΔEV = VBM_A − VBM_B，σΔEV = √(σA²+σB²)
+  - Kraut Method：ΔEV = (CL_A−VBM_A) − (CL_B−VBM_B) − (CL_A_int−CL_B_int)
+- **RSF 定量分析**（擬合後）：`POST /api/xps/rsf`
+  - 查 Scofield ORBITAL_RSF → Atomic% = (Area/RSF) / Σ(Area/RSF) × 100
+
+### XES（1D 光譜模式）
+- BG1/BG2 1D 插值扣除（依樣品位置加權：w = (pos+1)/(total+1)）
+- 多檔平均 / 平滑 / 歸一化 / X 軸線性校正（eV = offset + slope × pixel）
+- 峰值偵測 / 參考峰 overlay / 能帶對齊（Eg = CBM−VBM，ΔEV，ΔEC）
 
 ---
 
-## 目前主要風險與注意事項
+## 重要技術細節
 
-- **中文編碼**：多數檔案中的中文在終端顯示可能 mojibake，Python 可執行，修改中文字串需謹慎。
-- **`fileWatcherType = "none"`**：Streamlit 改動後需手動重啟。
-- **XPS/XES/Raman 檔案很大**：重構要分段，避免一次重寫整個 module。
-- **`modules/xas.py`**：保留舊版邏輯，app 實際使用 `xas_auto.py`，不要誤改 `xas.py`。
-- **高斯扣除計算順序**：XRD 網站版的 Gaussian subtraction 是在背景扣除前計算，不是在 normalized 後；UI 順序與實際計算順序不同，若使用者要求「對 normalized 後做扣除」需另外調整。
-- **npm 環境**：部署驗證需在有 npm 的機器上做 `npm run build`；Vite chunk size warning（~5 MB）與 postcss module warning 不阻擋 build。
+### XPS x 軸反轉
+XPS 資料 x 軸是 Binding Energy，習慣高 BE 在左。
+- 後端峰偵測：先判斷 `x[-1] < x[0]`，若是則 flip x/y 再偵測
+- 前端圖表：`autorange: 'reversed'`
+
+### 高斯模板扣除（Gaussian template subtraction）計算順序
+XRD / XAS 的高斯模板扣除都是在背景扣除 **之前** 進行。
+UI 步驟順序與實際計算順序不同，若未來要求「對 normalized 後做扣除」需另外調整。
+
+### XAS 高斯面積換算
+`area = peak_height × fwhm × 1.0645`
+（1.0645 = √(2π)/√(4ln2)，高斯函數的面積/峰高/FWHM 換算係數）
+
+### XAS E0 自動偵測
+`_derivative_edge_energy(energy, signal, window)` → 在 window 範圍內找一階導數最大值的能量。
+
+### 後端 XAS parser 不可 import modules/xas_auto.py
+那個檔案有 streamlit import，改成把 parser helper 直接寫在 `web/backend/routers/xas.py` 裡。
+
+### lmfit 依賴
+XANES 去卷積擬合需要 `lmfit`。確認已加入 `web/backend/requirements.txt`。
 
 ---
 
-## 部署驗證記錄
+## 部署注意事項
 
-- Render 網址：`https://data-processing-gui-web.onrender.com/`
-- Railway：`$PORT` 問題修正（Dockerfile CMD 用 `sh -c`，不在 railway.toml 設 startCommand）
-- `python3 -m py_compile web/backend/main.py web/backend/routers/*.py` ✅
-- `git diff --check` ✅（格式無誤）
-- `npm run build` 需在有 npm 的機器確認
+- `railway.toml`：`builder=DOCKERFILE`，不要設 startCommand（`$PORT` 展開問題）
+- Dockerfile 在 `web/Dockerfile`（多階段 build：Node build → Python serve）
+- `node_modules` 不進 git（已在 `.gitignore`）
+- `vite-env.d.ts` 必須存在（缺少時 VSCode 報大量 JSX TS7026）
+- Vite chunk size warning（~5 MB）與 postcss warning 不阻擋 build
+- `python3 -m py_compile web/backend/main.py web/backend/routers/*.py` 可驗證後端語法
 
 ---
 
-## 重要歷史決策紀錄
+## 前端 App 路由
 
-- **不搬 XES FITS 模式（第一版）**：曲率校正、ROI、sideband BG 太複雜，網站版第一版只做 1D 光譜模式
-- **XAS 不 import modules/xas_auto.py**：那個檔案有 streamlit import，改成把 parser helper 直接複製到 router
-- **刪除 docker-compose.yml**：有重複的 `build:` key，YAML 語法錯誤，Railway/Render 都不使用它
-- **不在 railway.toml 設 startCommand**：`$PORT` 不會被展開，讓 Dockerfile CMD（含 `sh -c`）處理
-- **node_modules 不進 git**：已加入 .gitignore，並執行過 `git rm -r --cached`
-- **vite-env.d.ts 需要存在**：缺少時 VSCode 顯示大量 JSX TS7026 錯誤
-- **Peak fitting `maxfev` 參數**：`core/peak_fitting.py` 已支援，Raman API 會傳入
+```typescript
+type WorkspaceId =
+  | 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes'
+  | 'tool-background' | 'tool-normalize' | 'tool-gaussian'
+```
+
+- 右下角齒輪（hover 展開）：主題 6 種 / 字體 3 種 / 字級 3 種
+- 右側 hover 抽屜（`選單`）：單一處理工具
+
+---
+
+## 各資料庫鍵值說明（供未來新增資料使用）
+
+### Raman DB（`db/raman_database.py` 在 Desktop repo）
+格式：`{ material: { peaks: [{position_cm, label, fwhm_cm, peak_type}] } }`
+
+### XRD DB（`db/xrd_database.py` 在 Desktop repo）
+格式：`{ phase: { peaks: [{two_theta, relative_intensity, hkl}], color, ...} }`
+
+### XPS DB（`db/xps_database.py` 在 Desktop repo）
+- `ELEMENTS`：元素週期表 + peaks list（label, be, fwhm）
+- `ORBITAL_RSF`：鍵格式 `"Ni 2p3/2": 14.07`（Al Kα，Scofield 1976）
+- `ELEMENT_RSF`：元素層級近似
+
+### XES DB（`db/xes_database.py` 在 Desktop repo）
+格式：`{ material: { peaks: [{label, energy_eV, tolerance_eV, relative_intensity, meaning}] } }`
+已知材料：NiO / Ga2O3 / n-Si
