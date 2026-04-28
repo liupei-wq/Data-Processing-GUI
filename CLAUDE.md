@@ -92,6 +92,14 @@ cd web/frontend && npm install && npm run dev
 
 ---
 
+## Docker Build 修復（2026-04-29）
+
+- **問題**：`COPY db/ ./db/` 與 `COPY core/ ./core/` 失敗，因為這兩個目錄在離線版移走後從專案根目錄消失
+- **解法**：將 `core/`（parsers/processing/peak_fitting/spectrum_ops）與 `db/`（raman/xrd/xps/xes database）從 Desktop repo 複製到 `web/backend/` 內；Dockerfile 改為 `COPY web/backend/core/` 與 `COPY web/backend/db/`
+- `core/ui_helpers.py`（含 Streamlit import）不複製，只複製 web backend 需要的模組
+
+---
+
 ## UI 修復紀錄（2026-04-29）
 
 - **AnalysisModuleNav**：移除 SEM「Coming soon」項目，所有模組全部可點擊

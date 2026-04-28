@@ -22,9 +22,9 @@ WORKDIR /app
 COPY web/backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy existing processing modules (no rewrite needed)
-COPY core/ ./core/
-COPY db/   ./db/
+# Copy processing modules (now live inside web/backend/)
+COPY web/backend/core/ ./core/
+COPY web/backend/db/   ./db/
 
 # Copy FastAPI backend
 COPY web/backend/ ./backend/
