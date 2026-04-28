@@ -978,6 +978,13 @@ cd web/frontend && npm install && npm run dev
   - 如果你們想要「不像 Render Free 那樣休眠」，那 Railway 很可能需要至少上 `Hobby $5/月` 的心理準備。
   - 但若只有實驗室三人偶爾使用、流量不高，實際費用大概率仍落在低檔，通常比較像「接近 $5 或小幅超過」，而不是一下變很高。
 
+## 2026-04-29 Railway 部署 $PORT 修正
+
+- 重新讀取 `CLAUDE.md` 後，確認 Railway runtime log 回報：`Error: Invalid value for '--port': '$PORT' is not a valid integer.`
+- 根本原因：`railway.toml` 的 `startCommand` 欄位不走 shell，`$PORT` 不會被展開，uvicorn 收到字串 `$PORT` 而非數字。
+- 修正方式：刪除 `railway.toml` 的 `startCommand`，讓 Dockerfile 的 `CMD ["sh", "-c", "uvicorn ... --port ${PORT:-8000}"]` 直接跑，這個 CMD 有包 `sh -c`，shell 展開正常。
+- 同時把 `healthcheckTimeout` 維持在 120 秒。
+
 ## 2026-04-29 切換至 Railway 部署
 
 - 重新讀取 `CLAUDE.md` 後，確認專案原本就有 `railway.toml` 與 `web/Dockerfile`，設計之初即以 Railway 為目標。

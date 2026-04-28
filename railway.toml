@@ -4,7 +4,5 @@ builder = "DOCKERFILE"
 dockerfilePath = "web/Dockerfile"
 
 [deploy]
-# Railway sets $PORT automatically
-startCommand = "uvicorn backend.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 120
