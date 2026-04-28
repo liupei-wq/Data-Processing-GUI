@@ -1076,5 +1076,6 @@ export default function XRD() {
         </div>
       </div>
     </div>
+    </div>
   )
 }

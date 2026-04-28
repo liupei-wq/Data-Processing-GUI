@@ -1180,3 +1180,29 @@ cd web/frontend && npm install && npm run dev
 - 限制：
   - 目前環境仍然沒有 `npm`，因此這一輪無法做 Vite / TypeScript build 驗證，也無法直接起前端畫面做瀏覽器確認。
   - 這次是依照使用者提供的截圖與現有網站結構做視覺回調，不是還原某個舊 commit 的逐像素版本。
+
+## 2026-04-29 網站版 UI 回調後 build 錯誤修正
+
+- 重新讀取 `CLAUDE.md` 後，根據使用者提供的 Docker build log 進行修正。
+- 錯誤位置：
+  - `web/frontend/src/pages/XRD.tsx(357,6)`：JSX element `div` 缺少對應 closing tag。
+  - `web/frontend/src/pages/XRD.tsx(1080,1)` 與 `(1081,1)`：通常是前面 JSX 結構失衡連帶造成。
+- 判斷：
+  - 這不是型別問題，是 `XRD.tsx` 在大幅調整版面後有區塊閉合遺漏。
+- 本輪先做：
+  - 檢查 `XRD.tsx` 錯誤行附近與檔案尾端的 JSX 層級。
+  - 補齊缺少的 closing tag，優先讓前端 build 恢復。
+- 修正結果：
+  - 已確認 `web/frontend/src/pages/XRD.tsx` 的最外層 root `<div>` 少一個 closing tag。
+  - 已補上一個 `</div>`，其餘 JSX 結構不需大改。
+- 驗證結果：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+  - 代表原本 Docker build log 內的：
+    - `JSX element 'div' has no corresponding closing tag`
+    - `Unexpected token`
+    - `'</' expected`
+    都已排除。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite 提示輸出 chunk 過大（`index-U-DQL0kP.js` 約 5 MB）。
+  - Node 對 `postcss.config.js` 顯示 module type warning。
+  - 這兩項目前都是 warning，不是這次 build 失敗的原因。
