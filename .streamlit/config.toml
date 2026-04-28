@@ -1,0 +1,19 @@
+[server]
+headless = true
+fileWatcherType = "none"
+address = "localhost"
+runOnSave = false
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 500
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[logger]
+level = "error"
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
