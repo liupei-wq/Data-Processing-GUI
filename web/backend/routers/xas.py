@@ -157,7 +157,42 @@ def _normalize_post_edge(
     return normalized, edge_step
 
 
+# ── Gaussian template helpers ─────────────────────────────────────────────────
+
+_GAUSS_SIGMA_FACTOR = 2.3548200450309493  # 2√(2ln2)
+
+
+def _gaussian(x: np.ndarray, center: float, fwhm: float, amplitude: float) -> np.ndarray:
+    sigma = fwhm / _GAUSS_SIGMA_FACTOR
+    return amplitude * np.exp(-0.5 * ((x - center) / sigma) ** 2)
+
+
+def _fit_gaussian_center(
+    x: np.ndarray, y: np.ndarray,
+    center: float, fwhm: float, amplitude: float,
+    search_range: float,
+) -> float:
+    """Return best center via dot-product cross-correlation within ±search_range."""
+    if search_range <= 0:
+        return center
+    sigma = fwhm / _GAUSS_SIGMA_FACTOR
+    c_lo = max(float(x[0]), center - search_range)
+    c_hi = min(float(x[-1]), center + search_range)
+    candidates = np.linspace(c_lo, c_hi, 200)
+    scores = np.array([
+        float(np.dot(y, amplitude * np.exp(-0.5 * ((x - c) / sigma) ** 2)))
+        for c in candidates
+    ])
+    return float(candidates[int(np.argmax(scores))])
+
+
 # ── pydantic models ───────────────────────────────────────────────────────────
+
+class GaussPeak(BaseModel):
+    center: float
+    fwhm: float
+    amplitude: float
+
 
 class ParsedXasFile(BaseModel):
     name: str
@@ -201,6 +236,11 @@ class ProcessParams(BaseModel):
     norm_pre_end: Optional[float] = None    # for post_edge: pre-edge region end
     white_line_start: Optional[float] = None
     white_line_end: Optional[float] = None
+    gauss_enabled: bool = False
+    gauss_channel: str = "both"             # both | TEY | TFY
+    gauss_peaks: List[GaussPeak] = Field(default_factory=list)
+    gauss_search: float = 0.5              # ±eV center search range
+    d2y_enabled: bool = False
 
 
 class ProcessRequest(BaseModel):
@@ -219,6 +259,12 @@ class ProcessedDataset(BaseModel):
     white_line_tfy: Optional[float] = None
     edge_step_tey: Optional[float] = None
     edge_step_tfy: Optional[float] = None
+    tey_gaussian: Optional[List[float]] = None
+    tfy_gaussian: Optional[List[float]] = None
+    tey_after_gauss: Optional[List[float]] = None
+    tfy_after_gauss: Optional[List[float]] = None
+    tey_d2y: Optional[List[float]] = None
+    tfy_d2y: Optional[List[float]] = None
 
 
 class ProcessResponse(BaseModel):
@@ -290,6 +336,34 @@ def process_xas(req: ProcessRequest):
         tey_proc = tey.copy()
         tfy_proc = tfy.copy()
 
+        # gaussian template subtraction (before BG)
+        tey_gauss_model: np.ndarray | None = None
+        tfy_gauss_model: np.ndarray | None = None
+        tey_after_gauss: np.ndarray | None = None
+        tfy_after_gauss: np.ndarray | None = None
+
+        if p.gauss_enabled and p.gauss_peaks:
+            apply_tey = p.gauss_channel in ("both", "TEY")
+            apply_tfy = p.gauss_channel in ("both", "TFY")
+
+            if apply_tey:
+                model = np.zeros_like(tey_proc)
+                for gp in p.gauss_peaks:
+                    c = _fit_gaussian_center(x_out, tey_proc, gp.center, gp.fwhm, gp.amplitude, p.gauss_search)
+                    model += _gaussian(x_out, c, gp.fwhm, gp.amplitude)
+                tey_gauss_model = model
+                tey_proc = tey_proc - model
+                tey_after_gauss = tey_proc.copy()
+
+            if apply_tfy:
+                model = np.zeros_like(tfy_proc)
+                for gp in p.gauss_peaks:
+                    c = _fit_gaussian_center(x_out, tfy_proc, gp.center, gp.fwhm, gp.amplitude, p.gauss_search)
+                    model += _gaussian(x_out, c, gp.fwhm, gp.amplitude)
+                tfy_gauss_model = model
+                tfy_proc = tfy_proc - model
+                tfy_after_gauss = tfy_proc.copy()
+
         # background subtraction
         if p.bg_enabled:
             bg_kwargs: dict[str, Any] = {
@@ -333,6 +407,13 @@ def process_xas(req: ProcessRequest):
             wl_tey = _find_white_line(x_out, tey_proc, p.white_line_start, p.white_line_end)
             wl_tfy = _find_white_line(x_out, tfy_proc, p.white_line_start, p.white_line_end)
 
+        # second derivative
+        tey_d2y: np.ndarray | None = None
+        tfy_d2y: np.ndarray | None = None
+        if p.d2y_enabled and len(x_out) > 4:
+            tey_d2y = np.gradient(np.gradient(tey_proc, x_out), x_out)
+            tfy_d2y = np.gradient(np.gradient(tfy_proc, x_out), x_out)
+
         processed_datasets.append(ProcessedDataset(
             name=ds.name,
             x=x_out.tolist(),
@@ -344,6 +425,12 @@ def process_xas(req: ProcessRequest):
             white_line_tfy=wl_tfy,
             edge_step_tey=edge_step_tey,
             edge_step_tfy=edge_step_tfy,
+            tey_gaussian=tey_gauss_model.tolist() if tey_gauss_model is not None else None,
+            tfy_gaussian=tfy_gauss_model.tolist() if tfy_gauss_model is not None else None,
+            tey_after_gauss=tey_after_gauss.tolist() if tey_after_gauss is not None else None,
+            tfy_after_gauss=tfy_after_gauss.tolist() if tfy_after_gauss is not None else None,
+            tey_d2y=tey_d2y.tolist() if tey_d2y is not None else None,
+            tfy_d2y=tfy_d2y.tolist() if tfy_d2y is not None else None,
         ))
 
     # average across all datasets
@@ -374,3 +461,133 @@ def process_xas(req: ProcessRequest):
             pass
 
     return ProcessResponse(datasets=processed_datasets, average=average_ds)
+
+
+# ── XANES deconvolution ───────────────────────────────────────────────────────
+
+class DeconvPeak(BaseModel):
+    center: float
+    delta: float = 2.0
+    name: str = ""
+    ptype: str = "gaussian"   # gaussian | lorentzian
+
+
+class DeconvRequest(BaseModel):
+    x: List[float]
+    y: List[float]
+    peaks: List[DeconvPeak]
+    fwhm_inst: float = 0.5
+    fwhm_init: float = 1.5
+    link_fwhm: bool = False
+    include_step: bool = True
+    e0: float = 0.0
+    fit_lo: Optional[float] = None
+    fit_hi: Optional[float] = None
+
+
+class DeconvParamRow(BaseModel):
+    name: str
+    value: float
+    stderr: float
+    vary: bool
+
+
+class DeconvResponse(BaseModel):
+    success: bool
+    x_fit: List[float]
+    y_fit: List[float]
+    components: Dict[str, List[float]]
+    residual: List[float]
+    r_factor: float
+    params_table: List[DeconvParamRow]
+    message: str = ""
+
+
+@router.post("/deconv", response_model=DeconvResponse)
+def xanes_deconv(req: DeconvRequest):
+    try:
+        from lmfit.models import GaussianModel, LorentzianModel, StepModel
+        from lmfit import Parameters
+    except ImportError:
+        raise HTTPException(status_code=500, detail="lmfit 未安裝，無法執行 XANES 去卷積擬合")
+
+    x = np.array(req.x, dtype=float)
+    y = np.array(req.y, dtype=float)
+
+    lo = req.fit_lo if req.fit_lo is not None else float(x[0])
+    hi = req.fit_hi if req.fit_hi is not None else float(x[-1])
+    mask = (x >= lo) & (x <= hi)
+    if mask.sum() < 4:
+        raise HTTPException(status_code=400, detail="擬合範圍內資料點不足")
+
+    x_f = x[mask]
+    y_f = y[mask]
+
+    _SIGMA_FACTOR = 2.3548200450309493
+    sigma_inst = req.fwhm_inst / _SIGMA_FACTOR
+    sigma_init = req.fwhm_init / _SIGMA_FACTOR
+
+    composite = None
+    params = Parameters()
+
+    if req.include_step:
+        step = StepModel(form='arctan', prefix='step_')
+        composite = step
+        params.update(step.make_params(
+            center=dict(value=req.e0, vary=False),
+            amplitude=dict(value=1.0, vary=False),
+            sigma=dict(value=sigma_inst, min=sigma_inst * 0.5),
+        ))
+
+    for i, pk in enumerate(req.peaks):
+        prefix = f'p{i}_'
+        comp = LorentzianModel(prefix=prefix) if pk.ptype == 'lorentzian' else GaussianModel(prefix=prefix)
+        p = comp.make_params()
+        p[f'{prefix}center'].set(value=pk.center, min=pk.center - pk.delta, max=pk.center + pk.delta)
+        p[f'{prefix}amplitude'].set(value=0.3, min=0)
+        if req.link_fwhm and req.include_step and i == 0:
+            p[f'{prefix}sigma'].set(value=sigma_init, min=sigma_inst)
+        elif req.link_fwhm and req.include_step and i > 0:
+            p[f'{prefix}sigma'].set(expr='p0_sigma', min=sigma_inst)
+        else:
+            p[f'{prefix}sigma'].set(value=sigma_init, min=sigma_inst)
+        params.update(p)
+        composite = comp if composite is None else composite + comp
+
+    if composite is None:
+        raise HTTPException(status_code=400, detail="沒有任何擬合分量")
+
+    try:
+        fit_result = composite.fit(y_f, params, x=x_f, method='leastsq')
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"擬合失敗：{exc}") from exc
+
+    y_fit_arr = np.array(fit_result.best_fit)
+    residual = y_f - y_fit_arr
+    ss_res = float(np.sum(residual ** 2))
+    ss_tot = float(np.sum(y_f ** 2))
+    r_factor = ss_res / ss_tot if ss_tot > 0 else 0.0
+
+    comps_raw = fit_result.eval_components(x=x_f)
+    components: Dict[str, List[float]] = {k: list(map(float, v)) for k, v in comps_raw.items()}
+
+    param_rows = [
+        DeconvParamRow(
+            name=name,
+            value=float(par.value),
+            stderr=float(par.stderr) if par.stderr is not None else 0.0,
+            vary=bool(par.vary),
+        )
+        for name, par in fit_result.params.items()
+    ]
+
+    return DeconvResponse(
+        success=bool(fit_result.success),
+        x_fit=x_f.tolist(),
+        y_fit=y_fit_arr.tolist(),
+        components=components,
+        residual=residual.tolist(),
+        r_factor=r_factor,
+        params_table=param_rows,
+        message=str(fit_result.message) if fit_result.message else "",
+    )

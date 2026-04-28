@@ -1,4 +1,4 @@
-import type { ParseResponse, ProcessParams, ProcessResult, DatasetInput } from '../types/xas'
+import type { DeconvRequest, DeconvResult, ParseResponse, ProcessParams, ProcessResult, DatasetInput } from '../types/xas'
 
 const BASE = '/api/xas'
 
@@ -18,6 +18,19 @@ export async function processData(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ datasets, params }),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(detail.detail ?? res.statusText)
+  }
+  return res.json()
+}
+
+export async function deconvXanes(req: DeconvRequest): Promise<DeconvResult> {
+  const res = await fetch(`${BASE}/deconv`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
   })
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }))

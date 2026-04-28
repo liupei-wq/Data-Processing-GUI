@@ -92,13 +92,25 @@ cd web/frontend && npm install && npm run dev
 
 ---
 
+## UI 修復紀錄（2026-04-29）
+
+- **AnalysisModuleNav**：移除 SEM「Coming soon」項目，所有模組全部可點擊
+- **右側 workspace-launcher**：新增「分析模組」區塊（Raman/XRD/XPS/XAS/XES），可直接切換回各分析頁面
+- **側欄縮放平滑**：XAS.tsx / XPS.tsx 拖動時移除 `transition-[width]`，加入 `body.style.cursor/userSelect` 防文字選取
+- **XAS 側欄框線**：移除各 section 的 `border-b border-[var(--card-divider)]`，改用 padding 分隔
+- **FileUpload**：新增 `accept?: string[]` prop（XAS/XPS 使用），`isLoading` 改為 optional（XES 不傳也不報錯）
+- **XES.tsx**：`onFilesSelected` → `onFiles`；`chartLayout` xaxis/yaxis title 改為 `{ text: ... }` 物件格式（Plotly v2 API）
+- TypeScript 零錯誤
+
+---
+
 ## 各模組完成度
 
 | 模組 | 狀態 | 後端 Router | 前端頁面 |
 |---|---|---|---|
-| **Raman** | ⚠️ 核心完成，缺 Si 應力 / preset | `routers/raman.py` | `pages/Raman.tsx` |
+| **Raman** | ✅ 核心完成，含 Si 應力估算 + preset 匯入/匯出 | `routers/raman.py` | `pages/Raman.tsx` |
 | **XRD** | ✅ 最完整 | `routers/xrd.py` | `pages/XRD.tsx` |
-| **XAS** | ⚠️ 核心完成，缺 Gaussian 扣除 / XANES 去卷積 / 二階微分 | `routers/xas.py` | `pages/XAS.tsx` |
+| **XAS** | ✅ 核心＋高斯扣除＋二階微分＋XANES 去卷積全部完成 | `routers/xas.py` | `pages/XAS.tsx` |
 | **XPS** | ✅ 含進階功能 | `routers/xps.py` | `pages/XPS.tsx` |
 | **XES** | ⚠️ 僅 1D 光譜模式，缺 FITS 影像模式 | `routers/xes.py` | `pages/XES.tsx` |
 | SEM | ⏳ 未實作 | — | — |
@@ -274,12 +286,17 @@ FITS → Dark/Bias 扣除 → Hot pixel（MAD × 1.4826 threshold，median_filte
 ### Raman
 - parse / process（去尖峰/interpolate/avg/bg/smooth/norm） / peaks / references / reference-peaks / fit
 - 峰位管理（從 DB 載入 / 手動新增 / 逐峰編輯）、峰擬合、可疑峰多選停用
+- **Si 應力估算**（已完成）：前端純計算，偵測 480–570 cm⁻¹ 峰，Δω = center − ref_pos，σ = Δω / coeff（預設 ref_pos=520.7，coeff=−1.93 GPa/cm⁻¹）
+- **Preset 匯入/匯出**（已完成）：前端純計算，JSON 格式 `{version:1, params, peaks}`，匯出下載 / 匯入還原
 
 ### XAS（TEY/TFY 雙通道）
 - parser：`_is_numeric_line` / `_parse_xas_table_bytes` / `_prepare_tey_tfy_auto` 直接寫在 router
 - 支援 6 欄同步輻射 DAT（Energy/Phase/Gap/TFY/TEY/I0）與 3 欄格式
 - 後邊緣歸一化：`(y - pre_mean) / edge_step`，E0 自動由最大導數決定
 - 前端：TEY（藍）+ TFY（紫）分開繪圖，White Line 橘色虛線標記
+- **高斯模板扣除**（已完成）：ProcessParams 加入 `gauss_enabled/gauss_channel/gauss_peaks/gauss_search`，ProcessedDataset 輸出 `tey_gaussian/tfy_gaussian/tey_after_gauss/tfy_after_gauss`；後端 `_gaussian()` + `_fit_gaussian_center()` 實作，在背景扣除前執行；前端 Sidebar Step 7 + 對照圖
+- **二階微分**（已完成）：ProcessParams 加入 `d2y_enabled`，ProcessedDataset 輸出 `tey_d2y/tfy_d2y`；`np.gradient(np.gradient(y, x), x)`，歸一化後計算；前端 Sidebar Step 8 + 獨立圖表
+- **XANES 去卷積擬合**（已完成）：`POST /api/xas/deconv`，lmfit Step(arctan)+Gaussian/Lorentzian，sigma 下限=fwhm_inst/2.3548，link_fwhm 選項；前端 Sidebar Step 9（峰位管理表格+擬合按鈕）+ 結果圖（原始/總擬合/各分量/殘差）+ 參數表；lmfit 已加入 requirements.txt
 
 ### XPS（含進階分析）
 - 背景：Shirley / Tougaard(B=2866/C=1643) / Linear / Polynomial / AsLS / airPLS

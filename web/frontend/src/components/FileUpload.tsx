@@ -3,11 +3,12 @@ import { useDropzone } from 'react-dropzone'
 
 interface Props {
   onFiles: (files: File[]) => void
-  isLoading: boolean
+  isLoading?: boolean
   moduleLabel?: string
+  accept?: string[]
 }
 
-export default function FileUpload({ onFiles, isLoading, moduleLabel = 'XRD' }: Props) {
+export default function FileUpload({ onFiles, isLoading = false, moduleLabel = 'XRD', accept }: Props) {
   const onDrop = useCallback(
     (accepted: File[]) => {
       if (accepted.length > 0) onFiles(accepted)
@@ -15,12 +16,13 @@ export default function FileUpload({ onFiles, isLoading, moduleLabel = 'XRD' }: 
     [onFiles],
   )
 
+  const acceptMap: Record<string, string[]> = accept
+    ? { 'application/octet-stream': accept, 'text/plain': accept, 'text/csv': accept }
+    : { 'text/plain': ['.txt', '.asc', '.xy', '.dat'], 'text/csv': ['.csv'] }
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      'text/plain': ['.txt', '.asc', '.xy', '.dat'],
-      'text/csv': ['.csv'],
-    },
+    accept: acceptMap,
     disabled: isLoading,
   })
 
@@ -47,7 +49,9 @@ export default function FileUpload({ onFiles, isLoading, moduleLabel = 'XRD' }: 
             Upload
           </div>
           <p className="mt-4 text-sm font-medium text-[var(--text-main)]">拖曳或點擊上傳 {moduleLabel} 檔案</p>
-          <p className="mt-1 text-xs text-[var(--text-soft)]">500MB per file • TXT, CSV, XY, ASC, DAT</p>
+          <p className="mt-1 text-xs text-[var(--text-soft)]">
+            {accept ? accept.map(e => e.toUpperCase().replace('.', '')).join(', ') : 'TXT, CSV, XY, ASC, DAT'}
+          </p>
         </>
       )}
     </div>

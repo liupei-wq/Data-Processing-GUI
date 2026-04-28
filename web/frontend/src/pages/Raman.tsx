@@ -358,6 +358,8 @@ export default function Raman({
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [fitTargetName, setFitTargetName] = useState<string>('')
   const [isFitting, setIsFitting] = useState(false)
+  const [siRefPos, setSiRefPos] = useState(520.7)
+  const [siCoeff, setSiCoeff] = useState(-1.93)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -573,6 +575,11 @@ export default function Raman({
     [fitPeakFlags],
   )
 
+  const siPeak = useMemo(() => {
+    if (!fitResult?.success) return null
+    return fitResult.peaks.find(pk => pk.Center_cm >= 480 && pk.Center_cm <= 570) ?? null
+  }, [fitResult])
+
   const runPeakFit = useCallback(async () => {
     if (!activeFitDataset) {
       setError('目前沒有可用於擬合的曲線')
@@ -708,6 +715,27 @@ export default function Raman({
     reviewMinAreaPct,
     selectedReviewRules,
   ])
+
+  const exportPreset = useCallback(() => {
+    const preset = { version: 1, params, peaks: fitCandidates }
+    const blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = 'raman_preset.json'; a.click()
+    URL.revokeObjectURL(url)
+  }, [params, fitCandidates])
+
+  const importPreset = useCallback((file: File) => {
+    file.text().then(text => {
+      try {
+        const preset = JSON.parse(text)
+        if (preset.version !== 1) throw new Error('不支援的 preset 版本')
+        if (preset.params) setParams(p => ({ ...p, ...preset.params }))
+        if (Array.isArray(preset.peaks)) setFitCandidates(preset.peaks)
+      } catch (e: unknown) {
+        setError(`Preset 匯入失敗：${(e as Error).message}`)
+      }
+    }).catch(() => setError('無法讀取檔案'))
+  }, [])
 
   const sidebarStyle = {
     '--sidebar-width': `${sidebarWidth}px`,
@@ -1262,6 +1290,35 @@ export default function Raman({
                   {isFitting ? '自動二次擬合中…' : '依停用條件自動二次擬合'}
                 </button>
               </div>
+
+              <div className="mt-4 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                  Preset 匯入 / 匯出
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={exportPreset}
+                    className="theme-pill pressable flex-1 rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]"
+                  >
+                    匯出 JSON
+                  </button>
+                  <label className="theme-pill pressable flex-1 cursor-pointer rounded-xl px-3 py-2 text-center text-xs font-semibold text-[var(--accent)]">
+                    匯入 JSON
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      onChange={e => {
+                        const f = e.target.files?.[0]
+                        if (f) importPreset(f)
+                        e.target.value = ''
+                      }}
+                    />
+                  </label>
+                </div>
+                <p className="mt-2 text-[10px] text-[var(--text-soft)]">儲存目前的處理參數與峰位表，下次可直接載入。</p>
+              </div>
             </SidebarCard>
           </div>
         </div>
@@ -1463,6 +1520,65 @@ export default function Raman({
                         </tbody>
                       </table>
                     </div>
+
+                    {/* Si stress card */}
+                    {siPeak && (
+                      <div className="mt-4 rounded-[22px] border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                        <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Si 應力估算</div>
+                        <p className="mb-3 text-xs text-[var(--text-soft)]">
+                          偵測到 Si 峰（{siPeak.Center_cm.toFixed(2)} cm⁻¹）。Anastassakis et al. (1990) 方法。
+                        </p>
+                        <div className="mb-3 grid grid-cols-2 gap-3">
+                          <label className="block">
+                            <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考位置 (cm⁻¹)</span>
+                            <input
+                              type="number"
+                              value={siRefPos}
+                              step={0.1}
+                              onChange={e => setSiRefPos(Number(e.target.value))}
+                              className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">係數 (cm⁻¹/GPa)</span>
+                            <input
+                              type="number"
+                              value={siCoeff}
+                              step={0.01}
+                              onChange={e => setSiCoeff(Number(e.target.value))}
+                              className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                            />
+                          </label>
+                        </div>
+                        {(() => {
+                          const deltaOmega = siPeak.Center_cm - siRefPos
+                          const stress = Math.abs(siCoeff) > 1e-10 ? deltaOmega / siCoeff : null
+                          const label = stress == null
+                            ? '係數為零，無法計算'
+                            : stress < -0.05
+                              ? '壓應力 (Compressive)'
+                              : stress > 0.05
+                                ? '拉應力 (Tensile)'
+                                : '接近無應力'
+                          return (
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">Δω</p>
+                                <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{deltaOmega.toFixed(2)} cm⁻¹</p>
+                              </div>
+                              <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">σ</p>
+                                <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{stress != null ? `${stress.toFixed(3)} GPa` : '—'}</p>
+                              </div>
+                              <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">類型</p>
+                                <p className="mt-1 text-xs font-semibold text-[var(--text-main)]">{label}</p>
+                              </div>
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    )}
 
                     <div className="mt-4 grid gap-4 xl:grid-cols-2">
                       <div className="theme-block-soft rounded-[22px] p-4">

@@ -267,8 +267,8 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     plot_bgcolor: bgColor,
     font: { color: textColor, size: 12 },
     title: { text: title, font: { size: 13 }, x: 0.02 },
-    xaxis: { title: xTitle, gridcolor: gridColor, zerolinecolor: gridColor },
-    yaxis: { title: 'Intensity', gridcolor: gridColor, zerolinecolor: gridColor },
+    xaxis: { title: { text: xTitle }, gridcolor: gridColor, zerolinecolor: gridColor },
+    yaxis: { title: { text: 'Intensity' }, gridcolor: gridColor, zerolinecolor: gridColor },
     legend: { orientation: 'h' as const, y: -0.15, font: { size: 11 } },
     margin: { l: 55, r: 20, t: 46, b: 50 },
     height: 340,
@@ -302,11 +302,11 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               {/* Step 1 */}
               <SidebarCard step={1} title="載入資料">
                 <Label>Sample 光譜（可多選）</Label>
-                <FileUpload onFilesSelected={handleUpload} moduleLabel="XES" />
+                <FileUpload onFiles={handleUpload} moduleLabel="XES" />
                 <Label>BG1（樣品前背景，可選）</Label>
-                <FileUpload onFilesSelected={handleBg1Upload} moduleLabel="BG1" />
+                <FileUpload onFiles={handleBg1Upload} moduleLabel="BG1" />
                 <Label>BG2（樣品後背景，可選）</Label>
-                <FileUpload onFilesSelected={handleBg2Upload} moduleLabel="BG2" />
+                <FileUpload onFiles={handleBg2Upload} moduleLabel="BG2" />
                 <button
                   type="button"
                   onClick={handleParse}

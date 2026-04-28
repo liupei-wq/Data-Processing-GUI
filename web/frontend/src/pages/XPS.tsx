@@ -315,11 +315,21 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }, [fitResult])
 
   const startResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault(); setSidebarResizing(true)
+    e.preventDefault()
+    setSidebarResizing(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
     const startX = e.clientX; const startW = sidebarWidth
     const onMove = (ev: MouseEvent) => setSidebarWidth(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, startW + ev.clientX - startX)))
-    const onUp = () => { setSidebarResizing(false); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
-    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+    const onUp = () => {
+      setSidebarResizing(false)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }, [sidebarWidth])
 
   const handleFiles = useCallback(async (files: File[]) => {
@@ -417,7 +427,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   return (
     <div className={`flex h-screen flex-row overflow-hidden${sidebarResizing ? ' select-none' : ''}`}>
       {/* ── sidebar ── */}
-      <aside style={sidebarStyle} className="relative flex shrink-0 flex-col overflow-hidden border-r border-[var(--card-divider)] bg-[var(--panel-bg)] transition-[width] duration-200">
+      <aside style={sidebarStyle} className={`relative flex shrink-0 flex-col overflow-hidden border-r border-[var(--card-divider)] bg-[var(--panel-bg)]${sidebarResizing ? '' : ' transition-[width] duration-200'}`}>
         {sidebarCollapsed ? (
           <button type="button" onClick={() => setSidebarCollapsed(false)}
             className="flex h-full w-full flex-col items-center justify-center text-[var(--text-soft)] hover:text-[var(--text-main)]"

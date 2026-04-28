@@ -3,9 +3,12 @@ import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import AnalysisModuleNav from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { parseFiles, processData } from '../api/xas'
+import { deconvXanes, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
+  DeconvPeak,
+  DeconvResult,
+  GaussPeak,
   ParsedXasFile,
   ProcessParams,
   ProcessResult,
@@ -38,6 +41,11 @@ const DEFAULT_PARAMS: ProcessParams = {
   norm_pre_end: null,
   white_line_start: null,
   white_line_end: null,
+  gauss_enabled: false,
+  gauss_channel: 'both',
+  gauss_peaks: [],
+  gauss_search: 0.5,
+  d2y_enabled: false,
 }
 
 function chartLayout(xLabel: string, yLabel: string): Partial<Plotly.Layout> {
@@ -100,7 +108,7 @@ function downloadFile(content: string, name: string, mime: string) {
 
 function SectionHeader({ n, label }: { n: number; label: string }) {
   return (
-    <div className="border-b border-[var(--card-divider)] bg-[color:color-mix(in_srgb,var(--card-bg)_60%,transparent)] px-4 py-2.5">
+    <div className="px-4 pb-1.5 pt-3">
       <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--text-soft)]">
         {n}. {label}
       </span>
@@ -166,6 +174,20 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
 
+  // XANES deconvolution state
+  const [deconvPeaks, setDeconvPeaks] = useState<DeconvPeak[]>([])
+  const [deconvFwhmInst, setDeconvFwhmInst] = useState(0.5)
+  const [deconvFwhmInit, setDeconvFwhmInit] = useState(1.5)
+  const [deconvLinkFwhm, setDeconvLinkFwhm] = useState(false)
+  const [deconvIncludeStep, setDeconvIncludeStep] = useState(true)
+  const [deconvE0, setDeconvE0] = useState(0)
+  const [deconvFitLo, setDeconvFitLo] = useState<number | null>(null)
+  const [deconvFitHi, setDeconvFitHi] = useState<number | null>(null)
+  const [deconvChannel, setDeconvChannel] = useState<'TEY' | 'TFY'>('TEY')
+  const [deconvResult, setDeconvResult] = useState<DeconvResult | null>(null)
+  const [deconvLoading, setDeconvLoading] = useState(false)
+  const [deconvError, setDeconvError] = useState<string | null>(null)
+
   const activeDataset = result?.average ?? result?.datasets[0] ?? null
 
   // reprocess whenever rawFiles or params change
@@ -190,14 +212,24 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }, [sidebarCollapsed])
 
   const startResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault(); setSidebarResizing(true)
+    e.preventDefault()
+    setSidebarResizing(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
     const startX = e.clientX; const startW = sidebarWidth
     const onMove = (ev: MouseEvent) => {
       const w = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, startW + ev.clientX - startX))
       setSidebarWidth(w)
     }
-    const onUp = () => { setSidebarResizing(false); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
-    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
+    const onUp = () => {
+      setSidebarResizing(false)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }, [sidebarWidth])
 
   const handleFiles = useCallback(async (files: File[]) => {
@@ -210,6 +242,32 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       setError((e as Error).message)
     } finally { setIsLoading(false) }
   }, [flipTfy])
+
+  const runDeconv = useCallback(async () => {
+    if (!activeDataset) return
+    const y = deconvChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+    setDeconvLoading(true)
+    setDeconvError(null)
+    try {
+      const res = await deconvXanes({
+        x: activeDataset.x,
+        y,
+        peaks: deconvPeaks,
+        fwhm_inst: deconvFwhmInst,
+        fwhm_init: deconvFwhmInit,
+        link_fwhm: deconvLinkFwhm,
+        include_step: deconvIncludeStep,
+        e0: deconvE0,
+        fit_lo: deconvFitLo,
+        fit_hi: deconvFitHi,
+      })
+      setDeconvResult(res)
+    } catch (e: unknown) {
+      setDeconvError((e as Error).message)
+    } finally {
+      setDeconvLoading(false)
+    }
+  }, [activeDataset, deconvChannel, deconvPeaks, deconvFwhmInst, deconvFwhmInit, deconvLinkFwhm, deconvIncludeStep, deconvE0, deconvFitLo, deconvFitHi])
 
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
@@ -226,7 +284,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       {/* ── sidebar ── */}
       <aside
         style={sidebarStyle}
-        className="relative flex shrink-0 flex-col overflow-hidden border-r border-[var(--card-divider)] bg-[var(--panel-bg)] transition-[width] duration-200"
+        className={`relative flex shrink-0 flex-col overflow-hidden border-r border-[var(--card-divider)] bg-[var(--panel-bg)]${sidebarResizing ? '' : ' transition-[width] duration-200'}`}
       >
         {sidebarCollapsed ? (
           <button
@@ -238,7 +296,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </button>
         ) : (
           <>
-            <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
+            <div className="flex items-center justify-between px-5 pb-2 pt-4">
               <span className="font-display text-base font-semibold tracking-wide text-[var(--text-main)]">XAS / XANES</span>
               <button type="button" onClick={() => setSidebarCollapsed(true)} className="text-xs text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
             </div>
@@ -247,7 +305,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <AnalysisModuleNav activeModule="xas" onSelectModule={onModuleSelect} />
 
               {/* 1. 載入 */}
-              <div className="border-b border-[var(--card-divider)]">
+              <div>
                 <SectionHeader n={1} label="載入資料" />
                 <div className="space-y-3 p-4">
                   <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor']} />
@@ -270,7 +328,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
 
               {/* 2. 內插與平均 */}
-              <div className="border-b border-[var(--card-divider)]">
+              <div>
                 <SectionHeader n={2} label="內插 / 平均" />
                 <div className="space-y-3 p-4">
                   <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
@@ -282,7 +340,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
 
               {/* 3. 能量校正 */}
-              <div className="border-b border-[var(--card-divider)]">
+              <div>
                 <SectionHeader n={3} label="能量校正" />
                 <div className="p-4">
                   <NumInput label="能量位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
@@ -291,7 +349,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
 
               {/* 4. 背景扣除 */}
-              <div className="border-b border-[var(--card-divider)]">
+              <div>
                 <SectionHeader n={4} label="背景扣除" />
                 <div className="space-y-3 p-4">
                   <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
@@ -316,7 +374,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
 
               {/* 5. 歸一化 */}
-              <div className="border-b border-[var(--card-divider)]">
+              <div>
                 <SectionHeader n={5} label="歸一化" />
                 <div className="space-y-3 p-4">
                   <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
@@ -352,7 +410,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
 
               {/* 6. White Line */}
-              <div className="border-b border-[var(--card-divider)]">
+              <div>
                 <SectionHeader n={6} label="White Line 搜尋" />
                 <div className="space-y-3 p-4">
                   <p className="text-[10px] text-[var(--text-soft)]">設定搜尋區間，自動找到最高點能量。</p>
@@ -369,6 +427,173 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   </button>
                 </div>
               </div>
+
+              {/* 7. 高斯模板扣除 */}
+              <div>
+                <SectionHeader n={7} label="高斯模板扣除" />
+                <div className="space-y-3 p-4">
+                  <CheckRow label="啟用高斯模板扣除" checked={params.gauss_enabled} onChange={set('gauss_enabled')} />
+                  {params.gauss_enabled && (
+                    <>
+                      <SelectInput
+                        label="套用通道"
+                        value={params.gauss_channel}
+                        onChange={v => set('gauss_channel')(v as ProcessParams['gauss_channel'])}
+                        options={[
+                          { value: 'both', label: 'TEY + TFY' },
+                          { value: 'TEY', label: '僅 TEY' },
+                          { value: 'TFY', label: '僅 TFY' },
+                        ]}
+                      />
+                      <NumInput
+                        label="中心搜尋範圍 (±eV)"
+                        value={params.gauss_search}
+                        onChange={set('gauss_search')}
+                        min={0} max={10} step={0.1}
+                      />
+                      <div className="space-y-2">
+                        <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">模板列表</p>
+                        {params.gauss_peaks.map((gp, i) => (
+                          <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-[var(--text-soft)]">模板 {i + 1}</span>
+                              <button
+                                type="button"
+                                onClick={() => setParams(p => ({ ...p, gauss_peaks: p.gauss_peaks.filter((_, j) => j !== i) }))}
+                                className="text-[10px] text-rose-400 hover:text-rose-300"
+                              >
+                                移除
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-3 gap-1">
+                              <NumInput
+                                label="中心(eV)"
+                                value={gp.center}
+                                onChange={v => setParams(p => {
+                                  const peaks = [...p.gauss_peaks]
+                                  peaks[i] = { ...peaks[i], center: v }
+                                  return { ...p, gauss_peaks: peaks }
+                                })}
+                                step={0.1}
+                              />
+                              <NumInput
+                                label="FWHM(eV)"
+                                value={gp.fwhm}
+                                onChange={v => setParams(p => {
+                                  const peaks = [...p.gauss_peaks]
+                                  peaks[i] = { ...peaks[i], fwhm: v }
+                                  return { ...p, gauss_peaks: peaks }
+                                })}
+                                min={0.01} step={0.1}
+                              />
+                              <NumInput
+                                label="振幅"
+                                value={gp.amplitude}
+                                onChange={v => setParams(p => {
+                                  const peaks = [...p.gauss_peaks]
+                                  peaks[i] = { ...peaks[i], amplitude: v }
+                                  return { ...p, gauss_peaks: peaks }
+                                })}
+                                step={0.01}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setParams(p => ({
+                            ...p,
+                            gauss_peaks: [...p.gauss_peaks, { center: (energyMin + energyMax) / 2, fwhm: 1.0, amplitude: 0.1 } as GaussPeak],
+                          }))}
+                          className="w-full rounded-lg border border-dashed border-[var(--accent-soft)] py-1.5 text-[10px] text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+                        >
+                          + 新增模板
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 8. 二階微分 */}
+              <div>
+                <SectionHeader n={8} label="二階微分" />
+                <div className="space-y-2 p-4">
+                  <CheckRow label="計算二階微分" checked={params.d2y_enabled} onChange={set('d2y_enabled')} />
+                  <p className="text-[10px] text-[var(--text-soft)]">輔助辨識吸收邊精細結構，不影響主光譜輸出。</p>
+                </div>
+              </div>
+
+              {/* 9. XANES 去卷積擬合 */}
+              {result && (
+                <div>
+                  <SectionHeader n={9} label="XANES 去卷積" />
+                  <div className="space-y-3 p-4">
+                    <SelectInput
+                      label="擬合通道"
+                      value={deconvChannel}
+                      onChange={v => { setDeconvChannel(v as 'TEY' | 'TFY'); setDeconvResult(null) }}
+                      options={[{ value: 'TEY', label: 'TEY' }, { value: 'TFY', label: 'TFY' }]}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="E0 (eV)" value={deconvE0} onChange={setDeconvE0} step={0.5} />
+                      <NumInput label="儀器 FWHM (eV)" value={deconvFwhmInst} onChange={setDeconvFwhmInst} min={0.01} step={0.1} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="初始 FWHM (eV)" value={deconvFwhmInit} onChange={setDeconvFwhmInit} min={0.1} step={0.1} />
+                      <NumInput label="擬合起始 (eV)" value={deconvFitLo ?? energyMin} onChange={v => setDeconvFitLo(v)} step={0.1} />
+                    </div>
+                    <NumInput label="擬合終止 (eV)" value={deconvFitHi ?? energyMax} onChange={v => setDeconvFitHi(v)} step={0.1} />
+                    <CheckRow label="包含 Step (Arctan)" checked={deconvIncludeStep} onChange={setDeconvIncludeStep} />
+                    <CheckRow label="連動所有峰 FWHM" checked={deconvLinkFwhm} onChange={setDeconvLinkFwhm} />
+
+                    <div className="space-y-2">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">擬合峰</p>
+                      {deconvPeaks.map((pk, i) => (
+                        <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <input
+                              value={pk.name}
+                              onChange={e => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, name: e.target.value } : p))}
+                              placeholder={`峰 ${i + 1} 名稱`}
+                              className="w-full rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-[10px] text-[var(--input-text)] focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setDeconvPeaks(ps => ps.filter((_, j) => j !== i))}
+                              className="ml-1 shrink-0 text-[10px] text-rose-400 hover:text-rose-300"
+                            >
+                              ×
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1">
+                            <NumInput label="中心(eV)" value={pk.center} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, center: v } : p))} step={0.1} />
+                            <NumInput label="±偏移" value={pk.delta} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, delta: v } : p))} min={0} step={0.1} />
+                            <SelectInput label="峰形" value={pk.ptype} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, ptype: v as DeconvPeak['ptype'] } : p))} options={[{ value: 'gaussian', label: 'G' }, { value: 'lorentzian', label: 'L' }]} />
+                          </div>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setDeconvPeaks(ps => [...ps, { center: (energyMin + energyMax) / 2, delta: 2, name: '', ptype: 'gaussian' }])}
+                        className="w-full rounded-lg border border-dashed border-[var(--accent-soft)] py-1.5 text-[10px] text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+                      >
+                        + 新增峰
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => void runDeconv()}
+                      disabled={deconvLoading || !activeDataset}
+                      className="w-full rounded-lg bg-[var(--accent-strong)] px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                    >
+                      {deconvLoading ? '擬合中…' : '執行 XANES 去卷積'}
+                    </button>
+                    {deconvError && <p className="text-[10px] text-rose-400">{deconvError}</p>}
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -469,6 +694,110 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 style={{ width: '100%', height: 340 }}
               />
             </div>
+
+            {/* Gaussian subtraction comparison chart */}
+            {(activeDataset.tey_gaussian != null || activeDataset.tfy_gaussian != null) && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">高斯模板扣除對比</p>
+                {activeDataset.tey_gaussian != null && (
+                  <>
+                    <p className="mb-1 text-xs text-[var(--text-soft)]">TEY</p>
+                    <Plot
+                      data={[
+                        { x: activeDataset.x, y: activeDataset.tey_raw, type: 'scatter', mode: 'lines', name: '原始 TEY', line: { color: '#94a3b8', width: 1.4 } },
+                        { x: activeDataset.x, y: activeDataset.tey_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
+                        { x: activeDataset.x, y: activeDataset.tey_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TEY', line: { color: '#38bdf8', width: 2 } },
+                      ] as Plotly.Data[]}
+                      layout={chartLayout('Energy (eV)', 'TEY Intensity') as Plotly.Layout}
+                      config={{ responsive: true, displayModeBar: false }}
+                      style={{ width: '100%', height: 300 }}
+                    />
+                  </>
+                )}
+                {activeDataset.tfy_gaussian != null && (
+                  <>
+                    <p className="mb-1 mt-3 text-xs text-[var(--text-soft)]">TFY</p>
+                    <Plot
+                      data={[
+                        { x: activeDataset.x, y: activeDataset.tfy_raw, type: 'scatter', mode: 'lines', name: '原始 TFY', line: { color: '#94a3b8', width: 1.4 } },
+                        { x: activeDataset.x, y: activeDataset.tfy_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
+                        { x: activeDataset.x, y: activeDataset.tfy_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TFY', line: { color: '#a78bfa', width: 2 } },
+                      ] as Plotly.Data[]}
+                      layout={chartLayout('Energy (eV)', 'TFY Intensity') as Plotly.Layout}
+                      config={{ responsive: true, displayModeBar: false }}
+                      style={{ width: '100%', height: 300 }}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* second derivative charts */}
+            {(activeDataset.tey_d2y != null || activeDataset.tfy_d2y != null) && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">二階微分（d²μ/dE²）</p>
+                <Plot
+                  data={[
+                    ...(activeDataset.tey_d2y != null ? [{ x: activeDataset.x, y: activeDataset.tey_d2y, type: 'scatter' as const, mode: 'lines' as const, name: 'TEY d²/dE²', line: { color: '#38bdf8', width: 1.8 } }] : []),
+                    ...(activeDataset.tfy_d2y != null ? [{ x: activeDataset.x, y: activeDataset.tfy_d2y, type: 'scatter' as const, mode: 'lines' as const, name: 'TFY d²/dE²', line: { color: '#a78bfa', width: 1.8 } }] : []),
+                  ] as Plotly.Data[]}
+                  layout={chartLayout('Energy (eV)', 'd²μ/dE²') as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 300 }}
+                />
+              </div>
+            )}
+
+            {/* XANES deconvolution result */}
+            {deconvResult?.success && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">XANES 去卷積結果 ({deconvChannel})</p>
+                  <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
+                    R² {(1 - deconvResult.r_factor).toFixed(5)}
+                  </span>
+                </div>
+                <Plot
+                  data={[
+                    { x: deconvResult.x_fit, y: deconvChannel === 'TEY' ? activeDataset.tey_processed.slice(0, deconvResult.x_fit.length) : activeDataset.tfy_processed.slice(0, deconvResult.x_fit.length), type: 'scatter', mode: 'lines', name: '原始', line: { color: '#94a3b8', width: 1.4 } },
+                    { x: deconvResult.x_fit, y: deconvResult.y_fit, type: 'scatter', mode: 'lines', name: '總擬合', line: { color: '#38bdf8', width: 2 } },
+                    { x: deconvResult.x_fit, y: deconvResult.residual, type: 'scatter', mode: 'lines', name: '殘差', line: { color: '#f97316', width: 1.2, dash: 'dot' as const } },
+                    ...Object.entries(deconvResult.components).map(([name, yArr]) => ({
+                      x: deconvResult.x_fit,
+                      y: yArr,
+                      type: 'scatter' as const,
+                      mode: 'lines' as const,
+                      name,
+                      line: { width: 1.4 },
+                      opacity: 0.75,
+                    })),
+                  ] as Plotly.Data[]}
+                  layout={chartLayout('Energy (eV)', '歸一化強度') as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 340 }}
+                />
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
+                        <th className="pb-2 text-left font-medium">參數</th>
+                        <th className="pb-2 text-right font-medium">值</th>
+                        <th className="pb-2 text-right font-medium">±誤差</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-[var(--text-main)]">
+                      {deconvResult.params_table.filter(r => r.vary).map(r => (
+                        <tr key={r.name} className="border-b border-[var(--card-divider)]">
+                          <td className="py-1.5 font-mono">{r.name}</td>
+                          <td className="py-1.5 text-right">{r.value.toFixed(4)}</td>
+                          <td className="py-1.5 text-right text-[var(--text-soft)]">±{r.stderr.toFixed(4)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* edge step table */}
             {activeDataset.edge_step_tey != null && (

@@ -1,17 +1,15 @@
-export type AnalysisModuleId = 'raman' | 'xrd' | 'xps' | 'xas' | 'xes' | 'sem'
+export type AnalysisModuleId = 'raman' | 'xrd' | 'xps' | 'xas' | 'xes'
 
 export const ANALYSIS_MODULES: {
   id: AnalysisModuleId
   label: string
   detail: string
-  ready: boolean
 }[] = [
-  { id: 'raman', label: 'Raman', detail: 'Raman Spectroscopy', ready: true },
-  { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction', ready: true },
-  { id: 'xps', label: 'XPS', detail: 'X-ray Photoelectron Spectroscopy', ready: true },
-  { id: 'xas', label: 'XAS', detail: 'X-ray Absorption', ready: true },
-  { id: 'xes', label: 'XES', detail: 'X-ray Emission Spectroscopy', ready: true },
-  { id: 'sem', label: 'SEM', detail: 'Coming soon', ready: false },
+  { id: 'raman', label: 'Raman', detail: 'Raman Spectroscopy' },
+  { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction' },
+  { id: 'xps', label: 'XPS', detail: 'X-ray Photoelectron Spectroscopy' },
+  { id: 'xas', label: 'XAS', detail: 'X-ray Absorption' },
+  { id: 'xes', label: 'XES', detail: 'X-ray Emission Spectroscopy' },
 ]
 
 interface Props {
@@ -30,17 +28,13 @@ export default function AnalysisModuleNav({ activeModule, onSelectModule }: Prop
             <button
               key={module.id}
               type="button"
-              disabled={!module.ready || isActive}
-              onClick={() => {
-                if (module.ready && module.id !== activeModule) onSelectModule?.(module.id)
-              }}
+              disabled={isActive}
+              onClick={() => { if (!isActive) onSelectModule?.(module.id) }}
               className={[
                 'flex w-full items-center justify-between px-4 py-3 text-left transition-colors shadow-[var(--card-shadow-soft)]',
                 isActive
                   ? 'theme-pill rounded-[24px] text-[var(--text-main)]'
-                  : module.ready
-                    ? 'theme-block rounded-[18px] text-[var(--text-main)] hover:border-[color:color-mix(in_srgb,var(--accent-strong)_35%,var(--card-border))]'
-                    : 'theme-block-soft rounded-[16px] text-[var(--text-soft)] opacity-85',
+                  : 'theme-block rounded-[18px] text-[var(--text-main)] hover:border-[color:color-mix(in_srgb,var(--accent-strong)_35%,var(--card-border))]',
               ].join(' ')}
             >
               <div className="flex items-center gap-3">
@@ -49,9 +43,7 @@ export default function AnalysisModuleNav({ activeModule, onSelectModule }: Prop
                     'h-4 w-4 rounded-full border',
                     isActive
                       ? 'border-[var(--accent-secondary)] bg-[var(--accent-secondary)]'
-                      : module.ready
-                        ? 'border-[var(--accent-strong)] bg-[color:color-mix(in_srgb,var(--accent-strong)_18%,transparent)]'
-                        : 'border-[var(--card-border)] bg-transparent',
+                      : 'border-[var(--accent-strong)] bg-[color:color-mix(in_srgb,var(--accent-strong)_18%,transparent)]',
                   ].join(' ')}
                 />
                 <div>
