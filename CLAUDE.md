@@ -978,6 +978,26 @@ cd web/frontend && npm install && npm run dev
   - 如果你們想要「不像 Render Free 那樣休眠」，那 Railway 很可能需要至少上 `Hobby $5/月` 的心理準備。
   - 但若只有實驗室三人偶爾使用、流量不高，實際費用大概率仍落在低檔，通常比較像「接近 $5 或小幅超過」，而不是一下變很高。
 
+## 2026-04-29 前端型別錯誤修正與清理
+
+- 重新讀取 `CLAUDE.md` 後，診斷 VSCode 顯示大量 JSX 紅色錯誤的原因。
+- 根本原因：`src/vite-env.d.ts` 完全不存在（標準 Vite 初始化會自動建立，但此專案是手動建立的），TypeScript 找不到 JSX 型別定義。
+- 修正一：建立 `web/frontend/src/vite-env.d.ts`，加入 `/// <reference types="vite/client" />` 與 `/// <reference types="react/jsx-runtime" />`。
+- 修正二：`tsconfig.json` 補上 `"types": ["vite/client", "react", "react-dom"]`，明確告知 TypeScript 要載入哪些型別。
+- 修正後需在 VSCode 執行 `TypeScript: Restart TS Server` 才會生效。
+- 另刪除 `web/docker-compose.yml`：該檔案有重複 `build:` 鍵的 YAML 語法錯誤，Railway 部署不使用它，本機開發也不需要，無保留價值。
+
+## 2026-04-29 網站版前端中文化
+
+- 重新讀取 `CLAUDE.md` 後，比對前端各元件的英文 UI 字串，逐一修改為繁體中文。
+- 修改檔案：
+  - `web/frontend/src/App.tsx`：badge 文字（Web Prototype → 網站原型、Render Live → Railway 上線）、說明文字、Mode/Stack 資訊卡。
+  - `web/frontend/src/pages/XRD.tsx`：側欄標題與說明、資訊卡標題與說明、空狀態提示、所有功能區塊標題、Scherrer/高斯/尋峰/對數/參考峰匹配的說明文字與狀態文字、表格欄位標頭（Phase→相位、Matched→匹配、Yes/No→✓匹配/✗不匹配、Intensity→強度等）、匯出區塊標題。
+- ProcessingPanel.tsx 與 FileUpload.tsx 原本已大部分是中文，未修改。
+- 表格欄位中帶有科學符號的保留英文/符號格式（hkl、2θ、d-spacing、FWHM、Ref/Obs、N/A）。
+- 已執行 grep 確認無遺漏的 UI 英文字串。
+- 舊有 TypeScript 錯誤（7026，JSX.IntrinsicElements）是既有設定問題，不是本次改動造成。
+
 ## 2026-04-29 Railway 部署 $PORT 修正
 
 - 重新讀取 `CLAUDE.md` 後，確認 Railway runtime log 回報：`Error: Invalid value for '--port': '$PORT' is not a valid integer.`

@@ -19,3 +19,7 @@ __pycache__/
 *.log
 *.err.log
 *.out.log
+
+# Node.js
+node_modules/
+web/frontend/dist/

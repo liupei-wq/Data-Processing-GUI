@@ -26,18 +26,17 @@ export default function App() {
             <div>
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <span className="rounded-full border border-white/14 bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-100">
-                  Web Prototype
+                  網站原型
                 </span>
                 <span className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                  Render Live
+                  Railway 上線
                 </span>
               </div>
               <h1 className="font-display text-2xl tracking-[0.06em] text-white sm:text-3xl">
                 Nigiro Pro
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300 sm:text-[15px]">
-                Scientific data processing for spectroscopy workflows. The current web release
-                focuses on XRD so the online prototype can stay stable while we iterate.
+                光譜與材料分析科學數據處理平台。網站版目前專注於 XRD 模組，讓線上原型在穩定狀態下持續迭代。
               </p>
             </div>
           </div>
@@ -61,11 +60,11 @@ export default function App() {
             </div>
             <div className="grid grid-cols-2 gap-2 text-left text-xs text-slate-300 sm:min-w-[280px]">
               <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                <p className="mb-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">Mode</p>
-                <p className="font-semibold text-slate-100">Interactive XRD</p>
+                <p className="mb-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">模組</p>
+                <p className="font-semibold text-slate-100">互動 XRD</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                <p className="mb-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">Stack</p>
+                <p className="mb-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">技術棧</p>
                 <p className="font-semibold text-slate-100">FastAPI + React</p>
               </div>
             </div>

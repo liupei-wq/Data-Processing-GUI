@@ -351,31 +351,30 @@ export default function XRD() {
       <aside className="glass-panel flex shrink-0 flex-col overflow-hidden rounded-[28px] border border-white/10 xl:w-[23rem]">
         <div className="border-b border-white/10 px-4 py-4 sm:px-5">
           <div className="mb-2 flex items-center justify-between gap-3">
-            <h2 className="font-display text-lg tracking-[0.08em] text-white">XRD Workspace</h2>
+            <h2 className="font-display text-lg tracking-[0.08em] text-white">XRD 工作區</h2>
             <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-100">
               Live
             </span>
           </div>
           <p className="text-xs leading-5 text-slate-400">
-            Upload one or more patterns, then smooth, normalize, compare references, and export
-            the processed spectra.
+            上傳一份或多份 XRD 圖譜，依序平滑、歸一化、比對參考峰，並匯出處理後光譜。
           </p>
         </div>
 
         <div className="sidebar-scroll flex-1 overflow-y-auto p-3 sm:p-4">
           <div className="mb-3 grid grid-cols-3 gap-2">
             <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Files</p>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">檔案</p>
               <p className="mt-1 text-sm font-semibold text-slate-100">{rawFiles.length}</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Axis</p>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">X 軸</p>
               <p className="mt-1 text-sm font-semibold text-slate-100">
                 {xMode === 'twotheta' ? '2θ' : 'd'}
               </p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Refs</p>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">參考相</p>
               <p className="mt-1 text-sm font-semibold text-slate-100">{selectedRefs.length}</p>
             </div>
           </div>
@@ -440,37 +439,37 @@ export default function XRD() {
       <div className="flex-1 overflow-y-auto">
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Current Module</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">目前模組</p>
             <p className="mt-2 font-display text-lg tracking-[0.08em] text-white">XRD</p>
-            <p className="mt-2 text-xs leading-5 text-slate-400">Pattern processing, reference overlay, and export in one flow.</p>
+            <p className="mt-2 text-xs leading-5 text-slate-400">圖譜處理、參考峰疊加、匯出，一站完成。</p>
           </div>
           <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Wavelength</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">波長</p>
             <p className="mt-2 text-lg font-semibold text-white">{wavelength.toFixed(4)} Å</p>
-            <p className="mt-2 text-xs leading-5 text-slate-400">Preset-controlled X axis conversion for 2θ and d-spacing.</p>
+            <p className="mt-2 text-xs leading-5 text-slate-400">預設光源控制 2θ 與 d-spacing 的 X 軸換算。</p>
           </div>
           <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Dataset</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">資料集</p>
             <p className="mt-2 text-lg font-semibold text-white">
-              {activeDataset ? activeDataset.name : 'Waiting'}
+              {activeDataset ? activeDataset.name : '等待中'}
             </p>
             <p className="mt-2 text-xs leading-5 text-slate-400">
               {result
-                ? `${result.datasets.length} dataset${result.datasets.length > 1 ? 's' : ''} loaded`
-                : 'Upload files to begin the web workflow.'}
+                ? `已載入 ${result.datasets.length} 個資料集`
+                : '從左側載入檔案以開始處理流程。'}
             </p>
           </div>
           <div className="glass-panel rounded-[24px] px-4 py-4">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Reference Overlay</p>
-            <p className="mt-2 text-lg font-semibold text-white">{selectedRefs.length} active</p>
-            <p className="mt-2 text-xs leading-5 text-slate-400">Overlay powder references to inspect phase candidates faster.</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">參考峰疊加</p>
+            <p className="mt-2 text-lg font-semibold text-white">{selectedRefs.length} 個已啟用</p>
+            <p className="mt-2 text-xs leading-5 text-slate-400">疊加參考粉末峰位，快速辨識相位候選。</p>
           </div>
           <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Gaussian Subtraction</p>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">高斯模板扣除</p>
                 <p className="mt-2 text-lg font-semibold text-white">
-                  {params.gaussian_enabled ? `${activeGaussianFits.length} fitted center${activeGaussianFits.length === 1 ? '' : 's'}` : 'Disabled'}
+                  {params.gaussian_enabled ? `${activeGaussianFits.length} 個中心已擬合` : '未啟用'}
                 </p>
               </div>
               {params.gaussian_enabled && (
@@ -491,9 +490,9 @@ export default function XRD() {
           <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Weak-Peak View</p>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">弱峰檢視</p>
                 <p className="mt-2 text-lg font-semibold text-white">
-                  {logViewParams.enabled ? `${logViewParams.method} enabled` : 'Disabled'}
+                  {logViewParams.enabled ? `${logViewParams.method} 已啟用` : '未啟用'}
                 </p>
               </div>
               {logViewParams.enabled && (
@@ -511,21 +510,21 @@ export default function XRD() {
           <div className="glass-panel rounded-[24px] px-4 py-4 sm:col-span-2 xl:col-span-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Peak Detection</p>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">自動尋峰</p>
                 <p className="mt-2 text-lg font-semibold text-white">
-                  {peakParams.enabled ? `${detectedPeaks.length} peaks detected` : 'Disabled'}
+                  {peakParams.enabled ? `已偵測 ${detectedPeaks.length} 個峰` : '未啟用'}
                 </p>
               </div>
               {peakParams.enabled && (
                 <div className="flex flex-wrap gap-2 text-xs text-slate-300">
                   <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    prominence {peakParams.prominence.toFixed(2)}
+                    顯著性 {peakParams.prominence.toFixed(2)}
                   </span>
                   <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    min distance {peakParams.min_distance.toFixed(2)} deg
+                    最小峰距 {peakParams.min_distance.toFixed(2)} deg
                   </span>
                   <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">
-                    max {peakParams.max_peaks}
+                    最多 {peakParams.max_peaks} 個
                   </span>
                 </div>
               )}
@@ -536,16 +535,15 @@ export default function XRD() {
               <div>
                 <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Scherrer</p>
                 <p className="mt-2 text-lg font-semibold text-white">
-                  {scherrerParams.enabled ? 'Crystallite size enabled' : 'Disabled'}
+                  {scherrerParams.enabled ? '晶粒尺寸計算已啟用' : '未啟用'}
                 </p>
                 <p className="mt-2 text-xs leading-5 text-slate-400">
-                  Estimate crystallite size directly from detected peak FWHM. Treat this as a quick
-                  screening tool, not a final publication-ready value.
+                  以偵測峰的 FWHM 直接估算晶粒尺寸。結果對展寬假設非常敏感，僅供快速篩選，不建議直接用於發表。
                 </p>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                 <label className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">Enable</span>
+                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">啟用</span>
                   <input
                     type="checkbox"
                     checked={scherrerParams.enabled}
@@ -566,7 +564,7 @@ export default function XRD() {
                   />
                 </label>
                 <label className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">Instr. broadening (deg)</span>
+                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">儀器展寬 (deg)</span>
                   <input
                     type="number"
                     value={scherrerParams.instrument_broadening_deg}
@@ -578,7 +576,7 @@ export default function XRD() {
                   />
                 </label>
                 <label className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300">
-                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">Correction</span>
+                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-500">展寬修正</span>
                   <select
                     value={scherrerParams.broadening_correction}
                     onChange={e => setScherrerParams(p => ({
@@ -587,7 +585,7 @@ export default function XRD() {
                     }))}
                     className="w-full rounded border border-white/10 bg-slate-950/50 px-2 py-1.5 text-slate-100 focus:outline-none"
                   >
-                    <option value="none">None</option>
+                    <option value="none">不修正</option>
                     <option value="gaussian">Gaussian</option>
                     <option value="lorentzian">Lorentzian</option>
                   </select>
@@ -616,10 +614,9 @@ export default function XRD() {
               <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-[24px] border border-cyan-300/20 bg-cyan-300/10 text-4xl">
                 ⟐
               </div>
-              <p className="font-display text-2xl tracking-[0.08em] text-white">Start With an XRD Pattern</p>
+              <p className="font-display text-2xl tracking-[0.08em] text-white">從這裡開始 XRD 分析</p>
               <p className="mt-3 max-w-xl text-sm leading-6 text-slate-400">
-                Load one or more spectra from the left panel, then adjust smoothing, normalize the
-                signal, and compare candidate references in the same page.
+                從左側面板載入一份或多份光譜，再依序調整平滑、歸一化，並在同一頁面比對候選參考峰。
               </p>
               <div className="mt-6 flex flex-wrap justify-center gap-2 text-xs text-slate-300">
                 <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">TXT</span>
@@ -644,11 +641,9 @@ export default function XRD() {
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-white">Log Weak-Peak View</p>
+                      <p className="text-sm font-semibold text-white">對數弱峰檢視</p>
                       <p className="mt-1 text-xs leading-5 text-slate-400">
-                        This view only changes how the processed spectrum is displayed, so weak peaks
-                        and broad tails are easier to inspect. It does not change peak detection,
-                        Scherrer, or reference matching.
+                        此顯示模式只改變圖表的縮放方式，方便觀察弱峰與寬尾巴。不影響尋峰、Scherrer 或參考峰匹配的計算基礎。
                       </p>
                     </div>
                     <span className="text-xs text-slate-500">
@@ -674,11 +669,9 @@ export default function XRD() {
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-white">Gaussian Template Subtraction</p>
+                      <p className="text-sm font-semibold text-white">高斯模板扣除</p>
                       <p className="mt-1 text-xs leading-5 text-slate-400">
-                        Uses fixed-area and fixed-FWHM Gaussian templates, then only lets each center
-                        move within the local search window. This is useful when you want a more
-                        stable estimate of where known peaks actually sit before later processing.
+                        使用固定面積與固定 FWHM 的高斯模板，只允許中心在局部範圍內移動，適合在後續處理前先扣掉已知峰的影響。
                       </p>
                     </div>
                     <span className="text-xs text-slate-500">
@@ -698,13 +691,13 @@ export default function XRD() {
                           <table className="min-w-full text-left text-sm">
                             <thead>
                               <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                                <th className="px-3 py-3 font-medium">Peak</th>
-                                <th className="px-3 py-3 font-medium">Seed 2θ</th>
-                                <th className="px-3 py-3 font-medium">Fitted 2θ</th>
-                                <th className="px-3 py-3 font-medium">Shift</th>
+                                <th className="px-3 py-3 font-medium">峰名稱</th>
+                                <th className="px-3 py-3 font-medium">初始 2θ</th>
+                                <th className="px-3 py-3 font-medium">擬合 2θ</th>
+                                <th className="px-3 py-3 font-medium">位移</th>
                                 <th className="px-3 py-3 font-medium">FWHM</th>
-                                <th className="px-3 py-3 font-medium">Area</th>
-                                <th className="px-3 py-3 font-medium">Height</th>
+                                <th className="px-3 py-3 font-medium">面積</th>
+                                <th className="px-3 py-3 font-medium">峰高</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -740,14 +733,13 @@ export default function XRD() {
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-white">Auto-detected Peaks</p>
+                      <p className="text-sm font-semibold text-white">自動偵測峰位</p>
                       <p className="mt-1 text-xs leading-5 text-slate-400">
-                        Based on the currently processed spectrum. Use this table to quickly inspect
-                        dominant peak positions before doing deeper interpretation.
+                        基於目前處理後光譜，可用於快速確認主要峰位，再做進一步解析。
                       </p>
                     </div>
                     <span className="text-xs text-slate-500">
-                      {detectedPeaks.length} peak{detectedPeaks.length === 1 ? '' : 's'}
+                      {detectedPeaks.length} 個峰
                     </span>
                   </div>
 
@@ -763,8 +755,8 @@ export default function XRD() {
                             <th className="px-3 py-3 font-medium">#</th>
                             <th className="px-3 py-3 font-medium">2θ (deg)</th>
                               <th className="px-3 py-3 font-medium">d-spacing (Å)</th>
-                              <th className="px-3 py-3 font-medium">Intensity</th>
-                              <th className="px-3 py-3 font-medium">Rel. I (%)</th>
+                              <th className="px-3 py-3 font-medium">強度</th>
+                              <th className="px-3 py-3 font-medium">相對強度 (%)</th>
                               <th className="px-3 py-3 font-medium">FWHM (deg)</th>
                             </tr>
                         </thead>
@@ -790,10 +782,9 @@ export default function XRD() {
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-white">Scherrer Crystallite Size</p>
+                      <p className="text-sm font-semibold text-white">Scherrer 晶粒尺寸</p>
                       <p className="mt-1 text-xs leading-5 text-slate-400">
-                        Uses the current detected peak FWHM and the standard Scherrer relation. This
-                        estimate is highly sensitive to broadening assumptions.
+                        使用目前偵測峰的 FWHM 與 Scherrer 公式估算晶粒尺寸。結果對展寬假設非常敏感，僅供快速篩選。
                       </p>
                     </div>
                     <span className="text-xs text-slate-500">
@@ -842,15 +833,13 @@ export default function XRD() {
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-white">Reference Peak Matching</p>
+                      <p className="text-sm font-semibold text-white">參考峰匹配</p>
                       <p className="mt-1 text-xs leading-5 text-slate-400">
-                        Uses the current auto-detected peaks and finds the nearest observed peak for
-                        each selected reference line. This is a quick screening table, not a final
-                        phase identification report.
+                        以目前自動偵測的峰位，為每條選定參考線找最近的觀測峰。這是快速相辨識篩選表，不是完整相鑑定報告。
                       </p>
                     </div>
                     <span className="text-xs text-slate-500">
-                      {matchedReferenceCount} / {referenceMatches.length} matched
+                      {matchedReferenceCount} / {referenceMatches.length} 匹配
                     </span>
                   </div>
 
@@ -871,16 +860,16 @@ export default function XRD() {
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            <th className="px-3 py-3 font-medium">Phase</th>
+                            <th className="px-3 py-3 font-medium">相位</th>
                             <th className="px-3 py-3 font-medium">hkl</th>
                             <th className="px-3 py-3 font-medium">Ref 2θ</th>
                             <th className="px-3 py-3 font-medium">Ref d</th>
                             <th className="px-3 py-3 font-medium">Ref I (%)</th>
                             <th className="px-3 py-3 font-medium">Obs 2θ</th>
                             <th className="px-3 py-3 font-medium">Obs d</th>
-                            <th className="px-3 py-3 font-medium">Obs Intensity</th>
+                            <th className="px-3 py-3 font-medium">Obs 強度</th>
                             <th className="px-3 py-3 font-medium">Δ2θ</th>
-                            <th className="px-3 py-3 font-medium">Matched</th>
+                            <th className="px-3 py-3 font-medium">匹配</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -915,7 +904,7 @@ export default function XRD() {
                                       : 'border border-rose-300/20 bg-rose-400/10 text-rose-200',
                                   ].join(' ')}
                                 >
-                                  {row.matched ? 'Yes' : 'No'}
+                                  {row.matched ? '✓ 匹配' : '✗ 不匹配'}
                                 </span>
                               </td>
                             </tr>
@@ -929,10 +918,9 @@ export default function XRD() {
 
               <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                 <div className="mb-4">
-                  <p className="text-sm font-semibold text-white">Export</p>
+                  <p className="text-sm font-semibold text-white">匯出</p>
                   <p className="mt-1 text-xs leading-5 text-slate-400">
-                    Download processed spectra, peak tables, matching tables, Gaussian center
-                    results, and a JSON report of the current XRD workflow.
+                    下載處理後光譜、峰位表、匹配表、高斯中心結果，以及目前 XRD 流程的 JSON 紀錄。
                   </p>
                 </div>
 
