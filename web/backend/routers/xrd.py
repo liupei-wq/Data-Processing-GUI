@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from scipy.signal import peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
-from core.processing import smooth_signal, apply_normalization
+from core.processing import smooth_signal, apply_normalization, apply_background
 from core.spectrum_ops import (
     detect_spectrum_peaks,
     fit_fixed_gaussian_templates,
@@ -68,6 +68,14 @@ class ProcessParams(BaseModel):
     interpolate: bool = False
     n_points: int = 1000
     average: bool = False
+    bg_enabled: bool = False
+    bg_method: str = "none"           # none | linear | shirley | polynomial | asls | airpls
+    bg_x_start: Optional[float] = None
+    bg_x_end: Optional[float] = None
+    bg_poly_deg: int = 3
+    bg_baseline_lambda: float = 1e5
+    bg_baseline_p: float = 0.01
+    bg_baseline_iter: int = 20
     gaussian_enabled: bool = False
     gaussian_fwhm: float = 0.2
     gaussian_height: float = 100.0
@@ -106,6 +114,7 @@ class DatasetOutput(BaseModel):
     name: str
     x: List[float]
     y_raw: List[float]
+    y_background: Optional[List[float]] = None
     y_gaussian_model: Optional[List[float]] = None
     y_gaussian_subtracted: Optional[List[float]] = None
     y_processed: List[float]
@@ -179,9 +188,10 @@ async def parse_files(files: List[UploadFile] = File(...)):
 @router.post("/process", response_model=ProcessResponse, summary="Process XRD data")
 def process_data(req: ProcessRequest):
     """
-    Apply interpolation, optional fixed Gaussian subtraction, smoothing, and normalization.
+    Apply interpolation, optional background subtraction, optional fixed Gaussian subtraction,
+    smoothing, and normalization.
 
-    Processing order: interpolate → average → Gaussian subtraction → smooth → normalize
+    Processing order: interpolate → average → background subtraction → Gaussian subtraction → smooth → normalize
     """
     if not req.datasets:
         raise HTTPException(status_code=400, detail="No datasets provided")
@@ -238,10 +248,27 @@ def _apply_smooth_norm(x: np.ndarray, y: np.ndarray, params: ProcessParams) -> n
 
 
 def _build_dataset_output(name: str, x: np.ndarray, y: np.ndarray, params: ProcessParams) -> DatasetOutput:
+    background_curve: Optional[np.ndarray] = None
     gaussian_model: Optional[np.ndarray] = None
     gaussian_subtracted: Optional[np.ndarray] = None
     gaussian_fits: list[GaussianFitRow] = []
     smooth_input = y
+
+    if params.bg_enabled and params.bg_method != "none":
+        bg_start = float(params.bg_x_start) if params.bg_x_start is not None else float(np.min(x))
+        bg_end = float(params.bg_x_end) if params.bg_x_end is not None else float(np.max(x))
+        bg_subtracted, background_curve = apply_background(
+            x,
+            y,
+            params.bg_method,
+            bg_start,
+            bg_end,
+            poly_deg=int(params.bg_poly_deg),
+            baseline_lambda=float(params.bg_baseline_lambda),
+            baseline_p=float(params.bg_baseline_p),
+            baseline_iter=int(params.bg_baseline_iter),
+        )
+        smooth_input = bg_subtracted
 
     if params.gaussian_enabled:
         fixed_area = float(params.gaussian_height) * float(params.gaussian_fwhm) * 1.0645
@@ -264,6 +291,7 @@ def _build_dataset_output(name: str, x: np.ndarray, y: np.ndarray, params: Proce
         name=name,
         x=x.tolist(),
         y_raw=y.tolist(),
+        y_background=None if background_curve is None else background_curve.tolist(),
         y_gaussian_model=None if gaussian_model is None else gaussian_model.tolist(),
         y_gaussian_subtracted=None if gaussian_subtracted is None else gaussian_subtracted.tolist(),
         y_processed=y_proc.tolist(),

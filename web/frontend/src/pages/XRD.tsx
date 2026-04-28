@@ -10,7 +10,7 @@
  *   3. On reference material select → fetchReferencePeaks() → overlay on chart
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, type CSSProperties } from 'react'
 import type {
   DetectedPeak,
   LogViewParams,
@@ -190,13 +190,29 @@ function buildReferenceMatches(
 }
 
 const MODULE_CHOICES = [
-  { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction', active: true },
   { id: 'raman', label: 'Raman', detail: 'Coming soon', active: false },
+  { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction', active: true },
   { id: 'xps', label: 'XPS', detail: 'Coming soon', active: false },
   { id: 'xas', label: 'XAS', detail: 'Coming soon', active: false },
+  { id: 'xes', label: 'XES', detail: 'Coming soon', active: false },
+  { id: 'sem', label: 'SEM', detail: 'Coming soon', active: false },
 ] as const
 
+const SIDEBAR_MIN_WIDTH = 320
+const SIDEBAR_MAX_WIDTH = 560
+const SIDEBAR_DEFAULT_WIDTH = 368
+const SIDEBAR_COLLAPSED_PEEK = 28
+
 export default function XRD() {
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('nigiro-xrd-sidebar-width'))
+    if (Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) {
+      return saved
+    }
+    return SIDEBAR_DEFAULT_WIDTH
+  })
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem('nigiro-xrd-sidebar-collapsed') === 'true')
+  const [sidebarResizing, setSidebarResizing] = useState(false)
   const [rawFiles, setRawFiles] = useState<ParsedFile[]>([])
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
@@ -231,6 +247,45 @@ export default function XRD() {
   const [detectedPeaks, setDetectedPeaks] = useState<DetectedPeak[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    localStorage.setItem('nigiro-xrd-sidebar-width', String(sidebarWidth))
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    localStorage.setItem('nigiro-xrd-sidebar-collapsed', String(sidebarCollapsed))
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
+    if (!sidebarResizing) return
+
+    const handleMove = (event: MouseEvent) => {
+      const nextWidth = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, event.clientX),
+      )
+      setSidebarWidth(nextWidth)
+      if (sidebarCollapsed) setSidebarCollapsed(false)
+    }
+
+    const handleUp = () => {
+      setSidebarResizing(false)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [sidebarCollapsed, sidebarResizing])
 
   const wavelength =
     wavelengthPreset === 'Custom' ? customWavelength : WAVELENGTH_MAP[wavelengthPreset]
@@ -353,9 +408,40 @@ export default function XRD() {
     }
   }, [])
 
+  const sidebarStyle = {
+    '--sidebar-width': `${sidebarWidth}px`,
+    '--sidebar-shift': sidebarCollapsed
+      ? `calc(-1 * (var(--sidebar-width) - ${SIDEBAR_COLLAPSED_PEEK}px))`
+      : '0px',
+  } as CSSProperties
+
   return (
-    <div className="min-h-screen xl:grid xl:grid-cols-[23rem_minmax(0,1fr)]">
-      <aside className="glass-panel flex min-h-screen flex-col overflow-hidden xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0">
+    <div className="min-h-screen xl:flex">
+      <aside
+        className={[
+          'glass-panel relative z-20 flex min-h-screen w-full flex-col overflow-hidden transition-[width,transform] duration-300 xl:w-[var(--sidebar-width)] xl:transform-gpu xl:[transform:translateX(var(--sidebar-shift))] xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0',
+        ].join(' ')}
+        style={sidebarStyle}
+      >
+        <button
+          type="button"
+          onClick={() => setSidebarCollapsed(value => !value)}
+          className="pressable absolute right-2 top-5 z-30 hidden h-10 w-10 items-center justify-center rounded-full border border-[var(--pill-border)] bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] text-lg text-[var(--text-main)] shadow-[var(--card-shadow)] xl:flex"
+          aria-label={sidebarCollapsed ? '展開左側欄' : '收合左側欄'}
+          title={sidebarCollapsed ? '展開左側欄' : '收合左側欄'}
+        >
+          {sidebarCollapsed ? '→' : '←'}
+        </button>
+
+        <div
+          className="absolute right-0 top-0 hidden h-full w-3 -translate-x-1/2 cursor-col-resize xl:block"
+          onMouseDown={() => setSidebarResizing(true)}
+          aria-hidden="true"
+        >
+          <div className="mx-auto h-full w-px bg-[linear-gradient(180deg,transparent,var(--card-border),transparent)]" />
+        </div>
+
+        <div className={sidebarCollapsed ? 'xl:pointer-events-none xl:opacity-0' : 'opacity-100'}>
         <div className="border-b border-[var(--card-divider)] px-6 py-8">
           <div className="flex items-center gap-4">
             <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] border border-[var(--pill-border)] bg-[radial-gradient(circle_at_30%_30%,color-mix(in_srgb,var(--accent-strong)_38%,white_8%),var(--card-bg-strong))] shadow-[var(--card-shadow)]">
@@ -496,9 +582,10 @@ export default function XRD() {
             onScherrerParamsChange={setScherrerParams}
           />
         </div>
+        </div>
       </aside>
 
-      <div className="min-w-0 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+      <div className="min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
           <div className="mb-8">
             <div className="flex flex-wrap items-baseline gap-3">

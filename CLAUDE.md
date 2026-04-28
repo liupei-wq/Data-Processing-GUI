@@ -1292,3 +1292,143 @@ cd web/frontend && npm install && npm run dev
 - 目前仍存在但不阻擋 build 的訊息：
   - Vite chunk size warning 仍在。
   - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 齒輪面板縮編、字體控制、補深色主題、點擊動畫
+
+- 重新讀取 `CLAUDE.md` 後，依使用者新需求開始第三輪齒輪面板調整。
+- 使用者需求：
+  - 齒輪內主題卡太大，要縮小。
+  - 齒輪內要再塞字體大小與字體切換，例如標楷體。
+  - 目前只有 1 個深色主題，要補成總共 6 個主題，其中深色系再加 2 個。
+  - 網站點擊元件時要有按下去的動畫感。
+- 本輪預定修改方向：
+  - `web/frontend/src/App.tsx`：把主題卡改成更緊湊的排版，加入字體家族與字級控制狀態。
+  - `web/frontend/src/index.css`：新增 2 組深色主題、字體/字級 dataset、齒輪內新控制區樣式、全域 press 動畫。
+- 已修改檔案：
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/index.css`
+- 本輪實作結果：
+  - 齒輪內原本 4 張較大的主題卡，已改成 6 張緊湊版主題卡，採 3 欄排列。
+  - 新增 2 個深色系主題：
+    - `ember` / `暮焰`：深酒紅、橘、玫瑰色系
+    - `forest` / `森夜`：深綠、墨色、金綠色系
+  - 現在總共 6 個主題：
+    - `杏桃`
+    - `柔白`
+    - `海霧`
+    - `黑曜`
+    - `暮焰`
+    - `森夜`
+  - 齒輪面板內新增字體切換：
+    - `介面體`
+    - `標楷體`
+    - `襯線體`
+  - 齒輪面板內新增字級切換：
+    - `小`
+    - `中`
+    - `大`
+  - 字體與字級都會寫進 localStorage，重新整理後保留。
+  - 全站加入按下去的 press 動畫，主要套用在 `button`、`a`、`summary`、帶 `role="button"` 的元件，以及齒輪內控制項。
+  - 補了 `Noto Serif TC` 字型載入，讓襯線體與標楷 fallback 更穩定。
+- 修正過程：
+  - `App.tsx` 一開始出現 `useState` 初始化型別錯誤，原因是 lazy initializer 可能回傳 `null`。
+  - 已改成明確 fallback 回傳 `ui` / `md`，之後編譯恢復正常。
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 右側 hover 選單與單一處理工具規劃
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求開始規劃網站右側自動感應選單與單一處理工具頁。
+- 使用者需求：
+  - 右側要有自動感應滑出選單。
+  - 之後可以放「只做單一步驟」的工具，不是完整 workflow。
+  - 這一輪先放：
+    - 背景扣除
+    - 歸一化
+    - 高斯模板扣除
+  - 每個工具頁都要能上傳檔案。
+- 調查結果：
+  - 前端現有 `parseFiles()` / `processData()` 可以直接重用。
+  - 後端現有 `/api/xrd/process` 已支援：
+    - 高斯模板扣除
+    - 平滑
+    - 歸一化
+  - 但目前網站版 `xrd.py` 尚未把核心 `apply_background()` 接進 `/api/xrd/process`，所以背景扣除還不能直接用。
+- 本輪預定修改方向：
+  - `web/backend/routers/xrd.py`：擴充處理參數與回傳內容，加入背景扣除與背景曲線輸出。
+  - `web/frontend/src/types/xrd.ts`：同步新增背景扣除型別欄位。
+  - `web/frontend/src/App.tsx`：新增右側 hover 抽屜，管理 `完整流程 / 單一處理工具` 的切換。
+  - 新增前端單一工具頁元件，分別承載背景扣除、歸一化、高斯模板扣除的簡化上傳與顯示流程。
+
+## 2026-04-29 右側 hover 選單與單一處理工具完成
+
+- 延續上一段規劃，已完成右側自動感應選單與三個單一處理工具入口。
+- 已修改檔案：
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/index.css`
+  - `web/frontend/src/pages/SingleProcessTool.tsx`
+  - `web/frontend/src/types/xrd.ts`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+  - `web/backend/routers/xrd.py`
+- 本輪實作結果：
+  - `App.tsx` 新增右側 hover 抽屜，滑鼠移到右側 `選單` tab 時會自動展開。
+  - 抽屜內分成兩區：
+    - `流程`：`XRD 完整流程`
+    - `單一處理`：`背景扣除`、`歸一化`、`高斯模板扣除`
+  - 切換單一處理工具後，不再進完整 workflow，而是直接進對應工具頁。
+  - 新增 `web/frontend/src/pages/SingleProcessTool.tsx`：
+    - 每個工具頁都可直接上傳檔案。
+    - 左側為上傳與對應參數設定。
+    - 右側為圖表與處理結果顯示。
+    - 高斯模板扣除頁另外顯示 fitted center 表格。
+  - `web/frontend/src/types/xrd.ts` 已加入背景扣除所需型別欄位。
+  - `web/backend/routers/xrd.py` 已把核心 `apply_background()` 接進網站後端流程，現在前端可直接呼叫背景扣除。
+  - `web/frontend/src/components/ProcessingPanel.tsx` 已補齊背景扣除預設參數，避免舊流程頁編譯失敗。
+  - `web/frontend/src/index.css` 已補右側選單樣式：
+    - 半透明玻璃卡片
+    - hover 展開動畫
+    - active 項目高亮
+    - 右側直式 tab
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 左側欄可縮放、可收合、固定模組順序
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求開始調整 XRD 頁左側欄行為。
+- 使用者需求：
+  - 左側欄可用滑鼠拖曳調整大小。
+  - 左側欄可一鍵縮進去，再展開。
+  - 左側分析模組順序固定為：
+    - `Raman`
+    - `XRD`
+    - `XPS`
+    - `XAS`
+    - `XES`
+    - `SEM`
+  - 即使之後切換其他模組，順序也不能亂。
+- 已修改檔案：
+  - `web/frontend/src/pages/XRD.tsx`
+- 本輪實作結果：
+  - 把 `MODULE_CHOICES` 改成固定順序：`Raman → XRD → XPS → XAS → XES → SEM`。
+  - 保留 `XRD` 為目前 active 項目，其餘模組維持 `Coming soon`。
+  - 左側欄新增寬度狀態：
+    - 最小寬度 `320px`
+    - 預設寬度 `368px`
+    - 最大寬度 `560px`
+  - 桌機版左欄右側新增拖曳區，可用滑鼠左右拖曳調整欄寬。
+  - 左側欄右上角新增收合按鈕，可把整欄縮進，只留下側邊細條，之後可再展開。
+  - 左欄寬度與收合狀態都會寫進 localStorage：
+    - `nigiro-xrd-sidebar-width`
+    - `nigiro-xrd-sidebar-collapsed`
+  - 收合狀態主要作用在桌機版，避免手機版直接被桌機欄寬設定壓縮。
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。

@@ -12,6 +12,14 @@ export interface ProcessParams {
   interpolate: boolean
   n_points: number
   average: boolean
+  bg_enabled: boolean
+  bg_method: 'none' | 'linear' | 'shirley' | 'polynomial' | 'asls' | 'airpls'
+  bg_x_start: number | null
+  bg_x_end: number | null
+  bg_poly_deg: number
+  bg_baseline_lambda: number
+  bg_baseline_p: number
+  bg_baseline_iter: number
   gaussian_enabled: boolean
   gaussian_fwhm: number
   gaussian_height: number
@@ -46,6 +54,7 @@ export interface ProcessedDataset {
   name: string
   x: number[]
   y_raw: number[]
+  y_background: number[] | null
   y_gaussian_model: number[] | null
   y_gaussian_subtracted: number[] | null
   y_processed: number[]
