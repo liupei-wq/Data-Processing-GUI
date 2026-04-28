@@ -166,25 +166,36 @@ sigma 用 quadrature 誤差傳播
 
 | 模組 | 狀態 | 後端 Router | 前端頁面 |
 |---|---|---|---|
-| **Raman** | ✅ 完成 | `web/backend/routers/raman.py` | `web/frontend/src/pages/Raman.tsx` |
-| **XRD** | ✅ 完成 | `web/backend/routers/xrd.py` | `web/frontend/src/pages/XRD.tsx` |
-| **XAS** | ✅ 完成 | `web/backend/routers/xas.py` | `web/frontend/src/pages/XAS.tsx` |
-| **XPS** | ✅ 完成 | `web/backend/routers/xps.py` | `web/frontend/src/pages/XPS.tsx` |
-| **XES** | 🔄 進行中 | 待建立 | 待建立 |
-| SEM | ⏳ 未開始 | — | — |
+| **Raman** | ✅ 核心完成 | `web/backend/routers/raman.py` | `web/frontend/src/pages/Raman.tsx` |
+| **XRD** | ✅ 最完整 | `web/backend/routers/xrd.py` | `web/frontend/src/pages/XRD.tsx` |
+| **XAS** | ✅ 核心完成 | `web/backend/routers/xas.py` | `web/frontend/src/pages/XAS.tsx` |
+| **XPS** | ⚠️ 核心有，進階缺 | `web/backend/routers/xps.py` | `web/frontend/src/pages/XPS.tsx` |
+| **XES** | ⚠️ 僅 1D 光譜模式 | `web/backend/routers/xes.py` | `web/frontend/src/pages/XES.tsx` |
+| SEM | ⏳ 未實作（Streamlit 版也無） | — | — |
+
+### 各模組進階功能缺口
+
+| 模組 | 尚未搬入的進階功能 |
+|---|---|
+| Raman | preset 匯入/匯出、Si 應力估算 |
+| XRD | 幾乎完整 |
+| XAS | 高斯扣除步驟、XANES 去卷積擬合、二階微分輔助 |
+| XPS | **VBM 外推、Band Offset、Kraut Method、RSF 定量表格、Core Level / Valence Band 模式切換** |
+| XES | **FITS 原始影像模式**（ROI、曲率校正、hot pixel、sideband BG 等），I0 table，preset |
 
 ### 目錄結構
 
 ```
 web/
 ├── backend/
-│   ├── main.py              # FastAPI 入口，掛載 xrd/raman/xas/xps router
+│   ├── main.py              # FastAPI 入口，掛載 xrd/raman/xas/xps/xes router
 │   ├── requirements.txt
 │   └── routers/
 │       ├── xrd.py           # XRD 5 個 endpoints（含 Scherrer、Gaussian）
 │       ├── raman.py         # Raman parse/process/peaks/references/fit
 │       ├── xas.py           # XAS parse/process（TEY/TFY 雙通道）
-│       └── xps.py           # XPS parse/process/peaks/fit（含 Shirley/Tougaard）
+│       ├── xps.py           # XPS parse/process/peaks/fit（含 Shirley/Tougaard）
+│       └── xes.py           # XES parse/process/peaks/references（1D 光譜模式）
 ├── frontend/
 │   ├── package.json         # React 18 + Vite + Tailwind + Plotly.js
 │   ├── vite.config.ts       # dev proxy /api → port 8000
@@ -203,8 +214,8 @@ web/
 │       │   ├── ProcessingPanel.tsx
 │       │   ├── SpectrumChart.tsx
 │       │   └── GaussianSubtractionChart.tsx
-│       ├── api/             # xrd.ts / raman.ts / xas.ts / xps.ts
-│       └── types/           # xrd.ts / raman.ts / xas.ts / xps.ts
+│       ├── api/             # xrd.ts / raman.ts / xas.ts / xps.ts / xes.ts
+│       └── types/           # xrd.ts / raman.ts / xas.ts / xps.ts / xes.ts
 ├── Dockerfile               # 多階段 build（Node → Python + 靜態服務）
 └── (docker-compose.yml 已刪除，有 YAML 重複鍵錯誤)
 railway.toml                 # builder=DOCKERFILE，healthcheckPath=/health
@@ -219,12 +230,13 @@ render.yaml                  # Render Blueprint，plan=free
 | `/api/raman` | parse / process / peaks / references / reference-peaks / fit | Raman + 峰擬合 |
 | `/api/xas` | parse / process | TEY+TFY 雙通道，energy/bg/norm/white-line |
 | `/api/xps` | parse / process / peaks / fit | Shirley/Tougaard 背景，峰擬合含 Area% |
+| `/api/xes` | parse / process / peaks / references / reference-peaks | 1D 光譜模式，BG1/BG2 扣除，能帶對齊 |
 
 ### 前端 App 路由（App.tsx）
 
 ```typescript
 type WorkspaceId =
-  | 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps'
+  | 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes'
   | `tool-background` | `tool-normalize` | `tool-gaussian`
 ```
 
