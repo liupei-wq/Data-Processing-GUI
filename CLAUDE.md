@@ -326,6 +326,25 @@ FITS → Dark/Bias 扣除 → Hot pixel（MAD × 1.4826 threshold，median_filte
 
 ---
 
+## 側欄 UI 統一改版（2026-04-29）
+
+所有模組的左側步驟欄已統一改為 XRD 的可折疊卡片風格。
+
+| 模組 | 改動說明 |
+|---|---|
+| **Raman** | `SidebarCard` 改為可折疊，加 `defaultOpen`、+/− 切換鈕 |
+| **XES** | `SidebarCard` 重新設計：`theme-block rounded-[22px]`，加 hint 和 +/− |
+| **XPS** | `SectionHeader` + 平鋪 div 全部換成 `Section` 可折疊元件；加 `px-4 pt-4` wrapper |
+| **XAS** | 原本無卡片結構，`SectionHeader` 換成 `Section` 元件，9 個 steps 全部可折疊 |
+
+共用 `Section` 元件設計：
+- `theme-block mb-3 overflow-hidden rounded-[22px]`
+- 步驟徽章：`accent-tertiary` 底色（16% mix）
+- 預設：step 1 展開，其他 `defaultOpen={false}`
+- +/− toggle，`hover:bg-[var(--card-ghost)]`
+
+---
+
 ## 重要技術細節
 
 ### XPS x 軸反轉

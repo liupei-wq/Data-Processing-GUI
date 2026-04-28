@@ -106,12 +106,26 @@ function downloadFile(content: string, name: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-function SectionHeader({ n, label }: { n: number; label: string }) {
+function Section({ step, title, hint, children, defaultOpen = true }: {
+  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="px-4 pb-1.5 pt-3">
-      <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--text-soft)]">
-        {n}. {label}
-      </span>
+    <div className="theme-block mb-3 overflow-hidden rounded-[22px]">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
+            {step}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
+            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+          </div>
+        </div>
+        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
+      </button>
+      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
     </div>
   )
 }
@@ -304,296 +318,271 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
             <div className="flex-1 overflow-y-auto">
               <AnalysisModuleNav activeModule="xas" onSelectModule={onModuleSelect} />
 
+              <div className="px-4 pt-4">
               {/* 1. 載入 */}
-              <div>
-                <SectionHeader n={1} label="載入資料" />
-                <div className="space-y-3 p-4">
-                  <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor']} />
-                  <CheckRow label="TFY 使用 1 − TFY 翻轉" checked={flipTfy} onChange={v => { setFlipTfy(v); setRawFiles([]) }} />
-                  {rawFiles.length > 0 && (
-                    <div className="space-y-1">
-                      {rawFiles.map(f => (
-                        <div key={f.name} className="flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2.5 py-1.5 text-xs text-[var(--text-main)]">
-                          <span className="text-[var(--accent-tertiary)]">✓</span>
-                          <span className="truncate">{f.name}</span>
-                          <span className="ml-auto shrink-0 text-[var(--text-soft)]">{f.x.length} pts</span>
-                        </div>
-                      ))}
-                      <button onClick={() => { setRawFiles([]); setResult(null) }} className="text-xs text-rose-400 hover:text-rose-300">
-                        清除全部
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <Section step={1} title="載入資料" hint="DAT / XMU / NOR / TXT">
+                <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor']} />
+                <CheckRow label="TFY 使用 1 − TFY 翻轉" checked={flipTfy} onChange={v => { setFlipTfy(v); setRawFiles([]) }} />
+                {rawFiles.length > 0 && (
+                  <div className="space-y-1">
+                    {rawFiles.map(f => (
+                      <div key={f.name} className="flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2.5 py-1.5 text-xs text-[var(--text-main)]">
+                        <span className="text-[var(--accent-tertiary)]">✓</span>
+                        <span className="truncate">{f.name}</span>
+                        <span className="ml-auto shrink-0 text-[var(--text-soft)]">{f.x.length} pts</span>
+                      </div>
+                    ))}
+                    <button onClick={() => { setRawFiles([]); setResult(null) }} className="text-xs text-rose-400 hover:text-rose-300">
+                      清除全部
+                    </button>
+                  </div>
+                )}
+              </Section>
 
               {/* 2. 內插與平均 */}
-              <div>
-                <SectionHeader n={2} label="內插 / 平均" />
-                <div className="space-y-3 p-4">
-                  <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
-                  {params.interpolate && (
-                    <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={10000} step={100} />
-                  )}
-                  {rawFiles.length > 1 && <CheckRow label="多檔平均" checked={params.average} onChange={set('average')} />}
-                </div>
-              </div>
+              <Section step={2} title="內插 / 平均" hint="多檔統一點數後平均" defaultOpen={false}>
+                <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
+                {params.interpolate && (
+                  <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={10000} step={100} />
+                )}
+                {rawFiles.length > 1 && <CheckRow label="多檔平均" checked={params.average} onChange={set('average')} />}
+              </Section>
 
               {/* 3. 能量校正 */}
-              <div>
-                <SectionHeader n={3} label="能量校正" />
-                <div className="p-4">
-                  <NumInput label="能量位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
-                  <p className="mt-2 text-[10px] text-[var(--text-soft)]">正值向高能方向移，負值向低能移。</p>
-                </div>
-              </div>
+              <Section step={3} title="能量校正" hint="校正能量軸零點" defaultOpen={false}>
+                <NumInput label="能量位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
+                <p className="text-[10px] text-[var(--text-soft)]">正值向高能方向移，負值向低能移。</p>
+              </Section>
 
               {/* 4. 背景扣除 */}
-              <div>
-                <SectionHeader n={4} label="背景扣除" />
-                <div className="space-y-3 p-4">
-                  <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
-                  {params.bg_enabled && (
-                    <>
-                      <SelectInput label="套用通道" value={params.bg_channel} onChange={v => set('bg_channel')(v as ProcessParams['bg_channel'])}
-                        options={[{ value: 'both', label: 'TEY + TFY' }, { value: 'TEY', label: '僅 TEY' }, { value: 'TFY', label: '僅 TFY' }]}
-                      />
-                      <SelectInput label="方法" value={params.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
-                        options={[{ value: 'linear', label: 'Linear' }, { value: 'polynomial', label: 'Polynomial' }, { value: 'asls', label: 'AsLS' }, { value: 'airpls', label: 'airPLS' }]}
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="起始 (eV)" value={params.bg_x_start ?? energyMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
-                        <NumInput label="結束 (eV)" value={params.bg_x_end ?? energyMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
-                      </div>
-                      {params.bg_method === 'polynomial' && (
-                        <NumInput label="多項式次數" value={params.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* 5. 歸一化 */}
-              <div>
-                <SectionHeader n={5} label="歸一化" />
-                <div className="space-y-3 p-4">
-                  <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
-                    options={[
-                      { value: 'none', label: '不歸一化' },
-                      { value: 'min_max', label: 'Min–Max' },
-                      { value: 'max', label: 'Max' },
-                      { value: 'area', label: 'Area' },
-                      { value: 'post_edge', label: 'Post-edge Step' },
-                    ]}
-                  />
-                  {params.norm_method === 'post_edge' && (
-                    <>
-                      <p className="text-[10px] text-[var(--text-soft)]">Pre-edge 區間（用於估算 edge step）</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="Pre 起始 (eV)" value={params.norm_pre_start ?? energyMin} onChange={v => set('norm_pre_start')(v)} step={0.1} />
-                        <NumInput label="Pre 結束 (eV)" value={params.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3)} onChange={v => set('norm_pre_end')(v)} step={0.1} />
-                      </div>
-                      <p className="text-[10px] text-[var(--text-soft)]">Post-edge 參考區間</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="Post 起始 (eV)" value={params.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7)} onChange={v => set('norm_x_start')(v)} step={0.1} />
-                        <NumInput label="Post 結束 (eV)" value={params.norm_x_end ?? energyMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
-                      </div>
-                    </>
-                  )}
-                  {(params.norm_method === 'area' || params.norm_method === 'min_max') && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="起始 (eV)" value={params.norm_x_start ?? energyMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
-                      <NumInput label="結束 (eV)" value={params.norm_x_end ?? energyMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* 6. White Line */}
-              <div>
-                <SectionHeader n={6} label="White Line 搜尋" />
-                <div className="space-y-3 p-4">
-                  <p className="text-[10px] text-[var(--text-soft)]">設定搜尋區間，自動找到最高點能量。</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="起始 (eV)" value={params.white_line_start ?? energyMin} onChange={v => set('white_line_start')(v)} step={0.1} />
-                    <NumInput label="結束 (eV)" value={params.white_line_end ?? energyMax} onChange={v => set('white_line_end')(v)} step={0.1} />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setParams(p => ({ ...p, white_line_start: energyMin, white_line_end: energyMax }))}
-                    className="text-[10px] text-[var(--accent-strong)] hover:underline"
-                  >
-                    重設為全範圍
-                  </button>
-                </div>
-              </div>
-
-              {/* 7. 高斯模板扣除 */}
-              <div>
-                <SectionHeader n={7} label="高斯模板扣除" />
-                <div className="space-y-3 p-4">
-                  <CheckRow label="啟用高斯模板扣除" checked={params.gauss_enabled} onChange={set('gauss_enabled')} />
-                  {params.gauss_enabled && (
-                    <>
-                      <SelectInput
-                        label="套用通道"
-                        value={params.gauss_channel}
-                        onChange={v => set('gauss_channel')(v as ProcessParams['gauss_channel'])}
-                        options={[
-                          { value: 'both', label: 'TEY + TFY' },
-                          { value: 'TEY', label: '僅 TEY' },
-                          { value: 'TFY', label: '僅 TFY' },
-                        ]}
-                      />
-                      <NumInput
-                        label="中心搜尋範圍 (±eV)"
-                        value={params.gauss_search}
-                        onChange={set('gauss_search')}
-                        min={0} max={10} step={0.1}
-                      />
-                      <div className="space-y-2">
-                        <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">模板列表</p>
-                        {params.gauss_peaks.map((gp, i) => (
-                          <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] text-[var(--text-soft)]">模板 {i + 1}</span>
-                              <button
-                                type="button"
-                                onClick={() => setParams(p => ({ ...p, gauss_peaks: p.gauss_peaks.filter((_, j) => j !== i) }))}
-                                className="text-[10px] text-rose-400 hover:text-rose-300"
-                              >
-                                移除
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-3 gap-1">
-                              <NumInput
-                                label="中心(eV)"
-                                value={gp.center}
-                                onChange={v => setParams(p => {
-                                  const peaks = [...p.gauss_peaks]
-                                  peaks[i] = { ...peaks[i], center: v }
-                                  return { ...p, gauss_peaks: peaks }
-                                })}
-                                step={0.1}
-                              />
-                              <NumInput
-                                label="FWHM(eV)"
-                                value={gp.fwhm}
-                                onChange={v => setParams(p => {
-                                  const peaks = [...p.gauss_peaks]
-                                  peaks[i] = { ...peaks[i], fwhm: v }
-                                  return { ...p, gauss_peaks: peaks }
-                                })}
-                                min={0.01} step={0.1}
-                              />
-                              <NumInput
-                                label="振幅"
-                                value={gp.amplitude}
-                                onChange={v => setParams(p => {
-                                  const peaks = [...p.gauss_peaks]
-                                  peaks[i] = { ...peaks[i], amplitude: v }
-                                  return { ...p, gauss_peaks: peaks }
-                                })}
-                                step={0.01}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => setParams(p => ({
-                            ...p,
-                            gauss_peaks: [...p.gauss_peaks, { center: (energyMin + energyMax) / 2, fwhm: 1.0, amplitude: 0.1 } as GaussPeak],
-                          }))}
-                          className="w-full rounded-lg border border-dashed border-[var(--accent-soft)] py-1.5 text-[10px] text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
-                        >
-                          + 新增模板
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* 8. 二階微分 */}
-              <div>
-                <SectionHeader n={8} label="二階微分" />
-                <div className="space-y-2 p-4">
-                  <CheckRow label="計算二階微分" checked={params.d2y_enabled} onChange={set('d2y_enabled')} />
-                  <p className="text-[10px] text-[var(--text-soft)]">輔助辨識吸收邊精細結構，不影響主光譜輸出。</p>
-                </div>
-              </div>
-
-              {/* 9. XANES 去卷積擬合 */}
-              {result && (
-                <div>
-                  <SectionHeader n={9} label="XANES 去卷積" />
-                  <div className="space-y-3 p-4">
-                    <SelectInput
-                      label="擬合通道"
-                      value={deconvChannel}
-                      onChange={v => { setDeconvChannel(v as 'TEY' | 'TFY'); setDeconvResult(null) }}
-                      options={[{ value: 'TEY', label: 'TEY' }, { value: 'TFY', label: 'TFY' }]}
+              <Section step={4} title="背景扣除" hint="Linear / Polynomial / AsLS" defaultOpen={false}>
+                <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
+                {params.bg_enabled && (
+                  <>
+                    <SelectInput label="套用通道" value={params.bg_channel} onChange={v => set('bg_channel')(v as ProcessParams['bg_channel'])}
+                      options={[{ value: 'both', label: 'TEY + TFY' }, { value: 'TEY', label: '僅 TEY' }, { value: 'TFY', label: '僅 TFY' }]}
+                    />
+                    <SelectInput label="方法" value={params.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
+                      options={[{ value: 'linear', label: 'Linear' }, { value: 'polynomial', label: 'Polynomial' }, { value: 'asls', label: 'AsLS' }, { value: 'airpls', label: 'airPLS' }]}
                     />
                     <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="E0 (eV)" value={deconvE0} onChange={setDeconvE0} step={0.5} />
-                      <NumInput label="儀器 FWHM (eV)" value={deconvFwhmInst} onChange={setDeconvFwhmInst} min={0.01} step={0.1} />
+                      <NumInput label="起始 (eV)" value={params.bg_x_start ?? energyMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
+                      <NumInput label="結束 (eV)" value={params.bg_x_end ?? energyMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="初始 FWHM (eV)" value={deconvFwhmInit} onChange={setDeconvFwhmInit} min={0.1} step={0.1} />
-                      <NumInput label="擬合起始 (eV)" value={deconvFitLo ?? energyMin} onChange={v => setDeconvFitLo(v)} step={0.1} />
-                    </div>
-                    <NumInput label="擬合終止 (eV)" value={deconvFitHi ?? energyMax} onChange={v => setDeconvFitHi(v)} step={0.1} />
-                    <CheckRow label="包含 Step (Arctan)" checked={deconvIncludeStep} onChange={setDeconvIncludeStep} />
-                    <CheckRow label="連動所有峰 FWHM" checked={deconvLinkFwhm} onChange={setDeconvLinkFwhm} />
+                    {params.bg_method === 'polynomial' && (
+                      <NumInput label="多項式次數" value={params.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />
+                    )}
+                  </>
+                )}
+              </Section>
 
+              {/* 5. 歸一化 */}
+              <Section step={5} title="歸一化" hint="Post-edge Step / Min-Max" defaultOpen={false}>
+                <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
+                  options={[
+                    { value: 'none', label: '不歸一化' },
+                    { value: 'min_max', label: 'Min–Max' },
+                    { value: 'max', label: 'Max' },
+                    { value: 'area', label: 'Area' },
+                    { value: 'post_edge', label: 'Post-edge Step' },
+                  ]}
+                />
+                {params.norm_method === 'post_edge' && (
+                  <>
+                    <p className="text-[10px] text-[var(--text-soft)]">Pre-edge 區間（用於估算 edge step）</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="Pre 起始 (eV)" value={params.norm_pre_start ?? energyMin} onChange={v => set('norm_pre_start')(v)} step={0.1} />
+                      <NumInput label="Pre 結束 (eV)" value={params.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3)} onChange={v => set('norm_pre_end')(v)} step={0.1} />
+                    </div>
+                    <p className="text-[10px] text-[var(--text-soft)]">Post-edge 參考區間</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="Post 起始 (eV)" value={params.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7)} onChange={v => set('norm_x_start')(v)} step={0.1} />
+                      <NumInput label="Post 結束 (eV)" value={params.norm_x_end ?? energyMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
+                    </div>
+                  </>
+                )}
+                {(params.norm_method === 'area' || params.norm_method === 'min_max') && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="起始 (eV)" value={params.norm_x_start ?? energyMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
+                    <NumInput label="結束 (eV)" value={params.norm_x_end ?? energyMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
+                  </div>
+                )}
+              </Section>
+
+              {/* 6. White Line */}
+              <Section step={6} title="White Line 搜尋" hint="自動找最高點能量" defaultOpen={false}>
+                <p className="text-[10px] text-[var(--text-soft)]">設定搜尋區間，自動找到最高點能量。</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="起始 (eV)" value={params.white_line_start ?? energyMin} onChange={v => set('white_line_start')(v)} step={0.1} />
+                  <NumInput label="結束 (eV)" value={params.white_line_end ?? energyMax} onChange={v => set('white_line_end')(v)} step={0.1} />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setParams(p => ({ ...p, white_line_start: energyMin, white_line_end: energyMax }))}
+                  className="text-[10px] text-[var(--accent-strong)] hover:underline"
+                >
+                  重設為全範圍
+                </button>
+              </Section>
+
+              {/* 7. 高斯模板扣除 */}
+              <Section step={7} title="高斯模板扣除" hint="扣除已知雜散峰" defaultOpen={false}>
+                <CheckRow label="啟用高斯模板扣除" checked={params.gauss_enabled} onChange={set('gauss_enabled')} />
+                {params.gauss_enabled && (
+                  <>
+                    <SelectInput
+                      label="套用通道"
+                      value={params.gauss_channel}
+                      onChange={v => set('gauss_channel')(v as ProcessParams['gauss_channel'])}
+                      options={[
+                        { value: 'both', label: 'TEY + TFY' },
+                        { value: 'TEY', label: '僅 TEY' },
+                        { value: 'TFY', label: '僅 TFY' },
+                      ]}
+                    />
+                    <NumInput
+                      label="中心搜尋範圍 (±eV)"
+                      value={params.gauss_search}
+                      onChange={set('gauss_search')}
+                      min={0} max={10} step={0.1}
+                    />
                     <div className="space-y-2">
-                      <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">擬合峰</p>
-                      {deconvPeaks.map((pk, i) => (
-                        <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-1.5">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">模板列表</p>
+                      {params.gauss_peaks.map((gp, i) => (
+                        <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-2">
                           <div className="flex items-center justify-between">
-                            <input
-                              value={pk.name}
-                              onChange={e => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, name: e.target.value } : p))}
-                              placeholder={`峰 ${i + 1} 名稱`}
-                              className="w-full rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-[10px] text-[var(--input-text)] focus:outline-none"
-                            />
+                            <span className="text-[10px] text-[var(--text-soft)]">模板 {i + 1}</span>
                             <button
                               type="button"
-                              onClick={() => setDeconvPeaks(ps => ps.filter((_, j) => j !== i))}
-                              className="ml-1 shrink-0 text-[10px] text-rose-400 hover:text-rose-300"
+                              onClick={() => setParams(p => ({ ...p, gauss_peaks: p.gauss_peaks.filter((_, j) => j !== i) }))}
+                              className="text-[10px] text-rose-400 hover:text-rose-300"
                             >
-                              ×
+                              移除
                             </button>
                           </div>
                           <div className="grid grid-cols-3 gap-1">
-                            <NumInput label="中心(eV)" value={pk.center} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, center: v } : p))} step={0.1} />
-                            <NumInput label="±偏移" value={pk.delta} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, delta: v } : p))} min={0} step={0.1} />
-                            <SelectInput label="峰形" value={pk.ptype} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, ptype: v as DeconvPeak['ptype'] } : p))} options={[{ value: 'gaussian', label: 'G' }, { value: 'lorentzian', label: 'L' }]} />
+                            <NumInput
+                              label="中心(eV)"
+                              value={gp.center}
+                              onChange={v => setParams(p => {
+                                const peaks = [...p.gauss_peaks]
+                                peaks[i] = { ...peaks[i], center: v }
+                                return { ...p, gauss_peaks: peaks }
+                              })}
+                              step={0.1}
+                            />
+                            <NumInput
+                              label="FWHM(eV)"
+                              value={gp.fwhm}
+                              onChange={v => setParams(p => {
+                                const peaks = [...p.gauss_peaks]
+                                peaks[i] = { ...peaks[i], fwhm: v }
+                                return { ...p, gauss_peaks: peaks }
+                              })}
+                              min={0.01} step={0.1}
+                            />
+                            <NumInput
+                              label="振幅"
+                              value={gp.amplitude}
+                              onChange={v => setParams(p => {
+                                const peaks = [...p.gauss_peaks]
+                                peaks[i] = { ...peaks[i], amplitude: v }
+                                return { ...p, gauss_peaks: peaks }
+                              })}
+                              step={0.01}
+                            />
                           </div>
                         </div>
                       ))}
                       <button
                         type="button"
-                        onClick={() => setDeconvPeaks(ps => [...ps, { center: (energyMin + energyMax) / 2, delta: 2, name: '', ptype: 'gaussian' }])}
+                        onClick={() => setParams(p => ({
+                          ...p,
+                          gauss_peaks: [...p.gauss_peaks, { center: (energyMin + energyMax) / 2, fwhm: 1.0, amplitude: 0.1 } as GaussPeak],
+                        }))}
                         className="w-full rounded-lg border border-dashed border-[var(--accent-soft)] py-1.5 text-[10px] text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
                       >
-                        + 新增峰
+                        + 新增模板
                       </button>
                     </div>
+                  </>
+                )}
+              </Section>
 
+              {/* 8. 二階微分 */}
+              <Section step={8} title="二階微分" hint="輔助辨識吸收邊特徵" defaultOpen={false}>
+                <CheckRow label="計算二階微分" checked={params.d2y_enabled} onChange={set('d2y_enabled')} />
+                <p className="text-[10px] text-[var(--text-soft)]">輔助辨識吸收邊精細結構，不影響主光譜輸出。</p>
+              </Section>
+
+              {/* 9. XANES 去卷積擬合 */}
+              {result && (
+                <Section step={9} title="XANES 去卷積" hint="lmfit Step + 多峰擬合" defaultOpen={false}>
+                  <SelectInput
+                    label="擬合通道"
+                    value={deconvChannel}
+                    onChange={v => { setDeconvChannel(v as 'TEY' | 'TFY'); setDeconvResult(null) }}
+                    options={[{ value: 'TEY', label: 'TEY' }, { value: 'TFY', label: 'TFY' }]}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="E0 (eV)" value={deconvE0} onChange={setDeconvE0} step={0.5} />
+                    <NumInput label="儀器 FWHM (eV)" value={deconvFwhmInst} onChange={setDeconvFwhmInst} min={0.01} step={0.1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="初始 FWHM (eV)" value={deconvFwhmInit} onChange={setDeconvFwhmInit} min={0.1} step={0.1} />
+                    <NumInput label="擬合起始 (eV)" value={deconvFitLo ?? energyMin} onChange={v => setDeconvFitLo(v)} step={0.1} />
+                  </div>
+                  <NumInput label="擬合終止 (eV)" value={deconvFitHi ?? energyMax} onChange={v => setDeconvFitHi(v)} step={0.1} />
+                  <CheckRow label="包含 Step (Arctan)" checked={deconvIncludeStep} onChange={setDeconvIncludeStep} />
+                  <CheckRow label="連動所有峰 FWHM" checked={deconvLinkFwhm} onChange={setDeconvLinkFwhm} />
+
+                  <div className="space-y-2">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">擬合峰</p>
+                    {deconvPeaks.map((pk, i) => (
+                      <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <input
+                            value={pk.name}
+                            onChange={e => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, name: e.target.value } : p))}
+                            placeholder={`峰 ${i + 1} 名稱`}
+                            className="w-full rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-[10px] text-[var(--input-text)] focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setDeconvPeaks(ps => ps.filter((_, j) => j !== i))}
+                            className="ml-1 shrink-0 text-[10px] text-rose-400 hover:text-rose-300"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1">
+                          <NumInput label="中心(eV)" value={pk.center} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, center: v } : p))} step={0.1} />
+                          <NumInput label="±偏移" value={pk.delta} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, delta: v } : p))} min={0} step={0.1} />
+                          <SelectInput label="峰形" value={pk.ptype} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, ptype: v as DeconvPeak['ptype'] } : p))} options={[{ value: 'gaussian', label: 'G' }, { value: 'lorentzian', label: 'L' }]} />
+                        </div>
+                      </div>
+                    ))}
                     <button
                       type="button"
-                      onClick={() => void runDeconv()}
-                      disabled={deconvLoading || !activeDataset}
-                      className="w-full rounded-lg bg-[var(--accent-strong)] px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                      onClick={() => setDeconvPeaks(ps => [...ps, { center: (energyMin + energyMax) / 2, delta: 2, name: '', ptype: 'gaussian' }])}
+                      className="w-full rounded-lg border border-dashed border-[var(--accent-soft)] py-1.5 text-[10px] text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
                     >
-                      {deconvLoading ? '擬合中…' : '執行 XANES 去卷積'}
+                      + 新增峰
                     </button>
-                    {deconvError && <p className="text-[10px] text-rose-400">{deconvError}</p>}
                   </div>
-                </div>
+
+                  <button
+                    type="button"
+                    onClick={() => void runDeconv()}
+                    disabled={deconvLoading || !activeDataset}
+                    className="w-full rounded-lg bg-[var(--accent-strong)] px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                  >
+                    {deconvLoading ? '擬合中…' : '執行 XANES 去卷積'}
+                  </button>
+                  {deconvError && <p className="text-[10px] text-rose-400">{deconvError}</p>}
+                </Section>
               )}
+              </div>
             </div>
           </>
         )}

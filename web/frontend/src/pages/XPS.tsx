@@ -127,12 +127,29 @@ function buildFitTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly
 
 // ── small UI pieces ───────────────────────────────────────────────────────────
 
-function SectionHeader({ n, label }: { n: number; label: string }) {
+function Section({ step, title, hint, children, defaultOpen = true }: {
+  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="border-b border-[var(--card-divider)] bg-[color:color-mix(in_srgb,var(--card-bg)_60%,transparent)] px-4 py-2.5">
-      <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--text-soft)]">
-        {n}. {label}
-      </span>
+    <div className="theme-block mb-3 overflow-hidden rounded-[22px]">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
+            {step}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
+            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+          </div>
+        </div>
+        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
+      </button>
+      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
     </div>
   )
 }
@@ -458,10 +475,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </div>
               </div>
 
-              {/* 1. 載入 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={1} label="載入檔案" />
-                <div className="space-y-3 p-4">
+              <div className="px-4 pt-4">
+              <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV">
                   <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat']} />
                   {rawFiles.length > 0 && (
                     <div className="space-y-1">
@@ -475,32 +490,20 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       <button onClick={() => { setRawFiles([]); setResult(null); setDetectedPeaks([]); setFitResult(null); setPeakCandidates([]) }} className="text-xs text-rose-400 hover:text-rose-300">清除全部</button>
                     </div>
                   )}
-                </div>
-              </div>
+              </Section>
 
-              {/* 2. 內插 / 平均 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={2} label="內插 / 平均" />
-                <div className="space-y-3 p-4">
+              <Section step={2} title="內插 / 平均" hint="多檔統一點數後平均" defaultOpen={false}>
                   <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
                   {params.interpolate && <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={5000} step={100} />}
                   {rawFiles.length > 1 && <CheckRow label="多檔平均" checked={params.average} onChange={set('average')} />}
-                </div>
-              </div>
+              </Section>
 
-              {/* 3. 能量校正 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={3} label="能量校正" />
-                <div className="p-4">
+              <Section step={3} title="能量校正" hint="C 1s = 284.8 eV" defaultOpen={false}>
                   <NumInput label="BE 位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
-                  <p className="mt-2 text-[10px] text-[var(--text-soft)]">正值向高 BE 方向移。常見校正：C 1s = 284.8 eV。</p>
-                </div>
-              </div>
+                  <p className="text-[10px] text-[var(--text-soft)]">正值向高 BE 方向移。常見校正：C 1s = 284.8 eV。</p>
+              </Section>
 
-              {/* 4. 背景扣除 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={4} label="背景扣除" />
-                <div className="space-y-3 p-4">
+              <Section step={4} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
                   <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
                   {params.bg_enabled && (
                     <>
@@ -527,26 +530,18 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       )}
                     </>
                   )}
-                </div>
-              </div>
+              </Section>
 
-              {/* 5. 平滑 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={5} label="平滑" />
-                <div className="space-y-3 p-4">
+              <Section step={5} title="平滑" hint="降噪處理" defaultOpen={false}>
                   <SelectInput label="方法" value={params.smooth_method} onChange={v => set('smooth_method')(v as ProcessParams['smooth_method'])}
                     options={[{ value: 'none', label: '不平滑' }, { value: 'moving_average', label: '移動平均' }, { value: 'savitzky_golay', label: 'Savitzky-Golay' }]}
                   />
                   {params.smooth_method !== 'none' && (
                     <NumInput label="窗口大小" value={params.smooth_window} onChange={set('smooth_window')} min={3} max={51} step={2} />
                   )}
-                </div>
-              </div>
+              </Section>
 
-              {/* 6. 歸一化 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={6} label="歸一化" />
-                <div className="space-y-3 p-4">
+              <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
                   <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
                     options={[{ value: 'none', label: '不歸一化' }, { value: 'min_max', label: 'Min–Max' }, { value: 'max', label: 'Max' }, { value: 'area', label: 'Area' }]}
                   />
@@ -556,13 +551,9 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       <NumInput label="結束 (eV)" value={params.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
                     </div>
                   )}
-                </div>
-              </div>
+              </Section>
 
-              {/* 7. 尋峰 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={7} label="自動尋峰" />
-                <div className="space-y-3 p-4">
+              <Section step={7} title="自動尋峰" hint="掃描峰位做擬合起點" defaultOpen={false}>
                   <CheckRow label="啟用自動尋峰" checked={peakEnabled} onChange={setPeakEnabled} />
                   {peakEnabled && (
                     <>
@@ -571,13 +562,9 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       <NumInput label="最多峰數" value={peakMaxPeaks} onChange={setPeakMaxPeaks} min={1} max={50} step={1} />
                     </>
                   )}
-                </div>
-              </div>
+              </Section>
 
-              {/* 8. 峰擬合 */}
-              <div className="border-b border-[var(--card-divider)]">
-                <SectionHeader n={8} label="峰擬合" />
-                <div className="space-y-3 p-4">
+              <Section step={8} title="峰擬合" hint="Voigt / Gaussian / Lorentzian" defaultOpen={false}>
                   <SelectInput label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
@@ -607,93 +594,87 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     </button>
                   )}
                   {fitError && <p className="text-xs text-rose-400">{fitError}</p>}
-                </div>
-              </div>
+              </Section>
 
               {/* 9. VBM 外推 (Valence Band mode only) */}
               {xpsMode === 'valence_band' && (
-                <div className="border-b border-[var(--card-divider)]">
-                  <SectionHeader n={9} label="VBM 線性外推" />
-                  <div className="space-y-3 p-4">
-                    <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="邊緣起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
-                      <NumInput label="邊緣終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
-                      <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
-                    </div>
-                    <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
-                      className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
-                    >
-                      {vbmLoading ? '計算中…' : '計算 VBM'}
-                    </button>
-                    {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
-                    {vbmResult?.success && (
-                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
-                        <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
-                        <p className="text-[var(--text-soft)]">斜率 = {vbmResult.slope.toFixed(4)} · 基準線 = {vbmResult.baseline_level.toFixed(2)}</p>
-                      </div>
-                    )}
+                <Section step={9} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
+                  <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="邊緣起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
+                    <NumInput label="邊緣終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
                   </div>
-                </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
+                    <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
+                  </div>
+                  <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
+                    className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
+                  >
+                    {vbmLoading ? '計算中…' : '計算 VBM'}
+                  </button>
+                  {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
+                  {vbmResult?.success && (
+                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
+                      <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
+                      <p className="text-[var(--text-soft)]">斜率 = {vbmResult.slope.toFixed(4)} · 基準線 = {vbmResult.baseline_level.toFixed(2)}</p>
+                    </div>
+                  )}
+                </Section>
               )}
 
               {/* 10. Band Offset (Valence Band mode only) */}
               {xpsMode === 'valence_band' && (
-                <div className="border-b border-[var(--card-divider)]">
-                  <SectionHeader n={10} label="能帶偏移" />
-                  <div className="space-y-3 p-4">
-                    <SelectInput label="方法" value={bandOffsetMethod}
-                      onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
-                      options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
-                    />
-                    {bandOffsetMethod === 'vbm_diff' && (
-                      <>
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumInput label="VBM_A (eV)" value={boVbmA} onChange={setBoVbmA} step={0.01} />
-                          <NumInput label="σ_A (eV)" value={boSigmaA} onChange={setBoSigmaA} min={0} step={0.001} />
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumInput label="VBM_B (eV)" value={boVbmB} onChange={setBoVbmB} step={0.01} />
-                          <NumInput label="σ_B (eV)" value={boSigmaB} onChange={setBoSigmaB} min={0} step={0.001} />
-                        </div>
-                        <p className="text-[10px] text-[var(--text-soft)]">ΔEV = VBM_A − VBM_B</p>
-                      </>
-                    )}
-                    {bandOffsetMethod === 'kraut' && (
-                      <>
-                        <p className="text-[10px] text-[var(--text-soft)]">ΔEV = (CL_A − VBM_A) − (CL_B − VBM_B) − (CL_A_int − CL_B_int)</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumInput label="CL_A 純樣 (eV)" value={boClA} onChange={setBoClA} step={0.01} />
-                          <NumInput label="VBM_A 純樣 (eV)" value={boVbmAPure} onChange={setBoVbmAPure} step={0.01} />
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumInput label="CL_B 純樣 (eV)" value={boClB} onChange={setBoClB} step={0.01} />
-                          <NumInput label="VBM_B 純樣 (eV)" value={boVbmBPure} onChange={setBoVbmBPure} step={0.01} />
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumInput label="CL_A 介面 (eV)" value={boClAInt} onChange={setBoClAInt} step={0.01} />
-                          <NumInput label="CL_B 介面 (eV)" value={boClBInt} onChange={setBoClBInt} step={0.01} />
-                        </div>
-                      </>
-                    )}
-                    <button type="button" onClick={computeBandOffset}
-                      className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 pressable"
-                    >
-                      計算能帶偏移
-                    </button>
-                    {bandOffsetResult && (
-                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
-                        <p className="font-semibold text-[var(--text-main)]">ΔEV = {bandOffsetResult.deltaEv.toFixed(3)} eV
-                          {bandOffsetResult.sigmaEv > 0 && ` ± ${bandOffsetResult.sigmaEv.toFixed(3)} eV`}
-                        </p>
+                <Section step={10} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
+                  <SelectInput label="方法" value={bandOffsetMethod}
+                    onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
+                    options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
+                  />
+                  {bandOffsetMethod === 'vbm_diff' && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput label="VBM_A (eV)" value={boVbmA} onChange={setBoVbmA} step={0.01} />
+                        <NumInput label="σ_A (eV)" value={boSigmaA} onChange={setBoSigmaA} min={0} step={0.001} />
                       </div>
-                    )}
-                  </div>
-                </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput label="VBM_B (eV)" value={boVbmB} onChange={setBoVbmB} step={0.01} />
+                        <NumInput label="σ_B (eV)" value={boSigmaB} onChange={setBoSigmaB} min={0} step={0.001} />
+                      </div>
+                      <p className="text-[10px] text-[var(--text-soft)]">ΔEV = VBM_A − VBM_B</p>
+                    </>
+                  )}
+                  {bandOffsetMethod === 'kraut' && (
+                    <>
+                      <p className="text-[10px] text-[var(--text-soft)]">ΔEV = (CL_A − VBM_A) − (CL_B − VBM_B) − (CL_A_int − CL_B_int)</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput label="CL_A 純樣 (eV)" value={boClA} onChange={setBoClA} step={0.01} />
+                        <NumInput label="VBM_A 純樣 (eV)" value={boVbmAPure} onChange={setBoVbmAPure} step={0.01} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput label="CL_B 純樣 (eV)" value={boClB} onChange={setBoClB} step={0.01} />
+                        <NumInput label="VBM_B 純樣 (eV)" value={boVbmBPure} onChange={setBoVbmBPure} step={0.01} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput label="CL_A 介面 (eV)" value={boClAInt} onChange={setBoClAInt} step={0.01} />
+                        <NumInput label="CL_B 介面 (eV)" value={boClBInt} onChange={setBoClBInt} step={0.01} />
+                      </div>
+                    </>
+                  )}
+                  <button type="button" onClick={computeBandOffset}
+                    className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 pressable"
+                  >
+                    計算能帶偏移
+                  </button>
+                  {bandOffsetResult && (
+                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
+                      <p className="font-semibold text-[var(--text-main)]">ΔEV = {bandOffsetResult.deltaEv.toFixed(3)} eV
+                        {bandOffsetResult.sigmaEv > 0 && ` ± ${bandOffsetResult.sigmaEv.toFixed(3)} eV`}
+                      </p>
+                    </div>
+                  )}
+                </Section>
               )}
+              </div>
             </div>
           </>
         )}

@@ -87,16 +87,29 @@ function downloadFile(name: string, content: string, mime = 'text/csv') {
 }
 
 // ── SidebarCard ───────────────────────────────────────────────────────────────
-function SidebarCard({ step, title, children }: { step: number; title: string; children: React.ReactNode }) {
+function SidebarCard({ step, title, hint, children, defaultOpen = true }: {
+  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="mb-3 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent-strong)] text-xs font-bold text-[var(--bg-canvas)]">
-          {step}
-        </span>
-        <span className="text-sm font-semibold text-[var(--text-main)]">{title}</span>
-      </div>
-      {children}
+    <div className="theme-block mb-3 overflow-hidden rounded-[22px]">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
+            {step}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
+            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+          </div>
+        </div>
+        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
+      </button>
+      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
     </div>
   )
 }
@@ -321,7 +334,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 2 */}
-              <SidebarCard step={2} title="內插 / 多檔平均">
+              <SidebarCard step={2} title="內插 / 多檔平均" defaultOpen={false}>
                 <label className="flex items-center gap-2 text-sm text-[var(--text-main)]">
                   <input type="checkbox" checked={params.interpolate} onChange={e => p('interpolate', e.target.checked)} />
                   內插至均勻網格
@@ -340,7 +353,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 3 */}
-              <SidebarCard step={3} title="BG1/BG2 背景扣除">
+              <SidebarCard step={3} title="BG1/BG2 背景扣除" defaultOpen={false}>
                 <Label>扣除方式</Label>
                 <Select value={params.bg_method} onChange={e => p('bg_method', e.target.value)}>
                   <option value="none">不扣除</option>
@@ -352,7 +365,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 4 */}
-              <SidebarCard step={4} title="平滑">
+              <SidebarCard step={4} title="平滑" defaultOpen={false}>
                 <Label>平滑方式</Label>
                 <Select value={params.smooth_method} onChange={e => p('smooth_method', e.target.value as ProcessParams['smooth_method'])}>
                   <option value="none">不平滑</option>
@@ -376,7 +389,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 5 */}
-              <SidebarCard step={5} title="歸一化">
+              <SidebarCard step={5} title="歸一化" defaultOpen={false}>
                 <Select value={params.norm_method} onChange={e => p('norm_method', e.target.value as ProcessParams['norm_method'])}>
                   <option value="none">不歸一化</option>
                   <option value="min_max">Min-Max</option>
@@ -401,7 +414,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 6 */}
-              <SidebarCard step={6} title="X 軸校正（pixel → eV）">
+              <SidebarCard step={6} title="X 軸校正（pixel → eV）" defaultOpen={false}>
                 <Label>校正方式</Label>
                 <Select value={params.axis_calibration} onChange={e => p('axis_calibration', e.target.value as ProcessParams['axis_calibration'])}>
                   <option value="none">不校正（保留 pixel / 原始 X）</option>
@@ -424,7 +437,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 7 */}
-              <SidebarCard step={7} title="參考峰">
+              <SidebarCard step={7} title="參考峰" defaultOpen={false}>
                 <Label>選擇材料</Label>
                 <div className="space-y-1">
                   {availableMaterials.map(m => (
@@ -443,7 +456,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 8 */}
-              <SidebarCard step={8} title="峰值偵測">
+              <SidebarCard step={8} title="峰值偵測" defaultOpen={false}>
                 <label className="flex items-center gap-2 text-sm text-[var(--text-main)]">
                   <input type="checkbox" checked={peakParams.enabled}
                     onChange={e => setPeakParams(p => ({ ...p, enabled: e.target.checked }))} />
@@ -473,7 +486,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </SidebarCard>
 
               {/* Step 9 */}
-              <SidebarCard step={9} title="能帶對齊（XES/XAS）">
+              <SidebarCard step={9} title="能帶對齊（XES/XAS）" defaultOpen={false}>
                 <label className="flex items-center gap-2 text-sm text-[var(--text-main)]">
                   <input type="checkbox" checked={bandParams.enabled} onChange={e => bp('enabled', e.target.checked)} />
                   啟用能帶對齊計算

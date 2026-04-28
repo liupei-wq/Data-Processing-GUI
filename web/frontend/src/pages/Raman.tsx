@@ -292,24 +292,34 @@ function SidebarCard({
   title,
   hint,
   children,
+  defaultOpen = true,
 }: {
   step: number
   title: string
   hint: string
   children: ReactNode
+  defaultOpen?: boolean
 }) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
     <div className="theme-block mb-3 overflow-hidden rounded-[24px]">
-      <div className="flex items-center gap-3 px-4 py-3">
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-          {step}
-        </span>
-        <div>
-          <div className="text-base font-semibold text-[var(--text-muted)]">{title}</div>
-          <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
+            {step}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
+            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+          </div>
         </div>
-      </div>
-      <div className="p-4 pt-2">{children}</div>
+        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
+      </button>
+      {open && <div className="p-4 pt-2">{children}</div>}
     </div>
   )
 }
@@ -827,7 +837,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={2} title="前處理" hint="去尖峰、內插、多檔平均">
+            <SidebarCard step={2} title="前處理" hint="去尖峰、內插、多檔平均" defaultOpen={false}>
               <label className="theme-block-soft mb-3 flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
                 <input
                   type="checkbox"
@@ -875,7 +885,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={3} title="背景與平滑" hint="baseline、平滑曲線形狀">
+            <SidebarCard step={3} title="背景與平滑" hint="baseline、平滑曲線形狀" defaultOpen={false}>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">背景方法</span>
                 <select value={params.bg_method} onChange={e => setParams(current => ({ ...current, bg_enabled: e.target.value !== 'none', bg_method: e.target.value as ProcessParams['bg_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
@@ -950,7 +960,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={4} title="歸一化與參考峰" hint="對照材料特徵峰">
+            <SidebarCard step={4} title="歸一化與參考峰" hint="對照材料特徵峰" defaultOpen={false}>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">歸一化方法</span>
                 <select value={params.norm_method} onChange={e => setParams(current => ({ ...current, norm_method: e.target.value as ProcessParams['norm_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
@@ -989,7 +999,7 @@ export default function Raman({
               <div className="mt-2 text-[11px] text-[var(--text-soft)]">可多選。圖上會加參考峰線，右側也會列出表格。</div>
             </SidebarCard>
 
-            <SidebarCard step={5} title="峰偵測" hint="快速掃出主要 peak 位置">
+            <SidebarCard step={5} title="峰偵測" hint="快速掃出主要 peak 位置" defaultOpen={false}>
               <label className="theme-block-soft mb-3 flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
                 <input
                   type="checkbox"
@@ -1021,7 +1031,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合">
+            <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false}>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">預設 FWHM</span>
                 <input
