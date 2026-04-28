@@ -454,3 +454,52 @@ cd web/frontend && npm install && npm run dev
 - 後續推送 GitHub 仍需要使用者提供：
   - GitHub repo URL，例如 `https://github.com/<user>/<repo>.git`
   - Git commit 作者名稱與 email，例如 `Name <email@example.com>`
+
+## 2026-04-29 Mac 啟動排查紀錄
+
+- 讀取 `CLAUDE.md` 後，檢查專案根目錄檔案與 `啟動_Mac.command` 狀態，確認該檔目前權限為 `-rw-rw-r--`，缺少可執行位元，Finder 雙擊時會直接出現「沒有適當的取用權限」。
+- 檢查 `啟動_Mac.command` 擴展屬性，發現存在 `com.apple.quarantine`，代表檔案帶有下載隔離標記，但這不是目前畫面中的第一層阻塞；第一層阻塞仍是缺少 executable bit。
+- 檢查 `啟動_Mac.command` 內容，確認腳本目前將 Python 寫死為 `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`，可用但可攜性差。
+- 檢查系統 Python 與 Streamlit：`python3 --version` 為 `Python 3.14.4`，`python3 -m streamlit --version` 為 `Streamlit 1.56.0`，表示本機已有可用執行環境。
+- 準備修正 `啟動_Mac.command`：改為優先使用 `command -v python3` 取得 Python，加入 Streamlit 檢查與啟動失敗提示，並補上可執行權限後再實測。
+- 已修改 `啟動_Mac.command`：加入 `cd` 失敗保護、優先使用 `command -v python3`、若找不到 Streamlit 則直接顯示安裝指令、30 秒未就緒時保留終端訊息供排錯。
+- 已執行 `chmod +x 啟動_Mac.command`，目前權限變為 `-rwxrwxr-x`，Finder 雙擊所需的 executable bit 已補上。
+- 已移除 `啟動_Mac.command` 的 `com.apple.quarantine`，剩餘屬性為 `com.apple.lastuseddate#PS`、`com.apple.macl`、`com.apple.provenance`。
+- 已用 `bash -n 啟動_Mac.command` 做語法檢查，結果通過。
+- 已在代理沙箱內實際執行 `./啟動_Mac.command`；腳本本身可執行，但 Streamlit 綁定 `localhost:8501` 時出現 `PermissionError: [Errno 1] Operation not permitted`。此錯誤高度疑似來自目前執行環境的 socket 權限限制，不能直接視為專案本身故障，需再做非沙箱驗證。
+- 已在非沙箱環境再次執行 `./啟動_Mac.command` 驗證，Streamlit 成功啟動並顯示 `URL: http://localhost:8501`，`curl -s http://localhost:8501/_stcore/health` 回傳 `ok`，確認修正後啟動流程正常。
+- 完成驗證後，將測試用啟動程序中止，避免持續佔用 `8501` port。
+
+## 2026-04-29 Web 版本閱讀與下一步判斷
+
+- 重新讀取 `CLAUDE.md`，確認檔內已有明確的 Web 版本段落：`## Web 版本（FastAPI + React）`，開始時間記錄為 2026-04-27，目標是把 Streamlit 版重寫成可部署到 Railway 的正式網站。
+- 依 `CLAUDE.md` 與實際目錄交叉確認，`web/` 目錄確實存在，包含 `web/backend/`、`web/frontend/`、`web/Dockerfile`、`web/docker-compose.yml`，不是只有規劃文字。
+- 檢查 `web/backend/main.py`，確認 FastAPI 已建立、已掛載 CORS、已註冊 `/api/xrd` router，並在 production 條件下可提供 React build 後的靜態檔。
+- 檢查 `web/backend/routers/xrd.py`，確認後端目前只完成 XRD API，且直接重用既有 `core/` 與 `db/` 邏輯，包含 parse、process、peaks、references、reference-peaks 等端點。
+- 檢查 `web/frontend/src/pages/XRD.tsx`、`web/frontend/src/api/xrd.ts`、`web/frontend/src/App.tsx`，確認前端目前主頁就是 XRD，已具備上傳、處理、參考峰與匯出流程；導覽列中的 Raman / XPS / XES 仍為 disabled，表示尚未 web 化。
+- 判斷結論：專案目前的網站版進度屬於「XRD 可當第一個 web 模組原型」，但整體產品離完整網站仍有明顯差距。若要繼續，最合理的順序不是重寫全部，而是先把 XRD 網頁版本機跑通並驗證，再選一個下一個模組做 API + 頁面移植。
+
+## 2026-04-29 GitHub 連接處理
+
+- 重新讀取 `CLAUDE.md` 後檢查 Git 狀態：目前專案目錄沒有 `.git`，`git rev-parse --is-inside-work-tree` 與 `git remote -v` 都回報 `fatal: not a git repository`，表示這份工作目錄目前尚未是 Git repo。
+- 檢查專案根目錄檔案，確認目前只有 `.gitignore`，沒有 `.git/` 目錄。
+- 以非沙箱網路驗證 `git ls-remote https://github.com/liupei-wq/Data-Processing-GUI.git`，確認 GitHub 上的 `liupei-wq/Data-Processing-GUI` 倉庫存在，且已有 `main` 分支與 commit `1ce8f5a1a2b11478feea438c60307eb88b552d5c`。
+- 判斷：要讓這份本機資料夾之後能正常推到 GitHub，下一步需要先在本機初始化 Git repo、設定 `origin` 指向該 GitHub 倉庫，並抓取遠端 `main` 供後續比對與對接。
+- 已執行 `git init -b main`，在專案根目錄建立本機 `.git/`。
+- 寫入 `origin` 時，普通沙箱執行 `git remote add origin ...` 因 `.git/config` 權限限制失敗；改以高權限重跑後成功，`origin` 現在指向 `https://github.com/liupei-wq/Data-Processing-GUI.git`。
+- 檢查 Git 作者資訊：`git config user.name` 為 `liupei-wq`，`git config user.email` 為 `peiliu001@gmail.com`。
+- 已以高權限執行 `git fetch origin main`，成功抓到遠端 `origin/main`。
+- 進一步檢查後確認：本機 `main` 目前仍是 `No commits yet on main` 的 unborn branch，而遠端 `origin/main` 已有歷史（最近可見 `1ce8f5a Merge remote main` 等 commit）。如果不把本機分支掛到遠端歷史上，之後第一次 push 很可能遇到 non-fast-forward 或需要額外 pull/rebase。
+- 決策：下一步要在不覆蓋目前工作樹檔案的前提下，將本機 `main` 指向 `origin/main` 並設定 upstream，讓之後的 commit/push 走正常 Git 流程。
+- 已以高權限執行 `git update-ref refs/heads/main refs/remotes/origin/main`，讓本機 `main` 指向遠端既有歷史；接著執行 `git branch --set-upstream-to=origin/main main`，目前 `main` 已追蹤 `origin/main`。
+- 驗證時發現 `git status` 同時出現大量 `D` 與 `??`，這不是檔案真的被刪除，而是因為前一步只接上分支參考，Git index 尚未同步到 `HEAD`。需要再做一次不改動工作樹內容的 `git reset --mixed HEAD` 來校正 index。
+- 已以高權限執行 `git reset --mixed HEAD` 同步 index 到目前 `HEAD`，未覆蓋工作樹；重檢後狀態已收斂為正常 Git 變更列表。
+- 最終驗證：
+  - `git branch -vv` 顯示 `main 1ce8f5a [origin/main]`
+  - `git remote -v` 顯示 fetch / push 都指向 `https://github.com/liupei-wq/Data-Processing-GUI.git`
+  - `git status --short --branch` 目前為 `main...origin/main`
+- 目前相對於 `origin/main` 的工作樹差異只剩：
+  - `CLAUDE.md` 修改
+  - `啟動_Mac.command` 修改
+  - `啟動_Windows.bat` 刪除
+- 結論：GitHub 已成功接上，之後只要照一般流程 `git add` → `git commit` → `git push` 即可推回 `liupei-wq/Data-Processing-GUI`。首次 push 仍可能需要 GitHub 驗證（瀏覽器登入、credential helper 或 personal access token），但 repo 連線與分支追蹤已完成。
