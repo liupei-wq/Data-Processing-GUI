@@ -193,43 +193,40 @@ export default function App() {
 
       <div className="workspace-launcher fixed right-0 top-1/2 z-30 -translate-y-1/2 pr-3 sm:pr-4">
         <div className="workspace-launcher__panel">
-          <div className="workspace-launcher__section">
-            <div className="workspace-launcher__title">分析模組</div>
-            {ANALYSIS_MODULES.map(item => {
-              const wsId = `workflow-${item.id}` as WorkspaceId
-              return (
+          {workspace.startsWith('tool-') ? (
+            <div className="workspace-launcher__section">
+              <div className="workspace-launcher__title">分析模組</div>
+              {ANALYSIS_MODULES.map(item => {
+                const wsId = `workflow-${item.id}` as WorkspaceId
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setWorkspace(wsId)}
+                    className="workspace-launcher__item pressable"
+                  >
+                    <span className="workspace-launcher__item-label">{item.label}</span>
+                    <span className="workspace-launcher__item-detail">{item.detail}</span>
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="workspace-launcher__section">
+              <div className="workspace-launcher__title">單一處理</div>
+              {TOOL_WORKSPACES.map(item => (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setWorkspace(wsId)}
-                  className={[
-                    'workspace-launcher__item pressable',
-                    workspace === wsId ? 'workspace-launcher__item--active' : '',
-                  ].join(' ')}
+                  onClick={() => setWorkspace(item.id)}
+                  className="workspace-launcher__item pressable"
                 >
                   <span className="workspace-launcher__item-label">{item.label}</span>
                   <span className="workspace-launcher__item-detail">{item.detail}</span>
                 </button>
-              )
-            })}
-          </div>
-          <div className="workspace-launcher__section">
-            <div className="workspace-launcher__title">單一處理</div>
-            {TOOL_WORKSPACES.map(item => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setWorkspace(item.id)}
-                className={[
-                  'workspace-launcher__item pressable',
-                  workspace === item.id ? 'workspace-launcher__item--active' : '',
-                ].join(' ')}
-              >
-                <span className="workspace-launcher__item-label">{item.label}</span>
-                <span className="workspace-launcher__item-detail">{item.detail}</span>
-              </button>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="workspace-launcher__tab">選單</div>
       </div>
