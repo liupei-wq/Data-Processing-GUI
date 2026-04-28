@@ -3,7 +3,7 @@ import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import AnalysisModuleNav from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { parseFiles, processData, detectPeaks, fitPeaks } from '../api/xps'
+import { parseFiles, processData, detectPeaks, fitPeaks, computeVbm, lookupRsf } from '../api/xps'
 import type {
   DatasetInput,
   DetectedPeak,
@@ -14,6 +14,9 @@ import type {
   ProcessParams,
   ProcessResult,
   ProcessedDataset,
+  VbmResult,
+  RsfRequestItem,
+  RsfResultRow,
 } from '../types/xps'
 
 const SIDEBAR_MIN_WIDTH = 300
@@ -237,6 +240,37 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [isFitting, setIsFitting] = useState(false)
   const [fitError, setFitError] = useState<string | null>(null)
 
+  // mode
+  const [xpsMode, setXpsMode] = useState<'core_level' | 'valence_band'>('core_level')
+
+  // VBM extrapolation
+  const [vbmEdgeLo, setVbmEdgeLo] = useState(1.0)
+  const [vbmEdgeHi, setVbmEdgeHi] = useState(5.0)
+  const [vbmBaselineLo, setVbmBaselineLo] = useState(10.0)
+  const [vbmBaselineHi, setVbmBaselineHi] = useState(15.0)
+  const [vbmResult, setVbmResult] = useState<VbmResult | null>(null)
+  const [vbmLoading, setVbmLoading] = useState(false)
+  const [vbmError, setVbmError] = useState<string | null>(null)
+
+  // Band Offset
+  const [bandOffsetMethod, setBandOffsetMethod] = useState<'vbm_diff' | 'kraut'>('vbm_diff')
+  const [boVbmA, setBoVbmA] = useState(0.0)
+  const [boSigmaA, setBoSigmaA] = useState(0.0)
+  const [boVbmB, setBoVbmB] = useState(0.0)
+  const [boSigmaB, setBoSigmaB] = useState(0.0)
+  const [boClA, setBoClA] = useState(0.0)
+  const [boVbmAPure, setBoVbmAPure] = useState(0.0)
+  const [boClB, setBoClB] = useState(0.0)
+  const [boVbmBPure, setBoVbmBPure] = useState(0.0)
+  const [boClAInt, setBoClAInt] = useState(0.0)
+  const [boClBInt, setBoClBInt] = useState(0.0)
+  const [bandOffsetResult, setBandOffsetResult] = useState<{ deltaEv: number; sigmaEv: number } | null>(null)
+
+  // RSF quantification
+  const [rsfRows, setRsfRows] = useState<{ peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]>([])
+  const [rsfLoading, setRsfLoading] = useState(false)
+  const [rsfError, setRsfError] = useState<string | null>(null)
+
   const activeDataset = result
     ? (result.average && params.average ? result.average : result.datasets[activeDatasetIdx] ?? null)
     : null
@@ -269,6 +303,17 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   useEffect(() => { localStorage.setItem('nigiro-xps-sidebar-width', String(sidebarWidth)) }, [sidebarWidth])
   useEffect(() => { localStorage.setItem('nigiro-xps-sidebar-collapsed', String(sidebarCollapsed)) }, [sidebarCollapsed])
 
+  useEffect(() => {
+    if (!fitResult) { setRsfRows([]); return }
+    setRsfRows(prev => {
+      const prevMap = new Map(prev.map(r => [r.peakName, r]))
+      return fitResult.peaks.map(pk => {
+        const existing = prevMap.get(pk.Peak_Name)
+        return existing ?? { peakName: pk.Peak_Name, element: '', orbitalLabel: '', rsf: null, source: '' }
+      })
+    })
+  }, [fitResult])
+
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault(); setSidebarResizing(true)
     const startX = e.clientX; const startW = sidebarWidth
@@ -290,6 +335,44 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
+
+  const computeVbmFn = async () => {
+    if (!activeDataset) return
+    setVbmLoading(true); setVbmError(null)
+    try {
+      const res = await computeVbm(activeDataset.x, activeDataset.y_processed, vbmEdgeLo, vbmEdgeHi, vbmBaselineLo, vbmBaselineHi)
+      setVbmResult(res)
+      if (!res.success) setVbmError(res.message || '計算失敗')
+    } catch (e: unknown) { setVbmError((e as Error).message) }
+    finally { setVbmLoading(false) }
+  }
+
+  const computeBandOffset = () => {
+    if (bandOffsetMethod === 'vbm_diff') {
+      const deltaEv = boVbmA - boVbmB
+      const sigmaEv = Math.sqrt(boSigmaA * boSigmaA + boSigmaB * boSigmaB)
+      setBandOffsetResult({ deltaEv, sigmaEv })
+    } else {
+      const deltaEv = (boClA - boVbmAPure) - (boClB - boVbmBPure) - (boClAInt - boClBInt)
+      setBandOffsetResult({ deltaEv, sigmaEv: 0 })
+    }
+  }
+
+  const lookupRsfFn = async () => {
+    const validCount = rsfRows.filter(r => r.element.trim() && r.orbitalLabel.trim()).length
+    if (validCount === 0) { setRsfError('請先填入元素與軌域標籤'); return }
+    setRsfLoading(true); setRsfError(null)
+    try {
+      const items: RsfRequestItem[] = rsfRows.map(r => ({ element: r.element.trim(), label: r.orbitalLabel.trim() }))
+      const results: RsfResultRow[] = await lookupRsf(items)
+      setRsfRows(prev => prev.map((row, idx) => ({
+        ...row,
+        rsf: results[idx]?.rsf ?? null,
+        source: results[idx]?.source ?? '',
+      })))
+    } catch (e: unknown) { setRsfError((e as Error).message) }
+    finally { setRsfLoading(false) }
+  }
 
   const addPeakFromDetected = (pk: DetectedPeak) => {
     if (!activeDataset) return
@@ -349,6 +432,21 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
             </div>
             <div className="flex-1 overflow-y-auto">
               <AnalysisModuleNav activeModule="xps" onSelectModule={onModuleSelect} />
+
+              {/* Mode toggle */}
+              <div className="border-b border-[var(--card-divider)] px-4 py-3">
+                <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模式</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(['core_level', 'valence_band'] as const).map(m => (
+                    <button key={m} type="button" onClick={() => setXpsMode(m)}
+                      className={['rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors pressable',
+                        xpsMode === m ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
+                    >
+                      {m === 'core_level' ? 'Core Level' : 'Valence Band'}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               {/* 1. 載入 */}
               <div className="border-b border-[var(--card-divider)]">
@@ -501,6 +599,91 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   {fitError && <p className="text-xs text-rose-400">{fitError}</p>}
                 </div>
               </div>
+
+              {/* 9. VBM 外推 (Valence Band mode only) */}
+              {xpsMode === 'valence_band' && (
+                <div className="border-b border-[var(--card-divider)]">
+                  <SectionHeader n={9} label="VBM 線性外推" />
+                  <div className="space-y-3 p-4">
+                    <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="邊緣起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
+                      <NumInput label="邊緣終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
+                      <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
+                    </div>
+                    <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
+                      className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
+                    >
+                      {vbmLoading ? '計算中…' : '計算 VBM'}
+                    </button>
+                    {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
+                    {vbmResult?.success && (
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
+                        <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
+                        <p className="text-[var(--text-soft)]">斜率 = {vbmResult.slope.toFixed(4)} · 基準線 = {vbmResult.baseline_level.toFixed(2)}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 10. Band Offset (Valence Band mode only) */}
+              {xpsMode === 'valence_band' && (
+                <div className="border-b border-[var(--card-divider)]">
+                  <SectionHeader n={10} label="能帶偏移" />
+                  <div className="space-y-3 p-4">
+                    <SelectInput label="方法" value={bandOffsetMethod}
+                      onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
+                      options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
+                    />
+                    {bandOffsetMethod === 'vbm_diff' && (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="VBM_A (eV)" value={boVbmA} onChange={setBoVbmA} step={0.01} />
+                          <NumInput label="σ_A (eV)" value={boSigmaA} onChange={setBoSigmaA} min={0} step={0.001} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="VBM_B (eV)" value={boVbmB} onChange={setBoVbmB} step={0.01} />
+                          <NumInput label="σ_B (eV)" value={boSigmaB} onChange={setBoSigmaB} min={0} step={0.001} />
+                        </div>
+                        <p className="text-[10px] text-[var(--text-soft)]">ΔEV = VBM_A − VBM_B</p>
+                      </>
+                    )}
+                    {bandOffsetMethod === 'kraut' && (
+                      <>
+                        <p className="text-[10px] text-[var(--text-soft)]">ΔEV = (CL_A − VBM_A) − (CL_B − VBM_B) − (CL_A_int − CL_B_int)</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="CL_A 純樣 (eV)" value={boClA} onChange={setBoClA} step={0.01} />
+                          <NumInput label="VBM_A 純樣 (eV)" value={boVbmAPure} onChange={setBoVbmAPure} step={0.01} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="CL_B 純樣 (eV)" value={boClB} onChange={setBoClB} step={0.01} />
+                          <NumInput label="VBM_B 純樣 (eV)" value={boVbmBPure} onChange={setBoVbmBPure} step={0.01} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="CL_A 介面 (eV)" value={boClAInt} onChange={setBoClAInt} step={0.01} />
+                          <NumInput label="CL_B 介面 (eV)" value={boClBInt} onChange={setBoClBInt} step={0.01} />
+                        </div>
+                      </>
+                    )}
+                    <button type="button" onClick={computeBandOffset}
+                      className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 pressable"
+                    >
+                      計算能帶偏移
+                    </button>
+                    {bandOffsetResult && (
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
+                        <p className="font-semibold text-[var(--text-main)]">ΔEV = {bandOffsetResult.deltaEv.toFixed(3)} eV
+                          {bandOffsetResult.sigmaEv > 0 && ` ± ${bandOffsetResult.sigmaEv.toFixed(3)} eV`}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -650,6 +833,120 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
+            {/* VBM extrapolation chart */}
+            {xpsMode === 'valence_band' && vbmResult?.success && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推</p>
+                <Plot
+                  data={[
+                    { x: activeDataset!.x, y: activeDataset!.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
+                    { x: vbmResult.x_fit, y: vbmResult.y_fit, type: 'scatter', mode: 'lines', name: '外推線', line: { color: '#f97316', width: 1.5, dash: 'dash' } },
+                    { x: vbmResult.x_fit.length > 0 ? [vbmResult.x_fit[0], vbmResult.x_fit[vbmResult.x_fit.length - 1]] : [], y: [vbmResult.baseline_level, vbmResult.baseline_level], type: 'scatter', mode: 'lines', name: '基準線', line: { color: '#a855f7', width: 1.2, dash: 'dot' } },
+                    ...(vbmResult.vbm_ev != null ? [{ x: [vbmResult.vbm_ev], y: [vbmResult.baseline_level], type: 'scatter' as const, mode: 'markers' as const, name: 'VBM', marker: { color: '#f97316', size: 10, symbol: 'diamond' as const } }] : []),
+                  ] as Plotly.Data[]}
+                  layout={{
+                    ...(chartLayout() as Plotly.Layout),
+                    margin: { l: 60, r: 20, t: 20, b: 50 },
+                    annotations: vbmResult.vbm_ev != null ? [{
+                      x: vbmResult.vbm_ev, y: vbmResult.baseline_level,
+                      text: `VBM = ${vbmResult.vbm_ev.toFixed(3)} eV`,
+                      showarrow: true, arrowhead: 2, ax: 50, ay: -35,
+                      font: { color: '#f97316', size: 11 }, arrowcolor: '#f97316',
+                    }] : [],
+                  }}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 280 }}
+                />
+              </div>
+            )}
+
+            {/* Band offset result */}
+            {xpsMode === 'valence_band' && bandOffsetResult && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">能帶偏移結果</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--accent-soft)_50%,var(--card-bg))] px-4 py-3">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">ΔEV</p>
+                    <p className="mt-1 text-xl font-semibold text-[var(--text-main)]">{bandOffsetResult.deltaEv.toFixed(3)} eV</p>
+                    {bandOffsetResult.sigmaEv > 0 && <p className="text-[11px] text-[var(--text-soft)]">± {bandOffsetResult.sigmaEv.toFixed(3)} eV</p>}
+                  </div>
+                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">方法</p>
+                    <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">
+                      {bandOffsetMethod === 'vbm_diff' ? 'VBM 差值法' : 'Kraut Method'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* RSF quantification */}
+            {fitResult && fitResult.peaks.length > 0 && rsfRows.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">RSF 定量分析</p>
+                  <button type="button" onClick={lookupRsfFn} disabled={rsfLoading}
+                    className="rounded-lg border border-[var(--accent-strong)] px-3 py-1 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 pressable"
+                  >
+                    {rsfLoading ? '查詢中…' : '查詢 RSF & 計算'}
+                  </button>
+                </div>
+                {rsfError && <p className="mb-2 text-xs text-rose-400">{rsfError}</p>}
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
+                      <th className="pb-2 text-left font-medium">峰</th>
+                      <th className="pb-2 text-left font-medium">元素</th>
+                      <th className="pb-2 text-left font-medium">軌域</th>
+                      <th className="pb-2 text-right font-medium">面積</th>
+                      <th className="pb-2 text-right font-medium">RSF</th>
+                      <th className="pb-2 text-right font-medium">Atomic %</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-[var(--text-main)]">
+                    {rsfRows.map((row, idx) => {
+                      const pk = fitResult.peaks[idx]
+                      const totalRsfArea = rsfRows.reduce((acc, r, i) => {
+                        const a = fitResult.peaks[i]?.Area ?? 0
+                        return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
+                      }, 0)
+                      const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
+                      const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
+                      return (
+                        <tr key={row.peakName} className="border-b border-[var(--card-divider)]">
+                          <td className="py-1.5 font-medium">{row.peakName}</td>
+                          <td className="py-1">
+                            <input value={row.element} placeholder="e.g. Ni"
+                              onChange={e => setRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, element: e.target.value } : r))}
+                              className="w-14 rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1.5 py-0.5 text-xs text-[var(--input-text)]"
+                            />
+                          </td>
+                          <td className="py-1">
+                            <input value={row.orbitalLabel} placeholder="2p3/2"
+                              onChange={e => setRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, orbitalLabel: e.target.value } : r))}
+                              className="w-16 rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1.5 py-0.5 text-xs text-[var(--input-text)]"
+                            />
+                          </td>
+                          <td className="py-1.5 text-right">{(pk?.Area ?? 0).toFixed(1)}</td>
+                          <td className="py-1.5 text-right">
+                            {row.rsf != null ? <span title={row.source}>{row.rsf.toFixed(2)}</span> : '—'}
+                          </td>
+                          <td className="py-1.5 text-right font-semibold text-[var(--accent-strong)]">
+                            {atomicPct != null ? `${atomicPct.toFixed(1)} %` : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                {rsfRows.some(r => r.rsf != null) && (
+                  <p className="mt-2 text-[10px] text-[var(--text-soft)]">
+                    RSF 來源：Scofield (1976)，Al Kα。Atomic% = (Area/RSF) / Σ(Area/RSF) × 100。
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* export */}
             <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</p>
@@ -672,6 +969,22 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']
                     const rows: (string | number | null)[][] = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
                     downloadFile(toCsv(headers, rows), 'xps_fit.csv', 'text/csv')
+                  }} />
+                )}
+                {rsfRows.some(r => r.rsf != null) && fitResult && (
+                  <ExportBtn label="RSF 定量 CSV" onClick={() => {
+                    const totalRsfArea = rsfRows.reduce((acc, r, i) => {
+                      const a = fitResult.peaks[i]?.Area ?? 0
+                      return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
+                    }, 0)
+                    const headers = ['Peak', 'Element', 'Orbital', 'Area', 'RSF', 'RSF_Area', 'Atomic_pct']
+                    const rows: (string | number | null)[][] = rsfRows.map((row, idx) => {
+                      const pk = fitResult.peaks[idx]
+                      const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
+                      const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
+                      return [row.peakName, row.element, row.orbitalLabel, pk?.Area ?? 0, row.rsf, rsfArea, atomicPct]
+                    })
+                    downloadFile(toCsv(headers, rows), 'xps_rsf_quantification.csv', 'text/csv')
                   }} />
                 )}
               </div>

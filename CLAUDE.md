@@ -169,7 +169,7 @@ sigma 用 quadrature 誤差傳播
 | **Raman** | ✅ 核心完成 | `web/backend/routers/raman.py` | `web/frontend/src/pages/Raman.tsx` |
 | **XRD** | ✅ 最完整 | `web/backend/routers/xrd.py` | `web/frontend/src/pages/XRD.tsx` |
 | **XAS** | ✅ 核心完成 | `web/backend/routers/xas.py` | `web/frontend/src/pages/XAS.tsx` |
-| **XPS** | ⚠️ 核心有，進階缺 | `web/backend/routers/xps.py` | `web/frontend/src/pages/XPS.tsx` |
+| **XPS** | ✅ 含進階功能 | `web/backend/routers/xps.py` | `web/frontend/src/pages/XPS.tsx` |
 | **XES** | ⚠️ 僅 1D 光譜模式 | `web/backend/routers/xes.py` | `web/frontend/src/pages/XES.tsx` |
 | SEM | ⏳ 未實作（Streamlit 版也無） | — | — |
 
@@ -180,7 +180,7 @@ sigma 用 quadrature 誤差傳播
 | Raman | preset 匯入/匯出、Si 應力估算 |
 | XRD | 幾乎完整 |
 | XAS | 高斯扣除步驟、XANES 去卷積擬合、二階微分輔助 |
-| XPS | **VBM 外推、Band Offset、Kraut Method、RSF 定量表格、Core Level / Valence Band 模式切換** |
+| XPS | preset 匯入/匯出（次要） |
 | XES | **FITS 原始影像模式**（ROI、曲率校正、hot pixel、sideband BG 等），I0 table，preset |
 
 ### 目錄結構
@@ -229,7 +229,7 @@ render.yaml                  # Render Blueprint，plan=free
 | `/api/xrd` | parse / process / peaks / references / reference-peaks | XRD 完整流程 |
 | `/api/raman` | parse / process / peaks / references / reference-peaks / fit | Raman + 峰擬合 |
 | `/api/xas` | parse / process | TEY+TFY 雙通道，energy/bg/norm/white-line |
-| `/api/xps` | parse / process / peaks / fit | Shirley/Tougaard 背景，峰擬合含 Area% |
+| `/api/xps` | parse / process / peaks / fit / vbm / rsf | Shirley/Tougaard 背景，峰擬合含 Area%，VBM 外推，RSF 定量 |
 | `/api/xes` | parse / process / peaks / references / reference-peaks | 1D 光譜模式，BG1/BG2 扣除，能帶對齊 |
 
 ### 前端 App 路由（App.tsx）
@@ -279,11 +279,20 @@ cd web/frontend && npm install && npm run dev
 - 後邊緣歸一化：`_normalize_post_edge(x, y, edge_region, norm_region)` → `(y - pre_mean) / edge_step`
 - 前端：TEY（藍）+ TFY（紫）分開繪圖，White Line 橘色虛線標記，post-edge 摘要表
 
-### XPS（x 軸反轉）
+### XPS（x 軸反轉，含進階分析）
 - 後端使用 `core/parsers.parse_xps_bytes`（支援多格式多編碼）
 - 背景：Shirley / Tougaard（B=2866/C=1643）/ Linear / Polynomial / AsLS / airPLS
 - 峰偵測時自動偵測並翻轉反向 x 軸（高 BE 在左）
 - 前端：圖表 `autorange: 'reversed'`，自動尋峰後可逐峰「加入擬合」或「全部加入」
+- **Core Level / Valence Band 模式切換**（sidebar 頂端 toggle）
+- **Valence Band 模式額外功能**：
+  - Step 9 VBM 外推：用戶設定邊緣區域與基準線區域 → 呼叫 `POST /api/xps/vbm` → 顯示 VBM + 外推線圖
+  - Step 10 能帶偏移：VBM差值法（ΔEV = VBM_A − VBM_B，含 quadrature σ）或 Kraut Method（6 個輸入值），前端計算，顯示結果卡
+- **RSF 定量分析**（Core/VB 兩模式均可，擬合後出現）：
+  - 每個擬合峰可填入元素（如 Ni）與軌域（如 2p3/2）
+  - 呼叫 `POST /api/xps/rsf` → 查詢 Scofield ORBITAL_RSF / ELEMENT_RSF
+  - 前端計算 Atomic% = (Area/RSF) / Σ(Area/RSF) × 100
+  - 可匯出 RSF 定量 CSV
 
 ---
 

@@ -80,3 +80,26 @@ export interface FitResult {
   residuals: number[]
   peaks: FitPeakRow[]
 }
+
+export interface VbmResult {
+  vbm_ev: number | null
+  slope: number
+  intercept: number
+  baseline_level: number
+  x_fit: number[]
+  y_fit: number[]
+  success: boolean
+  message: string
+}
+
+export interface RsfRequestItem {
+  element: string
+  label: string
+}
+
+export interface RsfResultRow {
+  element: string
+  label: string
+  rsf: number | null
+  source: string
+}

@@ -6,6 +6,9 @@ import type {
   ProcessParams,
   ProcessResult,
   DatasetInput,
+  VbmResult,
+  RsfRequestItem,
+  RsfResultRow,
 } from '../types/xps'
 
 const BASE = '/api/xps'
@@ -66,5 +69,35 @@ export async function fitPeaks(
     const detail = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(detail.detail ?? res.statusText)
   }
+  return res.json()
+}
+
+export async function computeVbm(
+  x: number[],
+  y: number[],
+  edgeLo: number,
+  edgeHi: number,
+  baselineLo: number,
+  baselineHi: number,
+): Promise<VbmResult> {
+  const res = await fetch(`${BASE}/vbm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x, y, edge_lo: edgeLo, edge_hi: edgeHi, baseline_lo: baselineLo, baseline_hi: baselineHi }),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(detail.detail ?? res.statusText)
+  }
+  return res.json()
+}
+
+export async function lookupRsf(items: RsfRequestItem[]): Promise<RsfResultRow[]> {
+  const res = await fetch(`${BASE}/rsf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(items),
+  })
+  if (!res.ok) throw new Error(`RSF lookup failed: ${res.statusText}`)
   return res.json()
 }

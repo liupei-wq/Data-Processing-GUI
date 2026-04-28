@@ -314,3 +314,99 @@ def fit_xps_peaks(req: FitRequest):
         residuals=result.get("residuals", []),
         peaks=rows,
     )
+
+
+# ── VBM linear extrapolation ──────────────────────────────────────────────────
+
+class VbmRequest(BaseModel):
+    x: List[float]
+    y: List[float]
+    edge_lo: float
+    edge_hi: float
+    baseline_lo: float
+    baseline_hi: float
+
+
+class VbmResponse(BaseModel):
+    vbm_ev: Optional[float]
+    slope: float
+    intercept: float
+    baseline_level: float
+    x_fit: List[float]
+    y_fit: List[float]
+    success: bool
+    message: str = ""
+
+
+@router.post("/vbm", response_model=VbmResponse)
+def compute_vbm(req: VbmRequest):
+    x = np.array(req.x, dtype=float)
+    y = np.array(req.y, dtype=float)
+
+    lo_e = min(req.edge_lo, req.edge_hi)
+    hi_e = max(req.edge_lo, req.edge_hi)
+    mask_edge = (x >= lo_e) & (x <= hi_e)
+    if mask_edge.sum() < 2:
+        return VbmResponse(vbm_ev=None, slope=0.0, intercept=0.0, baseline_level=0.0,
+                           x_fit=[], y_fit=[], success=False, message="邊緣區域點數不足")
+
+    coeffs = np.polyfit(x[mask_edge], y[mask_edge], 1)
+    slope, intercept = float(coeffs[0]), float(coeffs[1])
+
+    lo_b = min(req.baseline_lo, req.baseline_hi)
+    hi_b = max(req.baseline_lo, req.baseline_hi)
+    mask_bl = (x >= lo_b) & (x <= hi_b)
+    if mask_bl.sum() < 1:
+        return VbmResponse(vbm_ev=None, slope=slope, intercept=intercept, baseline_level=0.0,
+                           x_fit=[], y_fit=[], success=False, message="基準線區域點數不足")
+
+    baseline_level = float(np.mean(y[mask_bl]))
+
+    vbm_ev = None
+    success = False
+    message = ""
+    if abs(slope) > 1e-10:
+        vbm_ev = float((baseline_level - intercept) / slope)
+        success = True
+    else:
+        message = "斜率接近零，無法外推 VBM"
+
+    x_lo_plot = min(lo_e, float(vbm_ev) - 1.0) if vbm_ev is not None else lo_e - 1.0
+    x_hi_plot = max(hi_e, hi_b)
+    x_fit_arr = np.linspace(x_lo_plot, x_hi_plot, 80)
+    y_fit_arr = slope * x_fit_arr + intercept
+
+    return VbmResponse(
+        vbm_ev=vbm_ev,
+        slope=slope,
+        intercept=intercept,
+        baseline_level=baseline_level,
+        x_fit=x_fit_arr.tolist(),
+        y_fit=y_fit_arr.tolist(),
+        success=success,
+        message=message,
+    )
+
+
+# ── RSF lookup ────────────────────────────────────────────────────────────────
+
+class RsfItem(BaseModel):
+    element: str
+    label: str
+
+
+class RsfResultRow(BaseModel):
+    element: str
+    label: str
+    rsf: Optional[float]
+    source: str
+
+
+@router.post("/rsf", response_model=List[RsfResultRow])
+def get_rsf_values(items: List[RsfItem]):
+    from db.xps_database import get_orbital_rsf
+    results = []
+    for item in items:
+        rsf, source = get_orbital_rsf(item.element.strip(), item.label.strip())
+        results.append(RsfResultRow(element=item.element, label=item.label, rsf=rsf, source=source))
+    return results
