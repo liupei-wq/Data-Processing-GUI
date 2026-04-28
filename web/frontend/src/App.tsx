@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
+import { type AnalysisModuleId } from './components/AnalysisModuleNav'
+import Raman from './pages/Raman'
 import XRD from './pages/XRD'
 import SingleProcessTool, { type SingleToolKind } from './pages/SingleProcessTool'
 
 type ThemeId = 'apricot' | 'pearl' | 'ocean' | 'ink' | 'ember' | 'forest'
 type FontId = 'ui' | 'kai' | 'serif'
 type FontScale = 'sm' | 'md' | 'lg'
-type WorkspaceId = 'workflow-xrd' | `tool-${SingleToolKind}`
+type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | `tool-${SingleToolKind}`
 
 const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft' | 'square' }[] = [
   { id: 'apricot', label: '杏桃', tone: '暖奶油', shape: 'round' },
@@ -28,20 +30,14 @@ const FONT_SCALES: { id: FontScale; label: string }[] = [
   { id: 'lg', label: '大' },
 ]
 
-const WORKSPACES: {
-  id: WorkspaceId
-  section: 'flow' | 'tool'
-  label: string
-  detail: string
-}[] = [
-  { id: 'workflow-xrd', section: 'flow', label: 'XRD 完整流程', detail: '完整工作區' },
-  { id: 'tool-background', section: 'tool', label: '背景扣除', detail: '單一處理' },
-  { id: 'tool-normalize', section: 'tool', label: '歸一化', detail: '單一處理' },
-  { id: 'tool-gaussian', section: 'tool', label: '高斯模板扣除', detail: '單一處理' },
+const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
+  { id: 'tool-background', label: '背景扣除', detail: '單一處理' },
+  { id: 'tool-normalize', label: '歸一化', detail: '單一處理' },
+  { id: 'tool-gaussian', label: '高斯模板扣除', detail: '單一處理' },
 ]
 
 export default function App() {
-  const [workspace, setWorkspace] = useState<WorkspaceId>('workflow-xrd')
+  const [workspace, setWorkspace] = useState<WorkspaceId>('workflow-raman')
   const [theme, setTheme] = useState<ThemeId>(() => {
     const saved = localStorage.getItem('nigiro-theme') as ThemeId | 'midnight' | null
     if (saved === 'midnight') return 'apricot'
@@ -73,6 +69,11 @@ export default function App() {
     document.documentElement.dataset.scale = fontScale
     localStorage.setItem('nigiro-font-scale', fontScale)
   }, [fontScale])
+
+  const handleModuleSelect = (module: AnalysisModuleId) => {
+    if (module === 'raman') setWorkspace('workflow-raman')
+    if (module === 'xrd') setWorkspace('workflow-xrd')
+  }
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[var(--bg-canvas)] text-[var(--text-main)]">
@@ -187,26 +188,8 @@ export default function App() {
       <div className="workspace-launcher fixed right-0 top-1/2 z-30 -translate-y-1/2 pr-3 sm:pr-4">
         <div className="workspace-launcher__panel">
           <div className="workspace-launcher__section">
-            <div className="workspace-launcher__title">流程</div>
-            {WORKSPACES.filter(item => item.section === 'flow').map(item => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setWorkspace(item.id)}
-                className={[
-                  'workspace-launcher__item pressable',
-                  workspace === item.id ? 'workspace-launcher__item--active' : '',
-                ].join(' ')}
-              >
-                <span className="workspace-launcher__item-label">{item.label}</span>
-                <span className="workspace-launcher__item-detail">{item.detail}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="workspace-launcher__section">
             <div className="workspace-launcher__title">單一處理</div>
-            {WORKSPACES.filter(item => item.section === 'tool').map(item => (
+            {TOOL_WORKSPACES.map(item => (
               <button
                 key={item.id}
                 type="button"
@@ -226,7 +209,8 @@ export default function App() {
       </div>
 
       <main className="relative z-10 min-h-screen">
-        {workspace === 'workflow-xrd' && <XRD />}
+        {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} />}
+        {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} />}
         {workspace === 'tool-background' && <SingleProcessTool tool="background" />}
         {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" />}
         {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" />}

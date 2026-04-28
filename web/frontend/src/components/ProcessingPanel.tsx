@@ -81,7 +81,7 @@ function Section({
         <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
       </button>
 
-      {open && <div className="space-y-3 border-t border-[var(--card-divider)] p-4 pt-3">{children}</div>}
+      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
     </div>
   )
 }

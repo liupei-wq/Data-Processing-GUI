@@ -57,7 +57,7 @@ def area_voigt(amplitude: float, sigma: float, gamma: float) -> float:
 
 def fit_peaks(x, y, init_peaks, profile="voigt",
               manual_centers=None, manual_fwhms=None,
-              doublet_pairs=None):
+              doublet_pairs=None, maxfev=20000):
     """
     Fit a sum of peaks to (x, y) data.
 
@@ -203,7 +203,7 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
             return out
 
     try:
-        popt, _ = curve_fit(func, x, y, p0=p0, bounds=(lo, hi), maxfev=20000)
+        popt, _ = curve_fit(func, x, y, p0=p0, bounds=(lo, hi), maxfev=int(maxfev))
     except Exception as exc:
         return {"success": False, "message": f"擬合失敗：{exc}"}
 

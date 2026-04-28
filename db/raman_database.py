@@ -34,9 +34,11 @@ RAMAN_REFERENCES: dict[str, list[dict]] = {
     # First-order Raman-inactive; observed peaks are disorder/defect or magnon activated
     # Refs: Dietz et al. PRB 1971; Mironova-Ulmane et al. J. Phys. 2007
     "NiO": [
+        {"pos": 395,  "label": "TO",    "strength": 18, "note": "NiO TO (disorder-activated, weak and broad)"},
         {"pos": 457,  "label": "1M",    "strength": 50, "note": "NiO one-magnon"},
         {"pos": 570,  "label": "1LO",   "strength": 20, "note": "NiO 1LO (symmetry-forbidden, disorder-activated)"},
         {"pos": 730,  "label": "2P",    "strength": 45, "note": "NiO two-phonon (broad)"},
+        {"pos": 870,  "label": "TO+LO", "strength": 28, "note": "NiO TO+LO combination band (broad, disorder-sensitive)"},
         {"pos": 1090, "label": "2M/2LO","strength": 65, "note": "NiO two-magnon/2LO (most characteristic, broad)"},
     ],
 

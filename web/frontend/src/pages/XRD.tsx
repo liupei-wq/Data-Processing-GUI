@@ -25,6 +25,7 @@ import type {
   WavelengthPreset,
 } from '../types/xrd'
 import { detectPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
+import AnalysisModuleNav, { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import GaussianSubtractionChart from '../components/GaussianSubtractionChart'
 import SpectrumChart from '../components/SpectrumChart'
@@ -189,21 +190,16 @@ function buildReferenceMatches(
     })
 }
 
-const MODULE_CHOICES = [
-  { id: 'raman', label: 'Raman', detail: 'Coming soon', active: false },
-  { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction', active: true },
-  { id: 'xps', label: 'XPS', detail: 'Coming soon', active: false },
-  { id: 'xas', label: 'XAS', detail: 'Coming soon', active: false },
-  { id: 'xes', label: 'XES', detail: 'Coming soon', active: false },
-  { id: 'sem', label: 'SEM', detail: 'Coming soon', active: false },
-] as const
-
 const SIDEBAR_MIN_WIDTH = 320
 const SIDEBAR_MAX_WIDTH = 560
 const SIDEBAR_DEFAULT_WIDTH = 368
 const SIDEBAR_COLLAPSED_PEEK = 28
 
-export default function XRD() {
+export default function XRD({
+  onModuleSelect,
+}: {
+  onModuleSelect?: (module: AnalysisModuleId) => void
+}) {
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('nigiro-xrd-sidebar-width'))
     if (Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) {
@@ -419,7 +415,7 @@ export default function XRD() {
     <div className="min-h-screen xl:flex">
       <aside
         className={[
-          'glass-panel relative z-20 flex min-h-screen w-full flex-col overflow-hidden transition-[width,transform] duration-300 xl:w-[var(--sidebar-width)] xl:transform-gpu xl:[transform:translateX(var(--sidebar-shift))] xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0',
+          'module-sidebar glass-panel relative z-20 flex min-h-screen w-full flex-col overflow-hidden xl:w-[var(--sidebar-width)] xl:transform-gpu xl:[transform:translateX(var(--sidebar-shift))] xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0',
         ].join(' ')}
         style={sidebarStyle}
       >
@@ -441,8 +437,11 @@ export default function XRD() {
           <div className="mx-auto h-full w-px bg-[linear-gradient(180deg,transparent,var(--card-border),transparent)]" />
         </div>
 
-        <div className={sidebarCollapsed ? 'xl:pointer-events-none xl:opacity-0' : 'opacity-100'}>
-        <div className="border-b border-[var(--card-divider)] px-6 py-8">
+        <div className={[
+          'module-sidebar__content',
+          sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
+        ].join(' ')}>
+        <div className="px-6 py-8">
           <div className="flex items-center gap-4">
             <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] border border-[var(--pill-border)] bg-[radial-gradient(circle_at_30%_30%,color-mix(in_srgb,var(--accent-strong)_38%,white_8%),var(--card-bg-strong))] shadow-[var(--card-shadow)]">
               <span className="font-display text-3xl font-bold tracking-[0.04em] text-[var(--accent-contrast)]">N</span>
@@ -458,41 +457,9 @@ export default function XRD() {
           </div>
         </div>
 
-        <div className="border-b border-[var(--card-divider)] px-6 py-5">
-          <p className="text-sm font-semibold text-[var(--text-main)]">分析模組</p>
-          <div className="mt-3 space-y-2">
-            {MODULE_CHOICES.map(module => (
-              <button
-                key={module.id}
-                type="button"
-                disabled={!module.active}
-                className={[
-                  'flex w-full items-center justify-between px-4 py-3 text-left transition-colors shadow-[var(--card-shadow-soft)]',
-                  module.active
-                    ? 'theme-pill rounded-[24px] text-[var(--text-main)]'
-                    : 'theme-block-soft rounded-[16px] text-[var(--text-soft)] opacity-85',
-                ].join(' ')}
-              >
-                <div className="flex items-center gap-3">
-                  <span
-                    className={[
-                      'h-4 w-4 rounded-full border',
-                      module.active
-                        ? 'border-[var(--accent-secondary)] bg-[var(--accent-secondary)]'
-                        : 'border-[var(--card-border)] bg-transparent',
-                    ].join(' ')}
-                  />
-                  <div>
-                    <div className="text-sm font-semibold">{module.label}</div>
-                    <div className="text-[11px] text-[var(--text-soft)]">{module.detail}</div>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
+        <AnalysisModuleNav activeModule="xrd" onSelectModule={onModuleSelect} />
 
-        <div className="border-b border-[var(--card-divider)] px-6 py-5">
+        <div className="px-6 py-4">
           <div className="grid grid-cols-3 gap-2">
             <div className="theme-block-soft rounded-[18px] px-3 py-2">
               <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
@@ -524,7 +491,7 @@ export default function XRD() {
                 </div>
               </div>
             </div>
-            <div className="border-t border-[var(--card-divider)] p-4 pt-3">
+            <div className="p-4 pt-2">
               <div className="mb-3 text-sm font-medium text-[var(--text-main)]">上傳 XRD 檔案（可多選）</div>
               <FileUpload onFiles={handleFiles} isLoading={isLoading} />
               {rawFiles.length > 0 && (

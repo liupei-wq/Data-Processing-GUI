@@ -294,6 +294,8 @@
   html {
     min-height: 100%;
     background: var(--bg-gradient);
+    font-size: var(--base-font-size, 16px);
+    transition: font-size 180ms ease;
   }
 
   body {
@@ -302,7 +304,7 @@
     color: var(--text-main);
     background: transparent;
     font-family: var(--body-font, 'IBM Plex Sans', 'Segoe UI', sans-serif);
-    font-size: var(--base-font-size, 16px);
+    font-size: 1rem;
   }
 
   #root {
@@ -320,6 +322,26 @@
     border: 1px solid var(--panel-border);
     box-shadow: var(--panel-shadow);
     backdrop-filter: blur(16px);
+  }
+
+  .module-sidebar {
+    transition:
+      width 340ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 340ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 220ms ease;
+    will-change: width, transform;
+  }
+
+  .module-sidebar__content {
+    transition:
+      opacity 220ms ease,
+      filter 220ms ease,
+      transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .module-sidebar__content--collapsed {
+    filter: blur(2px);
+    transform: translateX(-0.35rem);
   }
 
   .theme-dock {
@@ -421,12 +443,6 @@
       transform 180ms ease;
   }
 
-  .workspace-launcher__section + .workspace-launcher__section {
-    margin-top: 0.95rem;
-    padding-top: 0.95rem;
-    border-top: 1px solid var(--card-divider);
-  }
-
   .workspace-launcher__title {
     margin-bottom: 0.55rem;
     font-size: 0.72rem;
@@ -480,7 +496,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 8rem;
+    min-height: 6.4rem;
     padding: 0.95rem 0.75rem;
     border-radius: 18px 0 0 18px;
     border: 1px solid color-mix(in srgb, var(--accent-strong) 42%, var(--pill-border));

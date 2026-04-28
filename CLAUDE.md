@@ -1432,3 +1432,263 @@ cd web/frontend && npm install && npm run dev
 - 目前仍存在但不阻擋 build 的訊息：
   - Vite chunk size warning 仍在。
   - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 Raman 網站版第一版規劃
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求開始推進下一個分析模組，先做 Raman。
+- 調查結果：
+  - 桌面版已有完整 Raman Streamlit workflow，檔案在 `modules/raman.py`。
+  - 核心可重用能力已存在：
+    - `parse_two_column_spectrum_bytes`
+    - `despike_signal`
+    - `apply_background`
+    - `smooth_signal`
+    - `apply_normalization`
+    - `detect_spectrum_peaks`
+    - `db/raman_database.py`
+  - 網站後端目前只有 `xrd.py`，Raman API 尚未建立。
+- 本輪決策：
+  - 不直接搬整份桌面版 Raman UI。
+  - 先做網站版 Raman 第一版，範圍包含：
+    - 檔案上傳 / 解析
+    - 去尖峰
+    - 內插 / 多檔平均
+    - 背景扣除
+    - 平滑
+    - 歸一化
+    - 參考材料 / 參考峰顯示
+    - 基本峰偵測
+  - 先不做桌面版那一整套峰擬合管理、人工峰表編輯、QC review 與 preset 匯入匯出，避免網站版第一版過重。
+- 預定修改檔案：
+  - `web/backend/main.py`
+  - `web/backend/routers/raman.py`（新增）
+  - `web/frontend/src/api/raman.ts`（新增）
+  - `web/frontend/src/types/raman.ts`（新增）
+  - `web/frontend/src/pages/Raman.tsx`（新增）
+  - `web/frontend/src/components/AnalysisModuleNav.tsx`（新增）
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+
+## 2026-04-29 Raman 網站版第一版完成
+
+- 已修改檔案：
+  - `web/backend/main.py`
+  - `web/backend/routers/raman.py`
+  - `web/frontend/src/api/raman.ts`
+  - `web/frontend/src/types/raman.ts`
+  - `web/frontend/src/pages/Raman.tsx`
+  - `web/frontend/src/components/AnalysisModuleNav.tsx`
+  - `web/frontend/src/components/FileUpload.tsx`
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+- 本輪實作結果：
+  - 新增網站後端 Raman router：
+    - `/api/raman/parse`
+    - `/api/raman/process`
+    - `/api/raman/peaks`
+    - `/api/raman/references`
+    - `/api/raman/reference-peaks`
+  - `raman.py` 的處理順序為：
+    - 去尖峰
+    - 內插
+    - 多檔平均
+    - 背景扣除
+    - 平滑
+    - 歸一化
+  - 新增網站版 Raman 頁面 `web/frontend/src/pages/Raman.tsx`：
+    - 左欄可拖曳調寬
+    - 左欄可收合
+    - 支援檔案上傳
+    - 支援去尖峰、內插、多檔平均、背景扣除、平滑、歸一化
+    - 支援 Raman 參考材料多選
+    - 支援基本峰偵測
+    - 右側顯示原始 / 去尖峰後 / 背景基準線 / 處理後曲線
+    - 右側顯示峰表與參考峰表
+  - 新增共用模組導覽 `AnalysisModuleNav.tsx`：
+    - 固定順序 `Raman → XRD → XPS → XAS → XES → SEM`
+    - `Raman` 與 `XRD` 目前可切換
+    - 其他模組維持 `Coming soon`
+  - `App.tsx` 已把完整流程區擴成：
+    - `Raman 完整流程`
+    - `XRD 完整流程`
+  - `App.tsx` 預設 workspace 已切到 `Raman`，符合本輪開始推進 Raman 的需求。
+  - `FileUpload.tsx` 已改成可傳入 `moduleLabel`，避免 UI 文案永遠寫死 `XRD`。
+  - `XRD.tsx` 已改用共用模組導覽，左側可直接切到 Raman。
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+  - 執行 `python3 -m py_compile web/backend/main.py web/backend/routers/raman.py web/backend/routers/xrd.py` 已成功通過。
+- 本輪未做：
+  - 尚未搬入桌面版 Raman 的完整 peak fitting 管理、手動峰表編輯、QC review、preset 匯入匯出。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 UI 細修與 Raman 狀態釐清
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求處理 4 個 UI 問題，並釐清 Raman 是否已補完。
+- Raman 狀態：
+  - Raman 目前只完成「網站版第一版」。
+  - 還沒有補完到和桌面版等量功能。
+  - 尚未搬入的部分包括：
+    - 完整 peak fitting 管理
+    - 手動峰表編輯
+    - QC review
+    - preset 匯入 / 匯出
+- 本輪使用者要求：
+  - 左邊欄縮放改平滑
+  - 右邊選單刪掉流程，只剩單一處理
+  - 字體大小改了沒有用，要修正
+  - 左邊欄很多框線要拿掉
+- 已修改檔案：
+  - `web/frontend/src/index.css`
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/components/AnalysisModuleNav.tsx`
+  - `web/frontend/src/components/ProcessingPanel.tsx`
+  - `web/frontend/src/pages/XRD.tsx`
+  - `web/frontend/src/pages/Raman.tsx`
+- 本輪實作結果：
+  - `index.css`
+    - 把字級切換改成作用在 `html` root font-size，而不是只改 `body`。
+    - 新增 `module-sidebar` / `module-sidebar__content` 動畫 class，讓左欄收合與展開更平滑。
+  - `App.tsx`
+    - 右側 hover 抽屜已移除 `流程` 區，只保留 `單一處理`。
+  - `AnalysisModuleNav.tsx`
+    - 移除外層底部分隔線。
+  - `ProcessingPanel.tsx`
+    - 移除各 section header 下方的分隔線。
+  - `XRD.tsx`
+    - 左欄改套用新的平滑 sidebar 動畫 class。
+    - 拿掉品牌區、統計區、上傳卡內部的部分分隔線。
+  - `Raman.tsx`
+    - 左欄改套用新的平滑 sidebar 動畫 class。
+    - 拿掉品牌區、統計區與 SidebarCard 內容區的部分分隔線。
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+  - 執行 `python3 -m py_compile web/backend/main.py web/backend/routers/raman.py web/backend/routers/xrd.py` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 Raman 峰位管理與峰擬合第一批搬入
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求繼續把 Raman 功能搬進網站版。
+- 本輪策略：
+  - 優先搬 `峰位管理 + 執行擬合`。
+  - 先不做桌面版那一整套 QC review 與 preset。
+- 已修改檔案：
+  - `web/backend/routers/raman.py`
+  - `web/frontend/src/api/raman.ts`
+  - `web/frontend/src/types/raman.ts`
+  - `web/frontend/src/pages/Raman.tsx`
+- 本輪實作結果：
+  - 後端 `raman.py` 新增 `/api/raman/fit`。
+  - `/api/raman/fit` 會呼叫 `core/peak_fitting.py` 的 `fit_peaks()`，對目前選定 Raman 光譜做 peak fitting。
+  - 前端 `types/raman.ts` 新增：
+    - `FitPeakCandidate`
+    - `FitParams`
+    - `FitPeakRow`
+    - `FitResult`
+  - 前端 `api/raman.ts` 新增 `fitSpectrum()`。
+  - `Raman.tsx` 左欄新增 `峰位管理與擬合` 區塊：
+    - 可把目前參考材料的 reference peaks 載入到峰位表
+    - 可清空峰位表
+    - 可手動新增峰位
+    - 可編輯每個峰的：
+      - 啟用狀態
+      - 顯示名稱
+      - 材料
+      - 峰位
+      - FWHM
+    - 可選擇擬合對象
+      - `Average`
+      - 個別 dataset
+    - 可選擇擬合輪廓
+      - `Voigt`
+      - `Gaussian`
+      - `Lorentzian`
+    - 可直接執行峰擬合
+  - `Raman.tsx` 右側新增峰擬合結果區：
+    - 擬合輸入曲線
+    - 總擬合曲線
+    - 各個獨立峰曲線
+    - 殘差
+    - R² 顯示
+    - 擬合結果表
+- Raman 目前狀態更新：
+  - 已不再只是「前處理 + 參考峰 + 基本峰偵測」。
+  - 現在已補進第一批峰位管理與峰擬合能力。
+  - 但仍未補完桌面版的：
+    - QC review / 自動停用規則
+    - preset 匯入 / 匯出
+    - 更完整的峰位表批次管理流程
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+  - 執行 `python3 -m py_compile web/backend/main.py web/backend/routers/raman.py web/backend/routers/xrd.py` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 Raman 可疑峰條件、多選停用、自動二次擬合、NiO 峰補充
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求繼續補 Raman，並處理指定峰資料與二次擬合流程。
+- 使用者需求：
+  - Raman 新增 NiO 的 `TO`、`TO+LO` 峰。
+  - 列出非可疑峰名稱。
+  - 提供可疑峰相關的二次擬合流程。
+  - 加入擬合迭代次數設定、自動迭代回合與停止條件。
+  - 停用條件要能多選後一次執行，不是按一個條件就跑一次。
+- 已修改檔案：
+  - `db/raman_database.py`
+  - `core/peak_fitting.py`
+  - `web/backend/routers/raman.py`
+  - `web/frontend/src/api/raman.ts`
+  - `web/frontend/src/types/raman.ts`
+  - `web/frontend/src/pages/Raman.tsx`
+- 本輪實作結果：
+  - `db/raman_database.py`
+    - `NiO` 新增：
+      - `TO` at `395 cm⁻¹`
+      - `TO+LO` at `870 cm⁻¹`
+  - `core/peak_fitting.py`
+    - `fit_peaks()` 新增 `maxfev` 參數，可調單次 nonlinear fitting 的迭代上限。
+  - `web/backend/routers/raman.py`
+    - `/api/raman/fit` 新增 `maxfev` 參數，直接傳給 `fit_peaks()`。
+  - `web/frontend/src/types/raman.ts`
+    - `FitParams` 新增 `maxfev`。
+  - `web/frontend/src/api/raman.ts`
+    - `fitSpectrum()` 會送出 `maxfev`。
+  - `web/frontend/src/pages/Raman.tsx`
+    - 峰位管理區新增：
+      - `單次擬合迭代上限`
+      - `自動二次擬合最多回合`
+      - `沒有新的可疑峰時自動停止`
+    - 可疑峰停用條件改成多選：
+      - `Area = 0`
+      - `Area% 過低`
+      - `|Δ| 過大`
+    - 新增 `依停用條件自動二次擬合` 按鈕。
+    - 自動二次擬合流程會：
+      - 先對目前峰位表做擬合
+      - 依多選停用條件找出可疑峰
+      - 把符合條件的峰停用
+      - 重新擬合
+      - 直到沒有新的可疑峰、沒有新變更，或達到回合上限
+    - 右側峰擬合結果區新增：
+      - `非可疑峰名稱` 清單
+      - `可疑峰清單`
+      - `自動二次擬合摘要`
+        - 自動回合數
+        - 停止原因
+        - 被停用峰名稱
+- Raman 目前狀態更新：
+  - 已補進第一版可疑峰條件與自動二次擬合流程。
+  - 但仍未搬完桌面版的：
+    - 更完整 QC review 表編輯流程
+    - preset 匯入 / 匯出
+    - 其他桌面版追溯 / 匯出整理介面
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+  - 執行 `python3 -m py_compile web/backend/main.py web/backend/routers/raman.py web/backend/routers/xrd.py core/peak_fitting.py db/raman_database.py` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。

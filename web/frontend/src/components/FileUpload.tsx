@@ -4,9 +4,10 @@ import { useDropzone } from 'react-dropzone'
 interface Props {
   onFiles: (files: File[]) => void
   isLoading: boolean
+  moduleLabel?: string
 }
 
-export default function FileUpload({ onFiles, isLoading }: Props) {
+export default function FileUpload({ onFiles, isLoading, moduleLabel = 'XRD' }: Props) {
   const onDrop = useCallback(
     (accepted: File[]) => {
       if (accepted.length > 0) onFiles(accepted)
@@ -45,7 +46,7 @@ export default function FileUpload({ onFiles, isLoading }: Props) {
           <div className="theme-pill inline-flex rounded-2xl px-4 py-2 text-base font-semibold text-[var(--text-main)]">
             Upload
           </div>
-          <p className="mt-4 text-sm font-medium text-[var(--text-main)]">拖曳或點擊上傳 XRD 檔案</p>
+          <p className="mt-4 text-sm font-medium text-[var(--text-main)]">拖曳或點擊上傳 {moduleLabel} 檔案</p>
           <p className="mt-1 text-xs text-[var(--text-soft)]">500MB per file • TXT, CSV, XY, ASC, DAT</p>
         </>
       )}
