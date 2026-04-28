@@ -11,3 +11,8 @@ __pycache__/
 
 # VS Code
 .vscode/
+
+# Runtime logs
+*.log
+*.err.log
+*.out.log

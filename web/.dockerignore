@@ -1,0 +1,6 @@
+web/frontend/node_modules
+web/frontend/dist
+**/__pycache__
+**/*.pyc
+.git
+.streamlit

@@ -349,6 +349,73 @@ Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與
 - 2026-04-26：新增主畫面低透明度資料處理浮貼裝飾。
 - 2026-04-26：XAS sidebar 順序調整為背景扣除、歸一化、高斯扣除、XANES 去卷積擬合。
 - 2026-04-26：本次重新評估所有資料處理類型，並重寫 `CLAUDE.md`。
+- 2026-04-28：整理根目錄：刪除 `CLAUDE拷貝.md`（舊格式版本）、刪除 4 個 runtime log 檔（streamlit_launcher / streamlit_ui_settings），並在 `.gitignore` 補上 `*.log / *.err.log / *.out.log` 排除規則。
+- 2026-04-27：XPS Valence Band Band Offset 區塊重構：新增「VBM 差值法（僅表面量測）」與「Kraut Method」兩種方法，透過 radio 切換。VBM 差值法適用於 XPS 穿透深度 < 3 nm（如 620 eV 同步輻射）、無法同時量兩材料 CL 的情況；Kraut 保留給有界面樣品的使用者。兩者均支援從已外推的 VB 資料集自動帶入 VBM、σ 誤差輸入、quadrature 誤差傳播、能帶示意圖與 CSV 匯出。
+
+## Web 版本（FastAPI + React）
+
+> 2026-04-27 開始開發，目標：將 Streamlit 版本重寫為可部署到 Railway 的正式 Web App。
+
+### 目錄結構
+
+```
+web/
+├── backend/
+│   ├── main.py              # FastAPI 入口，自動 import core/ + db/
+│   ├── requirements.txt
+│   └── routers/
+│       └── xrd.py           # XRD 5 個 API endpoints
+├── frontend/
+│   ├── package.json         # React 18 + Vite + Tailwind + Plotly.js
+│   ├── vite.config.ts       # dev 模式 proxy /api → port 8000
+│   └── src/
+│       ├── pages/XRD.tsx    # 主頁面（所有狀態在這）
+│       ├── components/
+│       │   ├── FileUpload.tsx       # 拖曳上傳（react-dropzone）
+│       │   ├── SpectrumChart.tsx    # Plotly.js 互動圖表
+│       │   └── ProcessingPanel.tsx  # 側欄步驟控制項
+│       ├── api/xrd.ts        # API 呼叫函式
+│       └── types/xrd.ts      # TypeScript 型別定義
+├── Dockerfile               # 多階段 build：Node → Python + 靜態服務
+└── docker-compose.yml
+railway.toml                 # Railway 部署設定
+```
+
+### 後端 API（XRD）
+
+| Endpoint | 說明 |
+|---|---|
+| `POST /api/xrd/parse` | 上傳檔案 → 解析 x/y 陣列 |
+| `POST /api/xrd/process` | 平滑 + 歸一化 → 處理後資料 |
+| `POST /api/xrd/peaks` | 自動偵測峰值 |
+| `GET /api/xrd/references` | 取得參考材料清單 |
+| `POST /api/xrd/reference-peaks` | 取得參考峰 2θ 位置 |
+
+後端直接 import `core/` + `db/`，**不需重寫任何運算邏輯**。
+
+### 本機啟動
+
+```bash
+# Terminal 1：後端
+cd web && uvicorn backend.main:app --reload --port 8000
+
+# Terminal 2：前端
+cd web/frontend && npm install && npm run dev
+# 瀏覽器開 http://localhost:3000
+```
+
+### 部署到 Railway
+
+1. Push 整個 repo 到 GitHub
+2. Railway 新建 Service → 選「Deploy from GitHub」
+3. Railway 自動讀取 `railway.toml`，使用 `web/Dockerfile` build
+4. 環境變數不需額外設定（PORT 由 Railway 自動注入）
+
+### 開發規則
+
+- 前端只做 UI 與 API 呼叫，**不做任何科學運算**
+- 新增模組時：先在 `web/backend/routers/` 加 router，再加 React page
+- 現有 Streamlit 版本（`app.py`）繼續維護，兩版並行
 
 ## 驗證紀錄
 
@@ -369,3 +436,5 @@ Nigiro Pro 是以 Streamlit 製作的科學數據處理 GUI，主軸是光譜與
 - 2026-04-26：修正右下角設定 popover 出現厚黑外框的問題；將 BaseWeb popover 外層改為透明、移除外層 padding/border/shadow，並把卡片背景、邊框、陰影套在 stPopoverBody / stVerticalBlockBorderWrapper 內容層。驗證：`uv run python -m py_compile app.py` 通過，`git diff --check` 通過。
 
 - 2026-04-26：依使用者回饋微調右下角設定 popover；保留外框但將外框 padding 縮到 8px，內部設定卡改為 12px 圓角與緊湊 padding，並重新整理標題、radio 標籤、選項 pill 的字距與行距。驗證：`uv run python -m py_compile app.py` 通過，`git diff --check` 通過。
+- 2026-04-27：建立 Web 版本骨架（FastAPI + React）。後端 `web/backend/` 直接 import 現有 `core/` + `db/`，提供 XRD 五個 API endpoints；前端 `web/frontend/` 使用 React 18 + Vite + Tailwind + Plotly.js，實作拖曳上傳、平滑/歸一化/波長/參考峰 sidebar、互動圖表與 CSV 匯出。部署方案：`web/Dockerfile`（多階段 build）+ `railway.toml`（Railway 一鍵部署）。驗證：`python3 -m py_compile web/backend/main.py web/backend/routers/xrd.py` ✅。
+- 2026-04-28：XPS Valence Band Band Offset → VBM 差值法：在材料 A / 材料 B 兩欄各新增「上傳 VB 光譜」功能，程式自動解析、套用能量校正與背景扣除、做 VBM 線性外推，並顯示光譜圖與 VBM metric。不上傳則退回原有「從主流程帶入 / 手動輸入」模式。用途：讓使用者直接比較 1019（NiO）與 1008（Ga₂O₃）兩個樣品的 VB 光譜，在同一頁面算出 ΔEV。驗證：`python3 -m py_compile modules/xps.py` ✅。
