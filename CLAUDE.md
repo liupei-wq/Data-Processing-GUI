@@ -1244,3 +1244,51 @@ cd web/frontend && npm install && npm run dev
 - 目前仍存在但不阻擋 build 的訊息：
   - Vite chunk size warning 仍在。
   - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 主題替換：移除深藍，新增自由發揮主題
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求調整主題組合。
+- 使用者要求：
+  - 移除原本的深藍主題。
+  - 由我自由補一個新主題進去。
+- 本輪處理方向：
+  - `web/frontend/src/App.tsx`：刪除 `midnight` 主題選項，補新的主題 id、標題、描述與預設值。
+  - `web/frontend/src/index.css`：刪除 `midnight` 對應色票，新增一組新的主題色彩與陰影配置。
+- 新主題方向先定為：
+  - 偏暖的奶油 / 杏桃 / 珊瑚感介面，與目前 `柔白`、`黑曜`、`海霧` 拉開差異。
+- 實作結果：
+  - 已移除 `midnight` 主題。
+  - 新增 `apricot` 主題，中文標示為 `杏桃`，色調為奶油 / 珊瑚 / 暖米色。
+  - `App.tsx` 的預設主題已改成 `apricot`。
+  - 若使用者瀏覽器 localStorage 還留著舊的 `midnight`，會自動轉成 `apricot`，避免切換後出現無效主題值。
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 主題入口改為右下角齒輪 hover 展開
+
+- 重新讀取 `CLAUDE.md` 後，依使用者要求調整主題入口互動。
+- 使用者要求：
+  - 不要固定在右上角。
+  - 改成右下角齒輪。
+  - 滑鼠移過去時自動感應並展開主題面板。
+- 本輪預定修改方向：
+  - `web/frontend/src/App.tsx`：把目前固定右上角的主題面板改成右下角 gear launcher + hover 展開面板。
+  - `web/frontend/src/index.css`：補齒輪 hover 動畫、展開過場與 hover hit area 樣式。
+- 已修改檔案：
+  - `web/frontend/src/App.tsx`
+  - `web/frontend/src/index.css`
+- 本輪實作結果：
+  - 原本固定在右上角的主題面板已移除。
+  - 新增右下角齒輪按鈕，作為主題入口。
+  - 滑鼠移入齒輪或展開區域時，主題面板會自動打開。
+  - 滑鼠移開後，主題面板會收回。
+  - 齒輪在 hover / focus-within 狀態會旋轉並加強陰影，讓互動感更明確。
+  - 主題面板展開位置改為齒輪上方，靠右對齊。
+- 驗證：
+  - 在 `web/frontend/` 執行 `npm run build` 已成功通過。
+- 目前仍存在但不阻擋 build 的訊息：
+  - Vite chunk size warning 仍在。
+  - `postcss.config.js` 的 module type warning 仍在。

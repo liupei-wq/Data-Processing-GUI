@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import XRD from './pages/XRD'
 
-type ThemeId = 'midnight' | 'pearl' | 'ink' | 'ocean'
+type ThemeId = 'apricot' | 'pearl' | 'ink' | 'ocean'
 
 const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft' | 'square' }[] = [
-  { id: 'midnight', label: '深藍', tone: '藍 / 青', shape: 'round' },
+  { id: 'apricot', label: '杏桃', tone: '奶油 / 珊瑚', shape: 'round' },
   { id: 'pearl', label: '柔白', tone: '米白 / 淺藍', shape: 'soft' },
   { id: 'ink', label: '黑曜', tone: '黑 / 白', shape: 'square' },
   { id: 'ocean', label: '海霧', tone: '海藍 / 青綠', shape: 'soft' },
@@ -12,7 +12,9 @@ const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft
 
 export default function App() {
   const [theme, setTheme] = useState<ThemeId>(() => {
-    return (localStorage.getItem('nigiro-theme') as ThemeId) ?? 'midnight'
+    const saved = localStorage.getItem('nigiro-theme') as ThemeId | 'midnight' | null
+    if (saved === 'midnight') return 'apricot'
+    return saved ?? 'apricot'
   })
 
   useEffect(() => {
@@ -28,8 +30,8 @@ export default function App() {
         <div className="hero-grid" />
       </div>
 
-      <div className="fixed right-4 top-4 z-40 sm:right-6 sm:top-6">
-        <div className="theme-dock">
+      <div className="theme-launcher fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6">
+        <div className="theme-dock theme-launcher__panel">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">
@@ -81,6 +83,10 @@ export default function App() {
             ))}
           </div>
         </div>
+
+        <button type="button" className="theme-launcher__gear" aria-label="打開主題設定">
+          <span className="theme-launcher__gear-icon">⚙</span>
+        </button>
       </div>
 
       <main className="relative z-10 min-h-screen">
