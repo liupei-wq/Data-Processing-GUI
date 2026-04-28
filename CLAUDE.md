@@ -1720,3 +1720,56 @@ cd web/frontend && npm install && npm run dev
 - 目前仍存在但不阻擋 build 的訊息：
   - Vite chunk size warning 仍在。
   - `postcss.config.js` 的 module type warning 仍在。
+
+## 2026-04-29 網站版 XAS + XPS 搬運完成
+
+- 重新讀取 `CLAUDE.md` 後，繼續搬運模組。本輪完成 XAS 與 XPS 兩個模組的後端 + 前端完整接線。
+
+### XAS（web 版）
+
+後端：`web/backend/routers/xas.py`
+- 自行移植 parser helper（不依賴 streamlit imports）：`_is_numeric_line`、`_parse_xas_table_bytes`、`_prepare_tey_tfy_auto`
+- 支援 6 欄同步輻射 DAT 格式（Energy/Phase/Gap/TFY/TEY/I0）與 3 欄純數字格式
+- `POST /api/xas/parse`：TFY 翻轉選項
+- `POST /api/xas/process`：能量校正、內插/平均、背景扣除（linear/polynomial/asls/airpls）、歸一化（min_max/max/area/post_edge）、White Line 搜尋
+- 後邊緣歸一化使用 `_normalize_post_edge(x, y, edge_region, norm_region)`
+
+前端：`web/frontend/src/pages/XAS.tsx`
+- 可調側欄（300–520 px）
+- 6 個步驟：載入資料 / 內插+平均 / 能量校正 / 背景扣除 / 歸一化 / White Line 搜尋
+- TEY（藍）與 TFY（紫）分開繪製，White Line 以橘色虛線標記
+- 摘要卡、後邊緣歸一化結果表、CSV 匯出
+
+### XPS（web 版）
+
+後端：`web/backend/routers/xps.py`
+- `POST /api/xps/parse`：使用 `core/parsers.parse_xps_bytes`
+- `POST /api/xps/process`：背景（Shirley/Tougaard/Linear/Polynomial/AsLS/airPLS）、平滑、歸一化
+- `POST /api/xps/peaks`：自動尋峰，自動處理反向 x 軸（高 BE 在左）
+- `POST /api/xps/fit`：使用 `core/peak_fitting.fit_peaks`，回傳 y_fit/y_individual/residuals/peaks 含 Area_pct
+
+前端：`web/frontend/src/pages/XPS.tsx`
+- 可調側欄（300–540 px）
+- 8 個步驟：載入 / 內插+平均 / 能量校正 / 背景扣除 / 平滑 / 歸一化 / 自動尋峰 / 峰擬合
+- 圖表 x 軸反轉（XPS 慣例，高 BE 在左）
+- 自動尋峰後可逐峰「加入擬合」或「全部加入擬合」
+- 可手動新增峰、刪除峰
+- 峰擬合選 Voigt/Gaussian/Lorentzian，結果圖同時顯示 raw/fit/residual/individual peaks
+- 匯出：處理後 CSV、偵測峰 CSV、擬合結果 CSV
+
+### App 接線
+
+- `web/frontend/src/App.tsx`：import XPS、新增 `workflow-xps` 至 WorkspaceId、handleModuleSelect 加 xps、渲染 `<XPS />`
+- `web/frontend/src/components/AnalysisModuleNav.tsx`：XPS 改為 `ready: true`、detail 改為 `X-ray Photoelectron Spectroscopy`
+
+### 驗證
+
+- `python3 -m py_compile web/backend/routers/xas.py web/backend/routers/xps.py` ✅
+- `git diff --check` 通過
+- commit：`6e5f032` (feat: 網站版新增 XAS + XPS 模組)
+
+### 目前狀態
+
+- 網站版已完成模組：Raman ✅ / XRD ✅ / XAS ✅ / XPS ✅
+- 尚未搬運：XES（FITS 影像讀取，最複雜，暫緩）
+- 下一步可考慮：push 到 GitHub 觸發 Render/Railway 重新部署，或繼續改其他功能
