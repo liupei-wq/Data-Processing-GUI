@@ -72,7 +72,10 @@ export interface RefPeak {
   fwhm_min: number
   fwhm_max: number
   profile: RamanProfile
+  allowed_profiles: RamanProfile[]
   peak_type: string
+  anchor_peak: boolean
+  can_be_quantified: boolean
   related_technique: string
   reference: string
   oxidation_state: string
@@ -81,7 +84,7 @@ export interface RefPeak {
   note: string
 }
 
-export type RamanProfile = 'gaussian' | 'lorentzian' | 'voigt' | 'pseudo_voigt' | 'split_pseudo_voigt'
+export type RamanProfile = 'gaussian' | 'lorentzian' | 'voigt' | 'pseudo_voigt' | 'split_pseudo_voigt' | 'super_gaussian'
 export type AssignmentInference = 'Direct' | 'Inferred' | 'Not applicable'
 export type ConfidenceLevel = 'High' | 'Medium' | 'Low'
 export type RobustLoss = 'linear' | 'soft_l1' | 'huber' | 'cauchy' | 'arctan'
@@ -100,7 +103,10 @@ export interface FitPeakCandidate {
   fwhm_min: number
   fwhm_max: number
   profile: RamanProfile | ''
+  allowed_profiles: RamanProfile[]
   peak_type: string
+  anchor_peak: boolean
+  can_be_quantified: boolean
   species: string
   theoretical_center: number | null
   related_technique: string
@@ -130,6 +136,9 @@ export interface FitParams {
   fit_hi: number | null
   robust_loss: RobustLoss
   segment_weights: SegmentWeight[]
+  residual_target_enabled: boolean
+  residual_target: number
+  residual_target_rounds: number
 }
 
 export interface FitPeakRow {
@@ -146,6 +155,8 @@ export interface FitPeakRow {
   Assignment_Basis: string
   Profile: RamanProfile
   Peak_Type: string
+  Anchor_Peak: boolean
+  Can_Be_Quantified: boolean
   Ref_cm: number | null
   Tolerance_cm: number
   Center_Min_cm: number | null
@@ -160,6 +171,8 @@ export interface FitPeakRow {
   Area: number
   Area_pct: number
   SNR: number | null
+  Fit_Status: string
+  Physical_Confidence: ConfidenceLevel
   Confidence: ConfidenceLevel
   Quality_Flags: string[]
   Group_Shift_cm: number | null
@@ -178,6 +191,14 @@ export interface ResidualDiagnostics {
   Max_Residual_Range: string
   Segment_480_570_RMSE: number | null
   Segment_480_570_MaxAbs: number | null
+  Local_Ranges: Array<{
+    Range: string
+    Lo_cm: number
+    Hi_cm: number
+    RMSE: number | null
+    MaxAbs: number | null
+    Warning: string
+  }>
   Suggestions: string[]
 }
 

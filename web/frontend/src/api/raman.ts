@@ -98,7 +98,10 @@ export async function fetchPeakLibrary(): Promise<RefPeak[]> {
     fwhm_min: row.fwhm_min,
     fwhm_max: row.fwhm_max,
     profile: row.profile,
+    allowed_profiles: row.allowed_profiles ?? [],
     peak_type: row.peak_type,
+    anchor_peak: Boolean(row.anchor_peak),
+    can_be_quantified: row.can_be_quantified !== false,
     related_technique: row.related_technique,
     reference: row.reference,
     oxidation_state: row.oxidation_state,
@@ -129,6 +132,9 @@ export async function fitSpectrum(
       fit_hi: params.fit_hi,
       robust_loss: params.robust_loss,
       segment_weights: params.segment_weights,
+      residual_target_enabled: params.residual_target_enabled,
+      residual_target: params.residual_target,
+      residual_target_rounds: params.residual_target_rounds,
     }),
   })
   if (!res.ok) {

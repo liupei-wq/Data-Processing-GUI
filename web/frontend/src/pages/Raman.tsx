@@ -73,6 +73,9 @@ const DEFAULT_FIT_PARAMS: FitParams = {
   fit_hi: null,
   robust_loss: 'linear',
   segment_weights: [],
+  residual_target_enabled: false,
+  residual_target: 0.05,
+  residual_target_rounds: 4,
 }
 
 type ReviewRule = 'area_zero' | 'low_area' | 'large_delta' | 'boundary' | 'broad' | 'low_confidence'
@@ -89,6 +92,7 @@ const REVIEW_RULE_OPTIONS: { id: ReviewRule; label: string }[] = [
 const PROFILE_OPTIONS: { value: RamanProfile; label: string }[] = [
   { value: 'voigt', label: 'Voigt' },
   { value: 'pseudo_voigt', label: 'pseudo-Voigt' },
+  { value: 'super_gaussian', label: 'flat-top / super-Gaussian (model component)' },
   { value: 'split_pseudo_voigt', label: 'asymmetric / split pseudo-Voigt' },
   { value: 'gaussian', label: 'Gaussian' },
   { value: 'lorentzian', label: 'Lorentzian' },
@@ -123,7 +127,10 @@ function refPeakToCandidate(peak: RefPeak, defaultFwhm: number): FitPeakCandidat
     fwhm_min: peak.fwhm_min,
     fwhm_max: peak.fwhm_max,
     profile: peak.profile || '',
+    allowed_profiles: peak.allowed_profiles || [],
     peak_type: peak.peak_type || '',
+    anchor_peak: peak.anchor_peak || false,
+    can_be_quantified: peak.can_be_quantified ?? true,
     species: peak.species || '',
     theoretical_center: peak.theoretical_center ?? peak.position_cm,
     related_technique: peak.related_technique || 'Raman',
@@ -162,7 +169,10 @@ function normalizeCandidate(candidate: Partial<FitPeakCandidate>): FitPeakCandid
     fwhm_min: fwhmMin,
     fwhm_max: fwhmMax,
     profile: candidate.profile || '',
+    allowed_profiles: candidate.allowed_profiles || [],
     peak_type: candidate.peak_type || '',
+    anchor_peak: candidate.anchor_peak ?? false,
+    can_be_quantified: candidate.can_be_quantified ?? true,
     species: candidate.species || '',
     theoretical_center: candidate.theoretical_center ?? candidate.ref_position_cm ?? position,
     related_technique: candidate.related_technique || 'Raman',
@@ -199,7 +209,7 @@ function fitChartTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly
       y: yLine,
       type: 'scatter',
       mode: 'lines',
-      name: row?.Peak_Name || `Peak ${idx + 1}`,
+      name: row ? fitPeakLabel(row) : `Peak ${idx + 1}`,
       line: { width: 1.75, dash: 'dash' },
       opacity: 0.95,
     })
@@ -226,6 +236,10 @@ function fitChartTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly
   )
 
   return traces
+}
+
+function fitPeakLabel(row: FitResult['peaks'][number]) {
+  return `${row.Peak_Name} ${row.Center_cm.toFixed(1)} cm⁻¹`
 }
 
 function fitChartLayout(): Partial<Plotly.Layout> {
@@ -287,6 +301,14 @@ function peakStatusLabel(row: FitResult['peaks'][number] | undefined, maxAbsDelt
 function isSuggestedEdit(row: FitResult['peaks'][number] | undefined, maxAbsDelta: number) {
   if (!row) return false
   return peakStatusLabel(row, maxAbsDelta) !== 'OK'
+}
+
+function isAnchorCandidate(candidate: FitPeakCandidate) {
+  const center = candidate.ref_position_cm ?? candidate.theoretical_center ?? candidate.position_cm
+  const phase = `${candidate.phase} ${candidate.material}`.toLowerCase()
+  return Boolean(candidate.anchor_peak) ||
+    (phase.includes('si') && Math.abs(center - 520.7) <= 3) ||
+    (phase.includes('ga₂o₃') && (Math.abs(center - 416) <= 3 || Math.abs(center - 651) <= 3))
 }
 
 function downloadFile(content: string, filename: string, mime: string) {
@@ -552,6 +574,13 @@ export default function Raman({
     disabledPeakNames: string[]
     stopReason: string
   } | null>(null)
+  const [autoDebugSummary, setAutoDebugSummary] = useState<{
+    rounds: number
+    actions: string[]
+    beforeMaxResidual: number | null
+    afterMaxResidual: number | null
+    stopReason: string
+  } | null>(null)
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [fitTargetName, setFitTargetName] = useState<string>('')
   const [isFitting, setIsFitting] = useState(false)
@@ -632,8 +661,9 @@ export default function Raman({
   useEffect(() => {
     setFitResult(null)
     setAutoRefitSummary(null)
+    setAutoDebugSummary(null)
     setBatchResults([])
-  }, [selectedSeries, params, result, fitCandidates, fitParams, fitTargetName])
+  }, [selectedSeries, params, result, fitTargetName])
 
   useEffect(() => {
     const options = [
@@ -766,7 +796,10 @@ export default function Raman({
         fwhm_min: manualPeakFwhmMin,
         fwhm_max: manualPeakFwhmMax,
         profile: manualPeakProfile,
+        allowed_profiles: ['gaussian', 'lorentzian', 'voigt', 'pseudo_voigt', 'split_pseudo_voigt'],
         peak_type: 'custom',
+        anchor_peak: false,
+        can_be_quantified: true,
         species: '',
         theoretical_center: manualPeakPosition,
         related_technique: 'Raman',
@@ -835,6 +868,29 @@ export default function Raman({
     }
   }), [fitCandidates, fitParams.profile, fitRowsById, reviewMaxAbsDelta])
 
+  const applyProfileToSuggestedPeaks = useCallback((nextProfile: RamanProfile) => {
+    const suggestedIds = new Set(
+      peakTableRows
+        .filter(item => item.suggested)
+        .map(item => item.candidate.peak_id),
+    )
+    if (suggestedIds.size === 0) return
+    setFitCandidates(current => current.map(item => (
+      item.enabled && suggestedIds.has(item.peak_id)
+        ? { ...item, profile: nextProfile }
+        : item
+    )))
+  }, [peakTableRows])
+
+  const applyFlexibleProfileToLowShiftPeaks = useCallback(() => {
+    setFitCandidates(current => current.map(item => {
+      const center = item.ref_position_cm ?? item.theoretical_center ?? item.position_cm
+      return item.enabled && Number.isFinite(center) && center <= 500
+        ? { ...item, profile: 'split_pseudo_voigt' }
+        : item
+    }))
+  }, [])
+
   const editingCandidate = useMemo(
     () => fitCandidates.find(item => item.peak_id === editingPeakId) ?? null,
     [editingPeakId, fitCandidates],
@@ -888,9 +944,9 @@ export default function Raman({
       }
       setFitResult(response)
       setAutoRefitSummary(null)
+      setAutoDebugSummary(null)
     } catch (e: unknown) {
       setError((e as Error).message)
-      setFitResult(null)
     } finally {
       setIsFitting(false)
     }
@@ -936,8 +992,11 @@ export default function Raman({
         }
         finalResult = response
 
+        const candidateById = new Map(workingCandidates.map(item => [item.peak_id, item]))
         const toDisable = response.peaks
           .filter(row => {
+            const candidate = candidateById.get(row.Peak_ID)
+            if (candidate && isAnchorCandidate(candidate)) return false
             const flags = getFitQualityFlags(row, reviewMinAreaPct, reviewMaxAbsDelta)
             return flags.some(flag => (
               (selectedReviewRules.includes('area_zero') && flag === 'Area=0') ||
@@ -986,6 +1045,7 @@ export default function Raman({
         disabledPeakNames: Array.from(disabledPeakNames),
         stopReason,
       })
+      setAutoDebugSummary(null)
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally {
@@ -1000,6 +1060,254 @@ export default function Raman({
     reviewMaxAbsDelta,
     reviewMinAreaPct,
     selectedReviewRules,
+  ])
+
+  const runAutoDebugRefit = useCallback(async () => {
+    if (!activeFitDataset) {
+      setError('目前沒有可用於擬合的曲線')
+      return
+    }
+    if (fitCandidates.filter(item => item.enabled).length === 0) {
+      setError('請先在峰位表啟用至少一個峰')
+      return
+    }
+
+    let workingCandidates = fitCandidates.map(item => ({ ...item }))
+    let finalResult: FitResult | null = null
+    let rounds = 0
+    let stopReason = '未開始'
+    let beforeMaxResidual: number | null = null
+    let afterMaxResidual: number | null = null
+    let needsFinalFit = false
+    const actions: string[] = []
+    const target = Math.max(Number(fitParams.residual_target || 0.05), 1e-6)
+    const maxRounds = Math.max(1, Math.min(8, Math.round(fitParams.residual_target_rounds || autoRefitMaxRounds || 4)))
+    const debugFitParams: FitParams = { ...fitParams, residual_target_enabled: false }
+
+    const fitWorkingCandidates = async (candidates: FitPeakCandidate[]) => {
+      const enabledCandidates = candidates.filter(item => item.enabled)
+      if (enabledCandidates.length === 0) {
+        throw new Error('所有峰位都已被停用')
+      }
+      const response = await fitSpectrum(
+        activeFitDataset.name,
+        activeFitDataset.x,
+        activeFitDataset.y_processed,
+        enabledCandidates,
+        debugFitParams,
+      )
+      if (!response.success) {
+        throw new Error(response.message || '峰擬合失敗')
+      }
+      return response
+    }
+
+    const peakCenter = (candidate: FitPeakCandidate) => (
+      candidate.ref_position_cm ?? candidate.theoretical_center ?? candidate.position_cm
+    )
+
+    setIsFitting(true)
+    setError(null)
+    try {
+      for (let round = 1; round <= maxRounds; round += 1) {
+        rounds = round
+        const response = await fitWorkingCandidates(workingCandidates)
+        finalResult = response
+        needsFinalFit = false
+        const maxResidual = response.residual_diagnostics.Global_MaxAbs
+        beforeMaxResidual ??= maxResidual
+        afterMaxResidual = maxResidual
+
+        if (maxResidual <= target) {
+          stopReason = `已低於目標 residual ${target.toFixed(3)}`
+          break
+        }
+
+        const rowsById = new Map(response.peaks.map(row => [row.Peak_ID, row]))
+        let changed = false
+        let nextCandidates = workingCandidates.map(candidate => {
+          if (!candidate.enabled) return candidate
+          const row = rowsById.get(candidate.peak_id)
+          if (!row) return candidate
+
+          const flags = getFitQualityFlags(row, reviewMinAreaPct, reviewMaxAbsDelta)
+          const patch: Partial<FitPeakCandidate> = {}
+          const label = candidate.display_name || candidate.label || candidate.peak_id
+          const absDelta = row.Delta_cm == null ? 0 : Math.abs(row.Delta_cm)
+
+          if (
+            row.Boundary_Peak ||
+            flags.includes('boundary peak') ||
+            flags.includes('center outside tolerance') ||
+            absDelta > reviewMaxAbsDelta
+          ) {
+            if (candidate.lock_center) {
+              patch.lock_center = false
+              actions.push(`R${round}: ${label} 解除中心鎖定；保留 hard center range ±${candidate.tolerance_cm.toFixed(1)} cm⁻¹`)
+            } else {
+              actions.push(`R${round}: ${label} 撞中心 hard limit，未自動放寬`)
+            }
+          }
+
+          const fwhmLimitHit =
+            flags.includes('FWHM at limit') ||
+            flags.includes('broad/background-like peak') ||
+            row.FWHM_cm >= candidate.fwhm_max * 0.92
+          if (fwhmLimitHit) {
+            if (candidate.lock_fwhm) {
+              patch.lock_fwhm = false
+              actions.push(`R${round}: ${label} 解除 FWHM 鎖定；保留 hard FWHM range`)
+            }
+            if (candidate.profile !== 'split_pseudo_voigt' && candidate.peak_type !== 'residual_assist') {
+              patch.profile = 'split_pseudo_voigt'
+              patch.lock_profile = false
+              actions.push(`R${round}: ${label} 改用 asymmetric / split pseudo-Voigt`)
+            }
+          }
+
+          if (
+            !isAnchorCandidate(candidate) &&
+            row.Confidence === 'Low' &&
+            row.Area_pct < Math.max(reviewMinAreaPct, 1) &&
+            (row.SNR == null || row.SNR < 3)
+          ) {
+            patch.enabled = false
+            actions.push(`R${round}: ${label} 低 SNR/低面積，暫停用`)
+          }
+
+          if (Object.keys(patch).length === 0) return candidate
+          changed = true
+          return { ...candidate, ...patch }
+        })
+
+        const residualCenter = response.residual_diagnostics.Max_Residual_Center_cm
+        if (typeof residualCenter === 'number' && Number.isFinite(residualCenter) && maxResidual > target) {
+          let nearestIdx = -1
+          let nearestDistance = Number.POSITIVE_INFINITY
+          nextCandidates.forEach((candidate, idx) => {
+            if (!candidate.enabled) return
+            const center = peakCenter(candidate)
+            if (center == null || !Number.isFinite(center)) return
+            const distance = Math.abs(center - residualCenter)
+            if (distance < nearestDistance) {
+              nearestDistance = distance
+              nearestIdx = idx
+            }
+          })
+
+          if (nearestIdx >= 0 && nearestDistance <= 32) {
+            const candidate = nextCandidates[nearestIdx]
+            nextCandidates[nearestIdx] = {
+              ...candidate,
+              profile: candidate.peak_type === 'residual_assist'
+                ? 'super_gaussian'
+                : (candidate.profile === 'split_pseudo_voigt' ? candidate.profile : 'split_pseudo_voigt'),
+              lock_profile: false,
+              lock_fwhm: false,
+            }
+            actions.push(`R${round}: 最大殘差 ${residualCenter.toFixed(1)} cm⁻¹ 附近峰改為更可變形`)
+            changed = true
+          } else {
+            const duplicateAssist = nextCandidates.some(candidate => (
+              candidate.peak_type === 'residual_assist' &&
+              Math.abs(candidate.position_cm - residualCenter) <= 10
+            ))
+            if (!duplicateAssist) {
+              const xSpan = Math.max(...activeFitDataset.x) - Math.min(...activeFitDataset.x)
+              const assistFwhm = Math.max(6, Math.min(35, xSpan / 35))
+              nextCandidates = [
+                ...nextCandidates,
+                {
+                  peak_id: createPeakCandidateId(),
+                  enabled: true,
+                  material: 'Residual assist',
+                  phase: 'Residual assist',
+                  phase_group: 'Residual assist',
+                  label: `Residual assist ${residualCenter.toFixed(1)} cm⁻¹`,
+                  display_name: `Residual assist ${residualCenter.toFixed(1)} cm⁻¹`,
+                  position_cm: residualCenter,
+                  fwhm_cm: assistFwhm,
+                  tolerance_cm: 18,
+                  fwhm_min: 2,
+                  fwhm_max: 90,
+                  profile: 'super_gaussian',
+                  allowed_profiles: ['super_gaussian'],
+                  peak_type: 'residual_assist',
+                  anchor_peak: false,
+                  can_be_quantified: false,
+                  species: 'model residual',
+                  theoretical_center: residualCenter,
+                  related_technique: 'Model',
+                  reference: 'Auto debug mode',
+                  oxidation_state: 'N/A',
+                  oxidation_state_inference: 'Not applicable',
+                  role: 'model correction',
+                  mode_label: 'residual assist',
+                  note: 'Automatically added by auto debug mode; treat as possible overfit, not a physical assignment.',
+                  ref_position_cm: null,
+                  lock_center: false,
+                  lock_fwhm: false,
+                  lock_area: false,
+                  lock_profile: false,
+                },
+              ]
+              actions.push(`R${round}: 新增 residual-assist ${residualCenter.toFixed(1)} cm⁻¹`)
+              changed = true
+            }
+          }
+        }
+
+        if (!changed) {
+          stopReason = '沒有找到可安全自動修改的項目'
+          break
+        }
+
+        workingCandidates = nextCandidates
+        needsFinalFit = true
+        if (round === maxRounds) {
+          stopReason = '已達自動偵錯回合上限'
+        }
+      }
+
+      if (needsFinalFit) {
+        finalResult = await fitWorkingCandidates(workingCandidates)
+        afterMaxResidual = finalResult.residual_diagnostics.Global_MaxAbs
+        const residualImprovement = beforeMaxResidual == null ? Number.POSITIVE_INFINITY : beforeMaxResidual - afterMaxResidual
+        const assistCount = workingCandidates.filter(item => item.peak_type === 'residual_assist').length
+        if (assistCount > 0 && residualImprovement < Math.max(0.005, (beforeMaxResidual ?? 0) * 0.02)) {
+          workingCandidates = workingCandidates.filter(item => item.peak_type !== 'residual_assist')
+          finalResult = await fitWorkingCandidates(workingCandidates)
+          afterMaxResidual = finalResult.residual_diagnostics.Global_MaxAbs
+          actions.push('Model selection: residual-assist 改善有限，已拒絕並移除')
+          stopReason = '新增 component 改善有限，已依 model selection rule 拒絕'
+        }
+        if (afterMaxResidual <= target) {
+          stopReason = `已低於目標 residual ${target.toFixed(3)}`
+        }
+      }
+
+      setFitCandidates(workingCandidates)
+      setFitResult(finalResult)
+      setAutoRefitSummary(null)
+      setAutoDebugSummary({
+        rounds,
+        actions,
+        beforeMaxResidual,
+        afterMaxResidual,
+        stopReason,
+      })
+    } catch (e: unknown) {
+      setError((e as Error).message)
+    } finally {
+      setIsFitting(false)
+    }
+  }, [
+    activeFitDataset,
+    autoRefitMaxRounds,
+    fitCandidates,
+    fitParams,
+    reviewMaxAbsDelta,
+    reviewMinAreaPct,
   ])
 
   const exportPreset = useCallback(() => {
@@ -1045,7 +1353,10 @@ export default function Raman({
           fwhm_min: Number(item.fwhm_min ?? 0.5),
           fwhm_max: Number(item.fwhm_max ?? 80),
           profile: (item.profile ?? 'pseudo_voigt') as RamanProfile,
+          allowed_profiles: Array.isArray(item.allowed_profiles) ? item.allowed_profiles as RamanProfile[] : [],
           peak_type: String(item.peak_type ?? 'custom'),
+          anchor_peak: Boolean(item.anchor_peak),
+          can_be_quantified: item.can_be_quantified !== false,
           related_technique: String(item.related_technique ?? 'Raman'),
           reference: String(item.reference ?? 'User imported library'),
           oxidation_state: String(item.oxidation_state ?? 'N/A'),
@@ -1064,7 +1375,7 @@ export default function Raman({
     const headers = [
       'Dataset', 'Peak', 'Phase', 'Mode', 'Species', 'Oxidation_State', 'Oxidation_Inference',
       'Profile', 'Ref_cm', 'Center_cm', 'Delta_cm', 'FWHM_cm', 'Area', 'Area_pct',
-      'SNR', 'Confidence', 'Flags', 'Group_Status',
+      'SNR', 'Fit_Status', 'Physical_Confidence', 'Flags', 'Group_Status',
     ]
     const rows = fitResult.peaks.map(row => [
       fitResult.dataset_name,
@@ -1082,7 +1393,8 @@ export default function Raman({
       row.Area,
       row.Area_pct,
       row.SNR,
-      row.Confidence,
+      row.Fit_Status,
+      row.Physical_Confidence || row.Confidence,
       row.Quality_Flags.join(' / '),
       row.Group_Status,
     ])
@@ -1096,7 +1408,7 @@ export default function Raman({
 
   const exportFitExcel = useCallback(() => {
     if (!fitResult?.success) return
-    const headers = ['Dataset', 'Peak', 'Phase', 'Mode', 'Center_cm', 'FWHM_cm', 'Area', 'Area_pct', 'Confidence', 'Flags']
+    const headers = ['Dataset', 'Peak', 'Phase', 'Mode', 'Center_cm', 'FWHM_cm', 'Area', 'Area_pct', 'Fit_Status', 'Physical_Confidence', 'Flags']
     const rows = fitResult.peaks.map(row => [
       fitResult.dataset_name,
       row.Peak_Name,
@@ -1106,7 +1418,8 @@ export default function Raman({
       row.FWHM_cm,
       row.Area,
       row.Area_pct,
-      row.Confidence,
+      row.Fit_Status,
+      row.Physical_Confidence || row.Confidence,
       row.Quality_Flags.join(' / '),
     ])
     downloadFile(toCsv(headers, rows).replace(/,/g, '\t'), 'raman_fit_results.xls', 'application/vnd.ms-excel')
@@ -1559,7 +1872,9 @@ export default function Raman({
                 </button>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <details className="mt-3 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+                <summary className="cursor-pointer text-sm font-semibold text-[var(--text-main)]">手動新增峰</summary>
+                <div className="mt-3 grid grid-cols-2 gap-2">
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">手動材料</span>
                   <input
@@ -1649,15 +1964,16 @@ export default function Raman({
                     className="theme-input w-full rounded-xl px-3 py-2 text-sm"
                   />
                 </label>
-              </div>
+                </div>
 
-              <button
-                type="button"
-                onClick={addManualPeakCandidate}
-                className="theme-pill pressable mt-3 w-full rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
-              >
-                新增手動峰
-              </button>
+                <button
+                  type="button"
+                  onClick={addManualPeakCandidate}
+                  className="theme-pill pressable mt-3 w-full rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
+                >
+                  新增手動峰
+                </button>
+              </details>
 
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <label className="block">
@@ -1703,6 +2019,21 @@ export default function Raman({
                     <option value="arctan">Arctan</option>
                   </select>
                 </label>
+                <button
+                  type="button"
+                  onClick={() => applyProfileToSuggestedPeaks('split_pseudo_voigt')}
+                  disabled={peakTableRows.every(row => !row.suggested)}
+                  className="theme-pill pressable self-end rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  建議峰用 asymmetric
+                </button>
+                <button
+                  type="button"
+                  onClick={applyFlexibleProfileToLowShiftPeaks}
+                  className="theme-pill pressable self-end rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
+                >
+                  ≤500 cm⁻¹ 用 asymmetric
+                </button>
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">自動二次擬合最多回合</span>
                   <input
@@ -1712,6 +2043,39 @@ export default function Raman({
                     max={20}
                     step={1}
                     onChange={e => setAutoRefitMaxRounds(Number(e.target.value))}
+                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="theme-block-soft flex items-center gap-2 self-end rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
+                  <input
+                    type="checkbox"
+                    checked={fitParams.residual_target_enabled}
+                    onChange={e => setFitParams(current => ({ ...current, residual_target_enabled: e.target.checked }))}
+                    className="h-4 w-4 accent-[var(--accent-strong)]"
+                  />
+                  <span>強制 residual 目標</span>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Max |residual| 目標</span>
+                  <input
+                    type="number"
+                    value={fitParams.residual_target}
+                    min={0.001}
+                    max={1}
+                    step={0.005}
+                    onChange={e => setFitParams(current => ({ ...current, residual_target: Number(e.target.value) }))}
+                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Residual 強制回合</span>
+                  <input
+                    type="number"
+                    value={fitParams.residual_target_rounds}
+                    min={1}
+                    max={8}
+                    step={1}
+                    onChange={e => setFitParams(current => ({ ...current, residual_target_rounds: Number(e.target.value) }))}
                     className="theme-input w-full rounded-xl px-3 py-2 text-sm"
                   />
                 </label>
@@ -1866,6 +2230,15 @@ export default function Raman({
                 >
                   {isFitting ? '自動二次擬合中…' : '依停用條件自動二次擬合'}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => void runAutoDebugRefit()}
+                  disabled={isFitting || !activeFitDataset}
+                  className="theme-block-soft pressable mt-2 w-full rounded-xl px-3 py-2 text-sm font-semibold text-[var(--text-main)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isFitting ? '自動偵錯中…' : '自動偵錯並修改後再擬合'}
+                </button>
               </div>
 
               <div className="mt-4 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
@@ -1993,20 +2366,32 @@ export default function Raman({
                   </div>
                 </div>
                 {fitCandidates.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-[1180px] w-full border-collapse text-left text-sm">
+                  <div className="overflow-hidden">
+                    <table className="min-w-0 w-full table-fixed border-collapse text-left text-xs sm:text-sm">
+                      <colgroup>
+                        <col style={{ width: '4%' }} />
+                        <col style={{ width: '8%' }} />
+                        <col style={{ width: '19%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '12%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '8%' }} />
+                        <col style={{ width: '7%' }} />
+                        <col style={{ width: '7%' }} />
+                        <col style={{ width: '17%' }} />
+                      </colgroup>
                       <thead className="bg-[color:color-mix(in_srgb,var(--card-bg-strong)_72%,transparent)]">
-                        <tr className="border-b border-white/10 text-xs uppercase tracking-[0.16em] text-slate-400">
-                          <th className="w-20 px-3 py-3 font-medium">啟用</th>
-                          <th className="w-28 px-3 py-3 font-medium">ID</th>
-                          <th className="min-w-72 px-3 py-3 font-medium">峰名稱</th>
-                          <th className="w-28 px-3 py-3 text-right font-medium">位置 cm⁻¹</th>
-                          <th className="w-44 px-3 py-3 font-medium">Profile</th>
-                          <th className="w-28 px-3 py-3 text-right font-medium">理論 cm⁻¹</th>
-                          <th className="w-28 px-3 py-3 text-right font-medium">Δ cm⁻¹</th>
-                          <th className="w-28 px-3 py-3 text-right font-medium">FWHM</th>
-                          <th className="w-28 px-3 py-3 text-right font-medium">Area%</th>
-                          <th className="min-w-44 px-3 py-3 font-medium">狀態</th>
+                        <tr className="border-b border-white/10 text-[11px] uppercase tracking-[0.06em] text-slate-400">
+                          <th className="px-2 py-3 text-center font-medium">啟用</th>
+                          <th className="px-2 py-3 font-medium">ID</th>
+                          <th className="px-2 py-3 font-medium">峰名稱</th>
+                          <th className="px-2 py-3 text-right font-medium">位置 cm⁻¹</th>
+                          <th className="px-2 py-3 font-medium">Profile</th>
+                          <th className="px-2 py-3 text-right font-medium">理論 cm⁻¹</th>
+                          <th className="px-2 py-3 text-right font-medium">Δ cm⁻¹</th>
+                          <th className="px-2 py-3 text-right font-medium">FWHM</th>
+                          <th className="px-2 py-3 text-right font-medium">Area%</th>
+                          <th className="px-2 py-3 font-medium">狀態</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2018,7 +2403,7 @@ export default function Raman({
                               suggested ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_10%,transparent)]' : '',
                             ].join(' ')}
                           >
-                            <td className="px-3 py-3 text-center">
+                            <td className="px-2 py-3 text-center">
                               <input
                                 type="checkbox"
                                 checked={candidate.enabled}
@@ -2026,28 +2411,28 @@ export default function Raman({
                                 className="h-4 w-4 accent-[var(--accent-strong)]"
                               />
                             </td>
-                            <td className="px-3 py-3 font-mono text-xs">{candidate.peak_id}</td>
-                            <td className="px-3 py-3">
+                            <td className="break-all px-2 py-3 font-mono text-[11px]">{candidate.peak_id}</td>
+                            <td className="px-2 py-3">
                               <button
                                 type="button"
                                 onClick={() => setEditingPeakId(candidate.peak_id)}
-                                className="text-left font-semibold text-[var(--text-muted)] underline-offset-4 hover:text-[var(--accent)] hover:underline"
+                                className="break-words text-left font-semibold leading-snug text-[var(--text-muted)] underline-offset-4 hover:text-[var(--accent)] hover:underline"
                               >
                                 {candidate.display_name || candidate.label}
                               </button>
-                              <div className="mt-1 text-[11px] text-[var(--text-soft)]">
+                              <div className="mt-1 break-words text-[11px] leading-snug text-[var(--text-soft)]">
                                 {candidate.phase || candidate.material || '未指定 phase'} · {candidate.species || 'species 未設定'}
                               </div>
                             </td>
-                            <td className="px-3 py-3 text-right tabular-nums">{position.toFixed(1)}</td>
-                            <td className="px-3 py-3">{profile}</td>
-                            <td className="px-3 py-3 text-right tabular-nums">{theoretical == null ? 'None' : theoretical.toFixed(1)}</td>
-                            <td className="px-3 py-3 text-right tabular-nums">{delta == null ? 'None' : delta.toFixed(1)}</td>
-                            <td className="px-3 py-3 text-right tabular-nums">{fwhm.toFixed(1)}</td>
-                            <td className="px-3 py-3 text-right tabular-nums">{areaPct == null ? '—' : areaPct.toFixed(2)}</td>
-                            <td className="px-3 py-3">
+                            <td className="px-2 py-3 text-right tabular-nums">{position.toFixed(1)}</td>
+                            <td className="break-words px-2 py-3">{profile}</td>
+                            <td className="px-2 py-3 text-right tabular-nums">{theoretical == null ? 'None' : theoretical.toFixed(1)}</td>
+                            <td className="px-2 py-3 text-right tabular-nums">{delta == null ? 'None' : delta.toFixed(1)}</td>
+                            <td className="px-2 py-3 text-right tabular-nums">{fwhm.toFixed(1)}</td>
+                            <td className="px-2 py-3 text-right tabular-nums">{areaPct == null ? '—' : areaPct.toFixed(2)}</td>
+                            <td className="px-2 py-3 align-middle">
                               <span className={[
-                                'inline-flex rounded-full px-2.5 py-1 text-xs font-semibold',
+                                'inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold',
                                 status === 'OK'
                                   ? 'bg-[color:color-mix(in_srgb,var(--accent-tertiary)_14%,transparent)] text-[var(--accent-tertiary)]'
                                   : status === '待擬合'
@@ -2058,7 +2443,7 @@ export default function Raman({
                                 {status}
                               </span>
                               {row?.Quality_Flags?.length ? (
-                                <div className="mt-1 text-[11px] text-[var(--text-soft)]">{row.Quality_Flags.join(' / ')}</div>
+                                <div className="mt-1 break-words text-[11px] leading-relaxed text-[var(--text-soft)]">{row.Quality_Flags.join(' / ')}</div>
                               ) : null}
                             </td>
                           </tr>
@@ -2136,7 +2521,7 @@ export default function Raman({
                   <div>
                     <div className="text-sm font-semibold text-[var(--text-muted)]">峰擬合結果</div>
                     <div className="mt-1 text-xs text-[var(--text-soft)]">
-                      先在左側建立峰位表，再對目前選取的 Raman 曲線執行擬合。
+                      這裡保留最近一次擬合結果，修改峰位表時可先對照；重新執行擬合後更新。
                     </div>
                   </div>
                   {fitResult?.success && (
@@ -2158,12 +2543,22 @@ export default function Raman({
                           自動回合 <span className="ml-2 font-semibold text-[var(--text-muted)]">{autoRefitSummary.rounds}</span>
                         </div>
                       )}
+                      {autoDebugSummary && (
+                        <div className="theme-pill rounded-full px-4 py-2 text-sm text-[var(--text-main)]">
+                          偵錯回合 <span className="ml-2 font-semibold text-[var(--text-muted)]">{autoDebugSummary.rounds}</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
 
                 {fitResult?.success && activeFitDataset ? (
                   <>
+                    {fitResult.message && (
+                      <div className="mb-3 rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-3 text-sm text-[var(--text-main)]">
+                        {fitResult.message}
+                      </div>
+                    )}
                     <div className="theme-block-soft rounded-[24px] p-3 sm:p-4">
                       <Plot
                         data={fitChartTraces(activeFitDataset, fitResult)}
@@ -2193,14 +2588,18 @@ export default function Raman({
                             <th className="px-3 py-3 font-medium">Δ cm⁻¹</th>
                             <th className="px-3 py-3 font-medium">FWHM</th>
                             <th className="px-3 py-3 font-medium">Area %</th>
-                            <th className="px-3 py-3 font-medium">Confidence</th>
+                            <th className="px-3 py-3 font-medium">Fit status</th>
+                            <th className="px-3 py-3 font-medium">Physical confidence</th>
                             <th className="px-3 py-3 font-medium">Flags</th>
                           </tr>
                         </thead>
                         <tbody>
                           {fitResult.peaks.map(row => (
                             <tr key={row.Peak_ID || `${row.Peak_Name}-${row.Center_cm}`} className="border-b border-white/5 text-[var(--text-main)] last:border-b-0">
-                              <td className="px-3 py-3">{row.Peak_Name}</td>
+                              <td className="px-3 py-3">
+                                <div>{row.Peak_Name}</div>
+                                <div className="text-[11px] text-[var(--text-soft)]">{row.Center_cm.toFixed(1)} cm⁻¹</div>
+                              </td>
                               <td className="px-3 py-3">{row.Phase || row.Material}<div className="text-[11px] text-[var(--text-soft)]">{row.Mode_Label || '—'}</div></td>
                               <td className="px-3 py-3">{row.Species || '—'}</td>
                               <td className="px-3 py-3">{row.Oxidation_State}<div className="text-[11px] text-[var(--text-soft)]">{row.Oxidation_State_Inference}</div></td>
@@ -2209,7 +2608,8 @@ export default function Raman({
                               <td className="px-3 py-3">{row.Delta_cm == null ? '—' : row.Delta_cm.toFixed(3)}</td>
                               <td className="px-3 py-3">{row.FWHM_cm.toFixed(3)}</td>
                               <td className="px-3 py-3">{row.Area_pct.toFixed(2)}</td>
-                              <td className="px-3 py-3">{row.Confidence}</td>
+                              <td className="px-3 py-3">{row.Fit_Status}</td>
+                              <td className="px-3 py-3">{row.Physical_Confidence || row.Confidence}</td>
                               <td className="px-3 py-3">{row.Quality_Flags.length ? row.Quality_Flags.join(' / ') : '—'}</td>
                             </tr>
                           ))}
@@ -2234,6 +2634,19 @@ export default function Raman({
                           <div className="mt-3 space-y-1 text-xs text-[var(--text-soft)]">
                             {fitResult.residual_diagnostics.Suggestions.map(item => (
                               <div key={item}>{item}</div>
+                            ))}
+                          </div>
+                        )}
+                        {fitResult.residual_diagnostics.Local_Ranges?.length > 0 && (
+                          <div className="mt-3 grid gap-2">
+                            {fitResult.residual_diagnostics.Local_Ranges.map(item => (
+                              <div key={item.Range} className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-xs text-[var(--text-main)]">
+                                <span className="font-semibold">{item.Range}</span>
+                                <span className="ml-2 text-[var(--text-soft)]">
+                                  RMSE {item.RMSE == null ? '—' : item.RMSE.toExponential(2)} · Max {item.MaxAbs == null ? '—' : item.MaxAbs.toExponential(2)}
+                                </span>
+                                {item.Warning && <span className="ml-2 text-[var(--accent-secondary)]">{item.Warning}</span>}
+                              </div>
                             ))}
                           </div>
                         )}
@@ -2324,7 +2737,7 @@ export default function Raman({
                           <div className="flex flex-wrap gap-2">
                             {cleanFitPeaks.map(item => (
                               <span key={item.row.Peak_ID || item.row.Peak_Name} className="theme-pill rounded-full px-3 py-1.5 text-sm text-[var(--text-main)]">
-                                {item.row.Peak_Name}
+                                {fitPeakLabel(item.row)}
                               </span>
                             ))}
                           </div>
@@ -2339,7 +2752,7 @@ export default function Raman({
                           <div className="space-y-2">
                             {suspiciousFitPeaks.map(item => (
                               <div key={item.row.Peak_ID || item.row.Peak_Name} className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-sm text-[var(--text-main)]">
-                                <span className="font-medium">{item.row.Peak_Name}</span>
+                                <span className="font-medium">{fitPeakLabel(item.row)}</span>
                                 <span className="ml-2 text-[var(--text-soft)]">{item.flags.join(' / ')}</span>
                               </div>
                             ))}
@@ -2367,6 +2780,29 @@ export default function Raman({
                               </span>
                             ))}
                           </div>
+                        )}
+                      </div>
+                    )}
+
+                    {autoDebugSummary && (
+                      <div className="mt-4 theme-block-soft rounded-[22px] p-4">
+                        <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">自動偵錯修改摘要</div>
+                        <div className="grid gap-2 text-sm text-[var(--text-main)] sm:grid-cols-3">
+                          <div>停止原因：{autoDebugSummary.stopReason}</div>
+                          <div>修改前 Max |residual|：{autoDebugSummary.beforeMaxResidual == null ? '—' : autoDebugSummary.beforeMaxResidual.toFixed(4)}</div>
+                          <div>修改後 Max |residual|：{autoDebugSummary.afterMaxResidual == null ? '—' : autoDebugSummary.afterMaxResidual.toFixed(4)}</div>
+                        </div>
+                        {autoDebugSummary.actions.length > 0 ? (
+                          <div className="mt-3 space-y-1 text-xs text-[var(--text-soft)]">
+                            {autoDebugSummary.actions.slice(0, 12).map((action, idx) => (
+                              <div key={`${action}-${idx}`}>{action}</div>
+                            ))}
+                            {autoDebugSummary.actions.length > 12 && (
+                              <div>另有 {autoDebugSummary.actions.length - 12} 項修改。</div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mt-3 text-xs text-[var(--text-soft)]">沒有套用額外修改。</div>
                         )}
                       </div>
                     )}

@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import least_squares
+from scipy.special import gamma as gamma_func
 from scipy.special import voigt_profile
 
 
@@ -42,6 +43,21 @@ def split_pseudo_voigt_peak(x, amplitude, center, fwhm_left, fwhm_right, eta):
     return out
 
 
+def super_gaussian_peak(x, amplitude, center, fwhm, shape):
+    """
+    Height-scaled generalized Gaussian.
+
+    shape=2 is Gaussian-like; larger values flatten the peak top while keeping
+    FWHM meaningful. This is useful for Raman bands that look plateau-like
+    instead of sharp and pointed.
+    """
+    x = np.asarray(x, dtype=float)
+    fwhm = max(abs(float(fwhm)), 1e-9)
+    shape = float(np.clip(shape, 2.0, 12.0))
+    scaled = np.abs(2.0 * (x - center) / fwhm)
+    return amplitude * np.exp(-np.log(2.0) * np.power(scaled, shape))
+
+
 # ── FWHM helpers ──────────────────────────────────────────────────────────────
 
 def fwhm_from_sigma(sigma: float) -> float:
@@ -68,8 +84,13 @@ def _normalise_profile(profile: str | None) -> str:
         "asymmetric_pseudo_voigt": "split_pseudo_voigt",
         "asymmetric_pvoigt": "split_pseudo_voigt",
         "split_pvoigt": "split_pseudo_voigt",
+        "flat_top": "super_gaussian",
+        "flat_top_gaussian": "super_gaussian",
+        "flat_top_peak": "super_gaussian",
+        "plateau": "super_gaussian",
+        "supergaussian": "super_gaussian",
     }
-    allowed = {"gaussian", "lorentzian", "voigt", "pseudo_voigt", "split_pseudo_voigt"}
+    allowed = {"gaussian", "lorentzian", "voigt", "pseudo_voigt", "split_pseudo_voigt", "super_gaussian"}
     value = aliases.get(value, value)
     return value if value in allowed else "voigt"
 
@@ -101,6 +122,11 @@ def area_split_pseudo_voigt(amplitude: float, fwhm_left: float, fwhm_right: floa
     half = 8 * max(abs(fwhm_left), abs(fwhm_right), 1e-6)
     xs = np.linspace(-half, half, 3000)
     return float(np.trapezoid(split_pseudo_voigt_peak(xs, amplitude, 0.0, fwhm_left, fwhm_right, eta), xs))
+
+
+def area_super_gaussian(amplitude: float, fwhm: float, shape: float) -> float:
+    shape = float(np.clip(shape, 2.0, 12.0))
+    return float(abs(amplitude) * abs(fwhm) * gamma_func(1.0 + 1.0 / shape) / (np.log(2.0) ** (1.0 / shape)))
 
 
 def _finite_or_none(value):
@@ -157,7 +183,7 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
     Individual peaks can carry optional keys:
     tolerance_cm, center_min, center_max, fwhm_min, fwhm_max, profile,
     lock_center, lock_fwhm, lock_area, lock_profile, amplitude, eta,
-    fwhm_left, and fwhm_right.
+    fwhm_left, fwhm_right, and shape.
 
     The legacy signature is preserved for XPS callers that pass only
     init_peaks/profile/maxfev.
@@ -297,6 +323,8 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
             "gamma_fixed": max(fwhm_init / 3.6, 1e-4),
             "eta_idx": None,
             "eta_fixed": float(np.clip(pk.get("eta", 0.5), 0.0, 1.0)),
+            "shape_idx": None,
+            "shape_fixed": float(np.clip(pk.get("shape", pk.get("flatness", 4.0)), 2.0, 12.0)),
             "center_min": center_min,
             "center_max": center_max,
             "center_seed": ctr,
@@ -314,6 +342,11 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         if peak_profile in {"gaussian", "lorentzian"}:
             idx, fixed = add_param(fwhm_init, fwhm_min, fwhm_max, lock_fwhm)
             spec["fwhm_idx"], spec["fwhm_fixed"] = idx, fixed
+        elif peak_profile == "super_gaussian":
+            idx, fixed = add_param(fwhm_init, fwhm_min, fwhm_max, lock_fwhm)
+            spec["fwhm_idx"], spec["fwhm_fixed"] = idx, fixed
+            shape_idx, shape_fixed = add_param(spec["shape_fixed"], 2.0, 12.0, lock_profile)
+            spec["shape_idx"], spec["shape_fixed"] = shape_idx, shape_fixed
         elif peak_profile == "pseudo_voigt":
             idx, fixed = add_param(fwhm_init, fwhm_min, fwhm_max, lock_fwhm)
             spec["fwhm_idx"], spec["fwhm_fixed"] = idx, fixed
@@ -358,6 +391,10 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         if prof in {"gaussian", "lorentzian"}:
             fwhm = value_at(p, spec, "fwhm")
             return A, c, fwhm, None, None, None
+        if prof == "super_gaussian":
+            fwhm = value_at(p, spec, "fwhm")
+            shape = value_at(p, spec, "shape")
+            return A, c, fwhm, None, None, shape
         if prof == "pseudo_voigt":
             fwhm = value_at(p, spec, "fwhm")
             eta = value_at(p, spec, "eta")
@@ -380,6 +417,8 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
             return lorentzian(xv, A, c, fwhm / 2.0)
         if prof == "pseudo_voigt":
             return pseudo_voigt_peak(xv, A, c, fwhm, eta if eta is not None else 0.5)
+        if prof == "super_gaussian":
+            return super_gaussian_peak(xv, A, c, fwhm, eta if eta is not None else 4.0)
         if prof == "split_pseudo_voigt":
             return split_pseudo_voigt_peak(
                 xv,
@@ -457,6 +496,8 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
             area = area_gaussian(A, fwhm_fit / 2.3548)
         elif prof == "lorentzian":
             area = area_lorentzian(A, fwhm_fit / 2.0)
+        elif prof == "super_gaussian":
+            area = area_super_gaussian(A, fwhm_fit, eta if eta is not None else 4.0)
         elif prof == "pseudo_voigt":
             area = area_pseudo_voigt(A, fwhm_fit, eta if eta is not None else 0.5)
         elif prof == "split_pseudo_voigt":
@@ -486,7 +527,8 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
             "fwhm": float(fwhm_fit),
             "area": float(area),
             "profile": prof,
-            "eta": float(eta) if eta is not None else None,
+            "eta": float(eta) if prof in {"pseudo_voigt", "split_pseudo_voigt"} and eta is not None else None,
+            "shape": float(eta) if prof == "super_gaussian" and eta is not None else None,
             "fwhm_left": float(v1) if prof == "split_pseudo_voigt" and v1 is not None else None,
             "fwhm_right": float(v2) if prof == "split_pseudo_voigt" and v2 is not None else None,
             "center_min": float(spec["center_min"]),
@@ -503,7 +545,7 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         for key, value in spec.items():
             if key not in peak_entry and not key.endswith("_idx") and key not in {
                 "amp_fixed", "center_fixed", "fwhm_fixed", "fwhm_left_fixed", "fwhm_right_fixed",
-                "sigma_fixed", "gamma_fixed", "eta_fixed", "center_seed", "profile",
+                "sigma_fixed", "gamma_fixed", "eta_fixed", "shape_fixed", "center_seed", "profile",
             }:
                 peak_entry[key] = value
         peaks_out.append(peak_entry)

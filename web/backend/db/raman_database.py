@@ -321,7 +321,10 @@ def _generic_phase_defaults(material: str) -> dict:
         "fwhm_min": 2.0,
         "fwhm_max": 60.0,
         "profile": "pseudo_voigt",
+        "allowed_profiles": ["gaussian", "lorentzian", "voigt", "pseudo_voigt", "split_pseudo_voigt"],
         "peak_type": "phonon",
+        "anchor_peak": False,
+        "can_be_quantified": True,
         "oxidation_state": oxidation,
         "oxidation_state_inference": inference,
         "reference": "Raman reference peak library",
@@ -338,6 +341,12 @@ def enriched_raman_peak(material: str, row: dict) -> dict:
     fwhm_max = float(row.get("fwhm_max", defaults["fwhm_max"]))
     if "broad" in note.lower() and fwhm_max < 90:
         fwhm_max = 120.0
+    anchor_peak = bool(row.get("anchor_peak", False))
+    if material == "Si (基板)" and abs(float(row["pos"]) - 520.7) <= 2.0:
+        anchor_peak = True
+    if material == "β-Ga₂O₃" and any(abs(float(row["pos"]) - value) <= 2.0 for value in (416.0, 651.0)):
+        anchor_peak = True
+    allowed_profiles = row.get("allowed_profiles", defaults.get("allowed_profiles", ["gaussian", "lorentzian", "voigt", "pseudo_voigt", "split_pseudo_voigt"]))
     return {
         "phase": material,
         "material": material,
@@ -351,7 +360,10 @@ def enriched_raman_peak(material: str, row: dict) -> dict:
         "fwhm_min": fwhm_min,
         "fwhm_max": fwhm_max,
         "profile": row.get("profile", defaults["profile"]),
+        "allowed_profiles": allowed_profiles,
         "peak_type": peak_type,
+        "anchor_peak": anchor_peak,
+        "can_be_quantified": bool(row.get("can_be_quantified", defaults.get("can_be_quantified", True))),
         "related_technique": row.get("related_technique", "Raman"),
         "reference": row.get("reference", defaults["reference"]),
         "oxidation_state": row.get("oxidation_state", defaults["oxidation_state"]),

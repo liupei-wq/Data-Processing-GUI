@@ -101,7 +101,10 @@ class RefPeak(BaseModel):
     fwhm_min: float = 0.5
     fwhm_max: float = 80.0
     profile: str = "voigt"
+    allowed_profiles: List[str] = []
     peak_type: str = ""
+    anchor_peak: bool = False
+    can_be_quantified: bool = True
     related_technique: str = "Raman"
     reference: str = ""
     oxidation_state: str = "N/A"
@@ -132,7 +135,10 @@ class FitPeakInput(BaseModel):
     fwhm_min: float = 0.5
     fwhm_max: float = 80.0
     profile: str = ""
+    allowed_profiles: List[str] = []
     peak_type: str = ""
+    anchor_peak: bool = False
+    can_be_quantified: bool = True
     species: str = ""
     theoretical_center: Optional[float] = None
     related_technique: str = "Raman"
@@ -165,6 +171,9 @@ class FitRequest(BaseModel):
     fit_hi: Optional[float] = None
     robust_loss: str = "linear"
     segment_weights: List[SegmentWeight] = []
+    residual_target_enabled: bool = False
+    residual_target: float = 0.05
+    residual_target_rounds: int = 4
     peaks: List[FitPeakInput]
 
 
@@ -182,6 +191,8 @@ class FitPeakRow(BaseModel):
     Assignment_Basis: str = "mode/phase"
     Profile: str = ""
     Peak_Type: str = ""
+    Anchor_Peak: bool = False
+    Can_Be_Quantified: bool = True
     Ref_cm: Optional[float] = None
     Tolerance_cm: float = 8.0
     Center_Min_cm: Optional[float] = None
@@ -196,6 +207,8 @@ class FitPeakRow(BaseModel):
     Area: float
     Area_pct: float
     SNR: Optional[float] = None
+    Fit_Status: str = "Fit OK"
+    Physical_Confidence: str = "Medium"
     Confidence: str = "Medium"
     Quality_Flags: List[str] = []
     Group_Shift_cm: Optional[float] = None
@@ -207,6 +220,15 @@ class FitPeakRow(BaseModel):
     Is_Doublet: bool = False
 
 
+class LocalResidualRange(BaseModel):
+    Range: str
+    Lo_cm: float
+    Hi_cm: float
+    RMSE: Optional[float] = None
+    MaxAbs: Optional[float] = None
+    Warning: str = ""
+
+
 class ResidualDiagnostics(BaseModel):
     Global_RMSE: float = 0.0
     Global_MaxAbs: float = 0.0
@@ -214,6 +236,7 @@ class ResidualDiagnostics(BaseModel):
     Max_Residual_Range: str = ""
     Segment_480_570_RMSE: Optional[float] = None
     Segment_480_570_MaxAbs: Optional[float] = None
+    Local_Ranges: List[LocalResidualRange] = []
     Suggestions: List[str] = []
 
 
@@ -478,8 +501,33 @@ def _residual_diagnostics(x: np.ndarray, residuals: np.ndarray) -> ResidualDiagn
         if si_rmse > max(global_rmse * 1.35, 1e-12):
             suggestions.append("520 cm⁻¹ 附近殘差偏高，建議使用 asymmetric/split pseudo-Voigt Si profile 或加入 Si shoulder。")
 
+    local_ranges: list[LocalResidualRange] = []
+    for lo, hi in [(480.0, 570.0), (570.0, 700.0), (700.0, 900.0), (900.0, 1050.0)]:
+        mask = (x >= lo) & (x <= hi)
+        warning = ""
+        rmse = None
+        max_abs = None
+        if np.any(mask):
+            rmse = float(np.sqrt(np.mean(residuals[mask] ** 2)))
+            max_abs = float(np.max(np.abs(residuals[mask])))
+            sign_changes = int(np.sum(np.diff(np.signbit(residuals[mask])) != 0))
+            if rmse > max(global_rmse * 1.35, 1e-12) and sign_changes <= max(2, int(np.sum(mask) * 0.03)):
+                warning = "structured residual"
+            elif rmse > max(global_rmse * 1.35, 1e-12):
+                warning = "high local residual"
+        local_ranges.append(LocalResidualRange(
+            Range=f"{lo:.0f}-{hi:.0f} cm⁻¹",
+            Lo_cm=lo,
+            Hi_cm=hi,
+            RMSE=rmse,
+            MaxAbs=max_abs,
+            Warning=warning,
+        ))
+
     if best_rmse > max(global_rmse * 1.5, 1e-12):
         suggestions.append(f"最大殘差集中在 {best_lo:.1f}–{best_hi:.1f} cm⁻¹，可檢查該區背景或缺峰。")
+        if best_hi <= 600.0:
+            suggestions.append("低 Raman shift 區殘差偏大且峰形較平時，可嘗試 flat-top / super-Gaussian profile。")
 
     return ResidualDiagnostics(
         Global_RMSE=global_rmse,
@@ -488,6 +536,7 @@ def _residual_diagnostics(x: np.ndarray, residuals: np.ndarray) -> ResidualDiagn
         Max_Residual_Range=f"{best_lo:.1f}–{best_hi:.1f} cm⁻¹",
         Segment_480_570_RMSE=si_rmse,
         Segment_480_570_MaxAbs=si_max,
+        Local_Ranges=local_ranges,
         Suggestions=suggestions,
     )
 
@@ -552,6 +601,8 @@ def _confidence_from_flags(flags: list[str], snr: float, area_pct: float, spacin
             score -= 20.0
         elif flag == "very low area":
             score -= 15.0
+        elif flag == "residual assist / possible overfit":
+            score -= 40.0
     if snr < 3:
         score -= 18.0
     elif snr < 6:
@@ -565,6 +616,166 @@ def _confidence_from_flags(flags: list[str], snr: float, area_pct: float, spacin
     if score >= 45:
         return "Medium"
     return "Low"
+
+
+def _fit_range_mask(x: np.ndarray, fit_range):
+    if fit_range is None:
+        return np.ones_like(x, dtype=bool)
+    lo, hi = min(fit_range), max(fit_range)
+    mask = (x >= lo) & (x <= hi)
+    return mask if np.any(mask) else np.ones_like(x, dtype=bool)
+
+
+def _residual_target_score(x: np.ndarray, result: dict, fit_range) -> float:
+    residuals = np.asarray(result.get("residuals", []), dtype=float)
+    if len(residuals) != len(x) or len(residuals) == 0:
+        return float("inf")
+    mask = _fit_range_mask(x, fit_range)
+    return float(np.max(np.abs(residuals[mask])))
+
+
+def _largest_residual_index(x: np.ndarray, result: dict, fit_range) -> Optional[int]:
+    residuals = np.asarray(result.get("residuals", []), dtype=float)
+    if len(residuals) != len(x) or len(residuals) == 0:
+        return None
+    mask = _fit_range_mask(x, fit_range)
+    idxs = np.flatnonzero(mask)
+    if len(idxs) == 0:
+        return None
+    return int(idxs[int(np.argmax(np.abs(residuals[idxs])))] )
+
+
+def _force_residual_target(
+    x: np.ndarray,
+    y: np.ndarray,
+    init_peaks: list[dict],
+    req: FitRequest,
+    fit_range,
+):
+    working_peaks = [dict(item) for item in init_peaks]
+
+    def run(peaks):
+        return fit_peaks(
+            x,
+            y,
+            init_peaks=peaks,
+            profile=req.profile,
+            maxfev=int(max(req.maxfev, 30000)),
+            fit_range=fit_range,
+            segment_weights=[item.dict() for item in req.segment_weights],
+            robust_loss=req.robust_loss,
+        )
+
+    result = run(working_peaks)
+    if not result.get("success"):
+        return result, ""
+
+    target = max(float(req.residual_target), 1e-9)
+    max_rounds = int(np.clip(req.residual_target_rounds, 1, 8))
+    best_result = result
+    best_score = _residual_target_score(x, result, fit_range)
+    actions: list[str] = []
+    added_assist = 0
+    y_span = float(np.max(y) - np.min(y)) if len(y) else 1.0
+    y_span = y_span if y_span > 0 else 1.0
+
+    for round_idx in range(max_rounds):
+        score = _residual_target_score(x, result, fit_range)
+        if score < best_score:
+            best_score = score
+            best_result = result
+        if score <= target:
+            break
+
+        idx = _largest_residual_index(x, result, fit_range)
+        if idx is None:
+            break
+        center = float(x[idx])
+        residual_value = float(np.asarray(result["residuals"], dtype=float)[idx])
+        nearest_idx = None
+        nearest_distance = float("inf")
+        for peak_idx, peak in enumerate(working_peaks):
+            peak_center = float(peak.get("theoretical_center", peak.get("be", center)))
+            distance = abs(peak_center - center)
+            if distance < nearest_distance:
+                nearest_idx = peak_idx
+                nearest_distance = distance
+
+        changed = False
+        if nearest_idx is not None:
+            peak = working_peaks[nearest_idx]
+            tolerance = max(float(peak.get("tolerance_cm", 8.0)), 8.0)
+            fwhm_max = max(float(peak.get("fwhm_max", 80.0)), 1.0)
+            if nearest_distance <= max(tolerance * 1.8, fwhm_max * 0.75, 25.0):
+                if peak.get("profile") not in {"split_pseudo_voigt", "pseudo_voigt"}:
+                    peak["profile"] = "split_pseudo_voigt"
+                    peak["lock_profile"] = False
+                    peak["fwhm"] = min(max(float(peak.get("fwhm", 8.0)), 8.0), fwhm_max)
+                    actions.append(f"{peak.get('display_name', peak.get('label', 'peak'))} -> asymmetric/pseudo-Voigt within hard limits")
+                    changed = True
+
+        if not changed and residual_value > target:
+            added_assist += 1
+            assist_fwhm = max(6.0, min(35.0, (float(np.max(x)) - float(np.min(x))) / 35.0))
+            working_peaks.append({
+                "label": f"residual assist {center:.1f} cm⁻¹",
+                "display_name": f"Residual assist {center:.1f} cm⁻¹",
+                "be": center,
+                "fwhm": assist_fwhm,
+                "peak_id": f"RASSIST{added_assist:02d}",
+                "material": "Residual assist",
+                "phase": "Residual assist",
+                "phase_group": "Residual assist",
+                "role": "model correction",
+                "mode_label": "residual assist",
+                "note": "Automatically added by residual target mode; treat as possible overfit, not a physical assignment.",
+                "species": "model residual",
+                "tolerance_cm": 18.0,
+                "fwhm_min": 2.0,
+                "fwhm_max": 90.0,
+                "profile": "super_gaussian",
+                "shape": 5.0,
+                "peak_type": "residual_assist",
+                "related_technique": "Model",
+                "reference": "Residual target mode",
+                "oxidation_state": "N/A",
+                "oxidation_state_inference": "Not applicable",
+                "theoretical_center": center,
+                "lock_center": False,
+                "lock_fwhm": False,
+                "lock_area": False,
+                "lock_profile": False,
+                "ref_center": float("nan"),
+                "amplitude": max(residual_value, y_span * 0.02),
+            })
+            actions.append(f"added residual assist {center:.1f} cm⁻¹")
+            changed = True
+
+        if not changed:
+            break
+        result = run(working_peaks)
+        if not result.get("success"):
+            break
+
+    if result.get("success"):
+        score = _residual_target_score(x, result, fit_range)
+        if score < best_score:
+            best_score = score
+            best_result = result
+
+    final_score = _residual_target_score(x, best_result, fit_range)
+    status = "達標" if final_score <= target else "未達標"
+    action_text = f"；調整：{', '.join(actions)}" if actions else ""
+    message = f"Residual target {status}：max |residual| {final_score:.4g} / target {target:.4g}{action_text}"
+    return best_result, message
+
+
+def _normal_profile_for_physical_peak(profile: str, peak_type: str) -> str:
+    value = str(profile or "voigt")
+    model_component = str(peak_type or "").lower() in {"residual_assist", "background_like", "background-like", "background component"}
+    if value == "super_gaussian" and not model_component:
+        return "pseudo_voigt"
+    return value
 
 
 @router.post("/fit", response_model=FitResponse, summary="Fit Raman peaks")
@@ -594,8 +805,11 @@ def fit_raman_peaks(req: FitRequest):
             "tolerance_cm": float(max(row.tolerance_cm, 0.0)),
             "fwhm_min": float(max(row.fwhm_min, 0.01)),
             "fwhm_max": float(max(row.fwhm_max, row.fwhm_min + 0.1)),
-            "profile": row.profile or req.profile,
+            "profile": _normal_profile_for_physical_peak(row.profile or req.profile, row.peak_type),
+            "allowed_profiles": row.allowed_profiles,
             "peak_type": row.peak_type,
+            "anchor_peak": row.anchor_peak,
+            "can_be_quantified": row.can_be_quantified,
             "related_technique": row.related_technique,
             "reference": row.reference,
             "oxidation_state": row.oxidation_state,
@@ -616,16 +830,20 @@ def fit_raman_peaks(req: FitRequest):
     if req.fit_lo is not None and req.fit_hi is not None:
         fit_range = (float(req.fit_lo), float(req.fit_hi))
 
-    result = fit_peaks(
-        x,
-        y,
-        init_peaks=init_peaks,
-        profile=req.profile,
-        maxfev=int(req.maxfev),
-        fit_range=fit_range,
-        segment_weights=[item.dict() for item in req.segment_weights],
-        robust_loss=req.robust_loss,
-    )
+    target_message = ""
+    if req.residual_target_enabled:
+        result, target_message = _force_residual_target(x, y, init_peaks, req, fit_range)
+    else:
+        result = fit_peaks(
+            x,
+            y,
+            init_peaks=init_peaks,
+            profile=req.profile,
+            maxfev=int(req.maxfev),
+            fit_range=fit_range,
+            segment_weights=[item.dict() for item in req.segment_weights],
+            robust_loss=req.robust_loss,
+        )
     if not result.get("success"):
         return FitResponse(
             success=False,
@@ -672,22 +890,27 @@ def fit_raman_peaks(req: FitRequest):
             flags.append("very low area")
         if snr is not None and snr < 3:
             flags.append("low SNR")
+        if str(peak.get("peak_type", "")) == "residual_assist":
+            flags.append("residual assist / possible overfit")
+        model_component = str(peak.get("peak_type", "")).lower() in {"residual_assist", "background_like", "background-like", "background component"}
 
         raw_rows.append(
             {
                 "Peak_ID": str(peak.get("peak_id", "")),
                 "Peak_Name": str(peak.get("display_name", peak["label"])),
-                "Phase": str(peak.get("phase", peak.get("material", ""))),
-                "Phase_Group": str(peak.get("phase_group", peak.get("phase", peak.get("material", "")))),
+                "Phase": "Model component" if model_component else str(peak.get("phase", peak.get("material", ""))),
+                "Phase_Group": "Model component" if model_component else str(peak.get("phase_group", peak.get("phase", peak.get("material", "")))),
                 "Material": str(peak.get("material", "")),
                 "Peak_Role": str(peak.get("role", "")),
                 "Mode_Label": str(peak.get("mode_label", "")),
                 "Species": str(peak.get("species", "")),
                 "Oxidation_State": str(peak.get("oxidation_state", "N/A")),
                 "Oxidation_State_Inference": str(peak.get("oxidation_state_inference", "Not applicable")),
-                "Assignment_Basis": "phase/mode-based",
+                "Assignment_Basis": "model component" if model_component else "phase/mode-based",
                 "Profile": str(peak.get("profile", req.profile)),
                 "Peak_Type": str(peak.get("peak_type", "")),
+                "Anchor_Peak": bool(peak.get("anchor_peak", False)),
+                "Can_Be_Quantified": bool(peak.get("can_be_quantified", True)) and not model_component,
                 "Ref_cm": ref_center_value,
                 "Tolerance_cm": tolerance,
                 "Center_Min_cm": float(peak.get("center_min")) if peak.get("center_min") is not None else None,
@@ -702,6 +925,7 @@ def fit_raman_peaks(req: FitRequest):
                 "Area": float(peak["area"]),
                 "Area_pct": float(peak["area_pct"]),
                 "SNR": snr,
+                "Fit_Status": "Model component" if model_component else ("Fit boundary" if flags else "Fit OK"),
                 "Quality_Flags": flags,
                 "Source_Note": str(peak.get("note", "")),
                 "Reference": str(peak.get("reference", "")),
@@ -709,7 +933,22 @@ def fit_raman_peaks(req: FitRequest):
             }
         )
 
-    group_summaries, group_lookup = _build_group_summaries(raw_rows)
+    physical_area_total = sum(
+        float(row["Area"])
+        for row in raw_rows
+        if row.get("Can_Be_Quantified") and row.get("Peak_Type") != "residual_assist"
+    )
+    for row in raw_rows:
+        if row.get("Can_Be_Quantified") and physical_area_total > 0:
+            row["Area_pct"] = float(row["Area"]) / physical_area_total * 100.0
+        elif row.get("Peak_Type") == "residual_assist":
+            row["Area_pct"] = 0.0
+
+    physical_group_rows = [
+        row for row in raw_rows
+        if row.get("Can_Be_Quantified") and row.get("Peak_Type") != "residual_assist"
+    ]
+    group_summaries, group_lookup = _build_group_summaries(physical_group_rows)
     rows: list[FitPeakRow] = []
     for row in raw_rows:
         group_info = group_lookup.get(row["Phase_Group"])
@@ -726,19 +965,21 @@ def fit_raman_peaks(req: FitRequest):
             row["Spacing_Error_cm"] = None
             row["Group_Consistency_Score"] = None
             row["Group_Status"] = ""
-        row["Confidence"] = _confidence_from_flags(
+        physical_confidence = _confidence_from_flags(
             row["Quality_Flags"],
             float(row["SNR"]) if row["SNR"] is not None else 0.0,
             float(row["Area_pct"]),
             row["Group_Consistency_Score"],
         )
+        row["Physical_Confidence"] = physical_confidence
+        row["Confidence"] = physical_confidence
         rows.append(FitPeakRow(**row))
 
     residual_diagnostics = _residual_diagnostics(x, residuals_arr)
 
     return FitResponse(
         success=True,
-        message="",
+        message=target_message,
         dataset_name=req.dataset_name,
         profile=req.profile,
         y_fit=np.asarray(result["y_fit"], dtype=float).tolist(),
