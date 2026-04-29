@@ -477,6 +477,18 @@ type WorkspaceId =
 
 ---
 
+## XPS 分析模組下拉改感應式（2026-04-29）
+
+- `web/frontend/src/components/AnalysisModuleNav.tsx`
+  - dropdown mode 原本是原生 `select`
+  - 改成 hover / focus 展開的感應式下拉面板
+  - 面板顯示目前模組與其他可切換模組
+  - 滑鼠移入展開、移出收起；點選模組後切換並關閉
+- XPS 頁面維持使用 `mode="dropdown"`，因此左上角模組切換現在是感應式，不會再是原生 select 外觀
+- `npm run build`：通過
+
+---
+
 ## 部署未更新排查（2026-04-29）
 
 - 重新讀取 `CLAUDE.md` 後檢查 git 狀態與最近提交

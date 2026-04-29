@@ -503,7 +503,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
   const calibrationPeak = calibrationPeaks.find(item => item.label === calibrationPeakLabel) ?? null
-  const hasPreprocessStage = params.interpolate || params.average || Math.abs(params.energy_shift) > 1e-8
+  const interpolationEnabled = params.interpolate || params.average
+  const hasPreprocessStage = interpolationEnabled || Math.abs(params.energy_shift) > 1e-8
   const hasBackgroundStage = params.bg_enabled
   const hasNormalizationStage = params.norm_method !== 'none'
   const rawPreview = rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null
@@ -523,7 +524,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     const effectiveParams = { ...params, n_points: effectiveNPoints }
     const preprocessParams: ProcessParams = {
       ...DEFAULT_PARAMS,
-      interpolate: params.interpolate,
+      interpolate: interpolationEnabled,
       n_points: effectiveNPoints,
       average: params.average,
       energy_shift: params.energy_shift,
@@ -566,7 +567,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       .catch(e => { if (!cancelled) setError(String(e.message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
-  }, [rawFiles, params, effectiveNPoints, hasPreprocessStage, hasBackgroundStage, hasNormalizationStage])
+  }, [rawFiles, params, effectiveNPoints, interpolationEnabled, hasPreprocessStage, hasBackgroundStage, hasNormalizationStage])
 
   // load elements list on mount
   useEffect(() => {
@@ -853,7 +854,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <button type="button" onClick={() => setSidebarCollapsed(true)} className="text-xs text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
             </div>
             <div className="flex-1 overflow-y-auto">
-              <AnalysisModuleNav activeModule="xps" onSelectModule={onModuleSelect} />
+              <AnalysisModuleNav activeModule="xps" onSelectModule={onModuleSelect} mode="dropdown" />
 
               {/* Mode toggle */}
               <div className="border-b border-[var(--card-divider)] px-4 py-3">
@@ -887,9 +888,22 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   )}
                 </Section>
 
-                <Section step={2} title="內插 / 平均" hint="多檔統一點數後平均" defaultOpen={false}>
+                <Section step={2} title="內插" hint="先統一點數，再進到後續流程" defaultOpen={false}>
                   <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
-                  {(params.interpolate || params.average) && (
+                  {rawFiles.length > 0 && (
+                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-xs">
+                      <p className="font-medium text-[var(--text-main)]">原始資料共 {rawFiles.length} 筆</p>
+                      <div className="mt-2 space-y-1 text-[var(--text-soft)]">
+                        {rawFiles.map(file => (
+                          <div key={file.name} className="flex items-center justify-between gap-3">
+                            <span className="truncate">{file.name}</span>
+                            <span className="shrink-0">{file.x.length} 點</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {interpolationEnabled && (
                     <>
                       <CheckRow label="自動調整點數" checked={autoInterpPoints} onChange={setAutoInterpPoints} />
                       {autoInterpPoints ? (
@@ -904,10 +918,28 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       )}
                     </>
                   )}
-                  {rawFiles.length > 1 && <CheckRow label="多檔平均" checked={params.average} onChange={set('average')} />}
                 </Section>
 
-                <Section step={3} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
+                <Section step={3} title="多檔平均" hint="平均前會沿用上一步的內插網格" defaultOpen={false}>
+                  {rawFiles.length > 1 ? (
+                    <>
+                      <CheckRow
+                        label="啟用多檔平均"
+                        checked={params.average}
+                        onChange={value => setParams(current => ({
+                          ...current,
+                          average: value,
+                          interpolate: value ? true : current.interpolate,
+                        }))}
+                      />
+                      <p className="text-[10px] text-[var(--text-soft)]">平均時會先把所有光譜對齊到同一組內插點數，不會先平均再內插。</p>
+                    </>
+                  ) : (
+                    <p className="text-[10px] text-[var(--text-soft)]">目前只有 1 筆資料，這一步不需要啟用。</p>
+                  )}
+                </Section>
+
+                <Section step={4} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
                   <CheckRow label="手動調整偏移量" checked={manualEnergyShiftEnabled} onChange={setManualEnergyShiftEnabled} />
                   {manualEnergyShiftEnabled && (
                     <NumInput label="手動 BE 位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
@@ -994,7 +1026,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   </div>
                 </Section>
 
-                <Section step={4} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
+                <Section step={5} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
                   <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
                   {params.bg_enabled && (
                     <>
@@ -1035,7 +1067,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   )}
                 </Section>
 
-                <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
+                <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
                   <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
                     options={[
                       { value: 'none', label: '不歸一化' },
@@ -1067,7 +1099,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   )}
                 </Section>
 
-                <Section step={6} title="峰擬合" hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
+                <Section step={7} title="峰擬合" hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
                   <SelectInput label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
@@ -1138,7 +1170,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={7} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
+                  <Section step={8} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
                     <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
                     <div className="grid grid-cols-2 gap-2">
                       <NumInput label="邊緣起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
@@ -1164,7 +1196,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 )}
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={8} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
+                  <Section step={9} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
                     <SelectInput label="方法" value={bandOffsetMethod}
                       onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
                       options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
