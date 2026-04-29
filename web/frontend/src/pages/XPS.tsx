@@ -483,9 +483,6 @@ function buildSessionSignature(files: ParsedFile[], index: number, session: Data
 }
 
 function buildDatasetsForSession(files: ParsedFile[], index: number, session: DatasetSessionState): DatasetInput[] {
-  if (session.params.average && files.length > 1) {
-    return files.map(file => ({ name: file.name, x: file.x, y: file.y }))
-  }
   const file = files[index]
   return file ? [{ name: file.name, x: file.x, y: file.y }] : []
 }
@@ -514,6 +511,14 @@ function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }
       width: 2,
     },
   }))
+}
+
+function getOverlayStageDatasets(stage: ProcessResult | null | undefined, useAverage: boolean) {
+  if (!stage) return []
+  if (useAverage && stage.average) {
+    return [{ name: `${stage.average.name || '平均光譜'}（平均）`, x: stage.average.x, y: stage.average.y_processed }]
+  }
+  return stage.datasets.map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
 }
 
 // ── main component ────────────────────────────────────────────────────────────
@@ -625,10 +630,10 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const currentAutoInterpPoints = processingViewMode === 'overlay' ? overlayState.autoInterpPoints : autoInterpPoints
   const currentManualEnergyShiftEnabled = processingViewMode === 'overlay' ? overlayState.manualEnergyShiftEnabled : manualEnergyShiftEnabled
 
-  const activeDataset = getStageDataset(result, activeDatasetIdx, params.average)
-  const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, params.average)
-  const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, params.average)
-  const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, params.average)
+  const activeDataset = getStageDataset(result, activeDatasetIdx, false)
+  const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, false)
+  const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, false)
+  const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, false)
   const overlayPrimaryDataset = getStageDataset(overlayBundle?.final ?? null, 0, false)
   const beMin = processingViewMode === 'overlay'
     ? (overlayPrimaryDataset ? Math.min(...overlayPrimaryDataset.x) : 0)
@@ -640,7 +645,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const effectiveNPoints = currentAutoInterpPoints ? estimatedInterpPoints : currentParams.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
   const calibrationPeak = calibrationPeaks.find(item => item.label === calibrationPeakLabel) ?? null
-  const interpolationEnabled = currentParams.interpolate || (processingViewMode === 'single' && currentParams.average)
+  const interpolationEnabled = currentParams.interpolate || (processingViewMode === 'overlay' && currentParams.average)
   const hasPreprocessStage = interpolationEnabled || Math.abs(currentParams.energy_shift) > 1e-8
   const hasBackgroundStage = currentParams.bg_enabled
   const hasNormalizationStage = currentParams.norm_method !== 'none'
@@ -706,7 +711,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     if (lastLoadedSessionKeyRef.current === activeDatasetKey) return
     restoringSessionRef.current = true
     lastLoadedSessionKeyRef.current = activeDatasetKey
-    setParams({ ...session.params })
+    setParams({ ...session.params, average: false })
     setAutoInterpPoints(session.autoInterpPoints)
     setManualEnergyShiftEnabled(session.manualEnergyShiftEnabled)
     setSelectedElement(session.selectedElement)
@@ -724,7 +729,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     setDatasetSessions(prev => ({
       ...prev,
       [activeDatasetKey]: {
-        params,
+        params: { ...params, average: false },
         autoInterpPoints,
         manualEnergyShiftEnabled,
         selectedElement,
@@ -880,11 +885,10 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       return
     }
 
-    const overlayParams: ProcessParams = {
-      ...overlayState.params,
-      average: false,
-      n_points: overlayState.autoInterpPoints ? effectiveNPoints : overlayState.params.n_points,
-    }
+        const overlayParams: ProcessParams = {
+          ...overlayState.params,
+          n_points: overlayState.autoInterpPoints ? effectiveNPoints : overlayState.params.n_points,
+        }
     const signature = JSON.stringify({
       mode: 'overlay',
       files: overlayFiles.map(file => `${file.name}:${file.x.length}`),
@@ -902,13 +906,13 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     const overlayHasPreprocessStage = overlayInterpolationEnabled || Math.abs(overlayParams.energy_shift) > 1e-8
     const overlayHasBackgroundStage = overlayParams.bg_enabled
     const overlayHasNormalizationStage = overlayParams.norm_method !== 'none'
-    const overlayPreprocessParams: ProcessParams = {
-      ...DEFAULT_PARAMS,
-      interpolate: overlayInterpolationEnabled,
-      n_points: overlayParams.n_points,
-      average: false,
-      energy_shift: overlayParams.energy_shift,
-    }
+      const overlayPreprocessParams: ProcessParams = {
+        ...DEFAULT_PARAMS,
+        interpolate: overlayInterpolationEnabled,
+        n_points: overlayParams.n_points,
+        average: overlayParams.average,
+        energy_shift: overlayParams.energy_shift,
+      }
     const overlayBackgroundParams: ProcessParams = {
       ...overlayPreprocessParams,
       bg_enabled: overlayHasBackgroundStage,
@@ -1250,18 +1254,10 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }
 
   const datasetTabs = rawFiles
-  const overlayFinalDatasets = (overlayBundle?.final?.datasets ?? [])
-    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
-    .filter((item): item is NonNullable<typeof item> => item != null)
-  const overlayBackgroundDatasets = (overlayBundle?.background?.datasets ?? [])
-    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
-    .filter((item): item is NonNullable<typeof item> => item != null)
-  const overlayNormalizationDatasets = (overlayBundle?.normalization?.datasets ?? [])
-    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
-    .filter((item): item is NonNullable<typeof item> => item != null)
-  const overlayPreprocessDatasets = (overlayBundle?.preprocess?.datasets ?? [])
-    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
-    .filter((item): item is NonNullable<typeof item> => item != null)
+  const overlayFinalDatasets = getOverlayStageDatasets(overlayBundle?.final ?? null, overlayState.params.average)
+  const overlayBackgroundDatasets = getOverlayStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
+  const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
+  const overlayPreprocessDatasets = getOverlayStageDatasets(overlayBundle?.preprocess ?? null, overlayState.params.average)
   const overlayStage = overlayNormalizationDatasets.length >= 2
     ? { title: '多筆疊圖比較：歸一化後', description: '這裡疊的是各筆資料經過各自設定的歸一化結果。', datasets: overlayNormalizationDatasets }
     : overlayBackgroundDatasets.length >= 2
@@ -1272,9 +1268,10 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           ? { title: '多筆疊圖比較：最終處理後', description: '這裡疊的是各筆資料目前最新的處理結果。', datasets: overlayFinalDatasets }
           : null
   const isOverlayView = processingViewMode === 'overlay' && Boolean(overlayStage && overlaySelection.length >= 2)
-  const rawChartTraces = processingViewMode === 'overlay'
-    ? buildRawFileTraces(overlayFiles, 0)
-    : buildRawFileTraces(rawFiles, activeDatasetIdx)
+  const rawChartSourceFiles = processingViewMode === 'overlay'
+    ? overlayFiles
+    : (activeFile ? [activeFile] : [])
+  const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, 0)
   const preprocessChartTraces = rawPreview && preprocessDataset
     ? buildPipelineOverlayTraces(
         { x: rawPreview.x, y: rawPreview.y, name: `${rawPreview.name} 原始` },
@@ -1419,23 +1416,26 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={3} title="多檔平均" hint="平均前會沿用上一步的內插網格" defaultOpen={false}>
-                  {processingViewMode === 'overlay' ? (
-                    <p className="text-[10px] text-[var(--text-soft)]">多筆疊圖模式不沿用單筆平均設定，這裡固定關閉，避免把疊圖直接平均成一條線。</p>
-                  ) : rawFiles.length > 1 ? (
+                  {processingViewMode === 'single' ? (
+                    <p className="text-[10px] text-[var(--text-soft)]">單筆資料處理只會處理目前這一筆，所以這一步固定停用。</p>
+                  ) : overlayFiles.length > 1 ? (
                     <>
                       <CheckRow
                         label="啟用多檔平均"
                         checked={currentParams.average}
-                        onChange={value => setParams(current => ({
+                        onChange={value => setOverlayState(current => ({
                           ...current,
-                          average: value,
-                          interpolate: value ? true : current.interpolate,
+                          params: {
+                            ...current.params,
+                            average: value,
+                            interpolate: value ? true : current.params.interpolate,
+                          },
                         }))}
                       />
-                      <p className="text-[10px] text-[var(--text-soft)]">平均時會先把所有光譜對齊到同一組內插點數，不會先平均再內插。</p>
+                      <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下可對目前選取的多筆資料做平均，平均前會先對齊到同一組內插點數。</p>
                     </>
                   ) : (
-                    <p className="text-[10px] text-[var(--text-soft)]">目前只有 1 筆資料，這一步不需要啟用。</p>
+                    <p className="text-[10px] text-[var(--text-soft)]">請先在多筆疊圖模式選至少 2 筆資料，這一步才可啟用。</p>
                   )}
                 </Section>
 
@@ -1839,7 +1839,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">內插點數</p>
                 <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">
-                  {currentParams.interpolate || (processingViewMode === 'single' && currentParams.average) ? `${effectiveNPoints} 點` : '未啟用'}
+                  {currentParams.interpolate || (processingViewMode === 'overlay' && currentParams.average) ? `${effectiveNPoints} 點` : '未啟用'}
                 </p>
               </div>
             </div>
@@ -2218,7 +2218,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   套用疊圖選擇
                 </button>
               </div>
-              <p className="text-xs text-[var(--text-soft)]">每一筆資料都會沿用自己左欄保存的內插、背景扣除、歸一化等設定，不會強制共用同一組參數。</p>
+              <p className="text-xs text-[var(--text-soft)]">多筆疊圖模式會使用獨立的一套內插、背景扣除與歸一化參數，不會沿用單筆資料處理時的設定。</p>
             </div>
           </div>
         </div>
