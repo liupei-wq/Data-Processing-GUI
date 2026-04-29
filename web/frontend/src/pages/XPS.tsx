@@ -474,8 +474,18 @@ function buildSessionSignature(files: ParsedFile[], index: number, session: Data
   })
 }
 
+function buildDatasetsForSession(files: ParsedFile[], index: number, session: DatasetSessionState): DatasetInput[] {
+  if (session.params.average && files.length > 1) {
+    return files.map(file => ({ name: file.name, x: file.x, y: file.y }))
+  }
+  const file = files[index]
+  return file ? [{ name: file.name, x: file.x, y: file.y }] : []
+}
+
 function getBundleDataset(bundle: DatasetPipelineBundle | null | undefined, index: number, useAverage: boolean) {
-  if (!bundle) return null
+  if (!bundle?.final) return null
+  if (useAverage && bundle.final.average) return bundle.final.average
+  if (bundle.final.datasets.length === 1) return bundle.final.datasets[0]
   return pickDataset(bundle.final, index, useAverage)
 }
 
@@ -499,6 +509,7 @@ function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }
 export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
   const restoringSessionRef = useRef(false)
   const lastLoadedSessionKeyRef = useRef<string | null>(null)
+  const datasetBundlesRef = useRef<Record<string, DatasetPipelineBundle>>({})
 
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = Number(localStorage.getItem('nigiro-xps-sidebar-width'))
@@ -517,6 +528,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [datasetSessions, setDatasetSessions] = useState<Record<string, DatasetSessionState>>({})
   const [datasetBundles, setDatasetBundles] = useState<Record<string, DatasetPipelineBundle>>({})
   const [overlaySelection, setOverlaySelection] = useState<string[]>([])
+  const [overlaySelectorOpen, setOverlaySelectorOpen] = useState(false)
   const [parseLoading, setParseLoading] = useState(false)
   const [processingKeys, setProcessingKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -617,6 +629,10 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     .filter((entry): entry is NonNullable<typeof entry> => entry != null)
 
   useEffect(() => {
+    datasetBundlesRef.current = datasetBundles
+  }, [datasetBundles])
+
+  useEffect(() => {
     const nextKeys = new Set(rawFileKeys)
     setDatasetSessions(prev => {
       if (rawFileKeys.length === 0) return {}
@@ -705,8 +721,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     const keysToProcess = Array.from(new Set([activeDatasetKey, ...overlaySelection].filter((key): key is string => Boolean(key))))
     if (keysToProcess.length === 0) return
     let cancelled = false
-    const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, y: f.y }))
-
     setProcessingKeys(prev => {
       const merged = Array.from(new Set([...prev, ...keysToProcess]))
       return merged.length === prev.length && merged.every((key, index) => key === prev[index]) ? prev : merged
@@ -718,10 +732,13 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       if (index < 0 || !session) return null
 
       const signature = buildSessionSignature(rawFiles, index, session)
-      const cachedBundle = datasetBundles[key]
+      const cachedBundle = datasetBundlesRef.current[key]
       if (cachedBundle && cachedBundle.signature === signature) {
         return { key, bundle: cachedBundle }
       }
+
+      const datasets = buildDatasetsForSession(rawFiles, index, session)
+      if (datasets.length === 0) return null
 
       const sessionNPoints = getSessionPointCount(rawFiles, session)
       const sessionInterpolationEnabled = session.params.interpolate || session.params.average
@@ -810,7 +827,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       })
 
     return () => { cancelled = true }
-  }, [rawFiles, rawFileKeys, datasetSessions, datasetBundles, activeDatasetKey, overlaySelection])
+  }, [rawFiles, rawFileKeys, datasetSessions, activeDatasetKey, overlaySelection])
 
   useEffect(() => {
     if (!activeDatasetKey) {
@@ -1596,66 +1613,33 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         {rawFiles.length > 0 && (
           <>
             {datasetTabs.length > 1 && (
-              <div className="mb-4 space-y-3 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <div>
-                  <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
-                  <div className="flex flex-wrap gap-2">
-                    {datasetTabs.map((ds, idx) => (
-                      <button key={ds.name} type="button" onClick={() => setActiveDatasetIdx(idx)}
-                        className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
-                          idx === activeDatasetIdx ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
-                      >{ds.name}</button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">多筆疊圖比較</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setOverlaySelection(rawFileKeys)}
-                        className="text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]"
-                      >
-                        全選
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setOverlaySelection(activeDatasetKey ? [activeDatasetKey] : [])}
-                        className="text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]"
-                      >
-                        只看目前
-                      </button>
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
+                    <div className="flex flex-wrap gap-2">
+                      {datasetTabs.map((ds, idx) => (
+                        <button key={ds.name} type="button" onClick={() => setActiveDatasetIdx(idx)}
+                          className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
+                            idx === activeDatasetIdx ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
+                        >{ds.name}</button>
+                      ))}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {rawFiles.map((file, index) => {
-                      const key = getDatasetKey(file, index)
-                      const checked = overlaySelection.includes(key)
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => {
-                            setOverlaySelection(current => (
-                              current.includes(key)
-                                ? current.filter(item => item !== key)
-                                : [...current, key]
-                            ))
-                          }}
-                          className={[
-                            'rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
-                            checked
-                              ? 'border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] text-[var(--text-main)]'
-                              : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
-                          ].join(' ')}
-                        >
-                          {file.name}
-                        </button>
-                      )
-                    })}
+                  <div className="shrink-0 lg:pl-4">
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">多筆疊圖處理</p>
+                    <button
+                      type="button"
+                      onClick={() => setOverlaySelectorOpen(true)}
+                      className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-left transition-colors hover:border-[var(--accent-secondary)] hover:bg-[color:color-mix(in_srgb,var(--accent-secondary)_10%,transparent)] pressable"
+                    >
+                      <span className="block text-sm font-semibold text-[var(--text-main)]">選擇疊圖資料</span>
+                      <span className="mt-1 block text-xs text-[var(--text-soft)]">
+                        已選 {overlaySelection.length} 筆
+                        {overlaySelection.length >= 2 ? '，可直接看中間欄疊圖結果' : '，至少選 2 筆才會顯示疊圖'}
+                      </span>
+                    </button>
                   </div>
-                  <p className="mt-2 text-[10px] text-[var(--text-soft)]">每一筆資料都保留自己的左欄設定；疊圖時會把各自目前的處理結果疊在同一張圖上。</p>
                 </div>
               </div>
             )}
@@ -1941,6 +1925,93 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </>
         )}
       </main>
+
+      {overlaySelectorOpen && (
+        <div className="absolute inset-0 z-40 flex items-start justify-center bg-black/35 px-4 py-8 backdrop-blur-[2px]">
+          <div className="theme-block max-h-[calc(100vh-4rem)] w-full max-w-4xl overflow-hidden rounded-[28px]">
+            <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
+              <div>
+                <p className="text-sm font-semibold text-[var(--text-main)]">多筆數據疊圖處理</p>
+                <p className="mt-1 text-xs text-[var(--text-soft)]">會列出目前所有資料，你可以從中選取要一起比較的光譜。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOverlaySelectorOpen(false)}
+                className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs text-[var(--text-soft)] hover:text-[var(--text-main)] pressable"
+              >
+                關閉
+              </button>
+            </div>
+            <div className="space-y-4 overflow-auto p-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOverlaySelection(rawFileKeys)}
+                  className="rounded-full border border-[var(--card-border)] px-3 py-1 text-xs text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--text-main)] pressable"
+                >
+                  全選
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOverlaySelection([])}
+                  className="rounded-full border border-[var(--card-border)] px-3 py-1 text-xs text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--text-main)] pressable"
+                >
+                  清空
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOverlaySelection(activeDatasetKey ? [activeDatasetKey] : [])}
+                  className="rounded-full border border-[var(--card-border)] px-3 py-1 text-xs text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--text-main)] pressable"
+                >
+                  只留目前
+                </button>
+                <span className="ml-auto text-xs text-[var(--text-soft)]">目前已選 {overlaySelection.length} / {rawFiles.length} 筆</span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {rawFiles.map((file, index) => {
+                  const key = getDatasetKey(file, index)
+                  const checked = overlaySelection.includes(key)
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        setOverlaySelection(current => (
+                          current.includes(key)
+                            ? current.filter(item => item !== key)
+                            : [...current, key]
+                        ))
+                      }}
+                      className={[
+                        'rounded-2xl border px-4 py-3 text-left transition-colors pressable',
+                        checked
+                          ? 'border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_14%,transparent)]'
+                          : 'border-[var(--card-border)] bg-[var(--card-bg)] hover:border-[var(--accent-secondary)]',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-[var(--text-main)]">{file.name}</p>
+                          <p className="mt-1 text-xs text-[var(--text-soft)]">{file.x.length} 點</p>
+                        </div>
+                        <span className={[
+                          'mt-0.5 h-5 w-5 shrink-0 rounded-full border text-[10px] leading-[18px] text-center',
+                          checked
+                            ? 'border-[var(--accent-secondary)] bg-[var(--accent-secondary)] text-[var(--accent-contrast)]'
+                            : 'border-[var(--card-border)] text-[var(--text-soft)]',
+                        ].join(' ')}>
+                          {checked ? '✓' : ''}
+                        </span>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-[var(--text-soft)]">每一筆資料都會沿用自己左欄保存的內插、背景扣除、歸一化等設定，不會強制共用同一組參數。</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {periodicTableOpen && (
         <div className="absolute inset-0 z-40 flex items-start justify-center bg-black/35 px-4 py-8 backdrop-blur-[2px]">

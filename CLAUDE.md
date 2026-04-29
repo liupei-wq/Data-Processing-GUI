@@ -476,6 +476,42 @@ type WorkspaceId =
 
 ---
 
+## XPS 多筆疊圖卡頓修正與入口精簡（2026-04-29, 續）
+
+### 多筆疊圖卡住原因
+- `web/frontend/src/pages/XPS.tsx`
+  - 原本多筆疊圖一旦選到多筆資料，前端會對每個被選中的 session 重跑整批 `rawFiles`
+  - 同時處理 effect 也把 `datasetBundles` 放在 dependency 裡，會造成不必要的連續重算
+- 這在資料筆數很多時會變成非常重，容易讓頁面卡死或看起來像崩潰
+
+### 修正方式
+- 新增 `datasetBundlesRef`，處理流程改從 ref 讀 cache，不再因 `datasetBundles` 更新反覆觸發 effect
+- 新增 `buildDatasetsForSession()`：
+  - 一般單筆處理時，只送該筆資料去 `/api/xps/process`
+  - 只有該 session 自己啟用 `average` 且確實有多筆資料時，才送整批資料
+- `getBundleDataset()` 補上單筆 bundle 的安全取值邏輯，避免用原始 index 去抓只有 1 筆的結果
+
+### 多筆疊圖入口改成彈窗
+- 中間欄最上方原本把：
+  - `單筆資料處理`
+  - `多筆疊圖比較`
+  直接都展開在同一塊
+- 現在改成精簡版：
+  - 左邊保留單筆資料切換 chip
+  - 右邊只留一個 `選擇疊圖資料` 按鈕
+- 點按鈕後會像元素週期表一樣開一個 overlay / modal：
+  - 列出目前所有上傳資料
+  - 筆數多也會完整顯示，可捲動
+  - 可逐筆勾選
+  - 提供 `全選` / `清空` / `只留目前`
+- 目的：
+  - 讓中間欄最上方那一列精簡，不要被大量資料 chip 塞滿
+
+### 驗證
+- `npm run build`：通過
+
+---
+
 ## XPS 分析模組下拉縮小（2026-04-29, 續）
 
 ### 左上角感應式分析模組入口
