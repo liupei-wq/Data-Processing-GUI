@@ -92,12 +92,6 @@ function estimateInterpolationPoints(files: ParsedFile[]) {
   return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
 }
 
-function pickDataset(result: ProcessResult | null, activeIndex: number, useAverage: boolean) {
-  if (!result) return null
-  if (useAverage && result.average) return result.average
-  return result.datasets[activeIndex] ?? result.datasets[0] ?? null
-}
-
 function buildRawFileTraces(files: ParsedFile[], activeIndex: number): Plotly.Data[] {
   return files.map((file, index) => ({
     x: file.x,
@@ -482,11 +476,15 @@ function buildDatasetsForSession(files: ParsedFile[], index: number, session: Da
   return file ? [{ name: file.name, x: file.x, y: file.y }] : []
 }
 
+function getStageDataset(stage: ProcessResult | null | undefined, index: number, useAverage: boolean) {
+  if (!stage) return null
+  if (useAverage && stage.average) return stage.average
+  if (stage.datasets.length === 1) return stage.datasets[0]
+  return stage.datasets[index] ?? stage.datasets[0] ?? null
+}
+
 function getBundleDataset(bundle: DatasetPipelineBundle | null | undefined, index: number, useAverage: boolean) {
-  if (!bundle?.final) return null
-  if (useAverage && bundle.final.average) return bundle.final.average
-  if (bundle.final.datasets.length === 1) return bundle.final.datasets[0]
-  return pickDataset(bundle.final, index, useAverage)
+  return getStageDataset(bundle?.final, index, useAverage)
 }
 
 function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }[]): Plotly.Data[] {
@@ -595,15 +593,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const rawFileKeys = rawFiles.map((file, index) => getDatasetKey(file, index))
   const activeFile = rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null
   const activeDatasetKey = activeFile ? getDatasetKey(activeFile, activeDatasetIdx) : null
-  const activeSession = activeDatasetKey ? datasetSessions[activeDatasetKey] : null
   const isLoading = parseLoading || (activeDatasetKey ? processingKeys.includes(activeDatasetKey) : false)
 
-  const activeDataset = result
-    ? (result.average && params.average ? result.average : result.datasets[activeDatasetIdx] ?? null)
-    : null
-  const preprocessDataset = pickDataset(preprocessResult, activeDatasetIdx, params.average)
-  const backgroundDataset = pickDataset(backgroundResult, activeDatasetIdx, params.average)
-  const normalizationDataset = pickDataset(normalizationResult, activeDatasetIdx, params.average)
+  const activeDataset = getStageDataset(result, activeDatasetIdx, params.average)
+  const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, params.average)
+  const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, params.average)
+  const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, params.average)
   const beMin = activeDataset ? Math.min(...activeDataset.x) : 0
   const beMax = activeDataset ? Math.max(...activeDataset.x) : 1000
   const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
@@ -1065,7 +1060,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     finally { setIsFitting(false) }
   }
 
-  const datasetTabs = result?.datasets ?? rawFiles
+  const datasetTabs = rawFiles
   const overlayFinalDatasets = overlayEntries
     .map(entry => {
       const dataset = getBundleDataset(entry.bundle, entry.index, entry.session.params.average)
@@ -1076,7 +1071,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const overlayBackgroundDatasets = overlayEntries
     .filter(entry => entry.session.params.bg_enabled)
     .map(entry => {
-      const dataset = pickDataset(entry.bundle.background, entry.index, entry.session.params.average)
+      const dataset = getStageDataset(entry.bundle.background, entry.index, entry.session.params.average)
       if (!dataset) return null
       return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
     })
@@ -1084,7 +1079,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const overlayNormalizationDatasets = overlayEntries
     .filter(entry => entry.session.params.norm_method !== 'none')
     .map(entry => {
-      const dataset = pickDataset(entry.bundle.normalization, entry.index, entry.session.params.average)
+      const dataset = getStageDataset(entry.bundle.normalization, entry.index, entry.session.params.average)
       if (!dataset) return null
       return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
     })
@@ -1092,7 +1087,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const overlayPreprocessDatasets = overlayEntries
     .filter(entry => (entry.session.params.interpolate || entry.session.params.average || Math.abs(entry.session.params.energy_shift) > 1e-8))
     .map(entry => {
-      const dataset = pickDataset(entry.bundle.preprocess, entry.index, entry.session.params.average)
+      const dataset = getStageDataset(entry.bundle.preprocess, entry.index, entry.session.params.average)
       if (!dataset) return null
       return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
     })
@@ -1203,7 +1198,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
               <div className="px-4 pt-4">
                 <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV">
-                  <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat']} />
+                  <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="XPS" accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat']} />
                   {rawFiles.length > 0 && (
                     <div className="space-y-1">
                       {rawFiles.map(f => (

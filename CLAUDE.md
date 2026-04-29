@@ -476,6 +476,43 @@ type WorkspaceId =
 
 ---
 
+## XPS 回歸修正與上傳文案調整（2026-04-29, 續）
+
+### 修正：中間欄上方資料列消失
+- 問題原因：
+  - `web/frontend/src/pages/XPS.tsx`
+  - 上方資料列仍用 `result?.datasets` 當來源
+  - 但切到單筆 session 後，單筆處理回來的 `result.datasets` 只會有 1 筆
+  - 導致原本多筆資料的資料列誤判成只有 1 筆，整塊 UI 消失
+- 修正：
+  - `datasetTabs` 改回直接使用 `rawFiles`
+
+### 修正：內插 / 階段結果取值失效
+- 問題原因：
+  - active dataset 與 preprocess / background / normalization 仍沿用舊的 `activeDatasetIdx` 對整批結果取值
+  - 但現在很多情況是單筆 session bundle，只會回傳單筆 dataset
+  - 直接用原索引去抓時會抓不到，連帶讓內插等步驟看起來像失效
+- 修正：
+  - 新增 `getStageDataset()`
+  - 單筆 bundle 時直接取唯一那筆
+  - 多筆 / average 時再依條件取 average 或 index 對應結果
+  - overlay 圖層也改用同一套 helper，不再混用舊索引邏輯
+
+### 上傳區文案
+- `web/frontend/src/components/FileUpload.tsx`
+  - 文字從 `拖曳或點擊上傳` 改成 `拖曳或上傳`
+- `web/frontend/src/pages/XPS.tsx`
+  - XPS 主上傳區明確傳入 `moduleLabel="XPS"`
+  - 顯示為 `拖曳或上傳 XPS 檔案`
+
+### 其他
+- 移除 XPS 頁面已不再使用的 `pickDataset()` 舊 helper
+
+### 驗證
+- `npm run build`：通過
+
+---
+
 ## XPS 多筆疊圖卡頓修正與入口精簡（2026-04-29, 續）
 
 ### 多筆疊圖卡住原因
