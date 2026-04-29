@@ -88,6 +88,17 @@ export interface ElementListItem {
   has_peaks: boolean
 }
 
+export interface CalibrationResult {
+  standard_element: string
+  peak_label: string
+  reference_be: number
+  observed_be: number | null
+  offset_ev: number
+  search_window: number
+  success: boolean
+  message: string
+}
+
 export interface FitPeakRow {
   Peak_Name: string
   Center_eV: number

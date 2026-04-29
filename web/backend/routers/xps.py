@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 from core.parsers import parse_xps_bytes
 from core.peak_fitting import fit_peaks
 from core.processing import apply_background, apply_normalization, smooth_signal
-from core.spectrum_ops import detect_spectrum_peaks, interpolate_spectrum_to_grid, mean_spectrum_arrays
+from core.spectrum_ops import detect_spectrum_peaks
+from db.xps_database import DOUBLET_INFO, ELEMENTS, get_orbital_rsf
 
 router = APIRouter()
 
@@ -128,6 +129,71 @@ class FitResponse(BaseModel):
     peaks: List[FitPeakRow]
 
 
+class CalibrationRequest(BaseModel):
+    x: List[float]
+    y: List[float]
+    standard_element: str
+    peak_label: str
+    reference_be: float
+    search_window: float = 4.0
+
+
+class CalibrationResponse(BaseModel):
+    standard_element: str
+    peak_label: str
+    reference_be: float
+    observed_be: Optional[float]
+    offset_ev: float
+    search_window: float
+    success: bool
+    message: str = ""
+
+
+def _sorted_xy(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    order = np.argsort(x)
+    return x[order], y[order]
+
+
+def _estimate_peak_position(x: np.ndarray, y: np.ndarray, target_be: float, search_window: float) -> Optional[float]:
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if np.count_nonzero(mask) < 5:
+        return None
+
+    xs, ys = _sorted_xy(x[mask], y[mask])
+    half_window = max(float(search_window), 0.5)
+    region = (xs >= target_be - half_window) & (xs <= target_be + half_window)
+    if np.count_nonzero(region) < 3:
+        return None
+
+    xr = xs[region]
+    yr = ys[region]
+    if len(yr) >= 7:
+        window = min(len(yr) if len(yr) % 2 == 1 else len(yr) - 1, 11)
+        if window >= 5:
+            yr = smooth_signal(yr, method="savitzky_golay", window_points=window, poly_deg=3)
+
+    max_idx = int(np.argmax(yr))
+    left = max(0, max_idx - 1)
+    right = min(len(xr) - 1, max_idx + 1)
+    if left == max_idx or right == max_idx:
+        return float(xr[max_idx])
+
+    x_fit = xr[left:right + 1]
+    y_fit = yr[left:right + 1]
+    try:
+        coeffs = np.polyfit(x_fit, y_fit, 2)
+        a, b = float(coeffs[0]), float(coeffs[1])
+        if abs(a) > 1e-12:
+            vertex = -b / (2 * a)
+            if float(x_fit.min()) <= vertex <= float(x_fit.max()):
+                return float(vertex)
+    except Exception:
+        pass
+    return float(xr[max_idx])
+
+
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/parse", response_model=ParseResponse)
@@ -199,15 +265,15 @@ def process_xps(req: ProcessRequest):
 
         # smoothing
         if p.smooth_method != "none":
-            y, _ = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
+            y = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
 
         # normalization
         if p.norm_method != "none":
-            _, y = apply_normalization(
+            y = apply_normalization(
                 x, y,
                 norm_method=p.norm_method,
-                x_start=p.norm_x_start,
-                x_end=p.norm_x_end,
+                norm_x_start=p.norm_x_start,
+                norm_x_end=p.norm_x_end,
             )
 
         outputs.append(DatasetOutput(
@@ -235,6 +301,39 @@ def process_xps(req: ProcessRequest):
             pass
 
     return ProcessResponse(datasets=outputs, average=average_out)
+
+
+@router.post("/calibrate", response_model=CalibrationResponse)
+def calibrate_xps_energy(req: CalibrationRequest):
+    x = np.array(req.x, dtype=float)
+    y = np.array(req.y, dtype=float)
+    if len(x) < 5 or len(y) < 5:
+        raise HTTPException(status_code=400, detail="標準樣品資料點不足")
+
+    observed_be = _estimate_peak_position(x, y, req.reference_be, req.search_window)
+    if observed_be is None:
+        return CalibrationResponse(
+            standard_element=req.standard_element,
+            peak_label=req.peak_label,
+            reference_be=req.reference_be,
+            observed_be=None,
+            offset_ev=0.0,
+            search_window=req.search_window,
+            success=False,
+            message="在指定搜尋範圍內找不到可用峰位",
+        )
+
+    offset_ev = float(req.reference_be - observed_be)
+    return CalibrationResponse(
+        standard_element=req.standard_element,
+        peak_label=req.peak_label,
+        reference_be=req.reference_be,
+        observed_be=observed_be,
+        offset_ev=offset_ev,
+        search_window=req.search_window,
+        success=True,
+        message="已完成標準樣品能量校正",
+    )
 
 
 @router.post("/peaks", response_model=PeakDetectResponse)
@@ -415,7 +514,6 @@ class ElementPeaksResponse(BaseModel):
 
 @router.get("/elements")
 def list_elements_endpoint():
-    from db.xps_database import ELEMENTS
     return [
         {"symbol": k, "name": v["name"], "has_peaks": len(v.get("peaks", [])) > 0}
         for k, v in ELEMENTS.items()
@@ -424,7 +522,6 @@ def list_elements_endpoint():
 
 @router.get("/element-peaks/{element}", response_model=ElementPeaksResponse)
 def get_element_peaks(element: str):
-    from db.xps_database import ELEMENTS, DOUBLET_INFO
     elem_data = ELEMENTS.get(element)
     if elem_data is None:
         raise HTTPException(status_code=404, detail=f"Element '{element}' not in database")
@@ -460,7 +557,6 @@ class RsfResultRow(BaseModel):
 
 @router.post("/rsf", response_model=List[RsfResultRow])
 def get_rsf_values(items: List[RsfItem]):
-    from db.xps_database import get_orbital_rsf
     results = []
     for item in items:
         rsf, source = get_orbital_rsf(item.element.strip(), item.label.strip())

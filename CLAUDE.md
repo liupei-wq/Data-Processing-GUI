@@ -432,3 +432,45 @@ type WorkspaceId =
 ### XES DB（`db/xes_database.py` 在 Desktop repo）
 格式：`{ material: { peaks: [{label, energy_eV, tolerance_eV, relative_intensity, meaning}] } }`
 已知材料：NiO / Ga2O3 / n-Si
+
+---
+
+## XPS 修正與補強（2026-04-29, 本輪）
+
+### 問題修正
+- 修正 `web/backend/routers/xps.py` 的 XPS 處理 bug：
+  - `smooth_signal()` 被錯當成回傳 tuple，改回單一陣列
+  - `apply_normalization()` 被錯當成回傳 tuple，且參數名改為 `norm_x_start / norm_x_end`
+- 這個錯誤會讓 `/api/xps/process` 在部分流程直接失敗，前端上傳後中間圖表不顯示的主因在這裡
+
+### XPS 能量校正
+- 新增 `POST /api/xps/calibrate`
+- 前端 `XPS.tsx` 的步驟 3 保留原本手動 `BE 位移 (eV)` 輸入
+- 同時新增「標準樣品資料庫校正」：
+  - 可上傳標準樣品光譜（`xy/txt/csv/vms/pro/dat`）
+  - 可從 XPS DB 選標準樣品元素與參考峰（例如 `Au 4f7/2`）
+  - 後端會在參考 BE 附近搜尋峰位，自動估計觀測峰中心
+  - 偏移量 `offset = reference_be - observed_be`
+  - 成功後自動累加到手動 `energy_shift`
+- 峰中心估計做法：
+  - 先依 `reference_be ± search_window` 截區間
+  - 區間內先做小視窗 Savitzky-Golay 平滑
+  - 取最大值附近三點做二次曲線頂點估計，失敗則退回最大值位置
+
+### XPS 背景 / 歸一化 UI
+- 背景扣除與歸一化區間都新增雙滑桿控制
+- 仍保留原本數值輸入框
+- `max` 歸一化也補上區間控制，避免後端支援但前端沒開
+
+### XPS 內插點數
+- XPS 網頁版新增「自動調整點數」
+- 目前 repo 內沒有找到離線版原本的點數函式，所以這裡先採 heuristic：
+  - 依每條原始光譜的點距中位數估算目標點數
+  - 再取中位數並四捨五入到 50 的倍數
+  - 最後限制在 `600–2400` 點之間
+- 目標是避免點數太少導致失真，也避免無意義過密造成效能浪費
+- 若之後找到離線版的原始公式，再直接換成同一套
+
+### 驗證
+- `npm run build`：通過
+- `python3 -m py_compile web/backend/main.py web/backend/routers/xps.py`：通過

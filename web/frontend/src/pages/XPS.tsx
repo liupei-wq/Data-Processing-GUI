@@ -3,9 +3,11 @@ import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import AnalysisModuleNav from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
+import { calibrateEnergy, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
 import type {
+  CalibrationResult,
   DatasetInput,
+  ElementDbPeak,
   ElementListItem,
   FitResult,
   InitPeak,
@@ -22,6 +24,9 @@ const SIDEBAR_MIN_WIDTH = 300
 const SIDEBAR_MAX_WIDTH = 540
 const SIDEBAR_DEFAULT_WIDTH = 360
 const SIDEBAR_COLLAPSED_PEEK = 28
+const INTERP_POINTS_MIN = 600
+const INTERP_POINTS_MAX = 2400
+const INTERP_POINTS_DEFAULT = 1000
 
 const DEFAULT_PARAMS: ProcessParams = {
   interpolate: false,
@@ -51,6 +56,39 @@ const DEFAULT_PARAMS: ProcessParams = {
 function cssVar(name: string, fallback: string) {
   if (typeof window === 'undefined') return fallback
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+
+function estimateInterpolationPoints(files: ParsedFile[]) {
+  if (files.length === 0) return INTERP_POINTS_DEFAULT
+  const estimated = files.map(file => {
+    if (!file.x || file.x.length < 2) return file.n_points || INTERP_POINTS_DEFAULT
+    const xs = [...file.x].filter(Number.isFinite).sort((a, b) => a - b)
+    if (xs.length < 2) return file.n_points || INTERP_POINTS_DEFAULT
+    const diffs: number[] = []
+    for (let i = 1; i < xs.length; i += 1) {
+      const diff = xs[i] - xs[i - 1]
+      if (Number.isFinite(diff) && diff > 0) diffs.push(diff)
+    }
+    const step = median(diffs)
+    const span = xs[xs.length - 1] - xs[0]
+    if (!Number.isFinite(step) || step <= 0 || !Number.isFinite(span) || span <= 0) {
+      return file.n_points || INTERP_POINTS_DEFAULT
+    }
+    return Math.round(span / step) + 1
+  })
+  const target = Math.round(median(estimated) / 50) * 50
+  return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
 }
 
 function chartLayout(xReversed = true): Partial<Plotly.Layout> {
@@ -173,6 +211,64 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
   )
 }
 
+function DualRangeInput({
+  label,
+  min,
+  max,
+  start,
+  end,
+  step = 0.1,
+  onChange,
+  disabled = false,
+}: {
+  label: string
+  min: number
+  max: number
+  start: number
+  end: number
+  step?: number
+  onChange: (next: { start: number; end: number }) => void
+  disabled?: boolean
+}) {
+  const low = Math.min(start, end)
+  const high = Math.max(start, end)
+  const boundedMin = Number.isFinite(min) ? min : 0
+  const boundedMax = Number.isFinite(max) && max > boundedMin ? max : boundedMin + 1
+
+  return (
+    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
+        <span className="text-[11px] font-medium text-[var(--text-main)]">
+          {low.toFixed(1)} – {high.toFixed(1)} eV
+        </span>
+      </div>
+      <div className="space-y-2">
+        <input
+          type="range"
+          min={boundedMin}
+          max={boundedMax}
+          step={step}
+          value={low}
+          disabled={disabled}
+          onChange={e => onChange({ start: Math.min(Number(e.target.value), high), end: high })}
+          className="w-full accent-[var(--accent-strong)] disabled:opacity-40"
+        />
+        <input
+          type="range"
+          min={boundedMin}
+          max={boundedMax}
+          step={step}
+          value={high}
+          disabled={disabled}
+          onChange={e => onChange({ start: low, end: Math.max(Number(e.target.value), low) })}
+          className="w-full accent-[var(--accent-tertiary)] disabled:opacity-40"
+        />
+      </div>
+    </div>
+  )
+}
+
 function csvEscape(v: string | number | null | undefined): string {
   if (v == null) return ''
   const s = String(v)
@@ -213,10 +309,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [sidebarResizing, setSidebarResizing] = useState(false)
 
   const [rawFiles, setRawFiles] = useState<ParsedFile[]>([])
+  const [standardFiles, setStandardFiles] = useState<ParsedFile[]>([])
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [autoInterpPoints, setAutoInterpPoints] = useState(true)
 
   // display
   const [showRaw, setShowRaw] = useState(true)
@@ -227,6 +325,15 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [elementsList, setElementsList] = useState<ElementListItem[]>([])
   const [selectedElement, setSelectedElement] = useState('')
   const [elementsLoading, setElementsLoading] = useState(false)
+  const [calibrationElement, setCalibrationElement] = useState('Au')
+  const [calibrationPeaks, setCalibrationPeaks] = useState<ElementDbPeak[]>([])
+  const [calibrationPeakLabel, setCalibrationPeakLabel] = useState('')
+  const [calibrationPeakBe, setCalibrationPeakBe] = useState<number | null>(null)
+  const [calibrationSearchWindow, setCalibrationSearchWindow] = useState(4)
+  const [calibrationDatasetIdx, setCalibrationDatasetIdx] = useState(0)
+  const [calibrationResult, setCalibrationResult] = useState<CalibrationResult | null>(null)
+  const [calibrationLoading, setCalibrationLoading] = useState(false)
+  const [calibrationError, setCalibrationError] = useState<string | null>(null)
 
   // fitting
   const [fitProfile, setFitProfile] = useState<string>('voigt')
@@ -271,6 +378,9 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     : null
   const beMin = activeDataset ? Math.min(...activeDataset.x) : 0
   const beMax = activeDataset ? Math.max(...activeDataset.x) : 1000
+  const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
+  const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
+  const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
 
   // process when files or params change
   useEffect(() => {
@@ -278,17 +388,37 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     let cancelled = false
     setIsLoading(true); setError(null)
     const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, y: f.y }))
-    processData(datasets, params)
+    processData(datasets, { ...params, n_points: effectiveNPoints })
       .then(r => { if (!cancelled) { setResult(r); setFitResult(null) } })
       .catch(e => { if (!cancelled) setError(String(e.message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
-  }, [rawFiles, params])
+  }, [rawFiles, params, effectiveNPoints])
 
   // load elements list on mount
   useEffect(() => {
     listElements().then(setElementsList).catch(console.error)
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchElementPeaks(calibrationElement)
+      .then(data => {
+        if (cancelled) return
+        setCalibrationPeaks(data.peaks)
+        const firstPeak = data.peaks[0]
+        setCalibrationPeakLabel(firstPeak?.label ?? '')
+        setCalibrationPeakBe(firstPeak?.be ?? null)
+      })
+      .catch(err => {
+        if (cancelled) return
+        setCalibrationPeaks([])
+        setCalibrationPeakLabel('')
+        setCalibrationPeakBe(null)
+        setCalibrationError(String(err.message ?? err))
+      })
+    return () => { cancelled = true }
+  }, [calibrationElement])
 
   useEffect(() => { localStorage.setItem('nigiro-xps-sidebar-width', String(sidebarWidth)) }, [sidebarWidth])
   useEffect(() => { localStorage.setItem('nigiro-xps-sidebar-collapsed', String(sidebarCollapsed)) }, [sidebarCollapsed])
@@ -333,8 +463,63 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     finally { setIsLoading(false) }
   }, [])
 
+  const handleStandardFiles = useCallback(async (files: File[]) => {
+    setCalibrationLoading(true)
+    setCalibrationError(null)
+    try {
+      const res = await parseFiles(files)
+      if (res.errors.length) setCalibrationError(res.errors.join('; '))
+      setStandardFiles(res.files)
+      setCalibrationDatasetIdx(0)
+      setCalibrationResult(null)
+    } catch (e: unknown) {
+      setCalibrationError((e as Error).message)
+    } finally {
+      setCalibrationLoading(false)
+    }
+  }, [])
+
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
+
+  const setCalibrationPeak = (label: string) => {
+    setCalibrationPeakLabel(label)
+    const peak = calibrationPeaks.find(item => item.label === label)
+    setCalibrationPeakBe(peak?.be ?? null)
+  }
+
+  const handleAutoCalibration = async () => {
+    if (!standardDataset) {
+      setCalibrationError('請先上傳標準樣品光譜')
+      return
+    }
+    if (!calibrationPeakLabel || calibrationPeakBe == null) {
+      setCalibrationError('請先選擇標準峰')
+      return
+    }
+    setCalibrationLoading(true)
+    setCalibrationError(null)
+    try {
+      const res = await calibrateEnergy(
+        standardDataset.x,
+        standardDataset.y,
+        calibrationElement,
+        calibrationPeakLabel,
+        calibrationPeakBe,
+        calibrationSearchWindow,
+      )
+      setCalibrationResult(res)
+      if (!res.success) {
+        setCalibrationError(res.message || '自動校正失敗')
+        return
+      }
+      setParams(current => ({ ...current, energy_shift: Number((current.energy_shift + res.offset_ev).toFixed(4)) }))
+    } catch (e: unknown) {
+      setCalibrationError((e as Error).message)
+    } finally {
+      setCalibrationLoading(false)
+    }
+  }
 
   const computeVbmFn = async () => {
     if (!activeDataset) return
@@ -472,13 +657,117 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
                 <Section step={2} title="內插 / 平均" hint="多檔統一點數後平均" defaultOpen={false}>
                   <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
-                  {params.interpolate && <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={5000} step={100} />}
+                  {(params.interpolate || params.average) && (
+                    <>
+                      <CheckRow label="自動調整點數" checked={autoInterpPoints} onChange={setAutoInterpPoints} />
+                      {autoInterpPoints ? (
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] px-3 py-3 text-xs">
+                          <p className="font-medium text-[var(--text-main)]">本次將使用 {effectiveNPoints} 點</p>
+                          <p className="mt-1 text-[var(--text-soft)]">
+                            依上傳光譜的原始點密度自動估算，並限制在 {INTERP_POINTS_MIN}–{INTERP_POINTS_MAX} 點之間。
+                          </p>
+                        </div>
+                      ) : (
+                        <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={5000} step={100} />
+                      )}
+                    </>
+                  )}
                   {rawFiles.length > 1 && <CheckRow label="多檔平均" checked={params.average} onChange={set('average')} />}
                 </Section>
 
-                <Section step={3} title="能量校正" hint="C 1s = 284.8 eV" defaultOpen={false}>
+                <Section step={3} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
                   <NumInput label="BE 位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
-                  <p className="text-[10px] text-[var(--text-soft)]">正值向高 BE 方向移。常見校正：C 1s = 284.8 eV。</p>
+                  <p className="text-[10px] text-[var(--text-soft)]">手動輸入會保留。自動校正算出的偏移量會直接累加到這個值。</p>
+                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <p className="mb-3 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">標準樣品資料庫校正</p>
+                    <div className="space-y-3">
+                      <FileUpload
+                        onFiles={handleStandardFiles}
+                        isLoading={calibrationLoading}
+                        moduleLabel="標準樣品"
+                        accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat']}
+                      />
+                      {standardFiles.length > 0 && (
+                        <div className="space-y-1">
+                          {standardFiles.map((file, idx) => (
+                            <button
+                              key={`${file.name}-${idx}`}
+                              type="button"
+                              onClick={() => setCalibrationDatasetIdx(idx)}
+                              className={[
+                                'flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors pressable',
+                                idx === calibrationDatasetIdx
+                                  ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
+                                  : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
+                              ].join(' ')}
+                            >
+                              <span className="truncate">{file.name}</span>
+                              <span className="ml-auto shrink-0">{file.x.length} pts</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-2">
+                        <SelectInput
+                          label="標準樣品"
+                          value={calibrationElement}
+                          onChange={setCalibrationElement}
+                          options={elementsList.filter(el => el.has_peaks).map(el => ({
+                            value: el.symbol,
+                            label: `${el.symbol} — ${el.name}`,
+                          }))}
+                        />
+                        <SelectInput
+                          label="參考峰"
+                          value={calibrationPeakLabel}
+                          onChange={setCalibrationPeak}
+                          options={calibrationPeaks.map(peak => ({
+                            value: peak.label,
+                            label: `${peak.label} (${peak.be.toFixed(1)} eV)`,
+                          }))}
+                          disabled={calibrationPeaks.length === 0}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput
+                          label="參考 BE (eV)"
+                          value={calibrationPeakBe ?? 0}
+                          onChange={setCalibrationPeakBe}
+                          step={0.01}
+                          disabled={calibrationPeaks.length === 0}
+                        />
+                        <NumInput
+                          label="搜尋視窗 ±eV"
+                          value={calibrationSearchWindow}
+                          onChange={setCalibrationSearchWindow}
+                          min={0.5}
+                          max={20}
+                          step={0.5}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleAutoCalibration}
+                        disabled={calibrationLoading || !standardDataset || !calibrationPeakLabel || calibrationPeakBe == null}
+                        className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
+                      >
+                        {calibrationLoading ? '校正中…' : '計算偏移並套用'}
+                      </button>
+                      {calibrationError && <p className="text-xs text-rose-400">{calibrationError}</p>}
+                      {calibrationResult?.success && (
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] px-3 py-3 text-xs text-[var(--text-main)]">
+                          <p className="font-medium">
+                            {calibrationResult.standard_element} {calibrationResult.peak_label}：
+                            觀測 {calibrationResult.observed_be?.toFixed(3)} eV
+                          </p>
+                          <p className="mt-1 text-[var(--text-soft)]">
+                            參考 {calibrationResult.reference_be.toFixed(3)} eV，已套用偏移 {calibrationResult.offset_ev >= 0 ? '+' : ''}
+                            {calibrationResult.offset_ev.toFixed(3)} eV。
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </Section>
 
                 <Section step={4} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
@@ -499,6 +788,18 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                         <NumInput label="起始 BE (eV)" value={params.bg_x_start ?? beMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
                         <NumInput label="結束 BE (eV)" value={params.bg_x_end ?? beMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
                       </div>
+                      <DualRangeInput
+                        label="背景區間拉桿"
+                        min={beMin}
+                        max={beMax}
+                        start={params.bg_x_start ?? beMin}
+                        end={params.bg_x_end ?? beMax}
+                        step={0.1}
+                        onChange={({ start, end }) => {
+                          set('bg_x_start')(start)
+                          set('bg_x_end')(end)
+                        }}
+                      />
                       {params.bg_method === 'polynomial' && <NumInput label="多項式次數" value={params.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />}
                       {params.bg_method === 'tougaard' && (
                         <div className="grid grid-cols-2 gap-2">
@@ -520,11 +821,25 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       { value: 'mean_region', label: '算術平均' },
                     ]}
                   />
-                  {(params.norm_method === 'min_max' || params.norm_method === 'area' || params.norm_method === 'mean_region') && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="起始 (eV)" value={params.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
-                      <NumInput label="結束 (eV)" value={params.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
-                    </div>
+                  {(params.norm_method === 'min_max' || params.norm_method === 'max' || params.norm_method === 'area' || params.norm_method === 'mean_region') && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput label="起始 (eV)" value={params.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
+                        <NumInput label="結束 (eV)" value={params.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
+                      </div>
+                      <DualRangeInput
+                        label="歸一化區間拉桿"
+                        min={beMin}
+                        max={beMax}
+                        start={params.norm_x_start ?? beMin}
+                        end={params.norm_x_end ?? beMax}
+                        step={0.1}
+                        onChange={({ start, end }) => {
+                          set('norm_x_start')(start)
+                          set('norm_x_end')(end)
+                        }}
+                      />
+                    </>
                   )}
                 </Section>
 

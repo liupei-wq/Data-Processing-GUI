@@ -1,4 +1,5 @@
 import type {
+  CalibrationResult,
   DetectedPeak,
   ElementListItem,
   ElementPeaksResponse,
@@ -65,6 +66,33 @@ export async function fetchElementPeaks(element: string): Promise<ElementPeaksRe
 export async function listElements(): Promise<ElementListItem[]> {
   const res = await fetch(`${BASE}/elements`)
   if (!res.ok) throw new Error(`Elements list fetch failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function calibrateEnergy(
+  x: number[],
+  y: number[],
+  standardElement: string,
+  peakLabel: string,
+  referenceBe: number,
+  searchWindow: number,
+): Promise<CalibrationResult> {
+  const res = await fetch(`${BASE}/calibrate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      x,
+      y,
+      standard_element: standardElement,
+      peak_label: peakLabel,
+      reference_be: referenceBe,
+      search_window: searchWindow,
+    }),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(detail.detail ?? res.statusText)
+  }
   return res.json()
 }
 
