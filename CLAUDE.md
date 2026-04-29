@@ -476,6 +476,100 @@ type WorkspaceId =
 
 ---
 
+## XPS 單筆 / 疊圖參數邏輯確認（2026-04-29, 續）
+
+### 目前程式實際邏輯
+- `web/frontend/src/pages/XPS.tsx`
+  - 目前只有一套 `datasetSessions`
+  - 這套 session 是「每筆資料一份」，不是「單筆模式一套、疊圖模式一套」
+- `overlaySelection`
+  - 只負責記錄哪些資料要拿去疊圖
+  - 本身不保存獨立的背景扣除 / 歸一化 / 內插參數
+- 疊圖顯示時：
+  - 直接吃各筆資料在 `datasetSessions` 裡已保存的參數結果
+  - 也就是說，單筆模式調過的參數，會被疊圖直接沿用
+
+### 結論
+- 目前**沒有**：
+  - 切到多筆疊圖時自動清空單筆模式參數
+  - 切回單筆時不保留疊圖模式專用參數
+- 因為現在根本沒有「疊圖模式自己的獨立參數狀態」，只有：
+  - 單筆資料各自的 session
+  - 疊圖選取名單
+
+---
+
+## XPS 單筆 / 疊圖參數完全分離（2026-04-29, 續）
+
+### 目標
+- 修正 XPS 單筆模式與多筆疊圖模式會共用同一批參數的問題
+- 要求：
+  - 單筆模式的參數不要同步到疊圖模式
+  - 疊圖模式的參數也不要回灌到單筆模式
+
+### 實作
+- `web/frontend/src/pages/XPS.tsx`
+  - 新增 `processingViewMode = 'single' | 'overlay'`
+  - 新增 `overlayState`
+    - `params`
+    - `autoInterpPoints`
+    - `manualEnergyShiftEnabled`
+  - `single` 模式：
+    - 繼續沿用每筆資料自己的 `datasetSessions`
+  - `overlay` 模式：
+    - 使用獨立的 `overlayState`
+    - 不寫回 `datasetSessions`
+    - 切回單筆時直接丟棄，不保留
+
+### 模式切換規則
+- 點單筆資料 chip：
+  - 進入 `single` 模式
+  - 清空疊圖選取與疊圖結果
+  - 重設疊圖專用 state
+- 在疊圖 modal 按 `套用疊圖選擇` 且至少選 2 筆：
+  - 進入 `overlay` 模式
+  - 重設 `overlayState`
+  - 不沿用任何單筆資料的背景扣除 / 歸一化 / 內插設定
+
+### 疊圖處理流程
+- 疊圖不再吃每筆單筆 session 的結果
+- 改成用 `overlaySelection + overlayState` 走一條獨立的 `/api/xps/process` 流程
+- 疊圖模式下的 sidebar 參數只影響疊圖結果本身
+- 單筆模式下的 sidebar 參數只影響目前那筆資料
+
+### 其他配套
+- `多檔平均` 在疊圖模式下固定不啟用，避免把多筆疊圖直接平均成單一曲線
+- 中間欄單筆流程圖、峰擬合、VBM、RSF、匯出等單筆結果區塊，只在 `single` 模式顯示
+- 疊圖模式只保留：
+  - 原始疊圖
+  - 疊圖後的處理結果
+
+### 驗證
+- `npm run build`：通過
+
+---
+
+## XPS 疊圖模式上方資料列狀態修正（2026-04-29, 續）
+
+### 問題
+- 多筆疊圖已顯示在中間欄，但上方 `單筆資料處理` chip 還是會亮第一筆或目前 activeDataset
+- 這會讓畫面語意衝突：
+  - 上面像是單筆模式
+  - 下面其實是多筆疊圖模式
+
+### 修正
+- `web/frontend/src/pages/XPS.tsx`
+  - 新增 `isOverlayView`
+  - 條件：`overlayStage` 存在且 `overlaySelection.length >= 2`
+- 在 `isOverlayView` 為 true 時：
+  - 上方單筆 chip 不再高亮任何一筆
+  - 額外顯示 `目前顯示疊圖模式` 小標記
+
+### 驗證
+- `npm run build`：通過
+
+---
+
 ## XPS 疊圖選取卡死修正（2026-04-29, 續）
 
 ### 問題原因

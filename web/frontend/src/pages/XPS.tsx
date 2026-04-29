@@ -426,6 +426,12 @@ interface DatasetPipelineBundle {
   error: string | null
 }
 
+interface OverlayProcessState {
+  params: ProcessParams
+  autoInterpPoints: boolean
+  manualEnergyShiftEnabled: boolean
+}
+
 function getDatasetKey(file: ParsedFile, index: number) {
   return `${index}::${file.name}`
 }
@@ -451,6 +457,14 @@ function createEmptyBundle(signature = ''): DatasetPipelineBundle {
     normalization: null,
     signature,
     error: null,
+  }
+}
+
+function createDefaultOverlayState(): OverlayProcessState {
+  return {
+    params: { ...DEFAULT_PARAMS },
+    autoInterpPoints: true,
+    manualEnergyShiftEnabled: false,
   }
 }
 
@@ -508,6 +522,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const restoringSessionRef = useRef(false)
   const lastLoadedSessionKeyRef = useRef<string | null>(null)
   const datasetBundlesRef = useRef<Record<string, DatasetPipelineBundle>>({})
+  const overlayBundleRef = useRef<DatasetPipelineBundle | null>(null)
 
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = Number(localStorage.getItem('nigiro-xps-sidebar-width'))
@@ -525,9 +540,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [normalizationResult, setNormalizationResult] = useState<ProcessResult | null>(null)
   const [datasetSessions, setDatasetSessions] = useState<Record<string, DatasetSessionState>>({})
   const [datasetBundles, setDatasetBundles] = useState<Record<string, DatasetPipelineBundle>>({})
+  const [processingViewMode, setProcessingViewMode] = useState<'single' | 'overlay'>('single')
   const [overlaySelection, setOverlaySelection] = useState<string[]>([])
   const [overlayDraftSelection, setOverlayDraftSelection] = useState<string[]>([])
   const [overlaySelectorOpen, setOverlaySelectorOpen] = useState(false)
+  const [overlayState, setOverlayState] = useState<OverlayProcessState>(createDefaultOverlayState)
+  const [overlayBundle, setOverlayBundle] = useState<DatasetPipelineBundle | null>(null)
   const [parseLoading, setParseLoading] = useState(false)
   const [processingKeys, setProcessingKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -594,39 +612,49 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const rawFileKeys = rawFiles.map((file, index) => getDatasetKey(file, index))
   const activeFile = rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null
   const activeDatasetKey = activeFile ? getDatasetKey(activeFile, activeDatasetIdx) : null
+  const overlayFiles = overlaySelection
+    .map(key => {
+      const index = rawFileKeys.indexOf(key)
+      return index >= 0 ? rawFiles[index] : null
+    })
+    .filter((file): file is ParsedFile => file != null)
   const isLoading = parseLoading || (activeDatasetKey ? processingKeys.includes(activeDatasetKey) : false)
+  const overlayLoading = processingKeys.includes('__overlay__')
+  const isBusy = isLoading || overlayLoading
+  const currentParams = processingViewMode === 'overlay' ? overlayState.params : params
+  const currentAutoInterpPoints = processingViewMode === 'overlay' ? overlayState.autoInterpPoints : autoInterpPoints
+  const currentManualEnergyShiftEnabled = processingViewMode === 'overlay' ? overlayState.manualEnergyShiftEnabled : manualEnergyShiftEnabled
 
   const activeDataset = getStageDataset(result, activeDatasetIdx, params.average)
   const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, params.average)
   const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, params.average)
   const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, params.average)
-  const beMin = activeDataset ? Math.min(...activeDataset.x) : 0
-  const beMax = activeDataset ? Math.max(...activeDataset.x) : 1000
-  const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
-  const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
+  const overlayPrimaryDataset = getStageDataset(overlayBundle?.final ?? null, 0, false)
+  const beMin = processingViewMode === 'overlay'
+    ? (overlayPrimaryDataset ? Math.min(...overlayPrimaryDataset.x) : 0)
+    : (activeDataset ? Math.min(...activeDataset.x) : 0)
+  const beMax = processingViewMode === 'overlay'
+    ? (overlayPrimaryDataset ? Math.max(...overlayPrimaryDataset.x) : 1000)
+    : (activeDataset ? Math.max(...activeDataset.x) : 1000)
+  const estimatedInterpPoints = estimateInterpolationPoints(processingViewMode === 'overlay' && overlayFiles.length > 0 ? overlayFiles : rawFiles)
+  const effectiveNPoints = currentAutoInterpPoints ? estimatedInterpPoints : currentParams.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
   const calibrationPeak = calibrationPeaks.find(item => item.label === calibrationPeakLabel) ?? null
-  const interpolationEnabled = params.interpolate || params.average
-  const hasPreprocessStage = interpolationEnabled || Math.abs(params.energy_shift) > 1e-8
-  const hasBackgroundStage = params.bg_enabled
-  const hasNormalizationStage = params.norm_method !== 'none'
-  const rawPreview = rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null
-
-  const overlayEntries = overlaySelection
-    .map(key => {
-      const index = rawFileKeys.indexOf(key)
-      if (index < 0) return null
-      const file = rawFiles[index]
-      const session = datasetSessions[key]
-      const bundle = datasetBundles[key]
-      if (!file || !session || !bundle) return null
-      return { key, index, file, session, bundle }
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry != null)
+  const interpolationEnabled = currentParams.interpolate || (processingViewMode === 'single' && currentParams.average)
+  const hasPreprocessStage = interpolationEnabled || Math.abs(currentParams.energy_shift) > 1e-8
+  const hasBackgroundStage = currentParams.bg_enabled
+  const hasNormalizationStage = currentParams.norm_method !== 'none'
+  const rawPreview = processingViewMode === 'overlay'
+    ? (overlayFiles[0] ?? null)
+    : (rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null)
 
   useEffect(() => {
     datasetBundlesRef.current = datasetBundles
   }, [datasetBundles])
+
+  useEffect(() => {
+    overlayBundleRef.current = overlayBundle
+  }, [overlayBundle])
 
   useEffect(() => {
     if (overlaySelectorOpen) {
@@ -654,12 +682,16 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       return next
     })
     setOverlaySelection(prev => prev.filter(key => nextKeys.has(key)))
+    setOverlayDraftSelection(prev => prev.filter(key => nextKeys.has(key)))
     if (rawFiles.length === 0) {
       lastLoadedSessionKeyRef.current = null
       setResult(null)
       setPreprocessResult(null)
       setBackgroundResult(null)
       setNormalizationResult(null)
+      setOverlayBundle(null)
+      setOverlayState(createDefaultOverlayState())
+      setProcessingViewMode('single')
       setError(null)
     }
   }, [rawFiles])
@@ -688,7 +720,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }, [activeDatasetKey, datasetSessions])
 
   useEffect(() => {
-    if (!activeDatasetKey || restoringSessionRef.current) return
+    if (processingViewMode !== 'single' || !activeDatasetKey || restoringSessionRef.current) return
     setDatasetSessions(prev => ({
       ...prev,
       [activeDatasetKey]: {
@@ -702,17 +734,18 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         rsfRows,
       },
     }))
-  }, [activeDatasetKey, params, autoInterpPoints, manualEnergyShiftEnabled, selectedElement, fitProfile, peakCandidates, fitResult, rsfRows])
+  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, manualEnergyShiftEnabled, selectedElement, fitProfile, peakCandidates, fitResult, rsfRows])
 
   useEffect(() => {
-    if (!activeDatasetKey) return
+    if (processingViewMode !== 'single' || !activeDatasetKey) return
     if (restoringSessionRef.current) return
     if (fitResult) setFitResult(null)
     if (rsfRows.length > 0) setRsfRows([])
-  }, [activeDatasetKey, params, autoInterpPoints, fitResult, rsfRows])
+  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, fitResult, rsfRows])
 
-  // process active dataset and selected overlays
+  // process active single dataset
   useEffect(() => {
+    if (processingViewMode !== 'single') return
     if (rawFiles.length === 0) {
       setResult(null)
       setPreprocessResult(null)
@@ -720,7 +753,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       setNormalizationResult(null)
       return
     }
-    const keysToProcess = Array.from(new Set([activeDatasetKey, ...overlaySelection].filter((key): key is string => Boolean(key))))
+    const keysToProcess = Array.from(new Set([activeDatasetKey].filter((key): key is string => Boolean(key))))
     if (keysToProcess.length === 0) return
     let cancelled = false
     setProcessingKeys(prev => {
@@ -837,9 +870,99 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     })()
 
     return () => { cancelled = true }
-  }, [rawFiles, rawFileKeys, datasetSessions, activeDatasetKey, overlaySelection])
+  }, [processingViewMode, rawFiles, rawFileKeys, datasetSessions, activeDatasetKey])
+
+  // process overlay selection with an independent transient state
+  useEffect(() => {
+    if (processingViewMode !== 'overlay') return
+    if (overlayFiles.length < 2) {
+      setOverlayBundle(null)
+      return
+    }
+
+    const overlayParams: ProcessParams = {
+      ...overlayState.params,
+      average: false,
+      n_points: overlayState.autoInterpPoints ? effectiveNPoints : overlayState.params.n_points,
+    }
+    const signature = JSON.stringify({
+      mode: 'overlay',
+      files: overlayFiles.map(file => `${file.name}:${file.x.length}`),
+      params: overlayParams,
+      autoInterpPoints: overlayState.autoInterpPoints,
+      manualEnergyShiftEnabled: overlayState.manualEnergyShiftEnabled,
+    })
+    if (overlayBundleRef.current && overlayBundleRef.current.signature === signature) return
+
+    let cancelled = false
+    setProcessingKeys(prev => (prev.includes('__overlay__') ? prev : [...prev, '__overlay__']))
+
+    const datasets: DatasetInput[] = overlayFiles.map(file => ({ name: file.name, x: file.x, y: file.y }))
+    const overlayInterpolationEnabled = overlayParams.interpolate
+    const overlayHasPreprocessStage = overlayInterpolationEnabled || Math.abs(overlayParams.energy_shift) > 1e-8
+    const overlayHasBackgroundStage = overlayParams.bg_enabled
+    const overlayHasNormalizationStage = overlayParams.norm_method !== 'none'
+    const overlayPreprocessParams: ProcessParams = {
+      ...DEFAULT_PARAMS,
+      interpolate: overlayInterpolationEnabled,
+      n_points: overlayParams.n_points,
+      average: false,
+      energy_shift: overlayParams.energy_shift,
+    }
+    const overlayBackgroundParams: ProcessParams = {
+      ...overlayPreprocessParams,
+      bg_enabled: overlayHasBackgroundStage,
+      bg_method: overlayParams.bg_method,
+      bg_x_start: overlayParams.bg_x_start,
+      bg_x_end: overlayParams.bg_x_end,
+      bg_poly_deg: overlayParams.bg_poly_deg,
+      bg_baseline_lambda: overlayParams.bg_baseline_lambda,
+      bg_baseline_p: overlayParams.bg_baseline_p,
+      bg_baseline_iter: overlayParams.bg_baseline_iter,
+      bg_tougaard_B: overlayParams.bg_tougaard_B,
+      bg_tougaard_C: overlayParams.bg_tougaard_C,
+    }
+    const overlayNormalizationParams: ProcessParams = {
+      ...overlayBackgroundParams,
+      norm_method: overlayParams.norm_method,
+      norm_x_start: overlayParams.norm_x_start,
+      norm_x_end: overlayParams.norm_x_end,
+    }
+
+    Promise.all([
+      processData(datasets, overlayParams),
+      overlayHasPreprocessStage || overlayHasBackgroundStage || overlayHasNormalizationStage ? processData(datasets, overlayPreprocessParams) : Promise.resolve(null),
+      overlayHasBackgroundStage ? processData(datasets, overlayBackgroundParams) : Promise.resolve(null),
+      overlayHasNormalizationStage ? processData(datasets, overlayNormalizationParams) : Promise.resolve(null),
+    ])
+      .then(([finalResult, preprocessStage, backgroundStage, normalizationStage]) => {
+        if (cancelled) return
+        setOverlayBundle({
+          final: finalResult,
+          preprocess: preprocessStage,
+          background: backgroundStage,
+          normalization: normalizationStage,
+          signature,
+          error: null,
+        })
+      })
+      .catch((overlayErrorValue: unknown) => {
+        if (cancelled) return
+        setOverlayBundle({
+          ...createEmptyBundle(signature),
+          error: String((overlayErrorValue as Error).message ?? overlayErrorValue),
+        })
+      })
+      .finally(() => {
+        if (cancelled) return
+        setProcessingKeys(prev => prev.filter(key => key !== '__overlay__'))
+      })
+
+    return () => { cancelled = true }
+  }, [processingViewMode, overlayFiles, overlayState, effectiveNPoints])
 
   useEffect(() => {
+    if (processingViewMode !== 'single') return
     if (!activeDatasetKey) {
       setResult(null)
       setPreprocessResult(null)
@@ -854,7 +977,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     setBackgroundResult(bundle?.background ?? null)
     setNormalizationResult(bundle?.normalization ?? null)
     setError(bundle?.error ?? null)
-  }, [activeDatasetKey, datasetBundles])
+  }, [processingViewMode, activeDatasetKey, datasetBundles])
 
   // load elements list on mount
   useEffect(() => {
@@ -956,8 +1079,49 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     }
   }, [])
 
-  const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
+  const enterSingleMode = (nextIndex: number) => {
+    setProcessingViewMode('single')
+    setOverlaySelection([])
+    setOverlayDraftSelection([])
+    setOverlayBundle(null)
+    setOverlayState(createDefaultOverlayState())
+    setActiveDatasetIdx(nextIndex)
+  }
+
+  const enterOverlayMode = (selection: string[]) => {
+    setProcessingViewMode('overlay')
+    setOverlaySelection(selection)
+    setOverlayDraftSelection(selection)
+    setOverlayBundle(null)
+    setOverlayState(createDefaultOverlayState())
+    setFitResult(null)
+    setPeakCandidates([])
+    setRsfRows([])
+  }
+
+  const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) => {
+    if (processingViewMode === 'overlay') {
+      setOverlayState(current => ({ ...current, params: { ...current.params, [key]: val } }))
+      return
+    }
     setParams(p => ({ ...p, [key]: val }))
+  }
+
+  const setCurrentAutoInterpPoints = (value: boolean) => {
+    if (processingViewMode === 'overlay') {
+      setOverlayState(current => ({ ...current, autoInterpPoints: value }))
+      return
+    }
+    setAutoInterpPoints(value)
+  }
+
+  const setCurrentManualEnergyShiftEnabled = (value: boolean) => {
+    if (processingViewMode === 'overlay') {
+      setOverlayState(current => ({ ...current, manualEnergyShiftEnabled: value }))
+      return
+    }
+    setManualEnergyShiftEnabled(value)
+  }
 
   const setCalibrationPeak = (label: string) => {
     setCalibrationPeakLabel(label)
@@ -988,7 +1152,17 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         setCalibrationError(res.message || '自動校正失敗')
         return
       }
-      setParams(current => ({ ...current, energy_shift: Number((current.energy_shift + res.offset_ev).toFixed(4)) }))
+      if (processingViewMode === 'overlay') {
+        setOverlayState(current => ({
+          ...current,
+          params: {
+            ...current.params,
+            energy_shift: Number((current.params.energy_shift + res.offset_ev).toFixed(4)),
+          },
+        }))
+      } else {
+        setParams(current => ({ ...current, energy_shift: Number((current.energy_shift + res.offset_ev).toFixed(4)) }))
+      }
     } catch (e: unknown) {
       setCalibrationError((e as Error).message)
     } finally {
@@ -1076,36 +1250,17 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }
 
   const datasetTabs = rawFiles
-  const overlayFinalDatasets = overlayEntries
-    .map(entry => {
-      const dataset = getBundleDataset(entry.bundle, entry.index, entry.session.params.average)
-      if (!dataset) return null
-      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
-    })
+  const overlayFinalDatasets = (overlayBundle?.final?.datasets ?? [])
+    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
     .filter((item): item is NonNullable<typeof item> => item != null)
-  const overlayBackgroundDatasets = overlayEntries
-    .filter(entry => entry.session.params.bg_enabled)
-    .map(entry => {
-      const dataset = getStageDataset(entry.bundle.background, entry.index, entry.session.params.average)
-      if (!dataset) return null
-      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
-    })
+  const overlayBackgroundDatasets = (overlayBundle?.background?.datasets ?? [])
+    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
     .filter((item): item is NonNullable<typeof item> => item != null)
-  const overlayNormalizationDatasets = overlayEntries
-    .filter(entry => entry.session.params.norm_method !== 'none')
-    .map(entry => {
-      const dataset = getStageDataset(entry.bundle.normalization, entry.index, entry.session.params.average)
-      if (!dataset) return null
-      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
-    })
+  const overlayNormalizationDatasets = (overlayBundle?.normalization?.datasets ?? [])
+    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
     .filter((item): item is NonNullable<typeof item> => item != null)
-  const overlayPreprocessDatasets = overlayEntries
-    .filter(entry => (entry.session.params.interpolate || entry.session.params.average || Math.abs(entry.session.params.energy_shift) > 1e-8))
-    .map(entry => {
-      const dataset = getStageDataset(entry.bundle.preprocess, entry.index, entry.session.params.average)
-      if (!dataset) return null
-      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
-    })
+  const overlayPreprocessDatasets = (overlayBundle?.preprocess?.datasets ?? [])
+    .map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
     .filter((item): item is NonNullable<typeof item> => item != null)
   const overlayStage = overlayNormalizationDatasets.length >= 2
     ? { title: '多筆疊圖比較：歸一化後', description: '這裡疊的是各筆資料經過各自設定的歸一化結果。', datasets: overlayNormalizationDatasets }
@@ -1116,12 +1271,15 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         : overlayFinalDatasets.length >= 2
           ? { title: '多筆疊圖比較：最終處理後', description: '這裡疊的是各筆資料目前最新的處理結果。', datasets: overlayFinalDatasets }
           : null
-  const rawChartTraces = buildRawFileTraces(rawFiles, activeDatasetIdx)
+  const isOverlayView = processingViewMode === 'overlay' && Boolean(overlayStage && overlaySelection.length >= 2)
+  const rawChartTraces = processingViewMode === 'overlay'
+    ? buildRawFileTraces(overlayFiles, 0)
+    : buildRawFileTraces(rawFiles, activeDatasetIdx)
   const preprocessChartTraces = rawPreview && preprocessDataset
     ? buildPipelineOverlayTraces(
         { x: rawPreview.x, y: rawPreview.y, name: `${rawPreview.name} 原始` },
         { x: preprocessDataset.x, y: preprocessDataset.y_processed, name: `${preprocessDataset.name} 前處理` },
-        params.average && preprocessResult?.average ? '平均 / 內插後' : '內插 / 校正後',
+        currentParams.average && preprocessResult?.average ? '平均 / 內插後' : '內插 / 校正後',
       )
     : []
   const backgroundChartTraces = backgroundDataset
@@ -1164,13 +1322,13 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     : []
   const backgroundLayout = {
     ...(chartLayout() as Plotly.Layout),
-    shapes: buildRegionShapes(params.bg_x_start ?? beMin, params.bg_x_end ?? beMax, 'rgba(245, 158, 11, 0.55)'),
-    annotations: buildRegionAnnotations(params.bg_x_start ?? beMin, params.bg_x_end ?? beMax, '背景區間', '#f59e0b'),
+    shapes: buildRegionShapes(currentParams.bg_x_start ?? beMin, currentParams.bg_x_end ?? beMax, 'rgba(245, 158, 11, 0.55)'),
+    annotations: buildRegionAnnotations(currentParams.bg_x_start ?? beMin, currentParams.bg_x_end ?? beMax, '背景區間', '#f59e0b'),
   }
   const normalizationLayout = {
     ...(chartLayout() as Plotly.Layout),
-    shapes: buildRegionShapes(params.norm_x_start ?? beMin, params.norm_x_end ?? beMax, 'rgba(20, 184, 166, 0.55)'),
-    annotations: buildRegionAnnotations(params.norm_x_start ?? beMin, params.norm_x_end ?? beMax, '歸一化區間', '#14b8a6'),
+    shapes: buildRegionShapes(currentParams.norm_x_start ?? beMin, currentParams.norm_x_end ?? beMax, 'rgba(20, 184, 166, 0.55)'),
+    annotations: buildRegionAnnotations(currentParams.norm_x_start ?? beMin, currentParams.norm_x_end ?? beMax, '歸一化區間', '#14b8a6'),
   }
 
   const sidebarStyle: CSSProperties = sidebarCollapsed
@@ -1229,7 +1387,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={2} title="內插" hint="先統一點數，再進到後續流程" defaultOpen={false}>
-                  <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
+                  <CheckRow label="啟用內插" checked={currentParams.interpolate} onChange={set('interpolate')} />
                   {rawFiles.length > 0 && (
                     <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-xs">
                       <p className="font-medium text-[var(--text-main)]">原始資料共 {rawFiles.length} 筆</p>
@@ -1245,8 +1403,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   )}
                   {interpolationEnabled && (
                     <>
-                      <CheckRow label="自動調整點數" checked={autoInterpPoints} onChange={setAutoInterpPoints} />
-                      {autoInterpPoints ? (
+                      <CheckRow label="自動調整點數" checked={currentAutoInterpPoints} onChange={setCurrentAutoInterpPoints} />
+                      {currentAutoInterpPoints ? (
                         <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] px-3 py-3 text-xs">
                           <p className="font-medium text-[var(--text-main)]">本次將使用 {effectiveNPoints} 點</p>
                           <p className="mt-1 text-[var(--text-soft)]">
@@ -1254,18 +1412,20 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                           </p>
                         </div>
                       ) : (
-                        <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={5000} step={100} />
+                        <NumInput label="點數" value={currentParams.n_points} onChange={set('n_points')} min={200} max={5000} step={100} />
                       )}
                     </>
                   )}
                 </Section>
 
                 <Section step={3} title="多檔平均" hint="平均前會沿用上一步的內插網格" defaultOpen={false}>
-                  {rawFiles.length > 1 ? (
+                  {processingViewMode === 'overlay' ? (
+                    <p className="text-[10px] text-[var(--text-soft)]">多筆疊圖模式不沿用單筆平均設定，這裡固定關閉，避免把疊圖直接平均成一條線。</p>
+                  ) : rawFiles.length > 1 ? (
                     <>
                       <CheckRow
                         label="啟用多檔平均"
-                        checked={params.average}
+                        checked={currentParams.average}
                         onChange={value => setParams(current => ({
                           ...current,
                           average: value,
@@ -1280,9 +1440,9 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={4} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
-                  <CheckRow label="手動調整偏移量" checked={manualEnergyShiftEnabled} onChange={setManualEnergyShiftEnabled} />
-                  {manualEnergyShiftEnabled && (
-                    <NumInput label="手動 BE 位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
+                  <CheckRow label="手動調整偏移量" checked={currentManualEnergyShiftEnabled} onChange={setCurrentManualEnergyShiftEnabled} />
+                  {currentManualEnergyShiftEnabled && (
+                    <NumInput label="手動 BE 位移 (eV)" value={currentParams.energy_shift} onChange={set('energy_shift')} step={0.01} />
                   )}
                   <p className="text-[10px] text-[var(--text-soft)]">沒有標準樣品時可勾選手動調整，直接輸入要加或減多少 eV；若用標準樣品校正，會把計算出的偏移量自動加到目前值。</p>
                   <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
@@ -1367,10 +1527,10 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={5} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
-                  <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
-                  {params.bg_enabled && (
+                  <CheckRow label="啟用背景扣除" checked={currentParams.bg_enabled} onChange={set('bg_enabled')} />
+                  {currentParams.bg_enabled && (
                     <>
-                      <SelectInput label="方法" value={params.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
+                      <SelectInput label="方法" value={currentParams.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
                         options={[
                           { value: 'linear', label: 'Linear' },
                           { value: 'shirley', label: 'Shirley' },
@@ -1381,26 +1541,26 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                         ]}
                       />
                       <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="起始 BE (eV)" value={params.bg_x_start ?? beMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
-                        <NumInput label="結束 BE (eV)" value={params.bg_x_end ?? beMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
+                        <NumInput label="起始 BE (eV)" value={currentParams.bg_x_start ?? beMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
+                        <NumInput label="結束 BE (eV)" value={currentParams.bg_x_end ?? beMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
                       </div>
                       <DualRangeInput
                         label="背景區間拉桿"
                         min={beMin}
                         max={beMax}
-                        start={params.bg_x_start ?? beMin}
-                        end={params.bg_x_end ?? beMax}
+                        start={currentParams.bg_x_start ?? beMin}
+                        end={currentParams.bg_x_end ?? beMax}
                         step={0.1}
                         onChange={({ start, end }) => {
                           set('bg_x_start')(start)
                           set('bg_x_end')(end)
                         }}
                       />
-                      {params.bg_method === 'polynomial' && <NumInput label="多項式次數" value={params.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />}
-                      {params.bg_method === 'tougaard' && (
+                      {currentParams.bg_method === 'polynomial' && <NumInput label="多項式次數" value={currentParams.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />}
+                      {currentParams.bg_method === 'tougaard' && (
                         <div className="grid grid-cols-2 gap-2">
-                          <NumInput label="B" value={params.bg_tougaard_B} onChange={set('bg_tougaard_B')} step={10} />
-                          <NumInput label="C" value={params.bg_tougaard_C} onChange={set('bg_tougaard_C')} step={10} />
+                          <NumInput label="B" value={currentParams.bg_tougaard_B} onChange={set('bg_tougaard_B')} step={10} />
+                          <NumInput label="C" value={currentParams.bg_tougaard_C} onChange={set('bg_tougaard_C')} step={10} />
                         </div>
                       )}
                     </>
@@ -1408,7 +1568,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
-                  <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
+                  <SelectInput label="方法" value={currentParams.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
                     options={[
                       { value: 'none', label: '不歸一化' },
                       { value: 'min_max', label: 'Min–Max' },
@@ -1417,18 +1577,18 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       { value: 'mean_region', label: '算術平均' },
                     ]}
                   />
-                  {(params.norm_method === 'min_max' || params.norm_method === 'max' || params.norm_method === 'area' || params.norm_method === 'mean_region') && (
+                  {(currentParams.norm_method === 'min_max' || currentParams.norm_method === 'max' || currentParams.norm_method === 'area' || currentParams.norm_method === 'mean_region') && (
                     <>
                       <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="起始 (eV)" value={params.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
-                        <NumInput label="結束 (eV)" value={params.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
+                        <NumInput label="起始 (eV)" value={currentParams.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
+                        <NumInput label="結束 (eV)" value={currentParams.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
                       </div>
                       <DualRangeInput
                         label="歸一化區間拉桿"
                         min={beMin}
                         max={beMax}
-                        start={params.norm_x_start ?? beMin}
-                        end={params.norm_x_end ?? beMax}
+                        start={currentParams.norm_x_start ?? beMin}
+                        end={currentParams.norm_x_end ?? beMax}
                         step={0.1}
                         onChange={({ start, end }) => {
                           set('norm_x_start')(start)
@@ -1599,13 +1759,13 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         {error && (
           <div className="mb-4 rounded-xl border border-rose-300/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">⚠ {error}</div>
         )}
-        {isLoading && (
+        {isBusy && (
           <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">
             <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--accent-strong)]" /> 處理中…
           </div>
         )}
 
-        {rawFiles.length === 0 && !isLoading && (
+        {rawFiles.length === 0 && !isBusy && (
           <div className="flex flex-1 flex-col items-center justify-center rounded-[28px] border border-dashed border-[var(--card-border)] bg-[var(--card-bg)] px-6 py-20 text-center">
             <div className="mb-4 text-5xl opacity-30">⚛</div>
             <p className="font-display text-xl tracking-wide text-[var(--text-main)]">XPS 分析</p>
@@ -1626,12 +1786,21 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0 flex-1">
-                    <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
+                      {isOverlayView && (
+                        <span className="rounded-full border border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_14%,transparent)] px-2.5 py-0.5 text-[10px] font-medium text-[var(--accent-secondary)]">
+                          目前顯示疊圖模式
+                        </span>
+                      )}
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       {datasetTabs.map((ds, idx) => (
-                        <button key={ds.name} type="button" onClick={() => setActiveDatasetIdx(idx)}
+                        <button key={ds.name} type="button" onClick={() => enterSingleMode(idx)}
                           className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
-                            idx === activeDatasetIdx ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
+                            !isOverlayView && idx === activeDatasetIdx
+                              ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
+                              : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
                         >{ds.name}</button>
                       ))}
                     </div>
@@ -1645,6 +1814,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     >
                       <span className="block text-sm font-semibold text-[var(--text-main)]">選擇疊圖資料</span>
                       <span className="mt-1 block text-xs text-[var(--text-soft)]">
+                        {processingViewMode === 'overlay' ? '目前疊圖模式獨立計算，不沿用單筆參數。' : ''}
+                        {processingViewMode === 'overlay' ? ' ' : ''}
                         已選 {overlaySelection.length} 筆
                         {overlaySelection.length >= 2 ? '，可直接看中間欄疊圖結果' : '，至少選 2 筆才會顯示疊圖'}
                       </span>
@@ -1668,7 +1839,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">內插點數</p>
                 <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">
-                  {params.interpolate || params.average ? `${effectiveNPoints} 點` : '未啟用'}
+                  {currentParams.interpolate || (processingViewMode === 'single' && currentParams.average) ? `${effectiveNPoints} 點` : '未啟用'}
                 </p>
               </div>
             </div>
@@ -1698,7 +1869,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {hasPreprocessStage && preprocessChartTraces.length > 0 && (
+            {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">2. 內插 / 平均 / 校正後疊圖</p>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">這張圖把原始光譜和前處理後結果疊在一起，方便對照點數與能量軸變化。</p>
@@ -1711,7 +1882,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {hasBackgroundStage && backgroundChartTraces.length > 0 && (
+            {processingViewMode === 'single' && hasBackgroundStage && backgroundChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-2 flex flex-wrap items-center gap-4">
                   <p className="text-sm font-semibold text-[var(--text-main)]">3. 背景扣除</p>
@@ -1727,7 +1898,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {hasNormalizationStage && normalizationChartTraces.length > 0 && (
+            {processingViewMode === 'single' && hasNormalizationStage && normalizationChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">4. 歸一化</p>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。</p>
@@ -1740,7 +1911,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {result && activeDataset && (
+            {processingViewMode === 'single' && result && activeDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-2 flex flex-wrap items-center gap-4">
                   <p className="text-sm font-semibold text-[var(--text-main)]">
@@ -1758,7 +1929,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {fitResult && fitResult.peaks.length > 0 && (
+            {processingViewMode === 'single' && fitResult && fitResult.peaks.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">峰擬合結果</p>
                 <table className="w-full text-xs">
@@ -1786,7 +1957,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {xpsMode === 'valence_band' && vbmResult?.success && activeDataset && (
+            {processingViewMode === 'single' && xpsMode === 'valence_band' && vbmResult?.success && activeDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推</p>
                 <Plot
@@ -1812,7 +1983,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {xpsMode === 'valence_band' && bandOffsetResult && (
+            {processingViewMode === 'single' && xpsMode === 'valence_band' && bandOffsetResult && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">能帶偏移結果</p>
                 <div className="grid grid-cols-2 gap-3">
@@ -1831,7 +2002,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {fitResult && fitResult.peaks.length > 0 && rsfRows.length > 0 && (
+            {processingViewMode === 'single' && fitResult && fitResult.peaks.length > 0 && rsfRows.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <p className="text-sm font-semibold text-[var(--text-main)]">RSF 定量分析</p>
@@ -1897,7 +2068,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {activeDataset && (
+            {processingViewMode === 'single' && activeDataset && (
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</p>
                 <div className="flex flex-wrap gap-2">
@@ -2034,7 +2205,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <button
                   type="button"
                   onClick={() => {
-                    setOverlaySelection(overlayDraftSelection)
+                    if (overlayDraftSelection.length >= 2) {
+                      enterOverlayMode(overlayDraftSelection)
+                    } else {
+                      setOverlaySelection(overlayDraftSelection)
+                      setProcessingViewMode('single')
+                    }
                     setOverlaySelectorOpen(false)
                   }}
                   className="rounded-full bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[var(--accent-contrast)] hover:opacity-90 pressable"
