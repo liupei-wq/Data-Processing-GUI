@@ -550,3 +550,39 @@ type WorkspaceId =
 - XPS 第 4 步背景扣除拉桿只會在「啟用背景扣除」後顯示
 - XPS 第 5 步歸一化拉桿只會在 `norm_method !== 'none'` 時顯示
 - 如果看的是部署站而不是本機，仍然看不到是因為目前這批修改還沒 commit / push 到遠端
+
+---
+
+## XPS UI 調整（2026-04-29, 續）
+
+### 能量校正
+- 刪除前端手動輸入的：
+  - `參考 BE`
+  - `搜尋視窗`
+- 改成：
+  - 標準樣品模式：只選資料庫中的 `標準樣品` 與 `參考峰`
+  - 參考 BE 直接用資料庫峰值
+  - 搜尋視窗前端不再暴露，固定走預設值
+- 另外新增 `手動調整偏移量` checkbox：
+  - 沒有丟標準樣品時可勾選
+  - 勾選後才顯示手動輸入 `BE 位移 (eV)`
+
+### 背景扣除 / 歸一化拉桿
+- 原本是上下兩條各一個 thumb，看起來像兩個軸
+- 改成單一軸雙把手樣式：
+  - 一條底軌
+  - 中間高亮選取區
+  - 左右各一個 thumb
+- 補上 `xps-range-*` CSS 樣式到 `web/frontend/src/index.css`
+
+### 元素週期表
+- 左欄不再直接塞完整週期表
+- 改成左欄只顯示一個 `元素週期表` 框框入口
+- 點開後在 XPS 主頁上方顯示 overlay / modal 式週期表，不另開分頁
+- 點元素後：
+  - 回填 `selectedElement`
+  - 關閉 overlay
+
+### 驗證
+- `npm run build`：通過
+- `python3 -m py_compile web/backend/main.py web/backend/routers/xps.py`：通過

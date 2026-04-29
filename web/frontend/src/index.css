@@ -724,6 +724,73 @@ summary:active,
 .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
 .sidebar-scroll::-webkit-scrollbar-thumb { border-radius: 999px; background: color-mix(in srgb, var(--text-soft) 68%, transparent); }
 
+.xps-range-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 0.4rem;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--input-border) 65%, transparent);
+}
+
+.xps-range-selection {
+  position: absolute;
+  top: 50%;
+  height: 0.4rem;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent-tertiary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-strong) 18%, transparent);
+}
+
+.xps-range-slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  pointer-events: none;
+}
+
+.xps-range-slider::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+
+.xps-range-slider::-moz-range-track {
+  height: 100%;
+  background: transparent;
+}
+
+.xps-range-slider::-webkit-slider-thumb {
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: 8px;
+  height: 1rem;
+  width: 1rem;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.2);
+}
+
+.xps-range-slider::-moz-range-thumb {
+  pointer-events: auto;
+  height: 1rem;
+  width: 1rem;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.2);
+}
+
+.xps-range-slider--primary::-webkit-slider-thumb { background: var(--accent-strong); }
+.xps-range-slider--secondary::-webkit-slider-thumb { background: var(--accent-tertiary); }
+.xps-range-slider--primary::-moz-range-thumb { background: var(--accent-strong); }
+.xps-range-slider--secondary::-moz-range-thumb { background: var(--accent-tertiary); }
+
 @media (max-width: 767px) {
   .workspace-launcher {
     padding-left: 0.5rem;

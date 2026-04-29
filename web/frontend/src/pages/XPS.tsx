@@ -337,6 +337,9 @@ function DualRangeInput({
   const high = Math.max(start, end)
   const boundedMin = Number.isFinite(min) ? min : 0
   const boundedMax = Number.isFinite(max) && max > boundedMin ? max : boundedMin + 1
+  const span = Math.max(boundedMax - boundedMin, 1e-9)
+  const startPct = ((low - boundedMin) / span) * 100
+  const endPct = ((high - boundedMin) / span) * 100
 
   return (
     <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
@@ -346,7 +349,15 @@ function DualRangeInput({
           {low.toFixed(1)} – {high.toFixed(1)} eV
         </span>
       </div>
-      <div className="space-y-2">
+      <div className="relative h-9">
+        <div className="xps-range-track" />
+        <div
+          className="xps-range-selection"
+          style={{
+            left: `${startPct}%`,
+            width: `${Math.max(endPct - startPct, 0)}%`,
+          }}
+        />
         <input
           type="range"
           min={boundedMin}
@@ -355,7 +366,7 @@ function DualRangeInput({
           value={low}
           disabled={disabled}
           onChange={e => onChange({ start: Math.min(Number(e.target.value), high), end: high })}
-          className="w-full accent-[var(--accent-strong)] disabled:opacity-40"
+          className="xps-range-slider xps-range-slider--primary"
         />
         <input
           type="range"
@@ -365,7 +376,7 @@ function DualRangeInput({
           value={high}
           disabled={disabled}
           onChange={e => onChange({ start: low, end: Math.max(Number(e.target.value), low) })}
-          className="w-full accent-[var(--accent-tertiary)] disabled:opacity-40"
+          className="xps-range-slider xps-range-slider--secondary"
         />
       </div>
     </div>
@@ -432,11 +443,11 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [periodicTable, setPeriodicTable] = useState<PeriodicTableItem[]>([])
   const [selectedElement, setSelectedElement] = useState('')
   const [elementsLoading, setElementsLoading] = useState(false)
+  const [periodicTableOpen, setPeriodicTableOpen] = useState(false)
   const [calibrationElement, setCalibrationElement] = useState('Au')
   const [calibrationPeaks, setCalibrationPeaks] = useState<ElementDbPeak[]>([])
   const [calibrationPeakLabel, setCalibrationPeakLabel] = useState('')
-  const [calibrationPeakBe, setCalibrationPeakBe] = useState<number | null>(null)
-  const [calibrationSearchWindow, setCalibrationSearchWindow] = useState(4)
+  const [manualEnergyShiftEnabled, setManualEnergyShiftEnabled] = useState(false)
   const [calibrationDatasetIdx, setCalibrationDatasetIdx] = useState(0)
   const [calibrationResult, setCalibrationResult] = useState<CalibrationResult | null>(null)
   const [calibrationLoading, setCalibrationLoading] = useState(false)
@@ -491,6 +502,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
   const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
+  const calibrationPeak = calibrationPeaks.find(item => item.label === calibrationPeakLabel) ?? null
   const hasPreprocessStage = params.interpolate || params.average || Math.abs(params.energy_shift) > 1e-8
   const hasBackgroundStage = params.bg_enabled
   const hasNormalizationStage = params.norm_method !== 'none'
@@ -574,13 +586,11 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         setCalibrationPeaks(data.peaks)
         const firstPeak = data.peaks[0]
         setCalibrationPeakLabel(firstPeak?.label ?? '')
-        setCalibrationPeakBe(firstPeak?.be ?? null)
       })
       .catch(err => {
         if (cancelled) return
         setCalibrationPeaks([])
         setCalibrationPeakLabel('')
-        setCalibrationPeakBe(null)
         setCalibrationError(String(err.message ?? err))
       })
     return () => { cancelled = true }
@@ -650,8 +660,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
   const setCalibrationPeak = (label: string) => {
     setCalibrationPeakLabel(label)
-    const peak = calibrationPeaks.find(item => item.label === label)
-    setCalibrationPeakBe(peak?.be ?? null)
   }
 
   const handleAutoCalibration = async () => {
@@ -659,7 +667,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       setCalibrationError('請先上傳標準樣品光譜')
       return
     }
-    if (!calibrationPeakLabel || calibrationPeakBe == null) {
+    if (!calibrationPeakLabel || !calibrationPeak) {
       setCalibrationError('請先選擇標準峰')
       return
     }
@@ -671,8 +679,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         standardDataset.y,
         calibrationElement,
         calibrationPeakLabel,
-        calibrationPeakBe,
-        calibrationSearchWindow,
+        calibrationPeak.be,
+        4,
       )
       setCalibrationResult(res)
       if (!res.success) {
@@ -900,8 +908,11 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={3} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
-                  <NumInput label="BE 位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
-                  <p className="text-[10px] text-[var(--text-soft)]">手動輸入會保留。自動校正算出的偏移量會直接累加到這個值。</p>
+                  <CheckRow label="手動調整偏移量" checked={manualEnergyShiftEnabled} onChange={setManualEnergyShiftEnabled} />
+                  {manualEnergyShiftEnabled && (
+                    <NumInput label="手動 BE 位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
+                  )}
+                  <p className="text-[10px] text-[var(--text-soft)]">沒有標準樣品時可勾選手動調整，直接輸入要加或減多少 eV；若用標準樣品校正，會把計算出的偏移量自動加到目前值。</p>
                   <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
                     <p className="mb-3 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">標準樣品資料庫校正</p>
                     <div className="space-y-3">
@@ -952,27 +963,16 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                           disabled={calibrationPeaks.length === 0}
                         />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput
-                          label="參考 BE (eV)"
-                          value={calibrationPeakBe ?? 0}
-                          onChange={setCalibrationPeakBe}
-                          step={0.01}
-                          disabled={calibrationPeaks.length === 0}
-                        />
-                        <NumInput
-                          label="搜尋視窗 ±eV"
-                          value={calibrationSearchWindow}
-                          onChange={setCalibrationSearchWindow}
-                          min={0.5}
-                          max={20}
-                          step={0.5}
-                        />
-                      </div>
+                      {calibrationPeak && (
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs">
+                          <p className="font-medium text-[var(--text-main)]">參考峰：{calibrationPeak.label}</p>
+                          <p className="mt-1 text-[var(--text-soft)]">資料庫參考 BE：{calibrationPeak.be.toFixed(3)} eV</p>
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={handleAutoCalibration}
-                        disabled={calibrationLoading || !standardDataset || !calibrationPeakLabel || calibrationPeakBe == null}
+                        disabled={calibrationLoading || !standardDataset || !calibrationPeakLabel || !calibrationPeak}
                         className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
                       >
                         {calibrationLoading ? '校正中…' : '計算偏移並套用'}
@@ -1094,50 +1094,16 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       </button>
                     </div>
                   </div>
-                  {periodicTable.length > 0 && (
-                    <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">元素週期表</span>
-                        {selectedElement && (
-                          <span className="text-[11px] text-[var(--text-soft)]">目前選擇：{selectedElement}</span>
-                        )}
-                      </div>
-                      <div
-                        className="grid gap-1"
-                        style={{ gridTemplateColumns: 'repeat(18, minmax(0, 1fr))' }}
-                      >
-                        {periodicTable.map(item => {
-                          const selected = selectedElement === item.symbol
-                          return (
-                            <button
-                              key={item.symbol}
-                              type="button"
-                              title={`${item.symbol} · ${item.name} · ${item.category_name_zh}${item.has_peaks ? '' : '（無峰資料）'}`}
-                              disabled={!item.has_peaks}
-                              onClick={() => setSelectedElement(item.symbol)}
-                              className={[
-                                'aspect-square min-h-[32px] rounded-lg border text-[10px] font-semibold transition-all pressable',
-                                item.has_peaks
-                                  ? 'text-[var(--text-main)] hover:-translate-y-0.5 hover:shadow-[var(--card-shadow-soft)]'
-                                  : 'cursor-not-allowed text-[var(--text-soft)] opacity-35',
-                                selected ? 'ring-2 ring-[var(--accent-strong)] ring-offset-1 ring-offset-transparent' : '',
-                              ].join(' ')}
-                              style={{
-                                gridColumn: item.col,
-                                gridRow: item.row,
-                                borderColor: item.has_peaks ? item.category_color : 'var(--card-border)',
-                                background: item.has_peaks
-                                  ? `color-mix(in srgb, ${item.category_color} 16%, var(--card-bg))`
-                                  : 'var(--card-ghost)',
-                              }}
-                            >
-                              {item.symbol}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPeriodicTableOpen(true)}
+                    className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-left text-sm text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] pressable"
+                  >
+                    <span className="block font-medium">元素週期表</span>
+                    <span className="mt-1 block text-xs text-[var(--text-soft)]">
+                      {selectedElement ? `目前選擇：${selectedElement}` : '點開後在主頁覆蓋層中選元素'}
+                    </span>
+                  </button>
                   <button type="button" onClick={addManualPeak}
                     className="w-full rounded-lg border border-dashed border-[var(--card-border)] py-2 text-xs text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)]"
                   >
@@ -1563,6 +1529,65 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </>
         )}
       </main>
+
+      {periodicTableOpen && (
+        <div className="absolute inset-0 z-40 flex items-start justify-center bg-black/35 px-4 py-8 backdrop-blur-[2px]">
+          <div className="theme-block max-h-[calc(100vh-4rem)] w-full max-w-6xl overflow-hidden rounded-[28px]">
+            <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
+              <div>
+                <p className="text-sm font-semibold text-[var(--text-main)]">元素週期表</p>
+                <p className="mt-1 text-xs text-[var(--text-soft)]">直接點選元素回填到峰擬合資料庫選擇。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPeriodicTableOpen(false)}
+                className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs text-[var(--text-soft)] hover:text-[var(--text-main)] pressable"
+              >
+                關閉
+              </button>
+            </div>
+            <div className="overflow-auto p-5">
+              <div
+                className="grid gap-1.5"
+                style={{ gridTemplateColumns: 'repeat(18, minmax(0, 1fr))' }}
+              >
+                {periodicTable.map(item => {
+                  const selected = selectedElement === item.symbol
+                  return (
+                    <button
+                      key={item.symbol}
+                      type="button"
+                      title={`${item.symbol} · ${item.name} · ${item.category_name_zh}${item.has_peaks ? '' : '（無峰資料）'}`}
+                      disabled={!item.has_peaks}
+                      onClick={() => {
+                        setSelectedElement(item.symbol)
+                        setPeriodicTableOpen(false)
+                      }}
+                      className={[
+                        'aspect-square min-h-[44px] rounded-xl border text-[11px] font-semibold transition-all pressable',
+                        item.has_peaks
+                          ? 'text-[var(--text-main)] hover:-translate-y-0.5 hover:shadow-[var(--card-shadow-soft)]'
+                          : 'cursor-not-allowed text-[var(--text-soft)] opacity-35',
+                        selected ? 'ring-2 ring-[var(--accent-strong)] ring-offset-1 ring-offset-transparent' : '',
+                      ].join(' ')}
+                      style={{
+                        gridColumn: item.col,
+                        gridRow: item.row,
+                        borderColor: item.has_peaks ? item.category_color : 'var(--card-border)',
+                        background: item.has_peaks
+                          ? `color-mix(in srgb, ${item.category_color} 16%, var(--card-bg))`
+                          : 'var(--card-ghost)',
+                      }}
+                    >
+                      {item.symbol}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
