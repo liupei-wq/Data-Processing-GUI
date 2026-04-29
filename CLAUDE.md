@@ -938,3 +938,53 @@ type WorkspaceId =
 ### 驗證
 - `npm run build`：通過
 - `python3 -m py_compile web/backend/main.py web/backend/routers/xps.py`：通過
+
+---
+
+## XPS UI Bug 修正 5 項（2026-04-29, 續）
+
+### 問題清單
+1. `CustomSelect` 下拉清單無法用滾輪滾動（`overflow-hidden` 導致）
+2. 疊圖模式開啟「多檔案平均」後瞬間跳回單筆模式（`overlayStage >= 2` 條件在 average=true 時失效）
+3. 歸一化下拉選單彈不開（`Section` 的 `overflow-hidden` 裁掉 `absolute` 定位的面板）
+4. 原始光譜圖每條線顏色太淺，且無法個別控制顏色
+5. 峰擬合「從元素資料庫載入」的下拉還是舊版原生 `<select>`
+
+### 修正方式
+- **`CustomSelect` 改用 `createPortal` + `position: fixed`**：
+  - 觸發按鈕改為 `useRef<HTMLButtonElement>`
+  - 開啟時呼叫 `getBoundingClientRect()` 計算位置（自動判斷上方/下方空間）
+  - 面板透過 `createPortal(panel, document.body)` 掛在 body，完全脫離父元素的 `overflow-hidden`
+  - 面板內層加 `max-h-48 overflow-y-auto`，支援滾輪滾動
+  - 同時修正問題 1、3、5
+- **`overlayStage` 條件修正**：
+  - 新增 `overlayMinCount = average ? 1 : 2`
+  - 所有 `>= 2` 改為 `>= overlayMinCount`
+  - 解決 average=true 回傳單筆卻無法觸發疊圖顯示的問題
+- **原始光譜圖改為全檔案顯示 + 個別線色控制**：
+  - 新增 `rawFileColors: string[]` state（長度隨 rawFiles 自動同步）
+  - 新增 `DEFAULT_SERIES_PALETTE_KEYS` 常數，初始各筆分配不同色系
+  - `buildRawFileTraces` 改用 `palette.primary` + 各自的 `rawFileColors[i]`（不再有半透明灰色）
+  - 原始圖在 single 模式也顯示所有檔案（`rawChartSourceFiles = rawFiles`），active 線加粗、其餘略淡
+  - 圖上方每筆檔案各顯示一個色點 + 名稱 + 個別色系下拉（native select 即可，此處不需 portal）
+- **元素資料庫下拉改為 `CustomSelect`**：
+  - 選項：`{ value: '', label: '選擇元素…' }` + 所有有峰資料的元素
+  - 移除原生 `<select>` JSX
+
+### 驗證
+- `npm run build`：通過（TypeScript 零錯誤）
+
+---
+
+## XPS 側欄頂部 Logo + 模組選單改版（2026-04-30）
+
+### 改動內容
+- **移除舊 XPS 文字 header**：原本固定 header 的大字 `XPS` 改成 Nigiro Pro logo 設計
+- **Logo 區塊**：Spectrum peak SVG 圖示 + `Nigiro Pro` 大字 + `Spectroscopy Analysis` 副標
+- **移除 header 分隔線**：原本 header `border-b border-[var(--card-divider)]` 全部移除
+- **移除 AnalysisModuleNav 大框**：原本 `mode="dropdown"` 的大感應框全部拿掉；import 改成只用 `ANALYSIS_MODULES` named export
+- **新增小型模組選單**：在可捲動區域最上方（緊接 logo 下方），hover 展開 → 顯示所有分析模組可切換；不 sticky，會隨側欄捲動
+- **移除 Core Level / Valence Band 分隔線**：Mode toggle `div` 移除 `border-b border-[var(--card-divider)]`
+
+### 驗證
+- `npm run build`：通過（TypeScript 零錯誤）

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
-import AnalysisModuleNav from '../components/AnalysisModuleNav'
+import { ANALYSIS_MODULES } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import { calibrateEnergy, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
 import type {
@@ -138,20 +139,26 @@ function estimateInterpolationPoints(files: ParsedFile[]) {
   return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
 }
 
-function buildRawFileTraces(files: ParsedFile[], activeIndex: number, paletteKey: string): Plotly.Data[] {
-  const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
-  return files.map((file, index) => ({
-    x: file.x,
-    y: file.y,
-    type: 'scatter',
-    mode: 'lines',
-    name: file.name,
-    line: {
-      color: index === activeIndex ? palette.secondary : 'rgba(148,163,184,0.38)',
-      width: index === activeIndex ? 1.8 : 1.1,
-    },
-    opacity: index === activeIndex ? 0.95 : 0.55,
-  }))
+const DEFAULT_SERIES_PALETTE_KEYS = ['blue', 'teal', 'orange', 'rose', 'violet']
+
+function buildRawFileTraces(files: ParsedFile[], activeIndex: number, fileColorKeys: string[]): Plotly.Data[] {
+  return files.map((file, index) => {
+    const paletteKey = fileColorKeys[index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
+    const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+    const isActive = index === activeIndex
+    return {
+      x: file.x,
+      y: file.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: file.name,
+      line: {
+        color: palette.primary,
+        width: isActive ? 2.0 : 1.2,
+      },
+      opacity: isActive ? 1.0 : 0.65,
+    }
+  })
 }
 
 function buildPipelineOverlayTraces(
@@ -338,47 +345,79 @@ function CustomSelect({ label, value, onChange, options, disabled = false }: {
   label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (triggerRef.current && !triggerRef.current.contains(target) &&
+          panelRef.current && !panelRef.current.contains(target)) {
+        setOpen(false)
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+
+  const toggle = () => {
+    if (disabled) return
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      const panelH = Math.min(options.length * 36 + 8, 200)
+      if (spaceBelow < panelH && rect.top > panelH) {
+        setPanelStyle({ position: 'fixed', bottom: window.innerHeight - rect.top + 4, left: rect.left, width: rect.width, zIndex: 9999 })
+      } else {
+        setPanelStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left, width: rect.width, zIndex: 9999 })
+      }
+    }
+    setOpen(o => !o)
+  }
+
   const selectedLabel = options.find(o => o.value === value)?.label ?? value
+  const panel = open && !disabled ? (
+    <div
+      ref={panelRef}
+      style={panelStyle}
+      className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-1 [box-shadow:var(--card-shadow)]"
+    >
+      <div className="max-h-48 overflow-y-auto">
+        {options.map(o => (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => { onChange(o.value); setOpen(false) }}
+            className={[
+              'flex w-full items-center rounded-lg px-3 py-1.5 text-xs transition-all duration-100',
+              o.value === value
+                ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-strong)] ring-1 ring-inset ring-[var(--accent-strong)]/40'
+                : 'text-[var(--text-main)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent-strong)] hover:ring-1 hover:ring-inset hover:ring-[var(--accent-strong)]/40',
+            ].join(' ')}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  ) : null
+
   return (
-    <div ref={ref} className="relative block">
+    <div className="relative block">
       <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen(o => !o)}
+        onClick={toggle}
         className="flex w-full items-center justify-between rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] transition-colors hover:border-[var(--accent-strong)]/60 focus:outline-none disabled:opacity-40"
       >
         <span>{selectedLabel}</span>
         <span className={`ml-2 text-[8px] text-[var(--text-soft)] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>▼</span>
       </button>
-      {open && !disabled && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-full overflow-hidden rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-1 [box-shadow:var(--card-shadow)]">
-          {options.map(o => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => { onChange(o.value); setOpen(false) }}
-              className={[
-                'flex w-full items-center rounded-lg px-3 py-1.5 text-xs transition-all duration-100',
-                o.value === value
-                  ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-strong)] ring-1 ring-inset ring-[var(--accent-strong)]/40'
-                  : 'text-[var(--text-main)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent-strong)] hover:ring-1 hover:ring-inset hover:ring-[var(--accent-strong)]/40',
-              ].join(' ')}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {typeof document !== 'undefined' && panel ? createPortal(panel, document.body) : null}
     </div>
   )
 }
@@ -695,6 +734,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     normalization: 'teal',
     final: 'blue',
   })
+  const [rawFileColors, setRawFileColors] = useState<string[]>([])
+  const [moduleDropdownOpen, setModuleDropdownOpen] = useState(false)
   const [parseLoading, setParseLoading] = useState(false)
   const [processingKeys, setProcessingKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -800,6 +841,17 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   useEffect(() => {
     datasetBundlesRef.current = datasetBundles
   }, [datasetBundles])
+
+  useEffect(() => {
+    setRawFileColors(prev => {
+      if (prev.length === rawFiles.length) return prev
+      const next = [...prev]
+      for (let i = prev.length; i < rawFiles.length; i++) {
+        next.push(DEFAULT_SERIES_PALETTE_KEYS[i % DEFAULT_SERIES_PALETTE_KEYS.length])
+      }
+      return next.slice(0, rawFiles.length)
+    })
+  }, [rawFiles.length])
 
   useEffect(() => {
     overlayBundleRef.current = overlayBundle
@@ -1401,7 +1453,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const stageDisplayLabel = getStageDisplayLabel(currentParams)
   const rawChartSourceFiles = processingViewMode === 'overlay'
     ? overlayFiles
-    : (activeFile ? [activeFile] : [])
+    : rawFiles
+  const rawChartActiveIndex = processingViewMode === 'overlay' ? 0 : activeDatasetIdx
   const rawStageDatasets = rawChartSourceFiles.map(file => ({ name: file.name, x: file.x, y: file.y }))
   const preprocessStageDatasets = rawPreview && preprocessDataset
     ? [{ name: preprocessDataset.name, x: preprocessDataset.x, y: preprocessDataset.y_processed }]
@@ -1419,17 +1472,18 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const overlayBackgroundDatasets = getOverlayStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
   const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
   const overlayPreprocessDatasets = getOverlayStageDatasets(overlayBundle?.preprocess ?? null, overlayState.params.average)
-  const overlayStage = overlayNormalizationDatasets.length >= 2
+  const overlayMinCount = overlayState.params.average ? 1 : 2
+  const overlayStage = overlayNormalizationDatasets.length >= overlayMinCount
     ? { title: '多筆疊圖比較：歸一化後', description: '這裡疊的是各筆資料經過各自設定的歸一化結果。', datasets: overlayNormalizationDatasets }
-    : overlayBackgroundDatasets.length >= 2
+    : overlayBackgroundDatasets.length >= overlayMinCount
       ? { title: '多筆疊圖比較：背景扣除後', description: '這裡疊的是各筆資料經過各自設定的背景扣除結果。', datasets: overlayBackgroundDatasets }
-      : overlayPreprocessDatasets.length >= 2
+      : overlayPreprocessDatasets.length >= overlayMinCount
         ? { title: '多筆疊圖比較：內插 / 平均 / 校正後', description: '這裡疊的是各筆資料在進入背景扣除前的前處理結果。', datasets: overlayPreprocessDatasets }
-        : overlayFinalDatasets.length >= 2
+        : overlayFinalDatasets.length >= overlayMinCount
           ? { title: '多筆疊圖比較：最終處理後', description: '這裡疊的是各筆資料目前最新的處理結果。', datasets: overlayFinalDatasets }
           : null
   const isOverlayView = processingViewMode === 'overlay' && Boolean(overlayStage && overlaySelection.length >= 2)
-  const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, 0, chartLineColors.raw)
+  const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, rawChartActiveIndex, rawFileColors)
   const preprocessChartTraces = rawPreview && preprocessDataset
     ? buildPipelineOverlayTraces(
         { x: rawPreview.x, y: rawPreview.y, name: `${rawPreview.name} 原始` },
@@ -1503,15 +1557,65 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </button>
         ) : (
           <>
-            <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
-              <span className="font-display text-base font-semibold tracking-wide text-[var(--text-main)]">XPS</span>
+            {/* ── Logo header ── */}
+            <div className="flex items-center justify-between px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))]">
+                  <svg width="18" height="16" viewBox="0 0 18 16" fill="none">
+                    <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13"
+                      stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold leading-tight text-[var(--text-main)]">Nigiro Pro</div>
+                  <div className="mt-0.5 text-[10px] leading-tight text-[var(--text-soft)]">Spectroscopy Analysis</div>
+                </div>
+              </div>
               <button type="button" onClick={() => setSidebarCollapsed(true)} className="text-xs text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
             </div>
+
             <div className="flex-1 overflow-y-auto">
-              <AnalysisModuleNav activeModule="xps" onSelectModule={onModuleSelect} mode="dropdown" />
+              {/* ── Compact module selector ── */}
+              <div className="px-4 pb-2 pt-1">
+                <div
+                  className="relative"
+                  onMouseEnter={() => setModuleDropdownOpen(true)}
+                  onMouseLeave={() => setModuleDropdownOpen(false)}
+                >
+                  <button type="button" className="flex items-center gap-1.5 rounded-lg px-1 py-1 text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]">
+                    <span className="uppercase tracking-[0.14em]">分析模組</span>
+                    <span className="rounded-md bg-[color:color-mix(in_srgb,var(--accent-strong)_13%,var(--card-bg))] px-1.5 py-0.5 font-semibold text-[var(--accent-strong)]">XPS</span>
+                    <span className="text-[8px]">▾</span>
+                  </button>
+                  {moduleDropdownOpen && (
+                    <div className="absolute left-0 top-[calc(100%+2px)] z-30 min-w-[160px] rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-1.5 [box-shadow:var(--card-shadow)]">
+                      {ANALYSIS_MODULES.map(mod => {
+                        const isActive = mod.id === 'xps'
+                        return (
+                          <button
+                            key={mod.id}
+                            type="button"
+                            disabled={isActive}
+                            onClick={() => { if (!isActive) { onModuleSelect?.(mod.id); setModuleDropdownOpen(false) } }}
+                            className={[
+                              'flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-xs transition-colors pressable',
+                              isActive
+                                ? 'bg-[var(--accent-soft)] font-semibold text-[var(--text-main)]'
+                                : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)]',
+                            ].join(' ')}
+                          >
+                            <span>{mod.label}</span>
+                            {isActive && <span className="text-[10px] text-[var(--accent-strong)]">●</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
 
               {/* Mode toggle */}
-              <div className="border-b border-[var(--card-divider)] px-4 py-3">
+              <div className="px-4 py-3">
                 <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模式</p>
                 <div className="grid grid-cols-2 gap-1.5">
                   {(['core_level', 'valence_band'] as const).map(m => (
@@ -1762,24 +1866,24 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   <CustomSelect label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
-                  <div className="space-y-1.5">
-                    <span className="block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">從元素資料庫載入</span>
-                    <div className="flex gap-2">
-                      <select
-                        value={selectedElement}
-                        onChange={e => setSelectedElement(e.target.value)}
-                        className="flex-1 rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none"
-                      >
-                        <option value="">選擇元素…</option>
-                        {elementsList.filter(el => el.has_peaks).map(el => (
-                          <option key={el.symbol} value={el.symbol}>{el.symbol} — {el.name}</option>
-                        ))}
-                      </select>
+                  <div className="space-y-2">
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <CustomSelect
+                          label="從元素資料庫載入"
+                          value={selectedElement}
+                          onChange={setSelectedElement}
+                          options={[
+                            { value: '', label: '選擇元素…' },
+                            ...elementsList.filter(el => el.has_peaks).map(el => ({ value: el.symbol, label: `${el.symbol} — ${el.name}` })),
+                          ]}
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={loadElementPeaks}
                         disabled={!selectedElement || elementsLoading}
-                        className="rounded-lg border border-[var(--accent-strong)] px-3 py-1.5 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 pressable"
+                        className="mb-0 rounded-lg border border-[var(--accent-strong)] px-3 py-1.5 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 pressable"
                       >
                         {elementsLoading ? '…' : '載入'}
                       </button>
@@ -2005,11 +2109,46 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
             {rawChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <ChartToolbar
-                  title="1. 原始光譜"
-                  colorValue={chartLineColors.raw}
-                  onColorChange={value => setChartLineColors(current => ({ ...current, raw: value }))}
-                />
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
+                {rawChartSourceFiles.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {rawChartSourceFiles.map((file, idx) => {
+                      const globalIdx = processingViewMode === 'overlay'
+                        ? rawFiles.indexOf(file)
+                        : idx
+                      const colorKey = rawFileColors[globalIdx >= 0 ? globalIdx : idx] ?? DEFAULT_SERIES_PALETTE_KEYS[idx % DEFAULT_SERIES_PALETTE_KEYS.length]
+                      const palette = LINE_COLOR_PALETTES[colorKey] ?? LINE_COLOR_PALETTES.blue
+                      const isActive = idx === rawChartActiveIndex
+                      return (
+                        <div key={`${file.name}-${idx}`} className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1">
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: palette.primary, opacity: isActive ? 1 : 0.65 }}
+                          />
+                          <span className={`max-w-[100px] truncate text-[10px] ${isActive ? 'font-semibold text-[var(--text-main)]' : 'text-[var(--text-soft)]'}`}>
+                            {file.name}
+                          </span>
+                          <select
+                            value={colorKey}
+                            onChange={e => {
+                              const targetIdx = globalIdx >= 0 ? globalIdx : idx
+                              setRawFileColors(prev => {
+                                const next = [...prev]
+                                next[targetIdx] = e.target.value
+                                return next
+                              })
+                            }}
+                            className="rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1 py-0.5 text-[10px] text-[var(--input-text)] focus:outline-none"
+                          >
+                            {LINE_COLOR_OPTIONS.map(opt => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
                 <Plot
                   data={rawChartTraces as Plotly.Data[]}
                   layout={chartLayout() as Plotly.Layout}
