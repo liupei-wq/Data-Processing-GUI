@@ -384,7 +384,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={4} title="平滑" hint="降噪但避免洗平峰型">
+      <Section step={4} title="平滑" hint="降噪但避免洗平峰型" defaultOpen={false}>
         <div>
           <Label>方法</Label>
           <Select
@@ -418,7 +418,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={5} title="歸一化" hint="統一強度尺度">
+      <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
         <div>
           <Label>方法</Label>
           <Select
@@ -465,7 +465,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={7} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示">
+      <Section step={7} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false}>
         <div>
           <Label>光源</Label>
           <Select
