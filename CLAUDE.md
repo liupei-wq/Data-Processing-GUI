@@ -110,6 +110,27 @@ cd web/frontend && npm install && npm run dev
 - **XES.tsx**：`onFilesSelected` → `onFiles`；`chartLayout` xaxis/yaxis title 改為 `{ text: ... }` 物件格式（Plotly v2 API）
 - TypeScript 零錯誤
 
+## XPS 大改版（2026-04-29）
+
+對齊離線版 XPS 操作流程，完整重構 `web/frontend/src/pages/XPS.tsx`：
+
+- **移除「自動尋峰」步驟**：原 Step 7（自動尋峰）完全移除；消除所有 `detectedPeaks`/`peakEnabled` 相關 state、useEffect、函式
+- **移除「平滑」步驟**：原 Step 5（平滑）從 sidebar 移除（後端 ProcessParams 保留）
+- **步驟重新編號**：載入=1, 內插平均=2, 能量校正=3, 背景扣除=4, 歸一化=5, 峰擬合=6, VBM=7, 能帶偏移=8
+- **歸一化新增「算術平均」**：Step 5 新增 `mean_region` 選項；選擇後顯示起始/結束 eV 輸入欄
+- **峰擬合改為元素資料庫模式**（Step 6）：
+  - 上方「從元素資料庫載入」：dropdown 選元素（自動載入 `/api/xps/elements`），按「載入」按 `/api/xps/element-peaks/{element}` 取回峰位一次加入 peakCandidates
+  - 下方保留「手動新增峰」按鈕
+  - peakCandidates 的 label（如「Ni 2p3/2」）透過 `peak_labels` 傳給後端，擬合結果峰名稱即為 label
+- **主內容改動**：
+  - 摘要卡「偵測峰數」改為「擬合峰數」（顯示 fitResult.peaks.length）
+  - 移除「自動偵測峰位」表格區塊
+  - 移除「偵測峰位 CSV」匯出按鈕
+- 後端 `routers/xps.py`：`InitPeak` 加 `label`；`FitRequest` 加 `peak_labels`；峰名稱優先使用 `peak_labels`
+- `types/xps.ts`：`norm_method` 加 `mean_region`；`InitPeak` 加 `label?`；新增 `ElementDbPeak`/`ElementPeaksResponse`/`ElementListItem`
+- `api/xps.ts`：新增 `fetchElementPeaks`/`listElements`；`fitPeaks` 加 `peakLabels?` 參數；保留 `detectPeaks`（api 層保留但 XPS 頁面不使用）
+- TypeScript 零錯誤
+
 ---
 
 ## 各模組完成度

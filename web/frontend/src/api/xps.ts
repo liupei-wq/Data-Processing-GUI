@@ -1,5 +1,7 @@
 import type {
   DetectedPeak,
+  ElementListItem,
+  ElementPeaksResponse,
   FitResult,
   InitPeak,
   ParseResponse,
@@ -54,16 +56,31 @@ export async function detectPeaks(
   return data.peaks
 }
 
+export async function fetchElementPeaks(element: string): Promise<ElementPeaksResponse> {
+  const res = await fetch(`${BASE}/element-peaks/${encodeURIComponent(element)}`)
+  if (!res.ok) throw new Error(`Element peaks fetch failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function listElements(): Promise<ElementListItem[]> {
+  const res = await fetch(`${BASE}/elements`)
+  if (!res.ok) throw new Error(`Elements list fetch failed: ${res.statusText}`)
+  return res.json()
+}
+
 export async function fitPeaks(
   x: number[],
   y: number[],
   peaks: InitPeak[],
   profile: string,
+  peakLabels?: string[],
 ): Promise<FitResult> {
+  const body: Record<string, unknown> = { x, y, peaks, profile }
+  if (peakLabels) body.peak_labels = peakLabels
   const res = await fetch(`${BASE}/fit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ x, y, peaks, profile }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }))

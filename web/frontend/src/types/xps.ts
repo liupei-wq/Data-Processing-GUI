@@ -34,7 +34,7 @@ export interface ProcessParams {
   smooth_method: 'none' | 'moving_average' | 'savitzky_golay'
   smooth_window: number
   smooth_poly: number
-  norm_method: 'none' | 'min_max' | 'max' | 'area'
+  norm_method: 'none' | 'min_max' | 'max' | 'area' | 'mean_region'
   norm_x_start: number | null
   norm_x_end: number | null
 }
@@ -63,6 +63,29 @@ export interface InitPeak {
   center: number
   fwhm: number
   amplitude: number
+  label?: string
+}
+
+export interface ElementDbPeak {
+  label: string
+  be: number
+  fwhm: number
+}
+
+export interface ElementPeaksResponse {
+  element: string
+  peaks: ElementDbPeak[]
+  has_doublet: boolean
+  doublet_be_sep: number | null
+  doublet_area_ratio: number | null
+  major_sub: string | null
+  minor_sub: string | null
+}
+
+export interface ElementListItem {
+  symbol: string
+  name: string
+  has_peaks: boolean
 }
 
 export interface FitPeakRow {

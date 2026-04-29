@@ -3,11 +3,10 @@ import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import AnalysisModuleNav from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { parseFiles, processData, detectPeaks, fitPeaks, computeVbm, lookupRsf } from '../api/xps'
+import { parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
 import type {
   DatasetInput,
-  DetectedPeak,
-  FitPeakRow,
+  ElementListItem,
   FitResult,
   InitPeak,
   ParsedFile,
@@ -79,7 +78,7 @@ function chartLayout(xReversed = true): Partial<Plotly.Layout> {
   }
 }
 
-function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean, detectedPeaks: DetectedPeak[]): Plotly.Data[] {
+function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean): Plotly.Data[] {
   const traces: Plotly.Data[] = []
   if (showRaw) {
     traces.push({ x: dataset.x, y: dataset.y_raw, type: 'scatter', mode: 'lines', name: '原始', line: { color: '#94a3b8', width: 1.4 } })
@@ -88,24 +87,6 @@ function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: bo
     traces.push({ x: dataset.x, y: dataset.y_background, type: 'scatter', mode: 'lines', name: '背景', line: { color: '#eab308', width: 1.3, dash: 'dot' } })
   }
   traces.push({ x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: '#38bdf8', width: 2.0 } })
-
-  // detected peak markers
-  if (detectedPeaks.length > 0) {
-    const yValues = dataset.y_processed
-    const yMin = Math.min(...yValues)
-    const yMax = Math.max(...yValues)
-    const span = Math.max(yMax - yMin, 1)
-    const xs: (number | null)[] = []
-    const ys: (number | null)[] = []
-    detectedPeaks.forEach(pk => {
-      xs.push(pk.binding_energy, pk.binding_energy, null)
-      ys.push(yMin, yMin + span * 0.12, null)
-    })
-    traces.push({
-      x: xs, y: ys, type: 'scatter', mode: 'lines', name: '偵測峰位',
-      line: { color: '#f97316', width: 1.2, dash: 'dash' },
-    })
-  }
   return traces
 }
 
@@ -242,15 +223,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [showBg, setShowBg] = useState(true)
   const [activeDatasetIdx, setActiveDatasetIdx] = useState(0)
 
-  // peak detection
-  const [peakEnabled, setPeakEnabled] = useState(false)
-  const [peakProminence, setPeakProminence] = useState(0.05)
-  const [peakMinDist, setPeakMinDist] = useState(0.3)
-  const [peakMaxPeaks, setPeakMaxPeaks] = useState(20)
-  const [detectedPeaks, setDetectedPeaks] = useState<DetectedPeak[]>([])
+  // element selection
+  const [elementsList, setElementsList] = useState<ElementListItem[]>([])
+  const [selectedElement, setSelectedElement] = useState('')
+  const [elementsLoading, setElementsLoading] = useState(false)
 
   // fitting
-  const [fitEnabled, setFitEnabled] = useState(false)
   const [fitProfile, setFitProfile] = useState<string>('voigt')
   const [peakCandidates, setPeakCandidates] = useState<PeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
@@ -301,21 +279,16 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     setIsLoading(true); setError(null)
     const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, y: f.y }))
     processData(datasets, params)
-      .then(r => { if (!cancelled) { setResult(r); setFitResult(null); setDetectedPeaks([]) } })
+      .then(r => { if (!cancelled) { setResult(r); setFitResult(null) } })
       .catch(e => { if (!cancelled) setError(String(e.message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
   }, [rawFiles, params])
 
-  // auto peak detection when enabled + active dataset changes
+  // load elements list on mount
   useEffect(() => {
-    if (!peakEnabled || !activeDataset) { setDetectedPeaks([]); return }
-    let cancelled = false
-    detectPeaks(activeDataset.x, activeDataset.y_processed, peakProminence, peakMinDist, peakMaxPeaks)
-      .then(pks => { if (!cancelled) setDetectedPeaks(pks) })
-      .catch(console.error)
-    return () => { cancelled = true }
-  }, [peakEnabled, activeDataset, peakProminence, peakMinDist, peakMaxPeaks])
+    listElements().then(setElementsList).catch(console.error)
+  }, [])
 
   useEffect(() => { localStorage.setItem('nigiro-xps-sidebar-width', String(sidebarWidth)) }, [sidebarWidth])
   useEffect(() => { localStorage.setItem('nigiro-xps-sidebar-collapsed', String(sidebarCollapsed)) }, [sidebarCollapsed])
@@ -401,18 +374,23 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     finally { setRsfLoading(false) }
   }
 
-  const addPeakFromDetected = (pk: DetectedPeak) => {
-    if (!activeDataset) return
-    const candidate: PeakCandidate = {
-      id: createPeakId(),
-      label: `${pk.binding_energy.toFixed(1)} eV`,
-      enabled: true,
-      center: pk.binding_energy,
-      fwhm: 1.0,
-      amplitude: pk.intensity,
-    }
-    setPeakCandidates(prev => [...prev, candidate])
-    setFitEnabled(true)
+  const loadElementPeaks = async () => {
+    if (!selectedElement) return
+    setElementsLoading(true); setFitError(null)
+    try {
+      const data = await fetchElementPeaks(selectedElement)
+      const maxY = activeDataset ? Math.max(...activeDataset.y_processed) : 1000
+      const newPeaks: PeakCandidate[] = data.peaks.map(pk => ({
+        id: createPeakId(),
+        label: `${selectedElement} ${pk.label}`,
+        enabled: true,
+        center: pk.be,
+        fwhm: pk.fwhm,
+        amplitude: maxY * 0.5,
+      }))
+      setPeakCandidates(prev => [...prev, ...newPeaks])
+    } catch (e: unknown) { setFitError((e as Error).message) }
+    finally { setElementsLoading(false) }
   }
 
   const addManualPeak = () => {
@@ -421,7 +399,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       id: createPeakId(), label: `峰 ${prev.length + 1}`, enabled: true,
       center, fwhm: 1.5, amplitude: 1000,
     }])
-    setFitEnabled(true)
   }
 
   const handleFit = async () => {
@@ -430,8 +407,9 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
     setIsFitting(true); setFitError(null)
     try {
-      const initPeaks: InitPeak[] = activePeaks.map(p => ({ center: p.center, fwhm: p.fwhm, amplitude: p.amplitude }))
-      const res = await fitPeaks(activeDataset.x, activeDataset.y_processed, initPeaks, fitProfile)
+      const initPeaks: InitPeak[] = activePeaks.map(p => ({ center: p.center, fwhm: p.fwhm, amplitude: p.amplitude, label: p.label }))
+      const peakLabels = activePeaks.map(p => p.label)
+      const res = await fitPeaks(activeDataset.x, activeDataset.y_processed, initPeaks, fitProfile, peakLabels)
       setFitResult(res)
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setIsFitting(false) }
@@ -476,7 +454,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
 
               <div className="px-4 pt-4">
-              <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV">
+                <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV">
                   <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat']} />
                   {rawFiles.length > 0 && (
                     <div className="space-y-1">
@@ -487,23 +465,23 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                           <span className="ml-auto shrink-0 text-[var(--text-soft)]">{f.x.length} pts</span>
                         </div>
                       ))}
-                      <button onClick={() => { setRawFiles([]); setResult(null); setDetectedPeaks([]); setFitResult(null); setPeakCandidates([]) }} className="text-xs text-rose-400 hover:text-rose-300">清除全部</button>
+                      <button onClick={() => { setRawFiles([]); setResult(null); setFitResult(null); setPeakCandidates([]) }} className="text-xs text-rose-400 hover:text-rose-300">清除全部</button>
                     </div>
                   )}
-              </Section>
+                </Section>
 
-              <Section step={2} title="內插 / 平均" hint="多檔統一點數後平均" defaultOpen={false}>
+                <Section step={2} title="內插 / 平均" hint="多檔統一點數後平均" defaultOpen={false}>
                   <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
                   {params.interpolate && <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={5000} step={100} />}
                   {rawFiles.length > 1 && <CheckRow label="多檔平均" checked={params.average} onChange={set('average')} />}
-              </Section>
+                </Section>
 
-              <Section step={3} title="能量校正" hint="C 1s = 284.8 eV" defaultOpen={false}>
+                <Section step={3} title="能量校正" hint="C 1s = 284.8 eV" defaultOpen={false}>
                   <NumInput label="BE 位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
                   <p className="text-[10px] text-[var(--text-soft)]">正值向高 BE 方向移。常見校正：C 1s = 284.8 eV。</p>
-              </Section>
+                </Section>
 
-              <Section step={4} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
+                <Section step={4} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
                   <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
                   {params.bg_enabled && (
                     <>
@@ -530,50 +508,59 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       )}
                     </>
                   )}
-              </Section>
+                </Section>
 
-              <Section step={5} title="平滑" hint="降噪處理" defaultOpen={false}>
-                  <SelectInput label="方法" value={params.smooth_method} onChange={v => set('smooth_method')(v as ProcessParams['smooth_method'])}
-                    options={[{ value: 'none', label: '不平滑' }, { value: 'moving_average', label: '移動平均' }, { value: 'savitzky_golay', label: 'Savitzky-Golay' }]}
-                  />
-                  {params.smooth_method !== 'none' && (
-                    <NumInput label="窗口大小" value={params.smooth_window} onChange={set('smooth_window')} min={3} max={51} step={2} />
-                  )}
-              </Section>
-
-              <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
+                <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
                   <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
-                    options={[{ value: 'none', label: '不歸一化' }, { value: 'min_max', label: 'Min–Max' }, { value: 'max', label: 'Max' }, { value: 'area', label: 'Area' }]}
+                    options={[
+                      { value: 'none', label: '不歸一化' },
+                      { value: 'min_max', label: 'Min–Max' },
+                      { value: 'max', label: 'Max' },
+                      { value: 'area', label: 'Area' },
+                      { value: 'mean_region', label: '算術平均' },
+                    ]}
                   />
-                  {(params.norm_method === 'min_max' || params.norm_method === 'area') && (
+                  {(params.norm_method === 'min_max' || params.norm_method === 'area' || params.norm_method === 'mean_region') && (
                     <div className="grid grid-cols-2 gap-2">
                       <NumInput label="起始 (eV)" value={params.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
                       <NumInput label="結束 (eV)" value={params.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
                     </div>
                   )}
-              </Section>
+                </Section>
 
-              <Section step={7} title="自動尋峰" hint="掃描峰位做擬合起點" defaultOpen={false}>
-                  <CheckRow label="啟用自動尋峰" checked={peakEnabled} onChange={setPeakEnabled} />
-                  {peakEnabled && (
-                    <>
-                      <NumInput label="Prominence" value={peakProminence} onChange={setPeakProminence} min={0.001} max={1} step={0.01} />
-                      <NumInput label="最小峰距 (eV)" value={peakMinDist} onChange={setPeakMinDist} min={0.1} max={10} step={0.1} />
-                      <NumInput label="最多峰數" value={peakMaxPeaks} onChange={setPeakMaxPeaks} min={1} max={50} step={1} />
-                    </>
-                  )}
-              </Section>
-
-              <Section step={8} title="峰擬合" hint="Voigt / Gaussian / Lorentzian" defaultOpen={false}>
+                <Section step={6} title="峰擬合" hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
                   <SelectInput label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
+                  <div className="space-y-1.5">
+                    <span className="block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">從元素資料庫載入</span>
+                    <div className="flex gap-2">
+                      <select
+                        value={selectedElement}
+                        onChange={e => setSelectedElement(e.target.value)}
+                        className="flex-1 rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none"
+                      >
+                        <option value="">選擇元素…</option>
+                        {elementsList.filter(el => el.has_peaks).map(el => (
+                          <option key={el.symbol} value={el.symbol}>{el.symbol} — {el.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={loadElementPeaks}
+                        disabled={!selectedElement || elementsLoading}
+                        className="rounded-lg border border-[var(--accent-strong)] px-3 py-1.5 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 pressable"
+                      >
+                        {elementsLoading ? '…' : '載入'}
+                      </button>
+                    </div>
+                  </div>
                   <button type="button" onClick={addManualPeak}
                     className="w-full rounded-lg border border-dashed border-[var(--card-border)] py-2 text-xs text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)]"
                   >
-                    + 新增峰
+                    + 手動新增峰
                   </button>
-                  {peakCandidates.map((pk, idx) => (
+                  {peakCandidates.map(pk => (
                     <div key={pk.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3 text-xs space-y-2">
                       <div className="flex items-center justify-between">
                         <CheckRow label={pk.label} checked={pk.enabled} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, enabled: v } : p))} />
@@ -587,93 +574,96 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     </div>
                   ))}
                   {peakCandidates.length > 0 && (
-                    <button type="button" onClick={handleFit} disabled={isFitting}
-                      className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50"
-                    >
-                      {isFitting ? '擬合中…' : '執行擬合'}
-                    </button>
+                    <>
+                      {peakCandidates.length > 1 && (
+                        <button type="button" onClick={() => setPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
+                      )}
+                      <button type="button" onClick={handleFit} disabled={isFitting}
+                        className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50"
+                      >
+                        {isFitting ? '擬合中…' : '執行擬合'}
+                      </button>
+                    </>
                   )}
                   {fitError && <p className="text-xs text-rose-400">{fitError}</p>}
-              </Section>
-
-              {/* 9. VBM 外推 (Valence Band mode only) */}
-              {xpsMode === 'valence_band' && (
-                <Section step={9} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
-                  <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="邊緣起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
-                    <NumInput label="邊緣終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
-                    <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
-                  </div>
-                  <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
-                    className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
-                  >
-                    {vbmLoading ? '計算中…' : '計算 VBM'}
-                  </button>
-                  {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
-                  {vbmResult?.success && (
-                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
-                      <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
-                      <p className="text-[var(--text-soft)]">斜率 = {vbmResult.slope.toFixed(4)} · 基準線 = {vbmResult.baseline_level.toFixed(2)}</p>
-                    </div>
-                  )}
                 </Section>
-              )}
 
-              {/* 10. Band Offset (Valence Band mode only) */}
-              {xpsMode === 'valence_band' && (
-                <Section step={10} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
-                  <SelectInput label="方法" value={bandOffsetMethod}
-                    onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
-                    options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
-                  />
-                  {bandOffsetMethod === 'vbm_diff' && (
-                    <>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="VBM_A (eV)" value={boVbmA} onChange={setBoVbmA} step={0.01} />
-                        <NumInput label="σ_A (eV)" value={boSigmaA} onChange={setBoSigmaA} min={0} step={0.001} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="VBM_B (eV)" value={boVbmB} onChange={setBoVbmB} step={0.01} />
-                        <NumInput label="σ_B (eV)" value={boSigmaB} onChange={setBoSigmaB} min={0} step={0.001} />
-                      </div>
-                      <p className="text-[10px] text-[var(--text-soft)]">ΔEV = VBM_A − VBM_B</p>
-                    </>
-                  )}
-                  {bandOffsetMethod === 'kraut' && (
-                    <>
-                      <p className="text-[10px] text-[var(--text-soft)]">ΔEV = (CL_A − VBM_A) − (CL_B − VBM_B) − (CL_A_int − CL_B_int)</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="CL_A 純樣 (eV)" value={boClA} onChange={setBoClA} step={0.01} />
-                        <NumInput label="VBM_A 純樣 (eV)" value={boVbmAPure} onChange={setBoVbmAPure} step={0.01} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="CL_B 純樣 (eV)" value={boClB} onChange={setBoClB} step={0.01} />
-                        <NumInput label="VBM_B 純樣 (eV)" value={boVbmBPure} onChange={setBoVbmBPure} step={0.01} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="CL_A 介面 (eV)" value={boClAInt} onChange={setBoClAInt} step={0.01} />
-                        <NumInput label="CL_B 介面 (eV)" value={boClBInt} onChange={setBoClBInt} step={0.01} />
-                      </div>
-                    </>
-                  )}
-                  <button type="button" onClick={computeBandOffset}
-                    className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 pressable"
-                  >
-                    計算能帶偏移
-                  </button>
-                  {bandOffsetResult && (
-                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
-                      <p className="font-semibold text-[var(--text-main)]">ΔEV = {bandOffsetResult.deltaEv.toFixed(3)} eV
-                        {bandOffsetResult.sigmaEv > 0 && ` ± ${bandOffsetResult.sigmaEv.toFixed(3)} eV`}
-                      </p>
+                {xpsMode === 'valence_band' && (
+                  <Section step={7} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
+                    <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="邊緣起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
+                      <NumInput label="邊緣終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
                     </div>
-                  )}
-                </Section>
-              )}
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
+                      <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
+                    </div>
+                    <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
+                      className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
+                    >
+                      {vbmLoading ? '計算中…' : '計算 VBM'}
+                    </button>
+                    {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
+                    {vbmResult?.success && (
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
+                        <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
+                        <p className="text-[var(--text-soft)]">斜率 = {vbmResult.slope.toFixed(4)} · 基準線 = {vbmResult.baseline_level.toFixed(2)}</p>
+                      </div>
+                    )}
+                  </Section>
+                )}
+
+                {xpsMode === 'valence_band' && (
+                  <Section step={8} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
+                    <SelectInput label="方法" value={bandOffsetMethod}
+                      onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
+                      options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
+                    />
+                    {bandOffsetMethod === 'vbm_diff' && (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="VBM_A (eV)" value={boVbmA} onChange={setBoVbmA} step={0.01} />
+                          <NumInput label="σ_A (eV)" value={boSigmaA} onChange={setBoSigmaA} min={0} step={0.001} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="VBM_B (eV)" value={boVbmB} onChange={setBoVbmB} step={0.01} />
+                          <NumInput label="σ_B (eV)" value={boSigmaB} onChange={setBoSigmaB} min={0} step={0.001} />
+                        </div>
+                        <p className="text-[10px] text-[var(--text-soft)]">ΔEV = VBM_A − VBM_B</p>
+                      </>
+                    )}
+                    {bandOffsetMethod === 'kraut' && (
+                      <>
+                        <p className="text-[10px] text-[var(--text-soft)]">ΔEV = (CL_A − VBM_A) − (CL_B − VBM_B) − (CL_A_int − CL_B_int)</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="CL_A 純樣 (eV)" value={boClA} onChange={setBoClA} step={0.01} />
+                          <NumInput label="VBM_A 純樣 (eV)" value={boVbmAPure} onChange={setBoVbmAPure} step={0.01} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="CL_B 純樣 (eV)" value={boClB} onChange={setBoClB} step={0.01} />
+                          <NumInput label="VBM_B 純樣 (eV)" value={boVbmBPure} onChange={setBoVbmBPure} step={0.01} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="CL_A 介面 (eV)" value={boClAInt} onChange={setBoClAInt} step={0.01} />
+                          <NumInput label="CL_B 介面 (eV)" value={boClBInt} onChange={setBoClBInt} step={0.01} />
+                        </div>
+                      </>
+                    )}
+                    <button type="button" onClick={computeBandOffset}
+                      className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 pressable"
+                    >
+                      計算能帶偏移
+                    </button>
+                    {bandOffsetResult && (
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
+                        <p className="font-semibold text-[var(--text-main)]">ΔEV = {bandOffsetResult.deltaEv.toFixed(3)} eV
+                          {bandOffsetResult.sigmaEv > 0 && ` ± ${bandOffsetResult.sigmaEv.toFixed(3)} eV`}
+                        </p>
+                      </div>
+                    )}
+                  </Section>
+                )}
               </div>
             </div>
           </>
@@ -711,7 +701,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
         {result && activeDataset && (
           <>
-            {/* dataset selector */}
             {result.datasets.length > 1 && !params.average && (
               <div className="mb-3 flex gap-2 flex-wrap">
                 {result.datasets.map((ds, idx) => (
@@ -723,7 +712,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {/* summary cards */}
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
@@ -736,66 +724,29 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </p>
               </div>
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">偵測峰數</p>
-                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{detectedPeaks.length > 0 ? `${detectedPeaks.length} 個` : '—'}</p>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">擬合峰數</p>
+                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{fitResult ? `${fitResult.peaks.length} 個` : '—'}</p>
               </div>
             </div>
 
-            {/* display controls */}
             <div className="mb-3 flex flex-wrap items-center gap-4">
               <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
               {params.bg_enabled && <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />}
             </div>
 
-            {/* main spectrum chart */}
             <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
               <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">
                 {activeDataset.name} — 光譜
                 {fitResult && <span className="ml-2 text-xs font-normal text-[var(--text-soft)]">（含擬合結果）</span>}
               </p>
               <Plot
-                data={(fitResult ? buildFitTraces(activeDataset, fitResult) : buildMainTraces(activeDataset, showRaw, showBg, detectedPeaks)) as Plotly.Data[]}
+                data={(fitResult ? buildFitTraces(activeDataset, fitResult) : buildMainTraces(activeDataset, showRaw, showBg)) as Plotly.Data[]}
                 layout={chartLayout() as Plotly.Layout}
                 config={{ responsive: true, displayModeBar: false }}
                 style={{ width: '100%', height: 380 }}
               />
             </div>
 
-            {/* detected peaks table */}
-            {detectedPeaks.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-[var(--text-main)]">自動偵測峰位</p>
-                  <button type="button" onClick={() => { detectedPeaks.forEach(pk => addPeakFromDetected(pk)) }}
-                    className="text-xs text-[var(--accent-strong)] hover:underline"
-                  >全部加入擬合</button>
-                </div>
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
-                      <th className="pb-2 text-left font-medium">BE (eV)</th>
-                      <th className="pb-2 text-right font-medium">強度</th>
-                      <th className="pb-2 text-right font-medium">相對強度 (%)</th>
-                      <th className="pb-2 text-right font-medium" />
-                    </tr>
-                  </thead>
-                  <tbody className="text-[var(--text-main)]">
-                    {detectedPeaks.map(pk => (
-                      <tr key={pk.binding_energy} className="border-b border-[var(--card-divider)]">
-                        <td className="py-1.5">{pk.binding_energy.toFixed(2)}</td>
-                        <td className="py-1.5 text-right">{pk.intensity.toFixed(1)}</td>
-                        <td className="py-1.5 text-right">{pk.rel_intensity.toFixed(1)}</td>
-                        <td className="py-1.5 text-right">
-                          <button type="button" onClick={() => addPeakFromDetected(pk)} className="text-[var(--accent-strong)] hover:underline">加入擬合</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* fit result table */}
             {fitResult && fitResult.peaks.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">峰擬合結果</p>
@@ -824,13 +775,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {/* VBM extrapolation chart */}
             {xpsMode === 'valence_band' && vbmResult?.success && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推</p>
                 <Plot
                   data={[
-                    { x: activeDataset!.x, y: activeDataset!.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
+                    { x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
                     { x: vbmResult.x_fit, y: vbmResult.y_fit, type: 'scatter', mode: 'lines', name: '外推線', line: { color: '#f97316', width: 1.5, dash: 'dash' } },
                     { x: vbmResult.x_fit.length > 0 ? [vbmResult.x_fit[0], vbmResult.x_fit[vbmResult.x_fit.length - 1]] : [], y: [vbmResult.baseline_level, vbmResult.baseline_level], type: 'scatter', mode: 'lines', name: '基準線', line: { color: '#a855f7', width: 1.2, dash: 'dot' } },
                     ...(vbmResult.vbm_ev != null ? [{ x: [vbmResult.vbm_ev], y: [vbmResult.baseline_level], type: 'scatter' as const, mode: 'markers' as const, name: 'VBM', marker: { color: '#f97316', size: 10, symbol: 'diamond' as const } }] : []),
@@ -851,7 +801,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {/* Band offset result */}
             {xpsMode === 'valence_band' && bandOffsetResult && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">能帶偏移結果</p>
@@ -871,7 +820,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {/* RSF quantification */}
             {fitResult && fitResult.peaks.length > 0 && rsfRows.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-3 flex items-center justify-between">
@@ -938,7 +886,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {/* export */}
             <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</p>
               <div className="flex flex-wrap gap-2">
@@ -948,13 +895,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   const rows = ds.x.map((x, i) => [x, ds.y_raw[i], ds.y_processed[i]])
                   downloadFile(toCsv(headers, rows), 'xps_processed.csv', 'text/csv')
                 }} />
-                {detectedPeaks.length > 0 && (
-                  <ExportBtn label="偵測峰位 CSV" onClick={() => {
-                    const headers = ['binding_energy_eV', 'intensity', 'rel_intensity_pct']
-                    const rows = detectedPeaks.map(pk => [pk.binding_energy, pk.intensity, pk.rel_intensity])
-                    downloadFile(toCsv(headers, rows), 'xps_peaks.csv', 'text/csv')
-                  }} />
-                )}
                 {fitResult && fitResult.peaks.length > 0 && (
                   <ExportBtn label="擬合結果 CSV" onClick={() => {
                     const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']

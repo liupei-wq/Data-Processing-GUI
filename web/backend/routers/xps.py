@@ -100,6 +100,7 @@ class InitPeak(BaseModel):
     center: float
     fwhm: float
     amplitude: float
+    label: Optional[str] = None
 
 
 class FitRequest(BaseModel):
@@ -108,6 +109,7 @@ class FitRequest(BaseModel):
     peaks: List[InitPeak]
     profile: str = "voigt"
     maxfev: int = 20000
+    peak_labels: Optional[List[str]] = None
 
 
 class FitPeakRow(BaseModel):
@@ -299,8 +301,13 @@ def fit_xps_peaks(req: FitRequest):
     rows: list[FitPeakRow] = []
     for i, pk in enumerate(result.get("peaks", []), 1):
         area = float(pk.get("Area", 0))
+        name = (
+            req.peak_labels[i - 1]
+            if req.peak_labels and i - 1 < len(req.peak_labels)
+            else str(pk.get("Peak_Name", f"Peak {i}"))
+        )
         rows.append(FitPeakRow(
-            Peak_Name=str(pk.get("Peak_Name", f"Peak {i}")),
+            Peak_Name=name,
             Center_eV=float(pk.get("Center", 0)),
             FWHM_eV=float(pk.get("FWHM", 0)),
             Area=area,
@@ -385,6 +392,55 @@ def compute_vbm(req: VbmRequest):
         y_fit=y_fit_arr.tolist(),
         success=success,
         message=message,
+    )
+
+
+# ── Element peaks from DB ─────────────────────────────────────────────────────
+
+class ElementPeakItem(BaseModel):
+    label: str
+    be: float
+    fwhm: float
+
+
+class ElementPeaksResponse(BaseModel):
+    element: str
+    peaks: List[ElementPeakItem]
+    has_doublet: bool
+    doublet_be_sep: Optional[float] = None
+    doublet_area_ratio: Optional[float] = None
+    major_sub: Optional[str] = None
+    minor_sub: Optional[str] = None
+
+
+@router.get("/elements")
+def list_elements_endpoint():
+    from db.xps_database import ELEMENTS
+    return [
+        {"symbol": k, "name": v["name"], "has_peaks": len(v.get("peaks", [])) > 0}
+        for k, v in ELEMENTS.items()
+    ]
+
+
+@router.get("/element-peaks/{element}", response_model=ElementPeaksResponse)
+def get_element_peaks(element: str):
+    from db.xps_database import ELEMENTS, DOUBLET_INFO
+    elem_data = ELEMENTS.get(element)
+    if elem_data is None:
+        raise HTTPException(status_code=404, detail=f"Element '{element}' not in database")
+    peaks = [
+        ElementPeakItem(label=p["label"], be=p["be"], fwhm=p["fwhm"])
+        for p in elem_data.get("peaks", [])
+    ]
+    doublet = DOUBLET_INFO.get(element)
+    return ElementPeaksResponse(
+        element=element,
+        peaks=peaks,
+        has_doublet=doublet is not None,
+        doublet_be_sep=doublet["be_sep"] if doublet else None,
+        doublet_area_ratio=doublet["area_ratio"] if doublet else None,
+        major_sub=doublet["major_sub"] if doublet else None,
+        minor_sub=doublet["minor_sub"] if doublet else None,
     )
 
 
