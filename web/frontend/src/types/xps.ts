@@ -88,6 +88,17 @@ export interface ElementListItem {
   has_peaks: boolean
 }
 
+export interface PeriodicTableItem {
+  symbol: string
+  name: string
+  row: number
+  col: number
+  category: string
+  category_name_zh: string
+  category_color: string
+  has_peaks: boolean
+}
+
 export interface CalibrationResult {
   standard_element: string
   peak_label: string

@@ -12,7 +12,7 @@ from core.parsers import parse_xps_bytes
 from core.peak_fitting import fit_peaks
 from core.processing import apply_background, apply_normalization, smooth_signal
 from core.spectrum_ops import detect_spectrum_peaks
-from db.xps_database import DOUBLET_INFO, ELEMENTS, get_orbital_rsf
+from db.xps_database import CATEGORY_COLORS, CATEGORY_NAMES_ZH, DOUBLET_INFO, ELEMENTS, get_orbital_rsf
 
 router = APIRouter()
 
@@ -512,11 +512,39 @@ class ElementPeaksResponse(BaseModel):
     minor_sub: Optional[str] = None
 
 
+class PeriodicTableItem(BaseModel):
+    symbol: str
+    name: str
+    row: int
+    col: int
+    category: str
+    category_name_zh: str
+    category_color: str
+    has_peaks: bool
+
+
 @router.get("/elements")
 def list_elements_endpoint():
     return [
         {"symbol": k, "name": v["name"], "has_peaks": len(v.get("peaks", [])) > 0}
         for k, v in ELEMENTS.items()
+    ]
+
+
+@router.get("/periodic-table", response_model=List[PeriodicTableItem])
+def periodic_table_endpoint():
+    return [
+        PeriodicTableItem(
+            symbol=symbol,
+            name=data["name"],
+            row=int(data["row"]),
+            col=int(data["col"]),
+            category=str(data["cat"]),
+            category_name_zh=CATEGORY_NAMES_ZH.get(str(data["cat"]), str(data["cat"])),
+            category_color=CATEGORY_COLORS.get(str(data["cat"]), "#64748b"),
+            has_peaks=len(data.get("peaks", [])) > 0,
+        )
+        for symbol, data in ELEMENTS.items()
     ]
 
 

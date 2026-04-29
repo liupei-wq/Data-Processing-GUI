@@ -474,3 +474,79 @@ type WorkspaceId =
 ### 驗證
 - `npm run build`：通過
 - `python3 -m py_compile web/backend/main.py web/backend/routers/xps.py`：通過
+
+---
+
+## 部署未更新排查（2026-04-29）
+
+- 重新讀取 `CLAUDE.md` 後檢查 git 狀態與最近提交
+- `git status --short` 顯示目前仍有 **未提交** 的本機修改：
+  - `web/backend/routers/xps.py`
+  - `web/frontend/src/api/xps.ts`
+  - `web/frontend/src/pages/XPS.tsx`
+  - `web/frontend/src/types/xps.ts`
+- `git log --oneline -n 8` 顯示目前最新 commit 是 `b4a615e (v14.9)`
+- `git remote -v` 指向 `origin https://github.com/liupei-wq/Data-Processing-GUI.git`
+- 結論：
+  - 這些 XPS 改動目前只存在本機工作樹
+  - 若部署平台是抓 GitHub / origin 的最新 commit，這批修改**不會上線**
+  - 所以「部署後完全沒更新」是正常結果，不是前端快取造成
+
+---
+
+## XPS 中間欄流程圖與週期表補完（2026-04-29）
+
+### 中間欄流程圖
+- `web/frontend/src/pages/XPS.tsx`
+  - 原本只有一張最終處理圖，改成多階段圖卡
+  - 現在流程是：
+    1. 原始光譜
+    2. 內插 / 平均 / 能量校正後疊圖
+    3. 背景扣除圖
+    4. 歸一化圖
+    5. 最終處理光譜（保留給擬合 / VBM / 匯出）
+- 顯示邏輯：
+  - 第 1 張圖：只要上傳檔案就顯示
+  - 第 2 張圖：有啟用內插 / 平均 / 手動或自動能量校正才顯示
+  - 第 3 張圖：啟用背景扣除才顯示
+  - 第 4 張圖：選擇歸一化方法才顯示
+- 背景扣除與歸一化圖都在圖上加了區間標示：
+  - 背景區間：橘色 shaded region + 邊界線 + 標籤
+  - 歸一化區間：青綠色 shaded region + 邊界線 + 標籤
+
+### XPS 分階段結果計算
+- 前端另外建立 3 組 stage result：
+  - `preprocessResult`
+  - `backgroundResult`
+  - `normalizationResult`
+- 不是只拿最後一個 `/process` 回傳值重用，而是分別呼叫：
+  - 前處理參數組
+  - 前處理 + 背景參數組
+  - 前處理 + 背景 + 歸一化參數組
+- 這樣中間欄每張圖都能對應正確的上一步輸入與本步輸出
+
+### XPS 元素週期表
+- 後端 `web/backend/routers/xps.py`
+  - 新增 `GET /api/xps/periodic-table`
+  - 回傳元素位置（row/col）、分類、中文分類名、分類色、是否有峰資料
+- 前端 `web/frontend/src/api/xps.ts` / `types/xps.ts`
+  - 新增 `fetchPeriodicTable()` 與 `PeriodicTableItem`
+- `web/frontend/src/pages/XPS.tsx`
+  - 在步驟 6 峰擬合區新增元素週期表
+  - 有峰資料的元素可直接點選成 `selectedElement`
+  - 無峰資料的元素顯示為 disabled
+  - 仍保留原本 dropdown + 載入按鈕，不拆掉原操作
+
+### 驗證
+- `npm run build`：通過
+- `python3 -m py_compile web/backend/main.py web/backend/routers/xps.py`：通過
+- `git diff --check`：通過
+
+### 可見性補充
+- XPS 第 3 步「能量校正」的新版 UI 已在 `web/frontend/src/pages/XPS.tsx`
+  - 含手動 `BE 位移`
+  - 含標準樣品上傳
+  - 含標準樣品 / 參考峰 / 參考 BE / 搜尋視窗 / 自動套用偏移
+- XPS 第 4 步背景扣除拉桿只會在「啟用背景扣除」後顯示
+- XPS 第 5 步歸一化拉桿只會在 `norm_method !== 'none'` 時顯示
+- 如果看的是部署站而不是本機，仍然看不到是因為目前這批修改還沒 commit / push 到遠端

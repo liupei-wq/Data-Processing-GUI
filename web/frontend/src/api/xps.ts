@@ -6,6 +6,7 @@ import type {
   FitResult,
   InitPeak,
   ParseResponse,
+  PeriodicTableItem,
   ProcessParams,
   ProcessResult,
   DatasetInput,
@@ -66,6 +67,12 @@ export async function fetchElementPeaks(element: string): Promise<ElementPeaksRe
 export async function listElements(): Promise<ElementListItem[]> {
   const res = await fetch(`${BASE}/elements`)
   if (!res.ok) throw new Error(`Elements list fetch failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function fetchPeriodicTable(): Promise<PeriodicTableItem[]> {
+  const res = await fetch(`${BASE}/periodic-table`)
+  if (!res.ok) throw new Error(`Periodic table fetch failed: ${res.statusText}`)
   return res.json()
 }
 

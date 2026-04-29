@@ -3,7 +3,7 @@ import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import AnalysisModuleNav from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { calibrateEnergy, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
+import { calibrateEnergy, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
 import type {
   CalibrationResult,
   DatasetInput,
@@ -12,6 +12,7 @@ import type {
   FitResult,
   InitPeak,
   ParsedFile,
+  PeriodicTableItem,
   ProcessParams,
   ProcessResult,
   ProcessedDataset,
@@ -89,6 +90,108 @@ function estimateInterpolationPoints(files: ParsedFile[]) {
   })
   const target = Math.round(median(estimated) / 50) * 50
   return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
+}
+
+function pickDataset(result: ProcessResult | null, activeIndex: number, useAverage: boolean) {
+  if (!result) return null
+  if (useAverage && result.average) return result.average
+  return result.datasets[activeIndex] ?? result.datasets[0] ?? null
+}
+
+function buildRawFileTraces(files: ParsedFile[], activeIndex: number): Plotly.Data[] {
+  return files.map((file, index) => ({
+    x: file.x,
+    y: file.y,
+    type: 'scatter',
+    mode: 'lines',
+    name: file.name,
+    line: {
+      color: index === activeIndex ? '#94a3b8' : 'rgba(148,163,184,0.38)',
+      width: index === activeIndex ? 1.8 : 1.1,
+    },
+    opacity: index === activeIndex ? 0.95 : 0.55,
+  }))
+}
+
+function buildPipelineOverlayTraces(
+  inputDataset: { x: number[]; y: number[]; name: string },
+  outputDataset: { x: number[]; y: number[]; name: string },
+  outputLabel: string,
+  outputColor = '#38bdf8',
+): Plotly.Data[] {
+  return [
+    {
+      x: inputDataset.x,
+      y: inputDataset.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: inputDataset.name,
+      line: { color: '#94a3b8', width: 1.4 },
+      opacity: 0.8,
+    },
+    {
+      x: outputDataset.x,
+      y: outputDataset.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: outputLabel,
+      line: { color: outputColor, width: 2.1 },
+    },
+  ]
+}
+
+function buildRegionShapes(start: number | null | undefined, end: number | null | undefined, color: string) {
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end) || start === end) return []
+  const x0 = Math.min(start, end)
+  const x1 = Math.max(start, end)
+  return [
+    {
+      type: 'rect' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0,
+      x1,
+      y0: 0,
+      y1: 1,
+      fillcolor: color,
+      opacity: 0.14,
+      line: { width: 0 },
+      layer: 'below' as const,
+    },
+    {
+      type: 'line' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0,
+      x1: x0,
+      y0: 0,
+      y1: 1,
+      line: { color, width: 1.2, dash: 'dot' },
+    },
+    {
+      type: 'line' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0: x1,
+      x1,
+      y0: 0,
+      y1: 1,
+      line: { color, width: 1.2, dash: 'dot' },
+    },
+  ]
+}
+
+function buildRegionAnnotations(start: number | null | undefined, end: number | null | undefined, label: string, color: string) {
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end) || start === end) return []
+  return [{
+    x: (start + end) / 2,
+    y: 1.03,
+    xref: 'x' as const,
+    yref: 'paper' as const,
+    text: label,
+    showarrow: false,
+    font: { size: 11, color },
+  }]
 }
 
 function chartLayout(xReversed = true): Partial<Plotly.Layout> {
@@ -312,6 +415,9 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [standardFiles, setStandardFiles] = useState<ParsedFile[]>([])
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
+  const [preprocessResult, setPreprocessResult] = useState<ProcessResult | null>(null)
+  const [backgroundResult, setBackgroundResult] = useState<ProcessResult | null>(null)
+  const [normalizationResult, setNormalizationResult] = useState<ProcessResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [autoInterpPoints, setAutoInterpPoints] = useState(true)
@@ -323,6 +429,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
   // element selection
   const [elementsList, setElementsList] = useState<ElementListItem[]>([])
+  const [periodicTable, setPeriodicTable] = useState<PeriodicTableItem[]>([])
   const [selectedElement, setSelectedElement] = useState('')
   const [elementsLoading, setElementsLoading] = useState(false)
   const [calibrationElement, setCalibrationElement] = useState('Au')
@@ -376,28 +483,87 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const activeDataset = result
     ? (result.average && params.average ? result.average : result.datasets[activeDatasetIdx] ?? null)
     : null
+  const preprocessDataset = pickDataset(preprocessResult, activeDatasetIdx, params.average)
+  const backgroundDataset = pickDataset(backgroundResult, activeDatasetIdx, params.average)
+  const normalizationDataset = pickDataset(normalizationResult, activeDatasetIdx, params.average)
   const beMin = activeDataset ? Math.min(...activeDataset.x) : 0
   const beMax = activeDataset ? Math.max(...activeDataset.x) : 1000
   const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
   const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
+  const hasPreprocessStage = params.interpolate || params.average || Math.abs(params.energy_shift) > 1e-8
+  const hasBackgroundStage = params.bg_enabled
+  const hasNormalizationStage = params.norm_method !== 'none'
+  const rawPreview = rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null
 
   // process when files or params change
   useEffect(() => {
-    if (rawFiles.length === 0) { setResult(null); return }
+    if (rawFiles.length === 0) {
+      setResult(null)
+      setPreprocessResult(null)
+      setBackgroundResult(null)
+      setNormalizationResult(null)
+      return
+    }
     let cancelled = false
     setIsLoading(true); setError(null)
     const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, y: f.y }))
-    processData(datasets, { ...params, n_points: effectiveNPoints })
-      .then(r => { if (!cancelled) { setResult(r); setFitResult(null) } })
+    const effectiveParams = { ...params, n_points: effectiveNPoints }
+    const preprocessParams: ProcessParams = {
+      ...DEFAULT_PARAMS,
+      interpolate: params.interpolate,
+      n_points: effectiveNPoints,
+      average: params.average,
+      energy_shift: params.energy_shift,
+    }
+    const backgroundParams: ProcessParams = {
+      ...preprocessParams,
+      bg_enabled: hasBackgroundStage,
+      bg_method: params.bg_method,
+      bg_x_start: params.bg_x_start,
+      bg_x_end: params.bg_x_end,
+      bg_poly_deg: params.bg_poly_deg,
+      bg_baseline_lambda: params.bg_baseline_lambda,
+      bg_baseline_p: params.bg_baseline_p,
+      bg_baseline_iter: params.bg_baseline_iter,
+      bg_tougaard_B: params.bg_tougaard_B,
+      bg_tougaard_C: params.bg_tougaard_C,
+    }
+    const normalizationParams: ProcessParams = {
+      ...backgroundParams,
+      norm_method: params.norm_method,
+      norm_x_start: params.norm_x_start,
+      norm_x_end: params.norm_x_end,
+    }
+
+    Promise.all([
+      processData(datasets, effectiveParams),
+      hasPreprocessStage || hasBackgroundStage || hasNormalizationStage ? processData(datasets, preprocessParams) : Promise.resolve(null),
+      hasBackgroundStage ? processData(datasets, backgroundParams) : Promise.resolve(null),
+      hasNormalizationStage ? processData(datasets, normalizationParams) : Promise.resolve(null),
+    ])
+      .then(([finalResult, preprocessStage, backgroundStage, normalizationStage]) => {
+        if (!cancelled) {
+          setResult(finalResult)
+          setPreprocessResult(preprocessStage)
+          setBackgroundResult(backgroundStage)
+          setNormalizationResult(normalizationStage)
+          setFitResult(null)
+        }
+      })
       .catch(e => { if (!cancelled) setError(String(e.message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
-  }, [rawFiles, params, effectiveNPoints])
+  }, [rawFiles, params, effectiveNPoints, hasPreprocessStage, hasBackgroundStage, hasNormalizationStage])
 
   // load elements list on mount
   useEffect(() => {
-    listElements().then(setElementsList).catch(console.error)
+    Promise.all([listElements(), fetchPeriodicTable()])
+      .then(([elements, periodic]) => {
+        setElementsList(elements)
+        setPeriodicTable(periodic)
+      })
+      .catch(console.error)
   }, [])
 
   useEffect(() => {
@@ -598,6 +764,64 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       setFitResult(res)
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setIsFitting(false) }
+  }
+
+  const datasetTabs = result?.datasets ?? rawFiles
+  const rawChartTraces = buildRawFileTraces(rawFiles, activeDatasetIdx)
+  const preprocessChartTraces = rawPreview && preprocessDataset
+    ? buildPipelineOverlayTraces(
+        { x: rawPreview.x, y: rawPreview.y, name: `${rawPreview.name} 原始` },
+        { x: preprocessDataset.x, y: preprocessDataset.y_processed, name: `${preprocessDataset.name} 前處理` },
+        params.average && preprocessResult?.average ? '平均 / 內插後' : '內插 / 校正後',
+      )
+    : []
+  const backgroundChartTraces = backgroundDataset
+    ? [
+        {
+          x: backgroundDataset.x,
+          y: backgroundDataset.y_raw,
+          type: 'scatter',
+          mode: 'lines',
+          name: '背景扣除前',
+          line: { color: '#94a3b8', width: 1.4 },
+          opacity: 0.82,
+        },
+        ...(backgroundDataset.y_background ? [{
+          x: backgroundDataset.x,
+          y: backgroundDataset.y_background,
+          type: 'scatter' as const,
+          mode: 'lines' as const,
+          name: '背景線',
+          line: { color: '#f59e0b', width: 1.3, dash: 'dot' as const },
+        }] : []),
+        {
+          x: backgroundDataset.x,
+          y: backgroundDataset.y_processed,
+          type: 'scatter',
+          mode: 'lines',
+          name: '背景扣除後',
+          line: { color: '#38bdf8', width: 2.1 },
+        },
+      ]
+    : []
+  const normalizationInput = hasBackgroundStage ? backgroundDataset : preprocessDataset
+  const normalizationChartTraces = normalizationDataset && normalizationInput
+    ? buildPipelineOverlayTraces(
+        { x: normalizationInput.x, y: normalizationInput.y_processed, name: '歸一化前' },
+        { x: normalizationDataset.x, y: normalizationDataset.y_processed, name: '歸一化後' },
+        '歸一化後',
+        '#14b8a6',
+      )
+    : []
+  const backgroundLayout = {
+    ...(chartLayout() as Plotly.Layout),
+    shapes: buildRegionShapes(params.bg_x_start ?? beMin, params.bg_x_end ?? beMax, 'rgba(245, 158, 11, 0.55)'),
+    annotations: buildRegionAnnotations(params.bg_x_start ?? beMin, params.bg_x_end ?? beMax, '背景區間', '#f59e0b'),
+  }
+  const normalizationLayout = {
+    ...(chartLayout() as Plotly.Layout),
+    shapes: buildRegionShapes(params.norm_x_start ?? beMin, params.norm_x_end ?? beMax, 'rgba(20, 184, 166, 0.55)'),
+    annotations: buildRegionAnnotations(params.norm_x_start ?? beMin, params.norm_x_end ?? beMax, '歸一化區間', '#14b8a6'),
   }
 
   const sidebarStyle: CSSProperties = sidebarCollapsed
@@ -870,6 +1094,50 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       </button>
                     </div>
                   </div>
+                  {periodicTable.length > 0 && (
+                    <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">元素週期表</span>
+                        {selectedElement && (
+                          <span className="text-[11px] text-[var(--text-soft)]">目前選擇：{selectedElement}</span>
+                        )}
+                      </div>
+                      <div
+                        className="grid gap-1"
+                        style={{ gridTemplateColumns: 'repeat(18, minmax(0, 1fr))' }}
+                      >
+                        {periodicTable.map(item => {
+                          const selected = selectedElement === item.symbol
+                          return (
+                            <button
+                              key={item.symbol}
+                              type="button"
+                              title={`${item.symbol} · ${item.name} · ${item.category_name_zh}${item.has_peaks ? '' : '（無峰資料）'}`}
+                              disabled={!item.has_peaks}
+                              onClick={() => setSelectedElement(item.symbol)}
+                              className={[
+                                'aspect-square min-h-[32px] rounded-lg border text-[10px] font-semibold transition-all pressable',
+                                item.has_peaks
+                                  ? 'text-[var(--text-main)] hover:-translate-y-0.5 hover:shadow-[var(--card-shadow-soft)]'
+                                  : 'cursor-not-allowed text-[var(--text-soft)] opacity-35',
+                                selected ? 'ring-2 ring-[var(--accent-strong)] ring-offset-1 ring-offset-transparent' : '',
+                              ].join(' ')}
+                              style={{
+                                gridColumn: item.col,
+                                gridRow: item.row,
+                                borderColor: item.has_peaks ? item.category_color : 'var(--card-border)',
+                                background: item.has_peaks
+                                  ? `color-mix(in srgb, ${item.category_color} 16%, var(--card-bg))`
+                                  : 'var(--card-ghost)',
+                              }}
+                            >
+                              {item.symbol}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <button type="button" onClick={addManualPeak}
                     className="w-full rounded-lg border border-dashed border-[var(--card-border)] py-2 text-xs text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)]"
                   >
@@ -999,7 +1267,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </div>
         )}
 
-        {!result && !isLoading && (
+        {rawFiles.length === 0 && !isLoading && (
           <div className="flex flex-1 flex-col items-center justify-center rounded-[28px] border border-dashed border-[var(--card-border)] bg-[var(--card-bg)] px-6 py-20 text-center">
             <div className="mb-4 text-5xl opacity-30">⚛</div>
             <p className="font-display text-xl tracking-wide text-[var(--text-main)]">XPS 分析</p>
@@ -1014,11 +1282,11 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </div>
         )}
 
-        {result && activeDataset && (
+        {rawFiles.length > 0 && (
           <>
-            {result.datasets.length > 1 && !params.average && (
+            {datasetTabs.length > 1 && !params.average && (
               <div className="mb-3 flex gap-2 flex-wrap">
-                {result.datasets.map((ds, idx) => (
+                {datasetTabs.map((ds, idx) => (
                   <button key={ds.name} type="button" onClick={() => setActiveDatasetIdx(idx)}
                     className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors',
                       idx === activeDatasetIdx ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
@@ -1030,37 +1298,93 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
-                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{result.datasets.length} 個</p>
+                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{rawFiles.length} 個</p>
               </div>
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">BE 範圍</p>
                 <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
-                  {beMin.toFixed(1)} – {beMax.toFixed(1)} eV
+                  {rawPreview ? `${Math.min(...rawPreview.x).toFixed(1)} – ${Math.max(...rawPreview.x).toFixed(1)} eV` : '—'}
                 </p>
               </div>
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">擬合峰數</p>
-                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{fitResult ? `${fitResult.peaks.length} 個` : '—'}</p>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">內插點數</p>
+                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">
+                  {params.interpolate || params.average ? `${effectiveNPoints} 點` : '未啟用'}
+                </p>
               </div>
             </div>
 
-            <div className="mb-3 flex flex-wrap items-center gap-4">
-              <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
-              {params.bg_enabled && <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />}
-            </div>
+            {rawChartTraces.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
+                <Plot
+                  data={rawChartTraces as Plotly.Data[]}
+                  layout={chartLayout() as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 340 }}
+                />
+              </div>
+            )}
 
-            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-              <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">
-                {activeDataset.name} — 光譜
-                {fitResult && <span className="ml-2 text-xs font-normal text-[var(--text-soft)]">（含擬合結果）</span>}
-              </p>
-              <Plot
-                data={(fitResult ? buildFitTraces(activeDataset, fitResult) : buildMainTraces(activeDataset, showRaw, showBg)) as Plotly.Data[]}
-                layout={chartLayout() as Plotly.Layout}
-                config={{ responsive: true, displayModeBar: false }}
-                style={{ width: '100%', height: 380 }}
-              />
-            </div>
+            {hasPreprocessStage && preprocessChartTraces.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">2. 內插 / 平均 / 校正後疊圖</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">這張圖把原始光譜和前處理後結果疊在一起，方便對照點數與能量軸變化。</p>
+                <Plot
+                  data={preprocessChartTraces as Plotly.Data[]}
+                  layout={chartLayout() as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 340 }}
+                />
+              </div>
+            )}
+
+            {hasBackgroundStage && backgroundChartTraces.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="mb-2 flex flex-wrap items-center gap-4">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">3. 背景扣除</p>
+                  <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
+                </div>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。</p>
+                <Plot
+                  data={(showBg ? backgroundChartTraces : backgroundChartTraces.filter(trace => trace.name !== '背景線')) as Plotly.Data[]}
+                  layout={backgroundLayout as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 340 }}
+                />
+              </div>
+            )}
+
+            {hasNormalizationStage && normalizationChartTraces.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">4. 歸一化</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。</p>
+                <Plot
+                  data={normalizationChartTraces as Plotly.Data[]}
+                  layout={normalizationLayout as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 340 }}
+                />
+              </div>
+            )}
+
+            {result && activeDataset && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="mb-2 flex flex-wrap items-center gap-4">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">
+                    最終處理光譜
+                    {fitResult && <span className="ml-2 text-xs font-normal text-[var(--text-soft)]">（含擬合結果）</span>}
+                  </p>
+                  <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
+                </div>
+                <Plot
+                  data={(fitResult ? buildFitTraces(activeDataset, fitResult) : buildMainTraces(activeDataset, showRaw, showBg)) as Plotly.Data[]}
+                  layout={chartLayout() as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 380 }}
+                />
+              </div>
+            )}
 
             {fitResult && fitResult.peaks.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
@@ -1090,7 +1414,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {xpsMode === 'valence_band' && vbmResult?.success && (
+            {xpsMode === 'valence_band' && vbmResult?.success && activeDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推</p>
                 <Plot
@@ -1201,40 +1525,41 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-              <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</p>
-              <div className="flex flex-wrap gap-2">
-                <ExportBtn label="處理後光譜 CSV" onClick={() => {
-                  const ds = activeDataset
-                  const headers = ['binding_energy_eV', 'intensity_raw', 'intensity_processed']
-                  const rows = ds.x.map((x, i) => [x, ds.y_raw[i], ds.y_processed[i]])
-                  downloadFile(toCsv(headers, rows), 'xps_processed.csv', 'text/csv')
-                }} />
-                {fitResult && fitResult.peaks.length > 0 && (
-                  <ExportBtn label="擬合結果 CSV" onClick={() => {
-                    const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']
-                    const rows: (string | number | null)[][] = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
-                    downloadFile(toCsv(headers, rows), 'xps_fit.csv', 'text/csv')
+            {activeDataset && (
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</p>
+                <div className="flex flex-wrap gap-2">
+                  <ExportBtn label="處理後光譜 CSV" onClick={() => {
+                    const headers = ['binding_energy_eV', 'intensity_raw', 'intensity_processed']
+                    const rows = activeDataset.x.map((x, i) => [x, activeDataset.y_raw[i], activeDataset.y_processed[i]])
+                    downloadFile(toCsv(headers, rows), 'xps_processed.csv', 'text/csv')
                   }} />
-                )}
-                {rsfRows.some(r => r.rsf != null) && fitResult && (
-                  <ExportBtn label="RSF 定量 CSV" onClick={() => {
-                    const totalRsfArea = rsfRows.reduce((acc, r, i) => {
-                      const a = fitResult.peaks[i]?.Area ?? 0
-                      return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
-                    }, 0)
-                    const headers = ['Peak', 'Element', 'Orbital', 'Area', 'RSF', 'RSF_Area', 'Atomic_pct']
-                    const rows: (string | number | null)[][] = rsfRows.map((row, idx) => {
-                      const pk = fitResult.peaks[idx]
-                      const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
-                      const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
-                      return [row.peakName, row.element, row.orbitalLabel, pk?.Area ?? 0, row.rsf, rsfArea, atomicPct]
-                    })
-                    downloadFile(toCsv(headers, rows), 'xps_rsf_quantification.csv', 'text/csv')
-                  }} />
-                )}
+                  {fitResult && fitResult.peaks.length > 0 && (
+                    <ExportBtn label="擬合結果 CSV" onClick={() => {
+                      const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']
+                      const rows: (string | number | null)[][] = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
+                      downloadFile(toCsv(headers, rows), 'xps_fit.csv', 'text/csv')
+                    }} />
+                  )}
+                  {rsfRows.some(r => r.rsf != null) && fitResult && (
+                    <ExportBtn label="RSF 定量 CSV" onClick={() => {
+                      const totalRsfArea = rsfRows.reduce((acc, r, i) => {
+                        const a = fitResult.peaks[i]?.Area ?? 0
+                        return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
+                      }, 0)
+                      const headers = ['Peak', 'Element', 'Orbital', 'Area', 'RSF', 'RSF_Area', 'Atomic_pct']
+                      const rows: (string | number | null)[][] = rsfRows.map((row, idx) => {
+                        const pk = fitResult.peaks[idx]
+                        const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
+                        const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
+                        return [row.peakName, row.element, row.orbitalLabel, pk?.Area ?? 0, row.rsf, rsfArea, atomicPct]
+                      })
+                      downloadFile(toCsv(headers, rows), 'xps_rsf_quantification.csv', 'text/csv')
+                    }} />
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </>
         )}
       </main>
