@@ -29,6 +29,52 @@ const INTERP_POINTS_MIN = 600
 const INTERP_POINTS_MAX = 2400
 const INTERP_POINTS_DEFAULT = 1000
 
+const LINE_COLOR_OPTIONS = [
+  { value: 'blue', label: 'Blue' },
+  { value: 'teal', label: 'Teal' },
+  { value: 'orange', label: 'Orange' },
+  { value: 'rose', label: 'Rose' },
+  { value: 'violet', label: 'Violet' },
+]
+
+const LINE_COLOR_PALETTES: Record<string, { primary: string; secondary: string; tertiary: string; accent: string; series: string[] }> = {
+  blue: {
+    primary: '#38bdf8',
+    secondary: '#94a3b8',
+    tertiary: '#f59e0b',
+    accent: '#14b8a6',
+    series: ['#38bdf8', '#94a3b8', '#60a5fa', '#818cf8', '#22d3ee', '#f59e0b', '#fb7185', '#f472b6'],
+  },
+  teal: {
+    primary: '#14b8a6',
+    secondary: '#9ca3af',
+    tertiary: '#f97316',
+    accent: '#2dd4bf',
+    series: ['#14b8a6', '#2dd4bf', '#5eead4', '#60a5fa', '#f59e0b', '#a78bfa', '#fb7185', '#84cc16'],
+  },
+  orange: {
+    primary: '#f97316',
+    secondary: '#94a3b8',
+    tertiary: '#facc15',
+    accent: '#fb923c',
+    series: ['#f97316', '#fb923c', '#facc15', '#38bdf8', '#818cf8', '#fb7185', '#2dd4bf', '#a3e635'],
+  },
+  rose: {
+    primary: '#fb7185',
+    secondary: '#94a3b8',
+    tertiary: '#f59e0b',
+    accent: '#f472b6',
+    series: ['#fb7185', '#f472b6', '#f9a8d4', '#38bdf8', '#f59e0b', '#2dd4bf', '#a78bfa', '#84cc16'],
+  },
+  violet: {
+    primary: '#a78bfa',
+    secondary: '#94a3b8',
+    tertiary: '#f59e0b',
+    accent: '#c084fc',
+    series: ['#a78bfa', '#c084fc', '#818cf8', '#38bdf8', '#2dd4bf', '#f59e0b', '#fb7185', '#a3e635'],
+  },
+}
+
 const DEFAULT_PARAMS: ProcessParams = {
   interpolate: false,
   n_points: 1000,
@@ -92,7 +138,8 @@ function estimateInterpolationPoints(files: ParsedFile[]) {
   return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
 }
 
-function buildRawFileTraces(files: ParsedFile[], activeIndex: number): Plotly.Data[] {
+function buildRawFileTraces(files: ParsedFile[], activeIndex: number, paletteKey: string): Plotly.Data[] {
+  const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
   return files.map((file, index) => ({
     x: file.x,
     y: file.y,
@@ -100,7 +147,7 @@ function buildRawFileTraces(files: ParsedFile[], activeIndex: number): Plotly.Da
     mode: 'lines',
     name: file.name,
     line: {
-      color: index === activeIndex ? '#94a3b8' : 'rgba(148,163,184,0.38)',
+      color: index === activeIndex ? palette.secondary : 'rgba(148,163,184,0.38)',
       width: index === activeIndex ? 1.8 : 1.1,
     },
     opacity: index === activeIndex ? 0.95 : 0.55,
@@ -111,8 +158,9 @@ function buildPipelineOverlayTraces(
   inputDataset: { x: number[]; y: number[]; name: string },
   outputDataset: { x: number[]; y: number[]; name: string },
   outputLabel: string,
-  outputColor = '#38bdf8',
+  paletteKey: string,
 ): Plotly.Data[] {
+  const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
   return [
     {
       x: inputDataset.x,
@@ -120,7 +168,7 @@ function buildPipelineOverlayTraces(
       type: 'scatter',
       mode: 'lines',
       name: inputDataset.name,
-      line: { color: '#94a3b8', width: 1.4 },
+      line: { color: palette.secondary, width: 1.4 },
       opacity: 0.8,
     },
     {
@@ -129,7 +177,7 @@ function buildPipelineOverlayTraces(
       type: 'scatter',
       mode: 'lines',
       name: outputLabel,
-      line: { color: outputColor, width: 2.1 },
+      line: { color: palette.primary, width: 2.1 },
     },
   ]
 }
@@ -213,29 +261,31 @@ function chartLayout(xReversed = true): Partial<Plotly.Layout> {
   }
 }
 
-function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean): Plotly.Data[] {
+function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean, paletteKey: string): Plotly.Data[] {
+  const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
   const traces: Plotly.Data[] = []
   if (showRaw) {
-    traces.push({ x: dataset.x, y: dataset.y_raw, type: 'scatter', mode: 'lines', name: '原始', line: { color: '#94a3b8', width: 1.4 } })
+    traces.push({ x: dataset.x, y: dataset.y_raw, type: 'scatter', mode: 'lines', name: '原始', line: { color: palette.secondary, width: 1.4 } })
   }
   if (showBg && dataset.y_background) {
-    traces.push({ x: dataset.x, y: dataset.y_background, type: 'scatter', mode: 'lines', name: '背景', line: { color: '#eab308', width: 1.3, dash: 'dot' } })
+    traces.push({ x: dataset.x, y: dataset.y_background, type: 'scatter', mode: 'lines', name: '背景', line: { color: palette.tertiary, width: 1.3, dash: 'dot' } })
   }
-  traces.push({ x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: '#38bdf8', width: 2.0 } })
+  traces.push({ x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: palette.primary, width: 2.0 } })
   return traces
 }
 
-function buildFitTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly.Data[] {
+function buildFitTraces(dataset: ProcessedDataset, fitResult: FitResult, paletteKey: string): Plotly.Data[] {
+  const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
   const traces: Plotly.Data[] = [
-    { x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '擬合輸入', line: { color: '#94a3b8', width: 1.4 } },
-    { x: dataset.x, y: fitResult.y_fit, type: 'scatter', mode: 'lines', name: '總擬合', line: { color: '#38bdf8', width: 2.2 } },
-    { x: dataset.x, y: fitResult.residuals, type: 'scatter', mode: 'lines', name: '殘差', line: { color: '#f97316', width: 1.2, dash: 'dot' }, opacity: 0.7 },
+    { x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '擬合輸入', line: { color: palette.secondary, width: 1.4 } },
+    { x: dataset.x, y: fitResult.y_fit, type: 'scatter', mode: 'lines', name: '總擬合', line: { color: palette.primary, width: 2.2 } },
+    { x: dataset.x, y: fitResult.residuals, type: 'scatter', mode: 'lines', name: '殘差', line: { color: palette.tertiary, width: 1.2, dash: 'dot' }, opacity: 0.7 },
   ]
   fitResult.y_individual.forEach((yLine, idx) => {
     const pk = fitResult.peaks[idx]
     traces.push({
       x: dataset.x, y: yLine, type: 'scatter', mode: 'lines',
-      name: pk?.Peak_Name || `Peak ${idx + 1}`, line: { width: 1.3 }, opacity: 0.8,
+      name: pk?.Peak_Name || `Peak ${idx + 1}`, line: { width: 1.3, color: palette.series[idx % palette.series.length] }, opacity: 0.8,
     })
   })
   return traces
@@ -398,6 +448,34 @@ function ExportBtn({ label, onClick }: { label: string; onClick: () => void }) {
   )
 }
 
+function ChartToolbar({
+  title,
+  colorValue,
+  onColorChange,
+}: {
+  title: string
+  colorValue: string
+  onColorChange: (value: string) => void
+}) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+      <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-soft)]">線色</span>
+        <select
+          value={colorValue}
+          onChange={e => onColorChange(e.target.value)}
+          className="rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-xs text-[var(--input-text)] focus:outline-none"
+        >
+          {LINE_COLOR_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  )
+}
+
 function createPeakId() { return `XP${Math.random().toString(36).slice(2, 7)}` }
 
 interface PeakCandidate extends InitPeak {
@@ -498,8 +576,8 @@ function getBundleDataset(bundle: DatasetPipelineBundle | null | undefined, inde
   return getStageDataset(bundle?.final, index, useAverage)
 }
 
-function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }[]): Plotly.Data[] {
-  const colors = ['#38bdf8', '#14b8a6', '#f59e0b', '#f97316', '#e879f9', '#a3e635', '#fb7185', '#60a5fa']
+function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }[], paletteKey: string): Plotly.Data[] {
+  const colors = (LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue).series
   return datasets.map((dataset, index) => ({
     x: dataset.x,
     y: dataset.y,
@@ -511,6 +589,30 @@ function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }
       width: 2,
     },
   }))
+}
+
+function getStageDisplayLabel(params: ProcessParams) {
+  const parts: string[] = []
+  if (params.interpolate) parts.push('內插')
+  if (params.average) parts.push('平均')
+  if (Math.abs(params.energy_shift) > 1e-8) parts.push('校正')
+  return parts.join(' / ')
+}
+
+function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], xLabel: string, yLabel: string) {
+  if (datasets.length === 0) return ''
+  const maxLen = Math.max(...datasets.map(dataset => Math.max(dataset.x.length, dataset.y.length)))
+  const headers = datasets.flatMap(dataset => [`${dataset.name}_${xLabel}`, `${dataset.name}_${yLabel}`])
+  const rows: (string | number | null)[][] = []
+  for (let i = 0; i < maxLen; i += 1) {
+    rows.push(
+      datasets.flatMap(dataset => [
+        dataset.x[i] ?? null,
+        dataset.y[i] ?? null,
+      ]),
+    )
+  }
+  return toCsv(headers, rows)
 }
 
 function getOverlayStageDatasets(stage: ProcessResult | null | undefined, useAverage: boolean) {
@@ -551,6 +653,14 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [overlaySelectorOpen, setOverlaySelectorOpen] = useState(false)
   const [overlayState, setOverlayState] = useState<OverlayProcessState>(createDefaultOverlayState)
   const [overlayBundle, setOverlayBundle] = useState<DatasetPipelineBundle | null>(null)
+  const [chartLineColors, setChartLineColors] = useState({
+    raw: 'blue',
+    preprocess: 'blue',
+    overlay: 'teal',
+    background: 'orange',
+    normalization: 'teal',
+    final: 'blue',
+  })
   const [parseLoading, setParseLoading] = useState(false)
   const [processingKeys, setProcessingKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -1254,6 +1364,23 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }
 
   const datasetTabs = rawFiles
+  const stageDisplayLabel = getStageDisplayLabel(currentParams)
+  const rawChartSourceFiles = processingViewMode === 'overlay'
+    ? overlayFiles
+    : (activeFile ? [activeFile] : [])
+  const rawStageDatasets = rawChartSourceFiles.map(file => ({ name: file.name, x: file.x, y: file.y }))
+  const preprocessStageDatasets = rawPreview && preprocessDataset
+    ? [{ name: preprocessDataset.name, x: preprocessDataset.x, y: preprocessDataset.y_processed }]
+    : []
+  const backgroundStageDatasets = backgroundDataset
+    ? [{ name: backgroundDataset.name, x: backgroundDataset.x, y: backgroundDataset.y_processed }]
+    : []
+  const normalizationStageDatasets = normalizationDataset
+    ? [{ name: normalizationDataset.name, x: normalizationDataset.x, y: normalizationDataset.y_processed }]
+    : []
+  const finalStageDatasets = processingViewMode === 'single' && activeDataset
+    ? [{ name: activeDataset.name, x: activeDataset.x, y: activeDataset.y_processed }]
+    : []
   const overlayFinalDatasets = getOverlayStageDatasets(overlayBundle?.final ?? null, overlayState.params.average)
   const overlayBackgroundDatasets = getOverlayStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
   const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
@@ -1268,15 +1395,13 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           ? { title: '多筆疊圖比較：最終處理後', description: '這裡疊的是各筆資料目前最新的處理結果。', datasets: overlayFinalDatasets }
           : null
   const isOverlayView = processingViewMode === 'overlay' && Boolean(overlayStage && overlaySelection.length >= 2)
-  const rawChartSourceFiles = processingViewMode === 'overlay'
-    ? overlayFiles
-    : (activeFile ? [activeFile] : [])
-  const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, 0)
+  const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, 0, chartLineColors.raw)
   const preprocessChartTraces = rawPreview && preprocessDataset
     ? buildPipelineOverlayTraces(
         { x: rawPreview.x, y: rawPreview.y, name: `${rawPreview.name} 原始` },
         { x: preprocessDataset.x, y: preprocessDataset.y_processed, name: `${preprocessDataset.name} 前處理` },
-        currentParams.average && preprocessResult?.average ? '平均 / 內插後' : '內插 / 校正後',
+        stageDisplayLabel ? `${stageDisplayLabel}後` : '前處理後',
+        chartLineColors.preprocess,
       )
     : []
   const backgroundChartTraces = backgroundDataset
@@ -1287,7 +1412,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           type: 'scatter',
           mode: 'lines',
           name: '背景扣除前',
-          line: { color: '#94a3b8', width: 1.4 },
+          line: { color: (LINE_COLOR_PALETTES[chartLineColors.background] ?? LINE_COLOR_PALETTES.orange).secondary, width: 1.4 },
           opacity: 0.82,
         },
         ...(backgroundDataset.y_background ? [{
@@ -1296,7 +1421,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           type: 'scatter' as const,
           mode: 'lines' as const,
           name: '背景線',
-          line: { color: '#f59e0b', width: 1.3, dash: 'dot' as const },
+          line: { color: (LINE_COLOR_PALETTES[chartLineColors.background] ?? LINE_COLOR_PALETTES.orange).tertiary, width: 1.3, dash: 'dot' as const },
         }] : []),
         {
           x: backgroundDataset.x,
@@ -1304,7 +1429,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           type: 'scatter',
           mode: 'lines',
           name: '背景扣除後',
-          line: { color: '#38bdf8', width: 2.1 },
+          line: { color: (LINE_COLOR_PALETTES[chartLineColors.background] ?? LINE_COLOR_PALETTES.orange).primary, width: 2.1 },
         },
       ]
     : []
@@ -1314,7 +1439,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         { x: normalizationInput.x, y: normalizationInput.y_processed, name: '歸一化前' },
         { x: normalizationDataset.x, y: normalizationDataset.y_processed, name: '歸一化後' },
         '歸一化後',
-        '#14b8a6',
+        chartLineColors.normalization,
       )
     : []
   const backgroundLayout = {
@@ -1574,7 +1699,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       { value: 'min_max', label: 'Min–Max' },
                       { value: 'max', label: 'Max' },
                       { value: 'area', label: 'Area' },
-                      { value: 'mean_region', label: '算術平均' },
+                      { value: 'mean_region', label: 'Mean Region' },
                     ]}
                   />
                   {(currentParams.norm_method === 'min_max' || currentParams.norm_method === 'max' || currentParams.norm_method === 'area' || currentParams.norm_method === 'mean_region') && (
@@ -1846,32 +1971,56 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
             {rawChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
+                <ChartToolbar
+                  title="1. 原始光譜"
+                  colorValue={chartLineColors.raw}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, raw: value }))}
+                />
                 <Plot
                   data={rawChartTraces as Plotly.Data[]}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
                 />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn
+                    label="下載此步驟 CSV"
+                    onClick={() => downloadFile(buildStageCsv(rawStageDatasets, 'binding_energy_eV', 'intensity_raw'), 'xps_raw_stage.csv', 'text/csv')}
+                  />
+                </div>
               </div>
             )}
 
             {overlayStage && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">{overlayStage.title}</p>
+                <ChartToolbar
+                  title={overlayStage.title}
+                  colorValue={chartLineColors.overlay}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
+                />
                 <p className="mb-3 text-xs text-[var(--text-soft)]">{overlayStage.description}</p>
                 <Plot
-                  data={buildOverlayTraces(overlayStage.datasets) as Plotly.Data[]}
+                  data={buildOverlayTraces(overlayStage.datasets, chartLineColors.overlay) as Plotly.Data[]}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
                 />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn
+                    label="下載此步驟 CSV"
+                    onClick={() => downloadFile(buildStageCsv(overlayStage.datasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_stage.csv', 'text/csv')}
+                  />
+                </div>
               </div>
             )}
 
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">2. 內插 / 平均 / 校正後疊圖</p>
+                <ChartToolbar
+                  title={`2. ${stageDisplayLabel || '前處理'}後疊圖`}
+                  colorValue={chartLineColors.preprocess}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
+                />
                 <p className="mb-3 text-xs text-[var(--text-soft)]">這張圖把原始光譜和前處理後結果疊在一起，方便對照點數與能量軸變化。</p>
                 <Plot
                   data={preprocessChartTraces as Plotly.Data[]}
@@ -1879,13 +2028,25 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
                 />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn
+                    label="下載此步驟 CSV"
+                    onClick={() => downloadFile(buildStageCsv(preprocessStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_preprocess_stage.csv', 'text/csv')}
+                  />
+                </div>
               </div>
             )}
 
             {processingViewMode === 'single' && hasBackgroundStage && backgroundChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <div className="mb-2 flex flex-wrap items-center gap-4">
-                  <p className="text-sm font-semibold text-[var(--text-main)]">3. 背景扣除</p>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <ChartToolbar
+                      title="3. 背景扣除"
+                      colorValue={chartLineColors.background}
+                      onColorChange={value => setChartLineColors(current => ({ ...current, background: value }))}
+                    />
+                  </div>
                   <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
                 </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。</p>
@@ -1895,12 +2056,22 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
                 />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn
+                    label="下載此步驟 CSV"
+                    onClick={() => downloadFile(buildStageCsv(backgroundStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_background_stage.csv', 'text/csv')}
+                  />
+                </div>
               </div>
             )}
 
             {processingViewMode === 'single' && hasNormalizationStage && normalizationChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">4. 歸一化</p>
+                <ChartToolbar
+                  title="4. 歸一化"
+                  colorValue={chartLineColors.normalization}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
+                />
                 <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。</p>
                 <Plot
                   data={normalizationChartTraces as Plotly.Data[]}
@@ -1908,24 +2079,39 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
                 />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn
+                    label="下載此步驟 CSV"
+                    onClick={() => downloadFile(buildStageCsv(normalizationStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_normalization_stage.csv', 'text/csv')}
+                  />
+                </div>
               </div>
             )}
 
             {processingViewMode === 'single' && result && activeDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <div className="mb-2 flex flex-wrap items-center gap-4">
-                  <p className="text-sm font-semibold text-[var(--text-main)]">
-                    最終處理光譜
-                    {fitResult && <span className="ml-2 text-xs font-normal text-[var(--text-soft)]">（含擬合結果）</span>}
-                  </p>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <ChartToolbar
+                      title={`最終處理光譜${fitResult ? '（含擬合結果）' : ''}`}
+                      colorValue={chartLineColors.final}
+                      onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
+                    />
+                  </div>
                   <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
                 </div>
                 <Plot
-                  data={(fitResult ? buildFitTraces(activeDataset, fitResult) : buildMainTraces(activeDataset, showRaw, showBg)) as Plotly.Data[]}
+                  data={(fitResult ? buildFitTraces(activeDataset, fitResult, chartLineColors.final) : buildMainTraces(activeDataset, showRaw, showBg, chartLineColors.final)) as Plotly.Data[]}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 380 }}
                 />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn
+                    label="下載此步驟 CSV"
+                    onClick={() => downloadFile(buildStageCsv(finalStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_final_stage.csv', 'text/csv')}
+                  />
+                </div>
               </div>
             )}
 
