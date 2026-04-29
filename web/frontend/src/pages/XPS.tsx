@@ -526,6 +526,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [datasetSessions, setDatasetSessions] = useState<Record<string, DatasetSessionState>>({})
   const [datasetBundles, setDatasetBundles] = useState<Record<string, DatasetPipelineBundle>>({})
   const [overlaySelection, setOverlaySelection] = useState<string[]>([])
+  const [overlayDraftSelection, setOverlayDraftSelection] = useState<string[]>([])
   const [overlaySelectorOpen, setOverlaySelectorOpen] = useState(false)
   const [parseLoading, setParseLoading] = useState(false)
   const [processingKeys, setProcessingKeys] = useState<string[]>([])
@@ -628,6 +629,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }, [datasetBundles])
 
   useEffect(() => {
+    if (overlaySelectorOpen) {
+      setOverlayDraftSelection(overlaySelection)
+    }
+  }, [overlaySelectorOpen, overlaySelection])
+
+  useEffect(() => {
     const nextKeys = new Set(rawFileKeys)
     setDatasetSessions(prev => {
       if (rawFileKeys.length === 0) return {}
@@ -721,105 +728,113 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       return merged.length === prev.length && merged.every((key, index) => key === prev[index]) ? prev : merged
     })
 
-    Promise.all(keysToProcess.map(async key => {
-      const index = rawFileKeys.indexOf(key)
-      const session = datasetSessions[key]
-      if (index < 0 || !session) return null
+    ;(async () => {
+      const results: Array<{ key: string; bundle: DatasetPipelineBundle; error?: string } | null> = []
 
-      const signature = buildSessionSignature(rawFiles, index, session)
-      const cachedBundle = datasetBundlesRef.current[key]
-      if (cachedBundle && cachedBundle.signature === signature) {
-        return { key, bundle: cachedBundle }
-      }
-
-      const datasets = buildDatasetsForSession(rawFiles, index, session)
-      if (datasets.length === 0) return null
-
-      const sessionNPoints = getSessionPointCount(rawFiles, session)
-      const sessionInterpolationEnabled = session.params.interpolate || session.params.average
-      const sessionHasPreprocessStage = sessionInterpolationEnabled || Math.abs(session.params.energy_shift) > 1e-8
-      const sessionHasBackgroundStage = session.params.bg_enabled
-      const sessionHasNormalizationStage = session.params.norm_method !== 'none'
-      const effectiveParams = { ...session.params, n_points: sessionNPoints }
-      const preprocessParams: ProcessParams = {
-        ...DEFAULT_PARAMS,
-        interpolate: sessionInterpolationEnabled,
-        n_points: sessionNPoints,
-        average: session.params.average,
-        energy_shift: session.params.energy_shift,
-      }
-      const backgroundParams: ProcessParams = {
-        ...preprocessParams,
-        bg_enabled: sessionHasBackgroundStage,
-        bg_method: session.params.bg_method,
-        bg_x_start: session.params.bg_x_start,
-        bg_x_end: session.params.bg_x_end,
-        bg_poly_deg: session.params.bg_poly_deg,
-        bg_baseline_lambda: session.params.bg_baseline_lambda,
-        bg_baseline_p: session.params.bg_baseline_p,
-        bg_baseline_iter: session.params.bg_baseline_iter,
-        bg_tougaard_B: session.params.bg_tougaard_B,
-        bg_tougaard_C: session.params.bg_tougaard_C,
-      }
-      const normalizationParams: ProcessParams = {
-        ...backgroundParams,
-        norm_method: session.params.norm_method,
-        norm_x_start: session.params.norm_x_start,
-        norm_x_end: session.params.norm_x_end,
-      }
-
-      try {
-        const [finalResult, preprocessStage, backgroundStage, normalizationStage] = await Promise.all([
-          processData(datasets, effectiveParams),
-          sessionHasPreprocessStage || sessionHasBackgroundStage || sessionHasNormalizationStage ? processData(datasets, preprocessParams) : Promise.resolve(null),
-          sessionHasBackgroundStage ? processData(datasets, backgroundParams) : Promise.resolve(null),
-          sessionHasNormalizationStage ? processData(datasets, normalizationParams) : Promise.resolve(null),
-        ])
-
-        return {
-          key,
-          bundle: {
-            final: finalResult,
-            preprocess: preprocessStage,
-            background: backgroundStage,
-            normalization: normalizationStage,
-            signature,
-            error: null,
-          } satisfies DatasetPipelineBundle,
-        }
-      } catch (sessionError: unknown) {
-        return {
-          key,
-          bundle: createEmptyBundle(signature),
-          error: String((sessionError as Error).message ?? sessionError),
-        }
-      }
-    }))
-      .then(results => {
+      for (const key of keysToProcess) {
         if (cancelled) return
-        setDatasetBundles(prev => {
-          let changed = false
-          const next = { ...prev }
-          results.forEach(item => {
-            if (!item) return
-            const nextBundle = item.error
-              ? { ...item.bundle, error: item.error }
-              : item.bundle
-            if (prev[item.key] !== nextBundle) {
-              next[item.key] = nextBundle
-              changed = true
-            }
+        const index = rawFileKeys.indexOf(key)
+        const session = datasetSessions[key]
+        if (index < 0 || !session) {
+          results.push(null)
+          continue
+        }
+
+        const signature = buildSessionSignature(rawFiles, index, session)
+        const cachedBundle = datasetBundlesRef.current[key]
+        if (cachedBundle && cachedBundle.signature === signature) {
+          results.push({ key, bundle: cachedBundle })
+          continue
+        }
+
+        const datasets = buildDatasetsForSession(rawFiles, index, session)
+        if (datasets.length === 0) {
+          results.push(null)
+          continue
+        }
+
+        const sessionNPoints = getSessionPointCount(rawFiles, session)
+        const sessionInterpolationEnabled = session.params.interpolate || session.params.average
+        const sessionHasPreprocessStage = sessionInterpolationEnabled || Math.abs(session.params.energy_shift) > 1e-8
+        const sessionHasBackgroundStage = session.params.bg_enabled
+        const sessionHasNormalizationStage = session.params.norm_method !== 'none'
+        const effectiveParams = { ...session.params, n_points: sessionNPoints }
+        const preprocessParams: ProcessParams = {
+          ...DEFAULT_PARAMS,
+          interpolate: sessionInterpolationEnabled,
+          n_points: sessionNPoints,
+          average: session.params.average,
+          energy_shift: session.params.energy_shift,
+        }
+        const backgroundParams: ProcessParams = {
+          ...preprocessParams,
+          bg_enabled: sessionHasBackgroundStage,
+          bg_method: session.params.bg_method,
+          bg_x_start: session.params.bg_x_start,
+          bg_x_end: session.params.bg_x_end,
+          bg_poly_deg: session.params.bg_poly_deg,
+          bg_baseline_lambda: session.params.bg_baseline_lambda,
+          bg_baseline_p: session.params.bg_baseline_p,
+          bg_baseline_iter: session.params.bg_baseline_iter,
+          bg_tougaard_B: session.params.bg_tougaard_B,
+          bg_tougaard_C: session.params.bg_tougaard_C,
+        }
+        const normalizationParams: ProcessParams = {
+          ...backgroundParams,
+          norm_method: session.params.norm_method,
+          norm_x_start: session.params.norm_x_start,
+          norm_x_end: session.params.norm_x_end,
+        }
+
+        try {
+          const [finalResult, preprocessStage, backgroundStage, normalizationStage] = await Promise.all([
+            processData(datasets, effectiveParams),
+            sessionHasPreprocessStage || sessionHasBackgroundStage || sessionHasNormalizationStage ? processData(datasets, preprocessParams) : Promise.resolve(null),
+            sessionHasBackgroundStage ? processData(datasets, backgroundParams) : Promise.resolve(null),
+            sessionHasNormalizationStage ? processData(datasets, normalizationParams) : Promise.resolve(null),
+          ])
+
+          results.push({
+            key,
+            bundle: {
+              final: finalResult,
+              preprocess: preprocessStage,
+              background: backgroundStage,
+              normalization: normalizationStage,
+              signature,
+              error: null,
+            } satisfies DatasetPipelineBundle,
           })
-          return changed ? next : prev
+        } catch (sessionError: unknown) {
+          results.push({
+            key,
+            bundle: createEmptyBundle(signature),
+            error: String((sessionError as Error).message ?? sessionError),
+          })
+        }
+      }
+
+      if (cancelled) return
+      setDatasetBundles(prev => {
+        let changed = false
+        const next = { ...prev }
+        results.forEach(item => {
+          if (!item) return
+          const nextBundle = item.error
+            ? { ...item.bundle, error: item.error }
+            : item.bundle
+          if (prev[item.key] !== nextBundle) {
+            next[item.key] = nextBundle
+            changed = true
+          }
         })
+        return changed ? next : prev
       })
-      .finally(() => {
-        if (cancelled) return
-        setProcessingKeys(prev => {
-          const next = prev.filter(key => !keysToProcess.includes(key))
-          return next.length === prev.length ? prev : next
-        })
+      setProcessingKeys(prev => {
+        const next = prev.filter(key => !keysToProcess.includes(key))
+        return next.length === prev.length ? prev : next
       })
+    })()
 
     return () => { cancelled = true }
   }, [rawFiles, rawFileKeys, datasetSessions, activeDatasetKey, overlaySelection])
@@ -1931,7 +1946,10 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
               <button
                 type="button"
-                onClick={() => setOverlaySelectorOpen(false)}
+                onClick={() => {
+                  setOverlayDraftSelection(overlaySelection)
+                  setOverlaySelectorOpen(false)
+                }}
                 className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs text-[var(--text-soft)] hover:text-[var(--text-main)] pressable"
               >
                 關閉
@@ -1941,37 +1959,37 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setOverlaySelection(rawFileKeys)}
+                  onClick={() => setOverlayDraftSelection(rawFileKeys)}
                   className="rounded-full border border-[var(--card-border)] px-3 py-1 text-xs text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--text-main)] pressable"
                 >
                   全選
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOverlaySelection([])}
+                  onClick={() => setOverlayDraftSelection([])}
                   className="rounded-full border border-[var(--card-border)] px-3 py-1 text-xs text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--text-main)] pressable"
                 >
                   清空
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOverlaySelection(activeDatasetKey ? [activeDatasetKey] : [])}
+                  onClick={() => setOverlayDraftSelection(activeDatasetKey ? [activeDatasetKey] : [])}
                   className="rounded-full border border-[var(--card-border)] px-3 py-1 text-xs text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--text-main)] pressable"
                 >
                   只留目前
                 </button>
-                <span className="ml-auto text-xs text-[var(--text-soft)]">目前已選 {overlaySelection.length} / {rawFiles.length} 筆</span>
+                <span className="ml-auto text-xs text-[var(--text-soft)]">目前已選 {overlayDraftSelection.length} / {rawFiles.length} 筆</span>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {rawFiles.map((file, index) => {
                   const key = getDatasetKey(file, index)
-                  const checked = overlaySelection.includes(key)
+                  const checked = overlayDraftSelection.includes(key)
                   return (
                     <button
                       key={key}
                       type="button"
                       onClick={() => {
-                        setOverlaySelection(current => (
+                        setOverlayDraftSelection(current => (
                           current.includes(key)
                             ? current.filter(item => item !== key)
                             : [...current, key]
@@ -2001,6 +2019,28 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     </button>
                   )
                 })}
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-[var(--card-divider)] pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOverlayDraftSelection(overlaySelection)
+                    setOverlaySelectorOpen(false)
+                  }}
+                  className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs text-[var(--text-soft)] hover:text-[var(--text-main)] pressable"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOverlaySelection(overlayDraftSelection)
+                    setOverlaySelectorOpen(false)
+                  }}
+                  className="rounded-full bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[var(--accent-contrast)] hover:opacity-90 pressable"
+                >
+                  套用疊圖選擇
+                </button>
               </div>
               <p className="text-xs text-[var(--text-soft)]">每一筆資料都會沿用自己左欄保存的內插、背景扣除、歸一化等設定，不會強制共用同一組參數。</p>
             </div>

@@ -476,6 +476,38 @@ type WorkspaceId =
 
 ---
 
+## XPS 疊圖選取卡死修正（2026-04-29, 續）
+
+### 問題原因
+- `web/frontend/src/pages/XPS.tsx`
+  - 疊圖選擇原本是即時寫入 `overlaySelection`
+  - 使用者在 modal 內每勾一筆，就會立刻觸發 processing effect
+  - 若一次要選很多筆，例如 30~50 筆，等於在勾選過程中連續重算大量 session
+  - 很容易讓前端卡住，看起來像整頁崩潰
+
+### 修正
+- 新增 `overlayDraftSelection`
+  - modal 內勾選只改草稿，不直接動到真正的 `overlaySelection`
+  - 按 `套用疊圖選擇` 才一次提交
+  - `取消 / 關閉` 則丟棄草稿，保留原本已套用的疊圖清單
+- modal 內的：
+  - `全選`
+  - `清空`
+  - `只留目前`
+  也全部改成只操作草稿
+
+### 背景處理節流
+- 將疊圖相關 session 的處理從 `Promise.all(keysToProcess.map(...))`
+  改成逐筆排隊執行
+- 目的：
+  - 避免一次對很多資料同時開大量 `/api/xps/process` 請求
+  - 降低前端和後端同時被壓爆的風險
+
+### 驗證
+- `npm run build`：通過
+
+---
+
 ## XPS 回歸修正與上傳文案調整（2026-04-29, 續）
 
 ### 修正：中間欄上方資料列消失
