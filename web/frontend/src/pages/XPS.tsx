@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import AnalysisModuleNav from '../components/AnalysisModuleNav'
@@ -412,9 +412,94 @@ interface PeakCandidate extends InitPeak {
   enabled: boolean
 }
 
+interface DatasetSessionState {
+  params: ProcessParams
+  autoInterpPoints: boolean
+  manualEnergyShiftEnabled: boolean
+  selectedElement: string
+  fitProfile: string
+  peakCandidates: PeakCandidate[]
+  fitResult: FitResult | null
+  rsfRows: { peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]
+}
+
+interface DatasetPipelineBundle {
+  final: ProcessResult | null
+  preprocess: ProcessResult | null
+  background: ProcessResult | null
+  normalization: ProcessResult | null
+  signature: string
+  error: string | null
+}
+
+function getDatasetKey(file: ParsedFile, index: number) {
+  return `${index}::${file.name}`
+}
+
+function createDefaultSession(): DatasetSessionState {
+  return {
+    params: { ...DEFAULT_PARAMS },
+    autoInterpPoints: true,
+    manualEnergyShiftEnabled: false,
+    selectedElement: '',
+    fitProfile: 'voigt',
+    peakCandidates: [],
+    fitResult: null,
+    rsfRows: [],
+  }
+}
+
+function createEmptyBundle(signature = ''): DatasetPipelineBundle {
+  return {
+    final: null,
+    preprocess: null,
+    background: null,
+    normalization: null,
+    signature,
+    error: null,
+  }
+}
+
+function getSessionPointCount(files: ParsedFile[], session: DatasetSessionState) {
+  return session.autoInterpPoints ? estimateInterpolationPoints(files) : session.params.n_points
+}
+
+function buildSessionSignature(files: ParsedFile[], index: number, session: DatasetSessionState) {
+  return JSON.stringify({
+    file: files[index]?.name ?? '',
+    points: files.map(file => file.x.length),
+    params: session.params,
+    autoInterpPoints: session.autoInterpPoints,
+    effectiveNPoints: getSessionPointCount(files, session),
+  })
+}
+
+function getBundleDataset(bundle: DatasetPipelineBundle | null | undefined, index: number, useAverage: boolean) {
+  if (!bundle) return null
+  return pickDataset(bundle.final, index, useAverage)
+}
+
+function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }[]): Plotly.Data[] {
+  const colors = ['#38bdf8', '#14b8a6', '#f59e0b', '#f97316', '#e879f9', '#a3e635', '#fb7185', '#60a5fa']
+  return datasets.map((dataset, index) => ({
+    x: dataset.x,
+    y: dataset.y,
+    type: 'scatter',
+    mode: 'lines',
+    name: dataset.name,
+    line: {
+      color: colors[index % colors.length],
+      width: 2,
+    },
+  }))
+}
+
 // ── main component ────────────────────────────────────────────────────────────
 
 export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
+  const restoringSessionRef = useRef(false)
+  const lastLoadedSessionKeyRef = useRef<string | null>(null)
+
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = Number(localStorage.getItem('nigiro-xps-sidebar-width'))
     return Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH ? saved : SIDEBAR_DEFAULT_WIDTH
@@ -429,7 +514,11 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [preprocessResult, setPreprocessResult] = useState<ProcessResult | null>(null)
   const [backgroundResult, setBackgroundResult] = useState<ProcessResult | null>(null)
   const [normalizationResult, setNormalizationResult] = useState<ProcessResult | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const [datasetSessions, setDatasetSessions] = useState<Record<string, DatasetSessionState>>({})
+  const [datasetBundles, setDatasetBundles] = useState<Record<string, DatasetPipelineBundle>>({})
+  const [overlaySelection, setOverlaySelection] = useState<string[]>([])
+  const [parseLoading, setParseLoading] = useState(false)
+  const [processingKeys, setProcessingKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [autoInterpPoints, setAutoInterpPoints] = useState(true)
 
@@ -491,6 +580,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [rsfLoading, setRsfLoading] = useState(false)
   const [rsfError, setRsfError] = useState<string | null>(null)
 
+  const rawFileKeys = rawFiles.map((file, index) => getDatasetKey(file, index))
+  const activeFile = rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null
+  const activeDatasetKey = activeFile ? getDatasetKey(activeFile, activeDatasetIdx) : null
+  const activeSession = activeDatasetKey ? datasetSessions[activeDatasetKey] : null
+  const isLoading = parseLoading || (activeDatasetKey ? processingKeys.includes(activeDatasetKey) : false)
+
   const activeDataset = result
     ? (result.average && params.average ? result.average : result.datasets[activeDatasetIdx] ?? null)
     : null
@@ -509,7 +604,96 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const hasNormalizationStage = params.norm_method !== 'none'
   const rawPreview = rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null
 
-  // process when files or params change
+  const overlayEntries = overlaySelection
+    .map(key => {
+      const index = rawFileKeys.indexOf(key)
+      if (index < 0) return null
+      const file = rawFiles[index]
+      const session = datasetSessions[key]
+      const bundle = datasetBundles[key]
+      if (!file || !session || !bundle) return null
+      return { key, index, file, session, bundle }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry != null)
+
+  useEffect(() => {
+    const nextKeys = new Set(rawFileKeys)
+    setDatasetSessions(prev => {
+      if (rawFileKeys.length === 0) return {}
+      const next: Record<string, DatasetSessionState> = {}
+      rawFiles.forEach((file, index) => {
+        const key = getDatasetKey(file, index)
+        next[key] = prev[key] ?? createDefaultSession()
+      })
+      return next
+    })
+    setDatasetBundles(prev => {
+      if (rawFileKeys.length === 0) return {}
+      const next: Record<string, DatasetPipelineBundle> = {}
+      Object.entries(prev).forEach(([key, bundle]) => {
+        if (nextKeys.has(key)) next[key] = bundle
+      })
+      return next
+    })
+    setOverlaySelection(prev => prev.filter(key => nextKeys.has(key)))
+    if (rawFiles.length === 0) {
+      lastLoadedSessionKeyRef.current = null
+      setResult(null)
+      setPreprocessResult(null)
+      setBackgroundResult(null)
+      setNormalizationResult(null)
+      setError(null)
+    }
+  }, [rawFiles])
+
+  useEffect(() => {
+    if (!activeDatasetKey) {
+      lastLoadedSessionKeyRef.current = null
+      return
+    }
+    const session = datasetSessions[activeDatasetKey]
+    if (!session) return
+    if (lastLoadedSessionKeyRef.current === activeDatasetKey) return
+    restoringSessionRef.current = true
+    lastLoadedSessionKeyRef.current = activeDatasetKey
+    setParams({ ...session.params })
+    setAutoInterpPoints(session.autoInterpPoints)
+    setManualEnergyShiftEnabled(session.manualEnergyShiftEnabled)
+    setSelectedElement(session.selectedElement)
+    setFitProfile(session.fitProfile)
+    setPeakCandidates(session.peakCandidates)
+    setFitResult(session.fitResult)
+    setRsfRows(session.rsfRows)
+    window.setTimeout(() => {
+      restoringSessionRef.current = false
+    }, 0)
+  }, [activeDatasetKey, datasetSessions])
+
+  useEffect(() => {
+    if (!activeDatasetKey || restoringSessionRef.current) return
+    setDatasetSessions(prev => ({
+      ...prev,
+      [activeDatasetKey]: {
+        params,
+        autoInterpPoints,
+        manualEnergyShiftEnabled,
+        selectedElement,
+        fitProfile,
+        peakCandidates,
+        fitResult,
+        rsfRows,
+      },
+    }))
+  }, [activeDatasetKey, params, autoInterpPoints, manualEnergyShiftEnabled, selectedElement, fitProfile, peakCandidates, fitResult, rsfRows])
+
+  useEffect(() => {
+    if (!activeDatasetKey) return
+    if (restoringSessionRef.current) return
+    if (fitResult) setFitResult(null)
+    if (rsfRows.length > 0) setRsfRows([])
+  }, [activeDatasetKey, params, autoInterpPoints, fitResult, rsfRows])
+
+  // process active dataset and selected overlays
   useEffect(() => {
     if (rawFiles.length === 0) {
       setResult(null)
@@ -518,56 +702,132 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       setNormalizationResult(null)
       return
     }
+    const keysToProcess = Array.from(new Set([activeDatasetKey, ...overlaySelection].filter((key): key is string => Boolean(key))))
+    if (keysToProcess.length === 0) return
     let cancelled = false
-    setIsLoading(true); setError(null)
     const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, y: f.y }))
-    const effectiveParams = { ...params, n_points: effectiveNPoints }
-    const preprocessParams: ProcessParams = {
-      ...DEFAULT_PARAMS,
-      interpolate: interpolationEnabled,
-      n_points: effectiveNPoints,
-      average: params.average,
-      energy_shift: params.energy_shift,
-    }
-    const backgroundParams: ProcessParams = {
-      ...preprocessParams,
-      bg_enabled: hasBackgroundStage,
-      bg_method: params.bg_method,
-      bg_x_start: params.bg_x_start,
-      bg_x_end: params.bg_x_end,
-      bg_poly_deg: params.bg_poly_deg,
-      bg_baseline_lambda: params.bg_baseline_lambda,
-      bg_baseline_p: params.bg_baseline_p,
-      bg_baseline_iter: params.bg_baseline_iter,
-      bg_tougaard_B: params.bg_tougaard_B,
-      bg_tougaard_C: params.bg_tougaard_C,
-    }
-    const normalizationParams: ProcessParams = {
-      ...backgroundParams,
-      norm_method: params.norm_method,
-      norm_x_start: params.norm_x_start,
-      norm_x_end: params.norm_x_end,
-    }
 
-    Promise.all([
-      processData(datasets, effectiveParams),
-      hasPreprocessStage || hasBackgroundStage || hasNormalizationStage ? processData(datasets, preprocessParams) : Promise.resolve(null),
-      hasBackgroundStage ? processData(datasets, backgroundParams) : Promise.resolve(null),
-      hasNormalizationStage ? processData(datasets, normalizationParams) : Promise.resolve(null),
-    ])
-      .then(([finalResult, preprocessStage, backgroundStage, normalizationStage]) => {
-        if (!cancelled) {
-          setResult(finalResult)
-          setPreprocessResult(preprocessStage)
-          setBackgroundResult(backgroundStage)
-          setNormalizationResult(normalizationStage)
-          setFitResult(null)
+    setProcessingKeys(prev => {
+      const merged = Array.from(new Set([...prev, ...keysToProcess]))
+      return merged.length === prev.length && merged.every((key, index) => key === prev[index]) ? prev : merged
+    })
+
+    Promise.all(keysToProcess.map(async key => {
+      const index = rawFileKeys.indexOf(key)
+      const session = datasetSessions[key]
+      if (index < 0 || !session) return null
+
+      const signature = buildSessionSignature(rawFiles, index, session)
+      const cachedBundle = datasetBundles[key]
+      if (cachedBundle && cachedBundle.signature === signature) {
+        return { key, bundle: cachedBundle }
+      }
+
+      const sessionNPoints = getSessionPointCount(rawFiles, session)
+      const sessionInterpolationEnabled = session.params.interpolate || session.params.average
+      const sessionHasPreprocessStage = sessionInterpolationEnabled || Math.abs(session.params.energy_shift) > 1e-8
+      const sessionHasBackgroundStage = session.params.bg_enabled
+      const sessionHasNormalizationStage = session.params.norm_method !== 'none'
+      const effectiveParams = { ...session.params, n_points: sessionNPoints }
+      const preprocessParams: ProcessParams = {
+        ...DEFAULT_PARAMS,
+        interpolate: sessionInterpolationEnabled,
+        n_points: sessionNPoints,
+        average: session.params.average,
+        energy_shift: session.params.energy_shift,
+      }
+      const backgroundParams: ProcessParams = {
+        ...preprocessParams,
+        bg_enabled: sessionHasBackgroundStage,
+        bg_method: session.params.bg_method,
+        bg_x_start: session.params.bg_x_start,
+        bg_x_end: session.params.bg_x_end,
+        bg_poly_deg: session.params.bg_poly_deg,
+        bg_baseline_lambda: session.params.bg_baseline_lambda,
+        bg_baseline_p: session.params.bg_baseline_p,
+        bg_baseline_iter: session.params.bg_baseline_iter,
+        bg_tougaard_B: session.params.bg_tougaard_B,
+        bg_tougaard_C: session.params.bg_tougaard_C,
+      }
+      const normalizationParams: ProcessParams = {
+        ...backgroundParams,
+        norm_method: session.params.norm_method,
+        norm_x_start: session.params.norm_x_start,
+        norm_x_end: session.params.norm_x_end,
+      }
+
+      try {
+        const [finalResult, preprocessStage, backgroundStage, normalizationStage] = await Promise.all([
+          processData(datasets, effectiveParams),
+          sessionHasPreprocessStage || sessionHasBackgroundStage || sessionHasNormalizationStage ? processData(datasets, preprocessParams) : Promise.resolve(null),
+          sessionHasBackgroundStage ? processData(datasets, backgroundParams) : Promise.resolve(null),
+          sessionHasNormalizationStage ? processData(datasets, normalizationParams) : Promise.resolve(null),
+        ])
+
+        return {
+          key,
+          bundle: {
+            final: finalResult,
+            preprocess: preprocessStage,
+            background: backgroundStage,
+            normalization: normalizationStage,
+            signature,
+            error: null,
+          } satisfies DatasetPipelineBundle,
         }
+      } catch (sessionError: unknown) {
+        return {
+          key,
+          bundle: createEmptyBundle(signature),
+          error: String((sessionError as Error).message ?? sessionError),
+        }
+      }
+    }))
+      .then(results => {
+        if (cancelled) return
+        setDatasetBundles(prev => {
+          let changed = false
+          const next = { ...prev }
+          results.forEach(item => {
+            if (!item) return
+            const nextBundle = item.error
+              ? { ...item.bundle, error: item.error }
+              : item.bundle
+            if (prev[item.key] !== nextBundle) {
+              next[item.key] = nextBundle
+              changed = true
+            }
+          })
+          return changed ? next : prev
+        })
       })
-      .catch(e => { if (!cancelled) setError(String(e.message)) })
-      .finally(() => { if (!cancelled) setIsLoading(false) })
+      .finally(() => {
+        if (cancelled) return
+        setProcessingKeys(prev => {
+          const next = prev.filter(key => !keysToProcess.includes(key))
+          return next.length === prev.length ? prev : next
+        })
+      })
+
     return () => { cancelled = true }
-  }, [rawFiles, params, effectiveNPoints, interpolationEnabled, hasPreprocessStage, hasBackgroundStage, hasNormalizationStage])
+  }, [rawFiles, rawFileKeys, datasetSessions, datasetBundles, activeDatasetKey, overlaySelection])
+
+  useEffect(() => {
+    if (!activeDatasetKey) {
+      setResult(null)
+      setPreprocessResult(null)
+      setBackgroundResult(null)
+      setNormalizationResult(null)
+      setError(null)
+      return
+    }
+    const bundle = datasetBundles[activeDatasetKey]
+    setResult(bundle?.final ?? null)
+    setPreprocessResult(bundle?.preprocess ?? null)
+    setBackgroundResult(bundle?.background ?? null)
+    setNormalizationResult(bundle?.normalization ?? null)
+    setError(bundle?.error ?? null)
+  }, [activeDatasetKey, datasetBundles])
 
   // load elements list on mount
   useEffect(() => {
@@ -630,14 +890,27 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }, [sidebarWidth])
 
   const handleFiles = useCallback(async (files: File[]) => {
-    setIsLoading(true); setError(null)
+    setParseLoading(true)
+    setError(null)
     try {
       const res = await parseFiles(files)
-      if (res.errors.length) setError(res.errors.join('; '))
-      setRawFiles(res.files)
+      const nextFiles = res.files
+      const nextSessions: Record<string, DatasetSessionState> = {}
+      nextFiles.forEach((file, index) => {
+        nextSessions[getDatasetKey(file, index)] = createDefaultSession()
+      })
+      lastLoadedSessionKeyRef.current = null
+      setDatasetSessions(nextSessions)
+      setDatasetBundles({})
+      setOverlaySelection([])
+      setRawFiles(nextFiles)
       setActiveDatasetIdx(0)
-    } catch (e: unknown) { setError((e as Error).message) }
-    finally { setIsLoading(false) }
+      if (res.errors.length) setError(res.errors.join('; '))
+    } catch (e: unknown) {
+      setError((e as Error).message)
+    } finally {
+      setParseLoading(false)
+    }
   }, [])
 
   const handleStandardFiles = useCallback(async (files: File[]) => {
@@ -776,6 +1049,46 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   }
 
   const datasetTabs = result?.datasets ?? rawFiles
+  const overlayFinalDatasets = overlayEntries
+    .map(entry => {
+      const dataset = getBundleDataset(entry.bundle, entry.index, entry.session.params.average)
+      if (!dataset) return null
+      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null)
+  const overlayBackgroundDatasets = overlayEntries
+    .filter(entry => entry.session.params.bg_enabled)
+    .map(entry => {
+      const dataset = pickDataset(entry.bundle.background, entry.index, entry.session.params.average)
+      if (!dataset) return null
+      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null)
+  const overlayNormalizationDatasets = overlayEntries
+    .filter(entry => entry.session.params.norm_method !== 'none')
+    .map(entry => {
+      const dataset = pickDataset(entry.bundle.normalization, entry.index, entry.session.params.average)
+      if (!dataset) return null
+      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null)
+  const overlayPreprocessDatasets = overlayEntries
+    .filter(entry => (entry.session.params.interpolate || entry.session.params.average || Math.abs(entry.session.params.energy_shift) > 1e-8))
+    .map(entry => {
+      const dataset = pickDataset(entry.bundle.preprocess, entry.index, entry.session.params.average)
+      if (!dataset) return null
+      return { name: entry.file.name, x: dataset.x, y: dataset.y_processed }
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null)
+  const overlayStage = overlayNormalizationDatasets.length >= 2
+    ? { title: '多筆疊圖比較：歸一化後', description: '這裡疊的是各筆資料經過各自設定的歸一化結果。', datasets: overlayNormalizationDatasets }
+    : overlayBackgroundDatasets.length >= 2
+      ? { title: '多筆疊圖比較：背景扣除後', description: '這裡疊的是各筆資料經過各自設定的背景扣除結果。', datasets: overlayBackgroundDatasets }
+      : overlayPreprocessDatasets.length >= 2
+        ? { title: '多筆疊圖比較：內插 / 平均 / 校正後', description: '這裡疊的是各筆資料在進入背景扣除前的前處理結果。', datasets: overlayPreprocessDatasets }
+        : overlayFinalDatasets.length >= 2
+          ? { title: '多筆疊圖比較：最終處理後', description: '這裡疊的是各筆資料目前最新的處理結果。', datasets: overlayFinalDatasets }
+          : null
   const rawChartTraces = buildRawFileTraces(rawFiles, activeDatasetIdx)
   const preprocessChartTraces = rawPreview && preprocessDataset
     ? buildPipelineOverlayTraces(
@@ -1282,14 +1595,68 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
         {rawFiles.length > 0 && (
           <>
-            {datasetTabs.length > 1 && !params.average && (
-              <div className="mb-3 flex gap-2 flex-wrap">
-                {datasetTabs.map((ds, idx) => (
-                  <button key={ds.name} type="button" onClick={() => setActiveDatasetIdx(idx)}
-                    className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-                      idx === activeDatasetIdx ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
-                  >{ds.name}</button>
-                ))}
+            {datasetTabs.length > 1 && (
+              <div className="mb-4 space-y-3 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div>
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
+                  <div className="flex flex-wrap gap-2">
+                    {datasetTabs.map((ds, idx) => (
+                      <button key={ds.name} type="button" onClick={() => setActiveDatasetIdx(idx)}
+                        className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
+                          idx === activeDatasetIdx ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
+                      >{ds.name}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">多筆疊圖比較</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setOverlaySelection(rawFileKeys)}
+                        className="text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]"
+                      >
+                        全選
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOverlaySelection(activeDatasetKey ? [activeDatasetKey] : [])}
+                        className="text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]"
+                      >
+                        只看目前
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {rawFiles.map((file, index) => {
+                      const key = getDatasetKey(file, index)
+                      const checked = overlaySelection.includes(key)
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => {
+                            setOverlaySelection(current => (
+                              current.includes(key)
+                                ? current.filter(item => item !== key)
+                                : [...current, key]
+                            ))
+                          }}
+                          className={[
+                            'rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
+                            checked
+                              ? 'border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] text-[var(--text-main)]'
+                              : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
+                          ].join(' ')}
+                        >
+                          {file.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="mt-2 text-[10px] text-[var(--text-soft)]">每一筆資料都保留自己的左欄設定；疊圖時會把各自目前的處理結果疊在同一張圖上。</p>
+                </div>
               </div>
             )}
 
@@ -1317,6 +1684,19 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
                 <Plot
                   data={rawChartTraces as Plotly.Data[]}
+                  layout={chartLayout() as Plotly.Layout}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 340 }}
+                />
+              </div>
+            )}
+
+            {overlayStage && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">{overlayStage.title}</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">{overlayStage.description}</p>
+                <Plot
+                  data={buildOverlayTraces(overlayStage.datasets) as Plotly.Data[]}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}

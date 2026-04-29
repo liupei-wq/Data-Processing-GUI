@@ -473,7 +473,83 @@ type WorkspaceId =
 
 ### 驗證
 - `npm run build`：通過
+
+---
+
+## XPS 分析模組下拉縮小（2026-04-29, 續）
+
+### 左上角感應式分析模組入口
+- `web/frontend/src/components/AnalysisModuleNav.tsx`
+  - 保留 `mode="dropdown"` 的感應式展開邏輯
+  - 但把原本太大的整塊卡片改成小型浮出式入口
+- 調整內容：
+  - 移除原本大張的 `XPS + 全稱` 顯示方式
+  - 改成只顯示：
+    - `分析模組`
+    - 目前模組縮寫（例如 `XPS`）
+  - 整體高度與 padding 縮小
+  - 左側加一小段凸出的 tab 視覺，讓它看起來是掛在左上角欄位邊緣
+  - dropdown 展開面板保留，但 item 文字細節再縮一點
+- 目的：
+  - 在側欄往下捲動時，頂部保留一個小型且不擋畫面的模組切換入口
+  - 不再像原本那樣吃掉一整塊空間
+
+### 驗證
+- `npm run build`：通過
 - `python3 -m py_compile web/backend/main.py web/backend/routers/xps.py`：通過
+
+---
+
+## XPS 中間欄多筆疊圖與單筆記憶（2026-04-29, 續）
+
+### 單筆資料各自保存流程設定
+- `web/frontend/src/pages/XPS.tsx`
+  - 新增 `datasetSessions`，以 `index::fileName` 為 key 保存每一筆資料自己的：
+    - `params`
+    - `autoInterpPoints`
+    - `manualEnergyShiftEnabled`
+    - `selectedElement`
+    - `fitProfile`
+    - `peakCandidates`
+    - `fitResult`
+    - `rsfRows`
+- 切換上方單筆資料按鈕時：
+  - 左欄會載入該筆資料自己之前調過的內容
+  - 不再把第一筆的背景扣除 / 歸一化 / 能量位移同步套到第二筆
+- 切回前一筆資料時：
+  - 原本的左欄設定與已完成的峰擬合結果會保留
+
+### 中間欄新增多筆疊圖選擇
+- 上方資料列改成兩段：
+  - `單筆資料處理`：維持一次只切一筆來細調
+  - `多筆疊圖比較`：可多選資料做疊圖
+- 多筆疊圖區新增：
+  - 各資料 toggle chip
+  - `全選`
+  - `只看目前`
+- 疊圖說明明確標示：
+  - 每筆資料都使用各自目前保存的流程參數
+  - 疊圖不是共用一套左欄設定強壓到全部資料
+
+### 中間欄疊圖顯示邏輯
+- 新增 `datasetBundles`，為每筆資料分別快取：
+  - `final`
+  - `preprocess`
+  - `background`
+  - `normalization`
+- 會依每筆資料自己的流程設定自動挑選最合適的疊圖層級：
+  - 優先顯示 `歸一化後`
+  - 否則顯示 `背景扣除後`
+  - 否則顯示 `內插 / 平均 / 校正後`
+  - 最後才退回 `最終處理後`
+- 中間欄會出現一張新的 `多筆疊圖比較` 卡片，用同一張圖疊多筆光譜
+
+### 其他細節
+- 切換資料時避免把剛恢復的 `fitResult` 立即清掉，補上 session restore guard
+- 前端 build 驗證維持通過
+
+### 驗證
+- `npm run build`：通過
 
 ---
 

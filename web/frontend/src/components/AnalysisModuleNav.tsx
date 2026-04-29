@@ -26,25 +26,25 @@ export default function AnalysisModuleNav({ activeModule, onSelectModule, mode =
     const activeInfo = ANALYSIS_MODULES.find(module => module.id === activeModule) ?? ANALYSIS_MODULES[0]
     return (
       <div
-        className="sticky top-0 z-20 border-b border-[var(--card-divider)] bg-[var(--panel-bg)]/95 px-4 pb-3 pt-4 backdrop-blur"
+        className="sticky top-2 z-20 px-3 pb-2 pt-2"
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
       >
         <div className="relative">
-          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模組</span>
+          <div className="pointer-events-none absolute left-0 top-1/2 z-0 h-10 w-3 -translate-x-1/2 -translate-y-1/2 rounded-l-full border border-r-0 border-[var(--card-border)] bg-[var(--card-bg)] shadow-[var(--card-shadow-soft)]" />
           <button
             type="button"
             onFocus={() => setOpen(true)}
-            className="flex w-full items-center justify-between rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2.5 text-left shadow-[var(--card-shadow-soft)]"
+            className="relative z-10 flex w-full items-center justify-between gap-3 rounded-2xl border border-[var(--input-border)] bg-[color:color-mix(in_srgb,var(--input-bg)_92%,var(--panel-bg))] px-3 py-2 text-left shadow-[var(--card-shadow-soft)]"
           >
-            <span>
-              <span className="block text-sm font-medium text-[var(--input-text)]">{activeInfo.label}</span>
-              <span className="mt-0.5 block text-[11px] text-[var(--text-soft)]">{activeInfo.detail}</span>
+            <span className="min-w-0">
+              <span className="block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模組</span>
+              <span className="mt-0.5 block truncate text-sm font-semibold text-[var(--input-text)]">{activeInfo.label}</span>
             </span>
-            <span className="text-xs text-[var(--text-soft)]">{open ? '▴' : '▾'}</span>
+            <span className="shrink-0 text-[11px] text-[var(--text-soft)]">{open ? '▴' : '▾'}</span>
           </button>
           {open && (
-            <div className="absolute left-0 right-0 top-[calc(100%+0.45rem)] rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2 shadow-[var(--card-shadow)]">
+            <div className="absolute left-0 right-0 top-[calc(100%+0.38rem)] rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2 shadow-[var(--card-shadow)]">
               {ANALYSIS_MODULES.map(module => {
                 const isActive = module.id === activeModule
                 return (
@@ -65,7 +65,7 @@ export default function AnalysisModuleNav({ activeModule, onSelectModule, mode =
                   >
                     <span>
                       <span className="block text-sm font-medium">{module.label}</span>
-                      <span className="mt-0.5 block text-[11px] text-[var(--text-soft)]">{module.detail}</span>
+                      <span className="mt-0.5 block text-[10px] text-[var(--text-soft)]">{module.detail}</span>
                     </span>
                     {isActive && <span className="text-xs text-[var(--accent-strong)]">目前</span>}
                   </button>
