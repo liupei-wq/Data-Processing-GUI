@@ -227,3 +227,146 @@ RAMAN_REFERENCES: dict[str, list[dict]] = {
         {"pos": 600,  "label": "A₁g", "strength": 25,  "note": "Mo₂Ti₂C₃ A₁g carbon-related mode"},
     ],
 }
+
+
+PHASE_LIBRARY_DEFAULTS: dict[str, dict] = {
+    "Si (基板)": {
+        "phase_group": "Si group",
+        "species": "Si lattice",
+        "tolerance_cm": 3.0,
+        "fwhm_min": 1.0,
+        "fwhm_max": 18.0,
+        "profile": "split_pseudo_voigt",
+        "peak_type": "substrate phonon",
+        "oxidation_state": "N/A",
+        "oxidation_state_inference": "Not applicable",
+        "reference": "Si Raman first-/second-order phonon references",
+    },
+    "β-Ga₂O₃": {
+        "phase_group": "β-Ga₂O₃ group",
+        "species": "Ga-O lattice",
+        "tolerance_cm": 10.0,
+        "fwhm_min": 2.0,
+        "fwhm_max": 35.0,
+        "profile": "pseudo_voigt",
+        "peak_type": "phonon",
+        "oxidation_state": "Ga³⁺",
+        "oxidation_state_inference": "Inferred",
+        "reference": "Kranert et al. PRL 2016; Dohy et al. J. Solid State Chem. 1982",
+    },
+    "α-Ga₂O₃": {
+        "phase_group": "α-Ga₂O₃ group",
+        "species": "Ga-O lattice",
+        "tolerance_cm": 10.0,
+        "fwhm_min": 2.0,
+        "fwhm_max": 35.0,
+        "profile": "pseudo_voigt",
+        "peak_type": "phonon",
+        "oxidation_state": "Ga³⁺",
+        "oxidation_state_inference": "Inferred",
+        "reference": "Playford et al. Chem. Eur. J. 2013; Cuscó et al. PRB 2020",
+    },
+    "NiO": {
+        "phase_group": "NiO group",
+        "species": "Ni-O / magnon mode",
+        "tolerance_cm": 20.0,
+        "fwhm_min": 8.0,
+        "fwhm_max": 140.0,
+        "profile": "pseudo_voigt",
+        "peak_type": "broad disorder/magnon band",
+        "oxidation_state": "Ni²⁺",
+        "oxidation_state_inference": "Inferred",
+        "reference": "Dietz et al. PRB 1971; Mironova-Ulmane et al. J. Phys. 2007",
+    },
+}
+
+
+def _generic_phase_defaults(material: str) -> dict:
+    oxidation = "N/A"
+    inference = "Not applicable"
+    species = "lattice vibration"
+    if "Ga" in material:
+        oxidation = "Ga³⁺"
+        inference = "Inferred"
+        species = "Ga-O lattice"
+    elif "Ni" in material:
+        oxidation = "Ni²⁺"
+        inference = "Inferred"
+        species = "Ni-O lattice"
+    elif "Ti" in material:
+        oxidation = "Ti⁴⁺"
+        inference = "Inferred"
+        species = "Ti-O lattice"
+    elif "Al" in material:
+        oxidation = "Al³⁺"
+        inference = "Inferred"
+        species = "Al-O lattice"
+    elif "Zn" in material:
+        oxidation = "Zn²⁺"
+        inference = "Inferred"
+        species = "Zn-O lattice"
+    elif "Sn" in material:
+        oxidation = "Sn⁴⁺"
+        inference = "Inferred"
+        species = "Sn-O lattice"
+    elif "Ce" in material:
+        oxidation = "Ce⁴⁺/Ce³⁺"
+        inference = "Inferred"
+        species = "Ce-O lattice"
+
+    return {
+        "phase_group": f"{material} group",
+        "species": species,
+        "tolerance_cm": 10.0,
+        "fwhm_min": 2.0,
+        "fwhm_max": 60.0,
+        "profile": "pseudo_voigt",
+        "peak_type": "phonon",
+        "oxidation_state": oxidation,
+        "oxidation_state_inference": inference,
+        "reference": "Raman reference peak library",
+    }
+
+
+def enriched_raman_peak(material: str, row: dict) -> dict:
+    defaults = {**_generic_phase_defaults(material), **PHASE_LIBRARY_DEFAULTS.get(material, {})}
+    peak_type = row.get("peak_type")
+    note = str(row.get("note", ""))
+    if not peak_type:
+        peak_type = "broad band" if "broad" in note.lower() else defaults["peak_type"]
+    fwhm_min = float(row.get("fwhm_min", defaults["fwhm_min"]))
+    fwhm_max = float(row.get("fwhm_max", defaults["fwhm_max"]))
+    if "broad" in note.lower() and fwhm_max < 90:
+        fwhm_max = 120.0
+    return {
+        "phase": material,
+        "material": material,
+        "phase_group": row.get("phase_group", defaults["phase_group"]),
+        "mode": row.get("mode", row.get("label", "")),
+        "label": row.get("label", ""),
+        "species": row.get("species", defaults["species"]),
+        "theoretical_center": float(row.get("theoretical_center", row["pos"])),
+        "pos": float(row["pos"]),
+        "tolerance_cm": float(row.get("tolerance_cm", defaults["tolerance_cm"])),
+        "fwhm_min": fwhm_min,
+        "fwhm_max": fwhm_max,
+        "profile": row.get("profile", defaults["profile"]),
+        "peak_type": peak_type,
+        "related_technique": row.get("related_technique", "Raman"),
+        "reference": row.get("reference", defaults["reference"]),
+        "oxidation_state": row.get("oxidation_state", defaults["oxidation_state"]),
+        "oxidation_state_inference": row.get("oxidation_state_inference", defaults["oxidation_state_inference"]),
+        "strength": float(row.get("strength", 0.0)),
+        "note": note,
+    }
+
+
+def get_enriched_raman_peaks(material: str) -> list[dict]:
+    return [enriched_raman_peak(material, row) for row in RAMAN_REFERENCES.get(material, [])]
+
+
+def get_raman_peak_library() -> list[dict]:
+    library: list[dict] = []
+    for material in sorted(RAMAN_REFERENCES):
+        library.extend(get_enriched_raman_peaks(material))
+    return library

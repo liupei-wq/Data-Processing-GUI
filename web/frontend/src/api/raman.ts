@@ -81,6 +81,33 @@ export async function fetchReferencePeaks(materials: string[]): Promise<RefPeak[
   return data.peaks as RefPeak[]
 }
 
+export async function fetchPeakLibrary(): Promise<RefPeak[]> {
+  const res = await fetch(`${BASE}/peak-library`)
+  if (!res.ok) throw new Error('Could not load peak library')
+  const data = await res.json()
+  return (data.peaks ?? []).map((row: Record<string, unknown>) => ({
+    material: row.material,
+    phase: row.phase,
+    phase_group: row.phase_group,
+    position_cm: row.pos,
+    theoretical_center: row.theoretical_center,
+    label: row.label,
+    mode: row.mode,
+    species: row.species,
+    tolerance_cm: row.tolerance_cm,
+    fwhm_min: row.fwhm_min,
+    fwhm_max: row.fwhm_max,
+    profile: row.profile,
+    peak_type: row.peak_type,
+    related_technique: row.related_technique,
+    reference: row.reference,
+    oxidation_state: row.oxidation_state,
+    oxidation_state_inference: row.oxidation_state_inference,
+    strength: row.strength,
+    note: row.note,
+  })) as RefPeak[]
+}
+
 export async function fitSpectrum(
   datasetName: string,
   x: number[],
@@ -98,6 +125,10 @@ export async function fitSpectrum(
       peaks,
       profile: params.profile,
       maxfev: params.maxfev,
+      fit_lo: params.fit_lo,
+      fit_hi: params.fit_hi,
+      robust_loss: params.robust_loss,
+      segment_weights: params.segment_weights,
     }),
   })
   if (!res.ok) {

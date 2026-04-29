@@ -30,6 +30,14 @@ def linear_background(x, y):
     return bg
 
 
+def constant_background(y):
+    """Constant baseline at the lower edge of the segment."""
+    y = np.asarray(y, dtype=float)
+    if len(y) == 0:
+        return y.copy()
+    return np.full_like(y, float(np.nanpercentile(y, 5)))
+
+
 def polynomial_background(x, y, degree=3):
     """Fit a polynomial of given degree to the segment."""
     x = np.asarray(x, dtype=float)
@@ -38,6 +46,64 @@ def polynomial_background(x, y, degree=3):
         return np.linspace(y[0], y[-1], len(y))
     coeffs = np.polyfit(x, y, degree)
     return np.polyval(coeffs, x)
+
+
+def rubber_band_background(x, y):
+    """
+    Lower convex-hull baseline, commonly called rubber-band correction.
+
+    The baseline is interpolated through the lower hull vertices. This keeps
+    broad fluorescence/background structure in the baseline instead of forcing
+    it into a very wide synthetic peak.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) < 3:
+        return linear_background(x, y)
+
+    order = np.argsort(x)
+    xs = x[order]
+    ys = y[order]
+    points = list(zip(xs, ys))
+
+    lower: list[tuple[float, float]] = []
+    for point in points:
+        while len(lower) >= 2:
+            x1, y1 = lower[-2]
+            x2, y2 = lower[-1]
+            x3, y3 = point
+            cross = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1)
+            if cross <= 0:
+                lower.pop()
+            else:
+                break
+        lower.append(point)
+
+    if len(lower) < 2:
+        return constant_background(y)
+
+    hx = np.asarray([p[0] for p in lower], dtype=float)
+    hy = np.asarray([p[1] for p in lower], dtype=float)
+    bg_sorted = np.interp(xs, hx, hy)
+    bg = np.zeros_like(y, dtype=float)
+    bg[order] = bg_sorted
+    return bg
+
+
+def manual_anchor_background(x, anchor_x, anchor_y):
+    """Piecewise-linear baseline through user-provided anchor points."""
+    x = np.asarray(x, dtype=float)
+    ax = np.asarray(anchor_x or [], dtype=float)
+    ay = np.asarray(anchor_y or [], dtype=float)
+    valid = np.isfinite(ax) & np.isfinite(ay)
+    ax = ax[valid]
+    ay = ay[valid]
+    if len(ax) < 2:
+        return np.zeros_like(x, dtype=float)
+    order = np.argsort(ax)
+    ax = ax[order]
+    ay = ay[order]
+    return np.interp(x, ax, ay, left=ay[0], right=ay[-1])
 
 
 def _baseline_system_matrix(n_points: int):
@@ -156,7 +222,8 @@ def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20):
 
 def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
                      baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20,
-                     tougaard_B=2866.0, tougaard_C=1643.0):
+                     tougaard_B=2866.0, tougaard_C=1643.0,
+                     manual_anchor_x=None, manual_anchor_y=None):
     """
     Calculate and subtract background only within [bg_x_start, bg_x_end].
     Outside that region the background is extended as a constant
@@ -177,12 +244,18 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
 
     xs, ys = x[mask], y[mask]
 
-    if method == "linear":
+    if method == "constant":
+        bg_seg = constant_background(ys)
+    elif method == "linear":
         bg_seg = linear_background(xs, ys)
     elif method == "shirley":
         bg_seg = shirley_background(ys)
     elif method == "polynomial":
         bg_seg = polynomial_background(xs, ys, degree=poly_deg)
+    elif method == "rubber_band":
+        bg_seg = rubber_band_background(xs, ys)
+    elif method == "manual_anchor":
+        bg_seg = manual_anchor_background(xs, manual_anchor_x, manual_anchor_y)
     elif method == "asls":
         bg_seg = asls_background(
             ys, lam=baseline_lambda, p=baseline_p, max_iter=baseline_iter,
@@ -290,10 +363,27 @@ def smooth_signal(y, method="none", window_points=11, poly_deg=3):
     return y.copy()
 
 
-def normalize_min_max(y):
-    """Scale y to [0, 1]."""
+def _normalization_mask(x, y, region_x_start=None, region_x_end=None):
+    x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    y_min, y_max = y.min(), y.max()
+    mask = np.isfinite(x) & np.isfinite(y)
+    if region_x_start is not None and region_x_end is not None:
+        r0, r1 = min(region_x_start, region_x_end), max(region_x_start, region_x_end)
+        region_mask = mask & (x >= r0) & (x <= r1)
+        if np.any(region_mask):
+            return region_mask
+    return mask
+
+
+def normalize_min_max(x, y, region_x_start=None, region_x_end=None):
+    """Scale y using the min/max inside the selected normalization region."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = _normalization_mask(x, y, region_x_start, region_x_end)
+    if not np.any(mask):
+        return y.copy()
+
+    y_min, y_max = np.min(y[mask]), np.max(y[mask])
     if y_max == y_min:
         return np.zeros_like(y)
     return (y - y_min) / (y_max - y_min)
@@ -306,27 +396,33 @@ def normalize_max(x, y, region_x_start=None, region_x_end=None):
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    if region_x_start is not None and region_x_end is not None:
-        r0, r1 = min(region_x_start, region_x_end), max(region_x_start, region_x_end)
-        mask = (x >= r0) & (x <= r1)
-        peak_val = np.max(y[mask]) if np.any(mask) else np.max(y)
-    else:
-        peak_val = y.max()
+    mask = _normalization_mask(x, y, region_x_start, region_x_end)
+    if not np.any(mask):
+        return y.copy()
+
+    peak_val = np.max(np.abs(y[mask]))
     if peak_val == 0:
         return np.zeros_like(y)
     return y / peak_val
 
 
-def normalize_area(x, y):
+def normalize_area(x, y, region_x_start=None, region_x_end=None):
     """
-    Divide entire spectrum by the total area (trapezoid integration).
-    Result: area under the normalized curve = 1.
+    Divide entire spectrum by the positive area inside the selected region.
+    The area is measured after shifting the selected region to a non-negative floor,
+    which avoids cancellation when baseline-corrected spectra dip below zero.
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    sort_idx = np.argsort(x)
-    xs, ys = x[sort_idx], y[sort_idx]
-    total_area = np.abs(np.trapezoid(ys, xs))
+    mask = _normalization_mask(x, y, region_x_start, region_x_end)
+    if not np.any(mask):
+        return y.copy()
+
+    xs, ys = x[mask], y[mask]
+    sort_idx = np.argsort(xs)
+    xs, ys = xs[sort_idx], ys[sort_idx]
+    positive_ys = ys - min(np.min(ys), 0)
+    total_area = np.trapezoid(positive_ys, xs)
     if total_area == 0:
         return np.zeros_like(y)
     return y / total_area
@@ -363,11 +459,11 @@ def apply_normalization(x, y, norm_method="none",
 
     y_out = y.copy()
     if norm_method == "min_max":
-        y_out = normalize_min_max(y_out)
+        y_out = normalize_min_max(x, y_out, norm_x_start, norm_x_end)
     elif norm_method == "max":
         y_out = normalize_max(x, y_out, norm_x_start, norm_x_end)
     elif norm_method == "area":
-        y_out = normalize_area(x, y_out)
+        y_out = normalize_area(x, y_out, norm_x_start, norm_x_end)
     elif norm_method == "mean_region":
         y_out = normalize_mean_region(x, y_out, norm_x_start, norm_x_end)
 
@@ -384,9 +480,9 @@ def apply_processing(x, y, bg_method="none", norm_method="none",
     Full processing pipeline: background subtraction → normalization.
 
     bg_method   : 'none' | 'linear' | 'shirley' | 'polynomial' | 'asls' | 'airpls' | 'tougaard'
-    norm_method : 'none' | 'min_max' | 'max' | 'mean_region'
+    norm_method : 'none' | 'min_max' | 'max' | 'area' | 'mean_region'
     bg_x_start/end   : energy range for background; defaults to full range.
-    norm_x_start/end : energy range for mean normalization; defaults to full range.
+    norm_x_start/end : range used to calculate normalization scale; defaults to full range.
 
     Returns (y_processed, bg_curve)
     """
