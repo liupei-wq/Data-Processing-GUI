@@ -298,7 +298,7 @@ function Section({ step, title, hint, children, defaultOpen = true }: {
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="theme-block mb-3 overflow-hidden rounded-[22px]">
+    <div className="mb-3 overflow-hidden rounded-[22px] bg-[var(--card-bg)] [box-shadow:var(--card-shadow)]">
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
@@ -334,18 +334,52 @@ function NumInput({ label, value, onChange, min, max, step = 1, disabled = false
   )
 }
 
-function SelectInput({ label, value, onChange, options, disabled = false }: {
+function CustomSelect({ label, value, onChange, options, disabled = false }: {
   label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; disabled?: boolean
 }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+  const selectedLabel = options.find(o => o.value === value)?.label ?? value
   return (
-    <label className="block">
+    <div ref={ref} className="relative block">
       <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
-      <select value={value} disabled={disabled} onChange={e => onChange(e.target.value)}
-        className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none disabled:opacity-40"
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] transition-colors hover:border-[var(--accent-strong)]/60 focus:outline-none disabled:opacity-40"
       >
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </label>
+        <span>{selectedLabel}</span>
+        <span className={`ml-2 text-[8px] text-[var(--text-soft)] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      {open && !disabled && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-full overflow-hidden rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-1 [box-shadow:var(--card-shadow)]">
+          {options.map(o => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => { onChange(o.value); setOpen(false) }}
+              className={[
+                'flex w-full items-center rounded-lg px-3 py-1.5 text-xs transition-all duration-100',
+                o.value === value
+                  ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-strong)] ring-1 ring-inset ring-[var(--accent-strong)]/40'
+                  : 'text-[var(--text-main)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent-strong)] hover:ring-1 hover:ring-inset hover:ring-[var(--accent-strong)]/40',
+              ].join(' ')}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1600,7 +1634,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-2">
-                        <SelectInput
+                        <CustomSelect
                           label="標準樣品"
                           value={calibrationElement}
                           onChange={setCalibrationElement}
@@ -1609,7 +1643,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                             label: `${el.symbol} — ${el.name}`,
                           }))}
                         />
-                        <SelectInput
+                        <CustomSelect
                           label="參考峰"
                           value={calibrationPeakLabel}
                           onChange={setCalibrationPeak}
@@ -1655,7 +1689,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   <CheckRow label="啟用背景扣除" checked={currentParams.bg_enabled} onChange={set('bg_enabled')} />
                   {currentParams.bg_enabled && (
                     <>
-                      <SelectInput label="方法" value={currentParams.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
+                      <CustomSelect label="方法" value={currentParams.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
                         options={[
                           { value: 'linear', label: 'Linear' },
                           { value: 'shirley', label: 'Shirley' },
@@ -1693,7 +1727,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
-                  <SelectInput label="方法" value={currentParams.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
+                  <CustomSelect label="方法" value={currentParams.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
                     options={[
                       { value: 'none', label: '不歸一化' },
                       { value: 'min_max', label: 'Min–Max' },
@@ -1725,7 +1759,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={7} title="峰擬合" hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
-                  <SelectInput label="峰形" value={fitProfile} onChange={setFitProfile}
+                  <CustomSelect label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
                   <div className="space-y-1.5">
@@ -1822,7 +1856,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
                 {xpsMode === 'valence_band' && (
                   <Section step={9} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
-                    <SelectInput label="方法" value={bandOffsetMethod}
+                    <CustomSelect label="方法" value={bandOffsetMethod}
                       onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
                       options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
                     />

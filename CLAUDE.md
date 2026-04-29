@@ -131,6 +131,15 @@ cd web/frontend && npm install && npm run dev
 - `api/xps.ts`：新增 `fetchElementPeaks`/`listElements`；`fitPeaks` 加 `peakLabels?` 參數；保留 `detectPeaks`（api 層保留但 XPS 頁面不使用）
 - TypeScript 零錯誤
 
+## XPS UI 精修（下拉選單 + 步驟卡片）
+
+- **下拉選單改為自定義 `CustomSelect`**：原生 `<select>` 無法套主題 hover 效果，改為浮出式面板
+  - 選項清單背景：`var(--card-bg)` + `var(--card-shadow)` 陰影 + 圓角邊框
+  - 選項 hover / 已選中：`var(--accent-soft)` 背景 + `var(--accent-strong)` 文字 + `ring-1 ring-inset` 框線（對應各主題強調色）
+  - 點外部自動關閉（`mousedown` listener + `useRef`）
+- **步驟卡片去邊框改純陰影**：`theme-block`（含 `border`）改為 `bg-[var(--card-bg)] [box-shadow:var(--card-shadow)]`，去掉 `border` 線，靠陰影深度區隔各步驟
+- TypeScript 零錯誤
+
 ---
 
 ## 各模組完成度
