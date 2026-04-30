@@ -192,3 +192,4 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 - 2026-04-30 19:34 CST：讀取 `CLAUDE.md` 並檢視 `web/backend/main.py`、`web/backend/requirements.txt`、`web/frontend` 相關檔案，整理目前網站版專案的前後端架構、主要語言與關鍵套件，回覆使用者目前技術棧概況。
 - 2026-04-30 20:36 CST：讀取 `CLAUDE.md` 後依使用者要求補充一版更直觀的網站版架構圖，整理成「瀏覽器 → React/Vite 前端 → FastAPI 後端 → core processing / db」的資料流與目錄對照說明。
 - 2026-04-30 20:42 CST：讀取 `CLAUDE.md` 後審閱使用者貼上的 XRD 自動找峰推薦方案；雖然外部 share link 本體未成功抓取，但使用者貼出的內容已足夠，先整理可實作項目、分階段導入建議與需要和使用者確認的企劃方向，暫不先修改 XRD 程式。
+- 2026-04-30 20:46 CST：讀取 `CLAUDE.md` 後回覆使用者目前網站版可用的前端與後端網址資訊，包含 Render 線上站與本機開發預設位址。
