@@ -319,8 +319,51 @@ function Section({ step, title, hint, children, defaultOpen = true, infoContent 
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const [infoOpen, setInfoOpen] = useState(false)
+
+  useEffect(() => {
+    if (!infoOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setInfoOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [infoOpen])
+
+  const infoModal = infoOpen && infoContent && typeof document !== 'undefined'
+    ? createPortal(
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-[3px]"
+          onClick={() => setInfoOpen(false)}
+        >
+          <div
+            className="glass-panel max-h-[min(84vh,calc(100vh-3rem))] w-full max-w-2xl overflow-hidden rounded-[30px]"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--card-divider)] px-5 py-4">
+              <div>
+                <p className="text-base font-semibold text-[var(--text-main)]">{title}說明</p>
+                {hint && <p className="mt-1 text-sm text-[var(--text-soft)]">{hint}</p>}
+              </div>
+              <button
+                type="button"
+                onClick={() => setInfoOpen(false)}
+                className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable"
+              >
+                關閉
+              </button>
+            </div>
+            <div className="overflow-y-auto px-5 py-5 text-[15px] leading-7 text-[var(--text-soft)] sm:px-6 sm:text-base sm:leading-8">
+              {infoContent}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null
+
   return (
-    <div className="mb-3 overflow-hidden rounded-[22px] bg-[var(--card-bg)] [box-shadow:var(--card-shadow)]">
+    <>
+    <div className="glass-panel mb-3 overflow-hidden rounded-[24px]">
       <div className="flex items-center">
         <button
           type="button"
@@ -341,10 +384,10 @@ function Section({ step, title, hint, children, defaultOpen = true, infoContent 
         {infoContent && (
           <button
             type="button"
-            onClick={() => setInfoOpen(v => !v)}
+            onClick={() => setInfoOpen(true)}
             title="查看方法說明"
             className={[
-              'mr-3 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold transition-colors',
+              'mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition-colors',
               infoOpen
                 ? 'border-[var(--accent-secondary)] bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
                 : 'border-[var(--card-border)] text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)]',
@@ -352,13 +395,10 @@ function Section({ step, title, hint, children, defaultOpen = true, infoContent 
           >?</button>
         )}
       </div>
-      {infoOpen && infoContent && (
-        <div className="border-t border-[var(--card-divider)] bg-[var(--card-ghost)] px-4 py-3 text-[11px] leading-relaxed text-[var(--text-soft)]">
-          {infoContent}
-        </div>
-      )}
       {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
     </div>
+    {infoModal}
+    </>
   )
 }
 
@@ -648,75 +688,31 @@ function ChartToolbar({
   )
 }
 
-function ModuleDropdown({ activeModule, onSelect }: { activeModule: string; onSelect?: (m: AnalysisModuleId) => void }) {
-  const [open, setOpen] = useState(false)
-  const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (triggerRef.current && !triggerRef.current.contains(t) &&
-          panelRef.current && !panelRef.current.contains(t)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
-
-  const toggle = () => {
-    if (!open && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect()
-      setPanelStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left, minWidth: 160, zIndex: 9999 })
-    }
-    setOpen(o => !o)
-  }
-
-  const panel = open ? (
-    <div
-      ref={panelRef}
-      style={panelStyle}
-      className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-1.5 [box-shadow:var(--card-shadow)]"
-    >
-      {ANALYSIS_MODULES.map(mod => {
-        const isActive = mod.id === activeModule
-        return (
-          <button
-            key={mod.id}
-            type="button"
-            disabled={isActive}
-            onClick={() => { if (!isActive) { onSelect?.(mod.id); setOpen(false) } }}
-            className={[
-              'flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-xs transition-colors pressable',
-              isActive ? 'bg-[var(--accent-soft)] font-semibold text-[var(--text-main)]' : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)]',
-            ].join(' ')}
-          >
-            <span>{mod.label}</span>
-            {isActive && <span className="text-[10px] text-[var(--accent-strong)]">●</span>}
-          </button>
-        )
-      })}
-    </div>
-  ) : null
-
+function ModuleTabs({ onSelect }: { onSelect?: (m: AnalysisModuleId) => void }) {
   return (
-    <div className="px-4 pb-2 pt-1">
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={toggle}
-        className="flex items-center gap-1.5 rounded-lg px-1 py-1 text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]"
-      >
-        <span className="uppercase tracking-[0.14em]">分析模組</span>
-        <span className="rounded-md bg-[color:color-mix(in_srgb,var(--accent-strong)_13%,var(--card-bg))] px-1.5 py-0.5 font-semibold text-[var(--accent-strong)]">
-          {ANALYSIS_MODULES.find(m => m.id === activeModule)?.label ?? activeModule.toUpperCase()}
-        </span>
-        <span className={`text-[8px] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>▾</span>
-      </button>
-      {typeof document !== 'undefined' && panel ? createPortal(panel, document.body) : null}
+    <div className="px-4 pb-4">
+      <p className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)]">分析模組</p>
+      <div className="flex flex-wrap gap-1.5">
+        {ANALYSIS_MODULES.map(mod => {
+          const isActive = mod.id === 'xps'
+          return (
+            <button
+              key={mod.id}
+              type="button"
+              disabled={isActive}
+              onClick={() => { if (!isActive) onSelect?.(mod.id) }}
+              className={[
+                'rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all duration-150',
+                isActive
+                  ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_20%,transparent)] text-[var(--accent-secondary)] [box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent),0_2px_10px_-2px_color-mix(in_srgb,var(--accent-secondary)_28%,transparent)]'
+                  : 'bg-[var(--card-bg)] text-[var(--text-soft)] [box-shadow:inset_0_0_0_1px_var(--card-border)] hover:text-[var(--text-main)] hover:[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--accent-secondary)_45%,var(--card-border))]',
+              ].join(' ')}
+            >
+              {mod.label}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -1738,26 +1734,26 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </button>
         ) : (
           <>
-            {/* ── Logo header ── */}
-            <div className="flex items-center justify-between px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))]">
-                  <svg width="18" height="16" viewBox="0 0 18 16" fill="none">
-                    <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13"
-                      stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-bold leading-tight text-[var(--text-main)]">Nigiro Pro</div>
-                  <div className="mt-0.5 text-[10px] leading-tight text-[var(--text-soft)]">Spectroscopy Analysis</div>
-                </div>
-              </div>
-              <button type="button" onClick={() => setSidebarCollapsed(true)} className="text-xs text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
-            </div>
-
             <div className="flex-1 overflow-y-auto">
-              {/* ── Compact module selector ── */}
-              <ModuleDropdown activeModule="xps" onSelect={onModuleSelect} />
+              {/* ── Logo header (scrolls with content) ── */}
+              <div className="flex items-start justify-between px-5 pb-4 pt-6">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_2px_12px_-3px_color-mix(in_srgb,var(--accent-strong)_35%,transparent)]">
+                    <svg width="26" height="22" viewBox="0 0 18 16" fill="none">
+                      <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13"
+                        stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xl font-bold leading-tight tracking-tight text-[var(--text-main)]">Nigiro Pro</div>
+                    <div className="mt-1 text-xs leading-tight text-[var(--text-soft)]">Spectroscopy Analysis</div>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setSidebarCollapsed(true)} className="mt-1 shrink-0 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
+              </div>
+
+              {/* ── Module tabs ── */}
+              <ModuleTabs onSelect={onModuleSelect} />
 
               {/* Mode toggle */}
               <div className="px-4 py-3">
@@ -1791,15 +1787,23 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   )}
                 </Section>
 
-                <Section step={2} title="內插" hint="對每筆資料各自重新取樣 x 軸" defaultOpen={false}>
-                  <TogglePill label="啟用內插" checked={currentParams.interpolate} onChange={set('interpolate')} />
-
-                  {/* 說明文字 */}
-                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5 text-[10px] leading-relaxed text-[var(--text-soft)]">
-                    <p className="font-medium text-[var(--text-main)]">⚑ 內插說明</p>
-                    <p className="mt-1">對每筆資料<span className="font-semibold text-[var(--text-main)]">各自</span>建立等間距 x 軸（linspace from 該筆 BE_min → BE_max，共 N 點），不建立跨檔案共同 x 軸。若各筆的能量範圍不同，內插後各筆 x 軸仍不相同。</p>
-                    <p className="mt-1">多檔平均時，後端以<span className="font-semibold text-[var(--text-main)]">第一筆</span>的 x 軸為基準，再內插其他筆。</p>
+                <Section step={2} title="內插" hint="對每筆資料各自重新取樣 x 軸" defaultOpen={false} infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">內插說明</p>
+                    <p>
+                      對每筆資料<span className="font-semibold text-[var(--text-main)]">各自</span>建立等間距 x 軸，也就是從該筆光譜的
+                      BE 最小值到最大值做 `linspace`，重新取成 N 個點，不建立跨檔案共用的 x 軸。
+                    </p>
+                    <p>
+                      如果不同檔案的能量範圍不同，內插後每筆資料的 x 軸仍然會不同；這一步是單筆重取樣，不是先把所有資料強制對齊。
+                    </p>
+                    <p>
+                      只有在多檔平均時，後端才會以<span className="font-semibold text-[var(--text-main)]">第一筆資料</span>的 x 軸當基準，
+                      再把其他資料插值到同一個網格上。
+                    </p>
                   </div>
+                }>
+                  <TogglePill label="啟用內插" checked={currentParams.interpolate} onChange={set('interpolate')} />
 
                   {/* 每筆資料統計 */}
                   {rawFiles.length > 0 && (() => {
@@ -2024,7 +2028,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={5} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false} infoContent={
-                  <div className="space-y-2.5">
+                  <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">背景扣除方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">Linear</span> — 線性連接起點與終點 bg(E)=aE+b。適用背景緩慢線性變化的簡單情況。峰頂遠超出線性基線時可能低估背景。</div>
                     <div><span className="font-medium text-[var(--text-main)]">Shirley</span> — 迭代演算，背景正比於較高 BE 端的積分強度。業界最常用，適合對稱 XPS 核心能階峰，兩端自然歸零。峰形嚴重非對稱或有強散射時效果較差。</div>
@@ -2075,7 +2079,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
-                  <div className="space-y-2.5">
+                  <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">歸一化方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">不歸一化 (None)</span> — 保留原始強度。適合已完成儀器強度校正的資料，或需比較絕對強度的情況。</div>
                     <div><span className="font-medium text-[var(--text-main)]">Min–Max</span> — y′=(y−min)/(max−min)，縮放至 [0, 1]。適合比較峰型，不保留相對強度。不建議用於定量比較。</div>
@@ -2950,7 +2954,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       )}
 
       {periodicTableOpen && (
-        <div className="absolute inset-0 z-40 flex items-start justify-center bg-black/35 px-4 py-8 backdrop-blur-[2px]">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 px-4 py-6 backdrop-blur-[2px]">
           <div className="theme-block max-h-[calc(100vh-4rem)] w-full max-w-6xl overflow-hidden rounded-[28px]">
             <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
               <div>
