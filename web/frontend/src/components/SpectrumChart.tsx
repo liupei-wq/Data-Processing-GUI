@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
 import type { DetectedPeak, ProcessResult, RefPeak, XMode } from '../types/xrd'
 
@@ -45,15 +46,28 @@ export default function SpectrumChart({
   showDetectedPeaks = true,
   minHeight = 460,
 }: Props) {
-  const cssVars = typeof window !== 'undefined'
-    ? getComputedStyle(document.documentElement)
-    : null
-  const chartGrid = cssVars?.getPropertyValue('--chart-grid').trim() || 'rgba(148, 163, 184, 0.14)'
-  const chartText = cssVars?.getPropertyValue('--chart-text').trim() || '#d9e4f0'
-  const chartBg = cssVars?.getPropertyValue('--chart-bg').trim() || 'rgba(15, 23, 42, 0.52)'
-  const chartLegendBg = cssVars?.getPropertyValue('--chart-legend-bg').trim() || 'rgba(15, 23, 42, 0.72)'
-  const chartHoverBg = cssVars?.getPropertyValue('--chart-hover-bg').trim() || 'rgba(15, 23, 42, 0.95)'
-  const chartHoverBorder = cssVars?.getPropertyValue('--chart-hover-border').trim() || 'rgba(148, 163, 184, 0.22)'
+  const { chartGrid, chartText, chartBg, chartLegendBg, chartHoverBg, chartHoverBorder } = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return {
+        chartGrid: 'rgba(148, 163, 184, 0.14)',
+        chartText: '#d9e4f0',
+        chartBg: 'rgba(15, 23, 42, 0.52)',
+        chartLegendBg: 'rgba(15, 23, 42, 0.72)',
+        chartHoverBg: 'rgba(15, 23, 42, 0.95)',
+        chartHoverBorder: 'rgba(148, 163, 184, 0.22)',
+      }
+    }
+    const cv = getComputedStyle(document.documentElement)
+    const g = (name: string, fallback: string) => cv.getPropertyValue(name).trim() || fallback
+    return {
+      chartGrid: g('--chart-grid', 'rgba(148, 163, 184, 0.14)'),
+      chartText: g('--chart-text', '#d9e4f0'),
+      chartBg: g('--chart-bg', 'rgba(15, 23, 42, 0.52)'),
+      chartLegendBg: g('--chart-legend-bg', 'rgba(15, 23, 42, 0.72)'),
+      chartHoverBg: g('--chart-hover-bg', 'rgba(15, 23, 42, 0.95)'),
+      chartHoverBorder: g('--chart-hover-border', 'rgba(148, 163, 184, 0.22)'),
+    }
+  }, [])
   const datasets = result.average ? [result.average, ...result.datasets] : result.datasets
   const showRaw = displayMode === 'linear' && !result.average && result.datasets.length > 1
   const convertX = (x: number[]) => (xMode === 'dspacing' ? x.map(v => toD(v, wavelength)) : x)
@@ -96,7 +110,7 @@ export default function SpectrumChart({
   uniqueMats.forEach((m, i) => { matColors[m] = refColorPalette[i % refColorPalette.length] })
 
   const allY = datasets.flatMap(ds => transformY(ds.y_processed))
-  const yMax = allY.length > 0 ? Math.max(...allY) : 1
+  const yMax = allY.length > 0 ? allY.reduce((m, v) => (v > m ? v : m), -Infinity) : 1
 
   if (showReferencePeaks && displayMode === 'linear') {
     uniqueMats.forEach(mat => {

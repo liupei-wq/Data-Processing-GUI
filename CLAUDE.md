@@ -988,3 +988,136 @@ type WorkspaceId =
 
 ### 驗證
 - `npm run build`：通過（TypeScript 零錯誤）
+
+---
+
+## XPS 圖表與 UI 修正（2026-04-30, 本輪）
+
+### 背景/歸一化區間顯示修正
+- `buildRegionShapes` rect `opacity` 從 0.14 → 0.28，邊界虛線從 1.2 → 1.6，讓區間更明顯
+- `buildRegionShapes` / `buildRegionAnnotations` 的顏色引數改用純色（`'#f59e0b'` / `'#14b8a6'`），不再帶 rgba 透明度疊加
+- `backgroundLayout` x 範圍 fallback 改從 `backgroundDataset.x` 取（而非 `activeDataset`）
+- `normalizationLayout` x 範圍 fallback 改從 `normalizationInput.x` 取
+
+### 預處理圖表動態名稱
+- `getStageDisplayLabel` 中 `'校正'` 改成 `'能量校正'`
+- 圖表標題從 `2. ${stageDisplayLabel}後疊圖` 改成 `2. ${stageDisplayLabel}後`，更簡潔自然
+  - 只有能量校正 → "2. 能量校正後"
+  - 內插 + 平均 → "2. 內插 / 平均後"
+  - 三項全開 → "2. 內插 / 平均 / 能量校正後"
+
+### 分析模組下拉改 portal 架構
+- 新增 `ModuleDropdown` 獨立元件（原本內嵌 JSX）
+- 改用 click 切換（不再 hover），`useRef<HTMLButtonElement>` + `getBoundingClientRect()` 定位
+- 下拉面板透過 `createPortal(panel, document.body)` 掛在 body，完全脫離側欄 `overflow-y-auto` 裁切
+- 點外部關閉（`mousedown` listener 同時偵測 trigger 與 panel）
+- 這樣無論側欄捲到哪裡，下拉面板都能正確顯示在 trigger 按鈕下方
+
+### 驗證
+- `npm run build`：通過（TypeScript 零錯誤）
+
+---
+
+## XRD 卡頓修正（2026-04-30）
+
+### 根因
+1. `processData` 與 `detectPeaks` 的 `useEffect` 無防抖 — 拖動滑桿每次 change 事件都立即打 API，造成大量並發請求
+2. `SpectrumChart` 每次 render 都呼叫 `getComputedStyle(document.documentElement)` — 強制 style 解析，拖慢 React reconciliation
+3. `Math.max(...allY)` spread 超大陣列 — 資料點多時會有 call stack 問題
+4. `referenceMatches`、`scherrerRows`、`filteredRefPeaks` 等衍生值每次 render 都重算
+
+### 修正
+- **`processData` effect**：加 `setTimeout(300ms)` + `clearTimeout` — 用戶停止操作 0.3s 後才打 API
+- **`detectPeaks` effect**：同上，300ms 防抖
+- **`SpectrumChart` CSS vars**：改用 `useMemo([], [])` 包住 `getComputedStyle`，只在 mount 時讀一次
+- **`Math.max` 大陣列**：`Math.max(...allY)` 改成 `allY.reduce((m,v) => v > m ? v : m, -Infinity)`
+- **衍生值 memoize**：`filteredRefPeaks`、`referenceMatches`、`visibleReferenceMatches`、`matchedReferenceCount`、`scherrerRows` 全部加 `useMemo`
+
+### 驗證
+- `npm run build`：通過（TypeScript 零錯誤）
+
+---
+
+## XPS 內插步驟 UI 強化（2026-04-30）
+
+### 背景說明
+使用者反映內插步驟說明不足，不清楚：
+- 內插是否建立共同 x 軸（答：**不是**，每筆資料各自 linspace，範圍為各自 BE_min → BE_max）
+- 每筆資料原本有多少點、BE 範圍多少、步距多少
+- 自動點數估算邏輯是否正確
+
+### 修正項目
+- **`INTERP_POINTS_MIN` 從 600 → 50**、**`INTERP_POINTS_MAX` 從 2400 → 5000**：原本 600 的下限會強制把窄掃描（如 C 1s 15 eV / 0.1 eV step，自然 151 點）灌到 600 點，造成無意義過密
+- **新增 `getFileStats(file: ParsedFile)`**：回傳 `{ xStart, xEnd, span, nPts, step }`（直接用原始 x 陣列計算）
+- **`estimateInterpolationPoints` 四捨五入修正**：`raw < 300` 時取 10 的倍數，否則取 50 的倍數（原本一律 50）
+
+### Step 2 UI 大改版（`web/frontend/src/pages/XPS.tsx`）
+- **說明文字區塊**：說明「每筆資料各自建立等間距 x 軸，不建立跨檔案共同 x 軸；多檔平均時以第一筆為基準」
+- **每筆資料統計表格**：
+  - 表頭：檔案 / 點數 / BE 範圍 (eV) / 步距
+  - 每行顯示：truncate 檔名、原始點數（啟用內插時顯示 → 新點數）、xStart–xEnd、原始步距（啟用時顯示 → 新步距）
+  - 新步距比原步距小（更密）→ accent 色；比原步距大（稀疏）→ amber 色
+- **能量範圍不一致警告**：若各筆 xStart 或 xEnd 差異 > 0.5 eV，顯示 amber 警告框
+- **步距變化提示**：若啟用內插且確實有增密或稀疏，顯示對應說明
+- **自動估算明細**：自動點數模式下列出每筆自然估算值及是否被夾限（`已夾限`）
+
+### 驗證
+- `npm run build`：通過（TypeScript 零錯誤）
+
+---
+
+## XPS 圖表 Legend 隱藏、匯出重構、方法說明（2026-04-30）
+
+### 圖表 Legend 點擊隱藏/顯示
+- `web/frontend/src/pages/XPS.tsx`
+  - 新增 `applyHidden(traces, hidden: string[])`：對 trace 設 `visible: 'legendonly'` 或 `true`
+  - 新增 `makeLegendClick(setHidden)`：回傳 Plotly `onLegendClick` handler，切換 hidden state，return false 防止 Plotly 內部切換
+  - 新增 state：`rawHidden / overlayHidden / preprocessHidden / bgHidden / normHidden / finalHidden`
+  - 所有主要 Plot 組件加上 `onLegendClick` + `onLegendDoubleClick={() => false}`
+
+### 匯出區塊重構（對齊 XRD 風格）
+- 新增 `ExportBtnPrimary`（filled accent 樣式）
+- 新增 `ExportBtnSecondary`（border/ghost 樣式）
+- 匯出區塊從 `flex flex-wrap gap-2` 改成三欄 grid：
+  - **研究常用**：最終處理光譜 CSV（primary 按鈕）/ 背景扣除後 CSV / 歸一化後 CSV / 原始光譜 CSV
+  - **分析表格**：峰擬合結果 CSV / RSF 定量 CSV / VBM 結果 TXT（各依條件顯示）
+  - **追溯/設定**：處理報告 JSON（含 params / peaks / fit_result / vbm / rsf 完整結構）
+
+### Section 組件新增 `infoContent` prop
+- `Section` 修改：header 改為 `<div>` 包含左側 toggle `<button>` 與右側 `?` `<button>`（有效分離，避免 button 巢狀）
+- `infoContent?: React.ReactNode`：傳入 JSX，點 `?` 在 Section header 下方展開/收起說明面板
+- **Step 5 背景扣除** 加入說明：Linear / Shirley / Tougaard / Polynomial / AsLS / airPLS 各方法數學邏輯、適用情境、注意事項
+- **Step 6 歸一化** 加入說明：None / Min–Max / Max / Area / Mean Region 各方法定義、適用情境，及 RSF 定量前的注意事項
+
+### 驗證
+- `npm run build`：通過（TypeScript 零錯誤）
+
+---
+
+## XPS 玻璃感切換按鈕（TogglePill）（2026-04-30）
+
+### 設計
+- 新增 `TogglePill` 元件：玻璃感 pill 按鈕，取代舊 `CheckRow`
+  - **啟用時**：accent-secondary 18% 透明背景 + 1.5px inset 邊框 + 2px glow 外陰影 + 右側亮點（帶 glow shadow）
+  - **停用時**：card-bg 70% 透明背景 + 1px card-border + hover 時邊框微亮
+  - `w-full`，`justify-between`，右側圓點指示器
+
+### 替換範圍（sidebar 步驟啟用開關）
+- Step 2 內插：`CheckRow label="啟用內插"` → `TogglePill`
+- Step 2 內插：`CheckRow label="自動調整點數"` → `TogglePill`
+- Step 3 多檔平均：`CheckRow label="啟用多檔平均"` → `TogglePill`
+- Step 4 能量校正：`CheckRow label="手動調整偏移量"` → `TogglePill`
+- Step 5 背景扣除：`CheckRow label="啟用背景扣除"` → `TogglePill`
+
+### 峰擬合 per-peak 卡片重設計
+- 整張峰卡片 `enabled` 時整體亮起：`border-[accent-secondary/50%] bg-[accent-secondary/7%] glow-shadow`
+- 峰名稱改成 `<button>`（取代 `CheckRow`），點擊切換 `enabled`
+  - 啟用：accent-secondary 文字 + 左側小圓點亮起（帶 glow）
+  - 停用：text-soft + hover text-main + 左側空心圓點
+
+### 保留 CheckRow（不替換）
+- `顯示背景線`（背景扣除圖工具列）
+- `顯示原始`（最終圖工具列）
+
+### 驗證
+- `npm run build`：通過（TypeScript 零錯誤）

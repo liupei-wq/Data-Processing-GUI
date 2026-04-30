@@ -10,7 +10,7 @@
  *   3. On reference material select → fetchReferencePeaks() → overlay on chart
  */
 
-import { useState, useEffect, useCallback, type CSSProperties } from 'react'
+import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
 import type {
   DetectedPeak,
   LogViewParams,
@@ -287,27 +287,36 @@ export default function XRD({
     wavelengthPreset === 'Custom' ? customWavelength : WAVELENGTH_MAP[wavelengthPreset]
   const activeDataset = result?.average ?? result?.datasets[0] ?? null
   const activeGaussianFits = activeDataset?.gaussian_fits ?? []
-  const filteredRefPeaks = refPeaks.filter(peak => peak.rel_i >= refMatchParams.min_rel_intensity)
-  const referenceMatches = buildReferenceMatches(
-    filteredRefPeaks,
-    detectedPeaks,
-    refMatchParams.tolerance_deg,
+  const filteredRefPeaks = useMemo(
+    () => refPeaks.filter(peak => peak.rel_i >= refMatchParams.min_rel_intensity),
+    [refPeaks, refMatchParams.min_rel_intensity],
   )
-  const visibleReferenceMatches = refMatchParams.only_show_matched
-    ? referenceMatches.filter(row => row.matched)
-    : referenceMatches
-  const matchedReferenceCount = referenceMatches.filter(row => row.matched).length
-  const scherrerRows = detectedPeaks.map(peak => ({
-    ...peak,
-    crystallite_nm: scherrerCrystalliteSizeNm(
-      peak.two_theta,
-      peak.fwhm_deg,
-      wavelength,
-      scherrerParams.k,
-      scherrerParams.instrument_broadening_deg,
-      scherrerParams.broadening_correction,
-    ),
-  }))
+  const referenceMatches = useMemo(
+    () => buildReferenceMatches(filteredRefPeaks, detectedPeaks, refMatchParams.tolerance_deg),
+    [filteredRefPeaks, detectedPeaks, refMatchParams.tolerance_deg],
+  )
+  const visibleReferenceMatches = useMemo(
+    () => refMatchParams.only_show_matched ? referenceMatches.filter(row => row.matched) : referenceMatches,
+    [referenceMatches, refMatchParams.only_show_matched],
+  )
+  const matchedReferenceCount = useMemo(
+    () => referenceMatches.filter(row => row.matched).length,
+    [referenceMatches],
+  )
+  const scherrerRows = useMemo(
+    () => detectedPeaks.map(peak => ({
+      ...peak,
+      crystallite_nm: scherrerCrystalliteSizeNm(
+        peak.two_theta,
+        peak.fwhm_deg,
+        wavelength,
+        scherrerParams.k,
+        scherrerParams.instrument_broadening_deg,
+        scherrerParams.broadening_correction,
+      ),
+    })),
+    [detectedPeaks, wavelength, scherrerParams],
+  )
   const processingReport = {
     report_type: 'xrd_processing_report',
     created_at: new Date().toISOString(),
@@ -349,11 +358,13 @@ export default function XRD({
     let cancelled = false
     setIsLoading(true)
     setError(null)
-    processData(rawFiles, params)
-      .then(r => { if (!cancelled) setResult(r) })
-      .catch(e => { if (!cancelled) setError(String(e.message)) })
-      .finally(() => { if (!cancelled) setIsLoading(false) })
-    return () => { cancelled = true }
+    const timer = setTimeout(() => {
+      processData(rawFiles, params)
+        .then(r => { if (!cancelled) setResult(r) })
+        .catch(e => { if (!cancelled) setError(String(e.message)) })
+        .finally(() => { if (!cancelled) setIsLoading(false) })
+    }, 300)
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [rawFiles, params])
 
   useEffect(() => {
@@ -373,20 +384,22 @@ export default function XRD({
     }
 
     let cancelled = false
-    detectPeaks(activeDataset.x, activeDataset.y_processed, {
-      prominence: peakParams.prominence,
-      min_distance: peakParams.min_distance,
-      max_peaks: peakParams.max_peaks,
-      wavelength,
-    })
-      .then(peaks => {
-        if (!cancelled) setDetectedPeaks(peaks)
+    const timer = setTimeout(() => {
+      detectPeaks(activeDataset.x, activeDataset.y_processed, {
+        prominence: peakParams.prominence,
+        min_distance: peakParams.min_distance,
+        max_peaks: peakParams.max_peaks,
+        wavelength,
       })
-      .catch(e => {
-        if (!cancelled) setError(String(e.message))
-      })
+        .then(peaks => {
+          if (!cancelled) setDetectedPeaks(peaks)
+        })
+        .catch(e => {
+          if (!cancelled) setError(String(e.message))
+        })
+    }, 300)
 
-    return () => { cancelled = true }
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [activeDataset, peakParams, wavelength])
 
   const handleFiles = useCallback(async (files: File[]) => {

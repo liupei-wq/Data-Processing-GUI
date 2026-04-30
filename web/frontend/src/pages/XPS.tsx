@@ -26,8 +26,8 @@ const SIDEBAR_MIN_WIDTH = 300
 const SIDEBAR_MAX_WIDTH = 540
 const SIDEBAR_DEFAULT_WIDTH = 360
 const SIDEBAR_COLLAPSED_PEEK = 28
-const INTERP_POINTS_MIN = 600
-const INTERP_POINTS_MAX = 2400
+const INTERP_POINTS_MIN = 50
+const INTERP_POINTS_MAX = 5000
 const INTERP_POINTS_DEFAULT = 1000
 
 const LINE_COLOR_OPTIONS = [
@@ -117,6 +117,17 @@ function median(values: number[]) {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
 }
 
+function getFileStats(file: ParsedFile) {
+  const xs = file.x
+  if (!xs || xs.length < 2) return null
+  const xStart = xs[0]
+  const xEnd = xs[xs.length - 1]
+  const span = Math.abs(xEnd - xStart)
+  const nPts = xs.length
+  const step = span / (nPts - 1)
+  return { xStart, xEnd, span, nPts, step }
+}
+
 function estimateInterpolationPoints(files: ParsedFile[]) {
   if (files.length === 0) return INTERP_POINTS_DEFAULT
   const estimated = files.map(file => {
@@ -135,7 +146,10 @@ function estimateInterpolationPoints(files: ParsedFile[]) {
     }
     return Math.round(span / step) + 1
   })
-  const target = Math.round(median(estimated) / 50) * 50
+  const raw = median(estimated)
+  // Round to nearest 10 for small counts, nearest 50 for large
+  const roundTo = raw < 300 ? 10 : 50
+  const target = Math.round(raw / roundTo) * roundTo
   return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
 }
 
@@ -203,7 +217,7 @@ function buildRegionShapes(start: number | null | undefined, end: number | null 
       y0: 0,
       y1: 1,
       fillcolor: color,
-      opacity: 0.14,
+      opacity: 0.28,
       line: { width: 0 },
       layer: 'below' as const,
     },
@@ -215,7 +229,7 @@ function buildRegionShapes(start: number | null | undefined, end: number | null 
       x1: x0,
       y0: 0,
       y1: 1,
-      line: { color, width: 1.2, dash: 'dot' },
+      line: { color, width: 1.6, dash: 'dot' },
     },
     {
       type: 'line' as const,
@@ -225,7 +239,7 @@ function buildRegionShapes(start: number | null | undefined, end: number | null 
       x1,
       y0: 0,
       y1: 1,
-      line: { color, width: 1.2, dash: 'dot' },
+      line: { color, width: 1.6, dash: 'dot' },
     },
   ]
 }
@@ -300,28 +314,49 @@ function buildFitTraces(dataset: ProcessedDataset, fitResult: FitResult, palette
 
 // ── small UI pieces ───────────────────────────────────────────────────────────
 
-function Section({ step, title, hint, children, defaultOpen = true }: {
-  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
+function Section({ step, title, hint, children, defaultOpen = true, infoContent }: {
+  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean; infoContent?: React.ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const [infoOpen, setInfoOpen] = useState(false)
   return (
     <div className="mb-3 overflow-hidden rounded-[22px] bg-[var(--card-bg)] [box-shadow:var(--card-shadow)]">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-            {step}
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
-            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          className="flex flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
+              {step}
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
+              {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+            </div>
           </div>
+          <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
+        </button>
+        {infoContent && (
+          <button
+            type="button"
+            onClick={() => setInfoOpen(v => !v)}
+            title="查看方法說明"
+            className={[
+              'mr-3 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold transition-colors',
+              infoOpen
+                ? 'border-[var(--accent-secondary)] bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                : 'border-[var(--card-border)] text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)]',
+            ].join(' ')}
+          >?</button>
+        )}
+      </div>
+      {infoOpen && infoContent && (
+        <div className="border-t border-[var(--card-divider)] bg-[var(--card-ghost)] px-4 py-3 text-[11px] leading-relaxed text-[var(--text-soft)]">
+          {infoContent}
         </div>
-        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
-      </button>
+      )}
       {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
     </div>
   )
@@ -431,6 +466,40 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
   )
 }
 
+function TogglePill({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={[
+        'flex w-full items-center justify-between gap-3 rounded-[14px] px-4 py-2.5 text-sm font-medium transition-all duration-150',
+        checked
+          ? [
+              'bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)]',
+              'text-[var(--accent-secondary)]',
+              '[box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent),0_2px_12px_-2px_color-mix(in_srgb,var(--accent-secondary)_30%,transparent)]',
+            ].join(' ')
+          : [
+              'bg-[color:color-mix(in_srgb,var(--card-bg)_70%,transparent)]',
+              'text-[var(--text-soft)]',
+              '[box-shadow:inset_0_0_0_1px_var(--card-border)]',
+              'hover:text-[var(--text-main)] hover:[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--accent-secondary)_40%,var(--card-border))]',
+            ].join(' '),
+      ].join(' ')}
+    >
+      <span>{label}</span>
+      <span
+        className={[
+          'h-3.5 w-3.5 shrink-0 rounded-full transition-all duration-150',
+          checked
+            ? 'bg-[var(--accent-secondary)] [box-shadow:0_0_8px_color-mix(in_srgb,var(--accent-secondary)_75%,transparent)]'
+            : 'border border-[var(--card-border)]',
+        ].join(' ')}
+      />
+    </button>
+  )
+}
+
 function DualRangeInput({
   label,
   min,
@@ -520,6 +589,36 @@ function ExportBtn({ label, onClick }: { label: string; onClick: () => void }) {
     >{label}</button>
   )
 }
+function ExportBtnPrimary({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-[13px] font-semibold text-white transition-opacity hover:opacity-85"
+    >{label}</button>
+  )
+}
+function ExportBtnSecondary({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-2 text-[13px] font-semibold text-[var(--text-main)] transition-colors hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] disabled:pointer-events-none disabled:opacity-40"
+    >{label}</button>
+  )
+}
+
+function applyHidden(traces: Plotly.Data[], hidden: string[]): Plotly.Data[] {
+  if (hidden.length === 0) return traces
+  return traces.map(t => ({
+    ...t,
+    visible: hidden.includes((t as { name?: string }).name ?? '') ? ('legendonly' as const) : (true as const),
+  }))
+}
+
+function makeLegendClick(setHidden: React.Dispatch<React.SetStateAction<string[]>>) {
+  return (data: { curveNumber: number; data: Array<{ name?: string }> }) => {
+    const name = data.data[data.curveNumber]?.name
+    if (name != null) setHidden(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name])
+    return false
+  }
+}
 
 function ChartToolbar({
   title,
@@ -545,6 +644,79 @@ function ChartToolbar({
           ))}
         </select>
       </div>
+    </div>
+  )
+}
+
+function ModuleDropdown({ activeModule, onSelect }: { activeModule: string; onSelect?: (m: AnalysisModuleId) => void }) {
+  const [open, setOpen] = useState(false)
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (triggerRef.current && !triggerRef.current.contains(t) &&
+          panelRef.current && !panelRef.current.contains(t)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect()
+      setPanelStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left, minWidth: 160, zIndex: 9999 })
+    }
+    setOpen(o => !o)
+  }
+
+  const panel = open ? (
+    <div
+      ref={panelRef}
+      style={panelStyle}
+      className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-1.5 [box-shadow:var(--card-shadow)]"
+    >
+      {ANALYSIS_MODULES.map(mod => {
+        const isActive = mod.id === activeModule
+        return (
+          <button
+            key={mod.id}
+            type="button"
+            disabled={isActive}
+            onClick={() => { if (!isActive) { onSelect?.(mod.id); setOpen(false) } }}
+            className={[
+              'flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-xs transition-colors pressable',
+              isActive ? 'bg-[var(--accent-soft)] font-semibold text-[var(--text-main)]' : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)]',
+            ].join(' ')}
+          >
+            <span>{mod.label}</span>
+            {isActive && <span className="text-[10px] text-[var(--accent-strong)]">●</span>}
+          </button>
+        )
+      })}
+    </div>
+  ) : null
+
+  return (
+    <div className="px-4 pb-2 pt-1">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggle}
+        className="flex items-center gap-1.5 rounded-lg px-1 py-1 text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]"
+      >
+        <span className="uppercase tracking-[0.14em]">分析模組</span>
+        <span className="rounded-md bg-[color:color-mix(in_srgb,var(--accent-strong)_13%,var(--card-bg))] px-1.5 py-0.5 font-semibold text-[var(--accent-strong)]">
+          {ANALYSIS_MODULES.find(m => m.id === activeModule)?.label ?? activeModule.toUpperCase()}
+        </span>
+        <span className={`text-[8px] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>▾</span>
+      </button>
+      {typeof document !== 'undefined' && panel ? createPortal(panel, document.body) : null}
     </div>
   )
 }
@@ -668,7 +840,7 @@ function getStageDisplayLabel(params: ProcessParams) {
   const parts: string[] = []
   if (params.interpolate) parts.push('內插')
   if (params.average) parts.push('平均')
-  if (Math.abs(params.energy_shift) > 1e-8) parts.push('校正')
+  if (Math.abs(params.energy_shift) > 1e-8) parts.push('能量校正')
   return parts.join(' / ')
 }
 
@@ -735,7 +907,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     final: 'blue',
   })
   const [rawFileColors, setRawFileColors] = useState<string[]>([])
-  const [moduleDropdownOpen, setModuleDropdownOpen] = useState(false)
   const [parseLoading, setParseLoading] = useState(false)
   const [processingKeys, setProcessingKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -745,6 +916,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [showRaw, setShowRaw] = useState(true)
   const [showBg, setShowBg] = useState(true)
   const [activeDatasetIdx, setActiveDatasetIdx] = useState(0)
+  const [rawHidden, setRawHidden] = useState<string[]>([])
+  const [overlayHidden, setOverlayHidden] = useState<string[]>([])
+  const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
+  const [bgHidden, setBgHidden] = useState<string[]>([])
+  const [normHidden, setNormHidden] = useState<string[]>([])
+  const [finalHidden, setFinalHidden] = useState<string[]>([])
 
   // element selection
   const [elementsList, setElementsList] = useState<ElementListItem[]>([])
@@ -1530,15 +1707,19 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         chartLineColors.normalization,
       )
     : []
+  const bgDataXMin = backgroundDataset ? Math.min(...backgroundDataset.x) : beMin
+  const bgDataXMax = backgroundDataset ? Math.max(...backgroundDataset.x) : beMax
+  const normDataXMin = normalizationInput ? Math.min(...normalizationInput.x) : beMin
+  const normDataXMax = normalizationInput ? Math.max(...normalizationInput.x) : beMax
   const backgroundLayout = {
     ...(chartLayout() as Plotly.Layout),
-    shapes: buildRegionShapes(currentParams.bg_x_start ?? beMin, currentParams.bg_x_end ?? beMax, 'rgba(245, 158, 11, 0.55)'),
-    annotations: buildRegionAnnotations(currentParams.bg_x_start ?? beMin, currentParams.bg_x_end ?? beMax, '背景區間', '#f59e0b'),
+    shapes: buildRegionShapes(currentParams.bg_x_start ?? bgDataXMin, currentParams.bg_x_end ?? bgDataXMax, '#f59e0b'),
+    annotations: buildRegionAnnotations(currentParams.bg_x_start ?? bgDataXMin, currentParams.bg_x_end ?? bgDataXMax, '背景區間', '#f59e0b'),
   }
   const normalizationLayout = {
     ...(chartLayout() as Plotly.Layout),
-    shapes: buildRegionShapes(currentParams.norm_x_start ?? beMin, currentParams.norm_x_end ?? beMax, 'rgba(20, 184, 166, 0.55)'),
-    annotations: buildRegionAnnotations(currentParams.norm_x_start ?? beMin, currentParams.norm_x_end ?? beMax, '歸一化區間', '#14b8a6'),
+    shapes: buildRegionShapes(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '#14b8a6'),
+    annotations: buildRegionAnnotations(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '歸一化區間', '#14b8a6'),
   }
 
   const sidebarStyle: CSSProperties = sidebarCollapsed
@@ -1576,43 +1757,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
             <div className="flex-1 overflow-y-auto">
               {/* ── Compact module selector ── */}
-              <div className="px-4 pb-2 pt-1">
-                <div
-                  className="relative"
-                  onMouseEnter={() => setModuleDropdownOpen(true)}
-                  onMouseLeave={() => setModuleDropdownOpen(false)}
-                >
-                  <button type="button" className="flex items-center gap-1.5 rounded-lg px-1 py-1 text-[10px] text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)]">
-                    <span className="uppercase tracking-[0.14em]">分析模組</span>
-                    <span className="rounded-md bg-[color:color-mix(in_srgb,var(--accent-strong)_13%,var(--card-bg))] px-1.5 py-0.5 font-semibold text-[var(--accent-strong)]">XPS</span>
-                    <span className="text-[8px]">▾</span>
-                  </button>
-                  {moduleDropdownOpen && (
-                    <div className="absolute left-0 top-[calc(100%+2px)] z-30 min-w-[160px] rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-1.5 [box-shadow:var(--card-shadow)]">
-                      {ANALYSIS_MODULES.map(mod => {
-                        const isActive = mod.id === 'xps'
-                        return (
-                          <button
-                            key={mod.id}
-                            type="button"
-                            disabled={isActive}
-                            onClick={() => { if (!isActive) { onModuleSelect?.(mod.id); setModuleDropdownOpen(false) } }}
-                            className={[
-                              'flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-xs transition-colors pressable',
-                              isActive
-                                ? 'bg-[var(--accent-soft)] font-semibold text-[var(--text-main)]'
-                                : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)]',
-                            ].join(' ')}
-                          >
-                            <span>{mod.label}</span>
-                            {isActive && <span className="text-[10px] text-[var(--accent-strong)]">●</span>}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <ModuleDropdown activeModule="xps" onSelect={onModuleSelect} />
 
               {/* Mode toggle */}
               <div className="px-4 py-3">
@@ -1646,33 +1791,122 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   )}
                 </Section>
 
-                <Section step={2} title="內插" hint="先統一點數，再進到後續流程" defaultOpen={false}>
-                  <CheckRow label="啟用內插" checked={currentParams.interpolate} onChange={set('interpolate')} />
-                  {rawFiles.length > 0 && (
-                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-3 text-xs">
-                      <p className="font-medium text-[var(--text-main)]">原始資料共 {rawFiles.length} 筆</p>
-                      <div className="mt-2 space-y-1 text-[var(--text-soft)]">
-                        {rawFiles.map(file => (
-                          <div key={file.name} className="flex items-center justify-between gap-3">
-                            <span className="truncate">{file.name}</span>
-                            <span className="shrink-0">{file.x.length} 點</span>
+                <Section step={2} title="內插" hint="對每筆資料各自重新取樣 x 軸" defaultOpen={false}>
+                  <TogglePill label="啟用內插" checked={currentParams.interpolate} onChange={set('interpolate')} />
+
+                  {/* 說明文字 */}
+                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5 text-[10px] leading-relaxed text-[var(--text-soft)]">
+                    <p className="font-medium text-[var(--text-main)]">⚑ 內插說明</p>
+                    <p className="mt-1">對每筆資料<span className="font-semibold text-[var(--text-main)]">各自</span>建立等間距 x 軸（linspace from 該筆 BE_min → BE_max，共 N 點），不建立跨檔案共同 x 軸。若各筆的能量範圍不同，內插後各筆 x 軸仍不相同。</p>
+                    <p className="mt-1">多檔平均時，後端以<span className="font-semibold text-[var(--text-main)]">第一筆</span>的 x 軸為基準，再內插其他筆。</p>
+                  </div>
+
+                  {/* 每筆資料統計 */}
+                  {rawFiles.length > 0 && (() => {
+                    const statsAll = rawFiles.map(f => getFileStats(f))
+                    const ref = statsAll[0]
+                    const rangeMismatch = statsAll.some(s =>
+                      s && ref && (Math.abs(s.xStart - ref.xStart) > 0.5 || Math.abs(s.xEnd - ref.xEnd) > 0.5)
+                    )
+                    const newStep = effectiveNPoints > 1
+                      ? null // computed per file below
+                      : null
+                    return (
+                      <div className="space-y-1.5">
+                        {rangeMismatch && (
+                          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-400">
+                            ⚠ 各筆能量範圍不同，內插後 x 軸不一致，平均時以第一筆為基準。
                           </div>
-                        ))}
+                        )}
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] overflow-hidden">
+                          {/* 表頭 */}
+                          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 border-b border-[var(--card-divider)] px-2.5 py-1.5 text-[9px] uppercase tracking-[0.14em] text-[var(--text-soft)]">
+                            <span>檔案</span>
+                            <span className="text-right">點數</span>
+                            <span className="text-right">BE 範圍 (eV)</span>
+                            <span className="text-right">步距</span>
+                          </div>
+                          {rawFiles.map((file, idx) => {
+                            const s = statsAll[idx]
+                            if (!s) return null
+                            const newStepEv = effectiveNPoints > 1 ? s.span / (effectiveNPoints - 1) : null
+                            const stepChanged = interpolationEnabled && newStepEv != null && Math.abs(newStepEv - s.step) > 0.001
+                            return (
+                              <div key={file.name} className={`grid grid-cols-[1fr_auto_auto_auto] gap-x-2 px-2.5 py-1.5 text-[10px] ${idx > 0 ? 'border-t border-[var(--card-divider)]' : ''}`}>
+                                <span className="truncate text-[var(--text-main)]" title={file.name}>{file.name}</span>
+                                <span className="shrink-0 text-right text-[var(--text-soft)]">
+                                  {s.nPts}
+                                  {interpolationEnabled && <span className="ml-1 text-[var(--accent-strong)]">→ {effectiveNPoints}</span>}
+                                </span>
+                                <span className="shrink-0 text-right text-[var(--text-soft)]">
+                                  {s.xStart.toFixed(1)} – {s.xEnd.toFixed(1)}
+                                </span>
+                                <span className="shrink-0 text-right text-[var(--text-soft)]">
+                                  {s.step.toFixed(3)}
+                                  {stepChanged && newStepEv != null && (
+                                    <span className={`ml-1 ${newStepEv < s.step ? 'text-[var(--accent-strong)]' : 'text-amber-400'}`}>
+                                      → {newStepEv.toFixed(3)}
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {interpolationEnabled && (() => {
+                          const statsAll2 = rawFiles.map(f => getFileStats(f))
+                          const hasDenseStep = statsAll2.some(s => s && effectiveNPoints > 1 && (s.span / (effectiveNPoints - 1)) < s.step * 0.9)
+                          const hasSparseStep = statsAll2.some(s => s && effectiveNPoints > 1 && (s.span / (effectiveNPoints - 1)) > s.step * 1.1)
+                          if (!hasDenseStep && !hasSparseStep) return null
+                          return (
+                            <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2.5 py-2 text-[10px] text-[var(--text-soft)]">
+                              {hasDenseStep && <p className="text-[var(--accent-strong)]">↑ 點數增加：步距變小，內插會平滑化細節。</p>}
+                              {hasSparseStep && <p className="text-amber-400">↓ 點數減少：步距變大，解析度下降。</p>}
+                            </div>
+                          )
+                        })()}
                       </div>
-                    </div>
-                  )}
+                    )
+                  })()}
+
                   {interpolationEnabled && (
                     <>
-                      <CheckRow label="自動調整點數" checked={currentAutoInterpPoints} onChange={setCurrentAutoInterpPoints} />
+                      <TogglePill label="自動調整點數" checked={currentAutoInterpPoints} onChange={setCurrentAutoInterpPoints} />
                       {currentAutoInterpPoints ? (
                         <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] px-3 py-3 text-xs">
-                          <p className="font-medium text-[var(--text-main)]">本次將使用 {effectiveNPoints} 點</p>
+                          <p className="font-medium text-[var(--text-main)]">自動建議：{effectiveNPoints} 點</p>
                           <p className="mt-1 text-[var(--text-soft)]">
-                            依上傳光譜的原始點密度自動估算，並限制在 {INTERP_POINTS_MIN}–{INTERP_POINTS_MAX} 點之間。
+                            依各筆資料的 span ÷ 原始步距 估算自然點數，取中位數後四捨五入（小於 300 點取 10 倍數，否則取 50 倍數）。
                           </p>
+                          {rawFiles.length > 0 && (() => {
+                            const estimates = rawFiles.map(f => {
+                              const s = getFileStats(f)
+                              if (!s) return null
+                              const xs = [...f.x].filter(Number.isFinite).sort((a, b) => a - b)
+                              const diffs: number[] = []
+                              for (let i = 1; i < xs.length; i++) {
+                                const d = xs[i] - xs[i-1]
+                                if (d > 0) diffs.push(d)
+                              }
+                              if (diffs.length === 0) return null
+                              const medStep = [...diffs].sort((a,b)=>a-b)[Math.floor(diffs.length/2)]
+                              const est = Math.round(s.span / medStep) + 1
+                              return { name: f.name, est, clamped: clamp(est, INTERP_POINTS_MIN, INTERP_POINTS_MAX) !== est }
+                            }).filter(Boolean)
+                            return (
+                              <div className="mt-2 space-y-0.5 text-[10px] text-[var(--text-soft)]">
+                                {estimates.map((e, i) => e && (
+                                  <div key={i} className="flex justify-between">
+                                    <span className="truncate max-w-[140px]">{e.name}</span>
+                                    <span className={e.clamped ? 'text-amber-400' : ''}>{e.est} 點{e.clamped ? '（已夾限）' : ''}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          })()}
                         </div>
                       ) : (
-                        <NumInput label="點數" value={currentParams.n_points} onChange={set('n_points')} min={200} max={5000} step={100} />
+                        <NumInput label="點數" value={currentParams.n_points} onChange={set('n_points')} min={50} max={5000} step={10} />
                       )}
                     </>
                   )}
@@ -1683,7 +1917,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     <p className="text-[10px] text-[var(--text-soft)]">單筆資料處理只會處理目前這一筆，所以這一步固定停用。</p>
                   ) : overlayFiles.length > 1 ? (
                     <>
-                      <CheckRow
+                      <TogglePill
                         label="啟用多檔平均"
                         checked={currentParams.average}
                         onChange={value => setOverlayState(current => ({
@@ -1703,7 +1937,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </Section>
 
                 <Section step={4} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
-                  <CheckRow label="手動調整偏移量" checked={currentManualEnergyShiftEnabled} onChange={setCurrentManualEnergyShiftEnabled} />
+                  <TogglePill label="手動調整偏移量" checked={currentManualEnergyShiftEnabled} onChange={setCurrentManualEnergyShiftEnabled} />
                   {currentManualEnergyShiftEnabled && (
                     <NumInput label="手動 BE 位移 (eV)" value={currentParams.energy_shift} onChange={set('energy_shift')} step={0.01} />
                   )}
@@ -1789,8 +2023,18 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   </div>
                 </Section>
 
-                <Section step={5} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false}>
-                  <CheckRow label="啟用背景扣除" checked={currentParams.bg_enabled} onChange={set('bg_enabled')} />
+                <Section step={5} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false} infoContent={
+                  <div className="space-y-2.5">
+                    <p className="font-semibold text-[var(--text-main)]">背景扣除方法說明</p>
+                    <div><span className="font-medium text-[var(--text-main)]">Linear</span> — 線性連接起點與終點 bg(E)=aE+b。適用背景緩慢線性變化的簡單情況。峰頂遠超出線性基線時可能低估背景。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Shirley</span> — 迭代演算，背景正比於較高 BE 端的積分強度。業界最常用，適合對稱 XPS 核心能階峰，兩端自然歸零。峰形嚴重非對稱或有強散射時效果較差。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Tougaard</span> — 物理模型，基於能量損失函數 B(E)=B·∫J/(E′−E+C)² dE′，預設 B=2866、C=1643。適合寬能量範圍，對峰形無對稱假設。計算較慢，需選較大 BE 範圍。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Polynomial</span> — 多項式擬合兩端背景。適合峰位不在邊緣、背景形狀較複雜的情況。次數過高容易過擬合，建議從 2–4 開始試。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">AsLS</span> — 非對稱最小二乘法（Asymmetric Least Squares）。以懲罰項讓估計背景平滑且盡量落在光譜下方。適合寬帶彎曲背景。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">airPLS</span> — 自適應迭代加權懲罰最小二乘法，自動調整各點權重，不需手動調非對稱參數。適合複雜背景形狀，通常比 AsLS 更穩健。</div>
+                  </div>
+                }>
+                  <TogglePill label="啟用背景扣除" checked={currentParams.bg_enabled} onChange={set('bg_enabled')} />
                   {currentParams.bg_enabled && (
                     <>
                       <CustomSelect label="方法" value={currentParams.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
@@ -1830,7 +2074,17 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   )}
                 </Section>
 
-                <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
+                <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
+                  <div className="space-y-2.5">
+                    <p className="font-semibold text-[var(--text-main)]">歸一化方法說明</p>
+                    <div><span className="font-medium text-[var(--text-main)]">不歸一化 (None)</span> — 保留原始強度。適合已完成儀器強度校正的資料，或需比較絕對強度的情況。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Min–Max</span> — y′=(y−min)/(max−min)，縮放至 [0, 1]。適合比較峰型，不保留相對強度。不建議用於定量比較。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Max</span> — y′=y/max，最高峰縮放至 1。適合多組光譜疊圖比較峰型與相對強度比。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Area</span> — y′=y/∫y dx，以積分面積歸一化。適合比較不同量測時間或通量下的峰強度，常用於 XPS 定量分析前的強度校正。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Mean Region</span> — y′=y/mean(y[lo:hi])，以指定能量區間的平均值歸一化。適合有明確參考背景的情況，如費米邊緣歸一化或特定背景區間。</div>
+                    <p className="mt-1 text-[var(--text-soft)]">注意：歸一化後的強度不再具有物理意義的絕對值，RSF 定量分析應在歸一化前進行，或確保各組資料採用相同歸一化條件。</p>
+                  </div>
+                }>
                   <CustomSelect label="方法" value={currentParams.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
                     options={[
                       { value: 'none', label: '不歸一化' },
@@ -1905,9 +2159,32 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     + 手動新增峰
                   </button>
                   {peakCandidates.map(pk => (
-                    <div key={pk.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3 text-xs space-y-2">
-                      <div className="flex items-center justify-between">
-                        <CheckRow label={pk.label} checked={pk.enabled} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, enabled: v } : p))} />
+                    <div
+                      key={pk.id}
+                      className={[
+                        'rounded-xl p-3 text-xs space-y-2 transition-all duration-150',
+                        pk.enabled
+                          ? 'border border-[color:color-mix(in_srgb,var(--accent-secondary)_50%,transparent)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_7%,var(--card-bg))] [box-shadow:0_2px_10px_-2px_color-mix(in_srgb,var(--accent-secondary)_20%,transparent)]'
+                          : 'border border-[var(--card-border)] bg-[var(--card-bg)]',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, enabled: !p.enabled } : p))}
+                          className={[
+                            'flex flex-1 items-center gap-2 text-xs font-medium transition-colors duration-150',
+                            pk.enabled ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          <span className={[
+                            'h-2.5 w-2.5 shrink-0 rounded-full transition-all duration-150',
+                            pk.enabled
+                              ? 'bg-[var(--accent-secondary)] [box-shadow:0_0_6px_color-mix(in_srgb,var(--accent-secondary)_70%,transparent)]'
+                              : 'border border-[var(--card-border)]',
+                          ].join(' ')} />
+                          {pk.label}
+                        </button>
                         <button type="button" onClick={() => setPeakCandidates(prev => prev.filter(p => p.id !== pk.id))} className="text-rose-400 hover:text-rose-300">✕</button>
                       </div>
                       <div className="grid grid-cols-3 gap-2">
@@ -2150,10 +2427,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   </div>
                 )}
                 <Plot
-                  data={rawChartTraces as Plotly.Data[]}
+                  data={applyHidden(rawChartTraces as Plotly.Data[], rawHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setRawHidden) as never}
+                  onLegendDoubleClick={() => false}
                 />
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
@@ -2173,10 +2452,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 />
                 <p className="mb-3 text-xs text-[var(--text-soft)]">{overlayStage.description}</p>
                 <Plot
-                  data={buildOverlayTraces(overlayStage.datasets, chartLineColors.overlay) as Plotly.Data[]}
+                  data={applyHidden(buildOverlayTraces(overlayStage.datasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setOverlayHidden) as never}
+                  onLegendDoubleClick={() => false}
                 />
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
@@ -2190,16 +2471,18 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title={`2. ${stageDisplayLabel || '前處理'}後疊圖`}
+                  title={`2. ${stageDisplayLabel ? `${stageDisplayLabel}後` : '前處理後'}`}
                   colorValue={chartLineColors.preprocess}
                   onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
                 />
                 <p className="mb-3 text-xs text-[var(--text-soft)]">這張圖把原始光譜和前處理後結果疊在一起，方便對照點數與能量軸變化。</p>
                 <Plot
-                  data={preprocessChartTraces as Plotly.Data[]}
+                  data={applyHidden(preprocessChartTraces as Plotly.Data[], preprocessHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setPreprocessHidden) as never}
+                  onLegendDoubleClick={() => false}
                 />
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
@@ -2224,10 +2507,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。</p>
                 <Plot
-                  data={(showBg ? backgroundChartTraces : backgroundChartTraces.filter(trace => trace.name !== '背景線')) as Plotly.Data[]}
+                  data={applyHidden((showBg ? backgroundChartTraces : backgroundChartTraces.filter(trace => trace.name !== '背景線')) as Plotly.Data[], bgHidden)}
                   layout={backgroundLayout as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setBgHidden) as never}
+                  onLegendDoubleClick={() => false}
                 />
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
@@ -2247,10 +2532,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 />
                 <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。</p>
                 <Plot
-                  data={normalizationChartTraces as Plotly.Data[]}
+                  data={applyHidden(normalizationChartTraces as Plotly.Data[], normHidden)}
                   layout={normalizationLayout as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setNormHidden) as never}
+                  onLegendDoubleClick={() => false}
                 />
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
@@ -2274,10 +2561,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
                 </div>
                 <Plot
-                  data={(fitResult ? buildFitTraces(activeDataset, fitResult, chartLineColors.final) : buildMainTraces(activeDataset, showRaw, showBg, chartLineColors.final)) as Plotly.Data[]}
+                  data={applyHidden((fitResult ? buildFitTraces(activeDataset, fitResult, chartLineColors.final) : buildMainTraces(activeDataset, showRaw, showBg, chartLineColors.final)) as Plotly.Data[], finalHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%', height: 380 }}
+                  onLegendClick={makeLegendClick(setFinalHidden) as never}
+                  onLegendDoubleClick={() => false}
                 />
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
@@ -2429,36 +2718,113 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
             {processingViewMode === 'single' && activeDataset && (
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</p>
-                <div className="flex flex-wrap gap-2">
-                  <ExportBtn label="處理後光譜 CSV" onClick={() => {
-                    const headers = ['binding_energy_eV', 'intensity_raw', 'intensity_processed']
-                    const rows = activeDataset.x.map((x, i) => [x, activeDataset.y_raw[i], activeDataset.y_processed[i]])
-                    downloadFile(toCsv(headers, rows), 'xps_processed.csv', 'text/csv')
-                  }} />
-                  {fitResult && fitResult.peaks.length > 0 && (
-                    <ExportBtn label="擬合結果 CSV" onClick={() => {
-                      const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']
-                      const rows: (string | number | null)[][] = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
-                      downloadFile(toCsv(headers, rows), 'xps_fit.csv', 'text/csv')
-                    }} />
-                  )}
-                  {rsfRows.some(r => r.rsf != null) && fitResult && (
-                    <ExportBtn label="RSF 定量 CSV" onClick={() => {
-                      const totalRsfArea = rsfRows.reduce((acc, r, i) => {
-                        const a = fitResult.peaks[i]?.Area ?? 0
-                        return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
-                      }, 0)
-                      const headers = ['Peak', 'Element', 'Orbital', 'Area', 'RSF', 'RSF_Area', 'Atomic_pct']
-                      const rows: (string | number | null)[][] = rsfRows.map((row, idx) => {
-                        const pk = fitResult.peaks[idx]
-                        const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
-                        const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
-                        return [row.peakName, row.element, row.orbitalLabel, pk?.Area ?? 0, row.rsf, rsfArea, atomicPct]
-                      })
-                      downloadFile(toCsv(headers, rows), 'xps_rsf_quantification.csv', 'text/csv')
-                    }} />
-                  )}
+                <div className="mb-4">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">匯出</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">
+                    下載各階段光譜、峰擬合結果、RSF 定量表，以及含完整處理參數的 JSON 報告。
+                  </p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  {/* 研究常用 */}
+                  <div className="rounded-[22px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">研究常用</p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      <ExportBtnPrimary label="最終處理光譜 CSV" onClick={() => {
+                        const headers = ['binding_energy_eV', 'intensity_raw', 'intensity_processed']
+                        const rows = activeDataset.x.map((x, i) => [x, activeDataset.y_raw[i], activeDataset.y_processed[i]])
+                        downloadFile(toCsv(headers, rows), 'xps_processed.csv', 'text/csv')
+                      }} />
+                      {backgroundDataset && (
+                        <ExportBtnSecondary label="背景扣除後 CSV" onClick={() => {
+                          downloadFile(buildStageCsv(backgroundStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_background.csv', 'text/csv')
+                        }} />
+                      )}
+                      {normalizationDataset && (
+                        <ExportBtnSecondary label="歸一化後 CSV" onClick={() => {
+                          downloadFile(buildStageCsv(normalizationStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_normalized.csv', 'text/csv')
+                        }} />
+                      )}
+                      <ExportBtnSecondary label="原始光譜 CSV" onClick={() => {
+                        downloadFile(buildStageCsv(rawStageDatasets, 'binding_energy_eV', 'intensity_raw'), 'xps_raw.csv', 'text/csv')
+                      }} />
+                    </div>
+                  </div>
+                  {/* 分析表格 */}
+                  <div className="rounded-[22px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">分析表格</p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      {fitResult && fitResult.peaks.length > 0 ? (
+                        <>
+                          <ExportBtnSecondary label="峰擬合結果 CSV" onClick={() => {
+                            const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']
+                            const rows: (string | number | null)[][] = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
+                            downloadFile(toCsv(headers, rows), 'xps_fit.csv', 'text/csv')
+                          }} />
+                          {rsfRows.some(r => r.rsf != null) && (
+                            <ExportBtnSecondary label="RSF 定量 CSV" onClick={() => {
+                              const totalRsfArea = rsfRows.reduce((acc, r, i) => {
+                                const a = fitResult.peaks[i]?.Area ?? 0
+                                return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
+                              }, 0)
+                              const headers = ['Peak', 'Element', 'Orbital', 'Area', 'RSF', 'RSF_Area', 'Atomic_pct']
+                              const rows: (string | number | null)[][] = rsfRows.map((row, idx) => {
+                                const pk = fitResult.peaks[idx]
+                                const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
+                                const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
+                                return [row.peakName, row.element, row.orbitalLabel, pk?.Area ?? 0, row.rsf, rsfArea, atomicPct]
+                              })
+                              downloadFile(toCsv(headers, rows), 'xps_rsf_quantification.csv', 'text/csv')
+                            }} />
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-xs leading-5 text-[var(--text-soft)]">完成峰擬合後才有結果可下載。</p>
+                      )}
+                      {vbmResult?.success && (
+                        <ExportBtnSecondary label="VBM 結果 TXT" onClick={() => {
+                          const lines = [
+                            `VBM = ${vbmResult.vbm_ev?.toFixed(4) ?? 'N/A'} eV`,
+                            `Baseline level = ${vbmResult.baseline_level?.toFixed(4) ?? 'N/A'}`,
+                            `Edge region: ${vbmEdgeLo} – ${vbmEdgeHi} eV`,
+                            `Baseline region: ${vbmBaselineLo} – ${vbmBaselineHi} eV`,
+                          ]
+                          downloadFile(lines.join('\n'), 'xps_vbm.txt', 'text/plain')
+                        }} />
+                      )}
+                    </div>
+                  </div>
+                  {/* 追溯/設定 */}
+                  <div className="rounded-[22px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">追溯 / 設定</p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      <ExportBtnSecondary label="處理報告 JSON" onClick={() => {
+                        const report = {
+                          generated: new Date().toISOString(),
+                          file: activeFile?.name ?? '',
+                          mode: xpsMode,
+                          params: currentParams,
+                          auto_interp_points: currentAutoInterpPoints,
+                          effective_n_points: effectiveNPoints,
+                          peaks: peakCandidates,
+                          fit_profile: fitProfile,
+                          fit_result: fitResult ? { peaks: fitResult.peaks } : null,
+                          vbm: vbmResult?.success ? {
+                            vbm_ev: vbmResult.vbm_ev,
+                            edge_lo: vbmEdgeLo,
+                            edge_hi: vbmEdgeHi,
+                            baseline_lo: vbmBaselineLo,
+                            baseline_hi: vbmBaselineHi,
+                          } : null,
+                          rsf: rsfRows.some(r => r.rsf != null) ? rsfRows : null,
+                        }
+                        downloadFile(JSON.stringify(report, null, 2), 'xps_report.json', 'application/json')
+                      }} />
+                      <p className="text-xs leading-5 text-[var(--text-soft)]">
+                        包含處理參數、峰擬合設定與結果摘要，可用於重現分析流程。
+                        共 {rawFiles.length} 個檔案。
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
