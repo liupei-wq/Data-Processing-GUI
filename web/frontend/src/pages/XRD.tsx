@@ -11,6 +11,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
+import Plot from 'react-plotly.js'
 import type {
   DetectedPeak,
   LogViewParams,
@@ -28,13 +29,18 @@ import { detectPeaks, parseFiles, processData, fetchReferences, fetchReferencePe
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import GaussianSubtractionChart from '../components/GaussianSubtractionChart'
-import SpectrumChart from '../components/SpectrumChart'
 import ProcessingPanel, {
   DEFAULT_PARAMS,
   WAVELENGTH_MAP,
 } from '../components/ProcessingPanel'
 import {
+  applyHidden,
+  ChartToolbar,
+  DEFAULT_SERIES_PALETTE_KEYS,
   DatasetSelectionModal,
+  LINE_COLOR_OPTIONS,
+  LINE_COLOR_PALETTES,
+  makeLegendClick,
   ProcessingWorkspaceHeader,
   StickySidebarHeader,
 } from '../components/WorkspaceUi'
@@ -78,6 +84,85 @@ function twoThetaToD(twoThetaDeg: number, wavelengthAngstrom: number): number | 
 function safeLogValue(value: number, shift: number, method: LogViewParams['method'], floorValue: number) {
   const shifted = Math.max(value + shift, floorValue)
   return method === 'ln' ? Math.log(shifted) : Math.log10(shifted)
+}
+
+function cssVar(name: string, fallback: string) {
+  if (typeof window === 'undefined') return fallback
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+
+function chartLayout({
+  xMode,
+  wavelength,
+  height = 360,
+  yTitle = 'Intensity (a.u.)',
+  reversed = false,
+}: {
+  xMode: XMode
+  wavelength: number
+  height?: number
+  yTitle?: string
+  reversed?: boolean
+}): Partial<Plotly.Layout> {
+  const chartGrid = cssVar('--chart-grid', 'rgba(148, 163, 184, 0.14)')
+  const chartText = cssVar('--chart-text', '#d9e4f0')
+  const chartBg = cssVar('--chart-bg', 'rgba(15, 23, 42, 0.52)')
+  const chartLegendBg = cssVar('--chart-legend-bg', 'rgba(15, 23, 42, 0.72)')
+  const chartHoverBg = cssVar('--chart-hover-bg', 'rgba(15, 23, 42, 0.95)')
+  const chartHoverBorder = cssVar('--chart-hover-border', 'rgba(148, 163, 184, 0.22)')
+
+  return {
+    xaxis: {
+      title: { text: xMode === 'dspacing' ? 'd-spacing (Å)' : '2θ (degrees)' },
+      showgrid: true,
+      gridcolor: chartGrid,
+      zeroline: false,
+      color: chartText,
+      autorange: reversed ? 'reversed' : (xMode === 'dspacing' ? 'reversed' : true),
+    },
+    yaxis: {
+      title: { text: yTitle },
+      showgrid: true,
+      gridcolor: chartGrid,
+      zeroline: false,
+      color: chartText,
+    },
+    legend: {
+      x: 1,
+      xanchor: 'right',
+      y: 1,
+      bgcolor: chartLegendBg,
+      bordercolor: chartHoverBorder,
+      borderwidth: 1,
+      font: { color: chartText },
+    },
+    margin: { l: 60, r: 20, t: 24, b: 60 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: chartBg,
+    font: { color: chartText },
+    hovermode: 'x unified',
+    hoverlabel: {
+      bgcolor: chartHoverBg,
+      bordercolor: chartHoverBorder,
+      font: { color: chartText },
+    },
+    autosize: true,
+    height,
+  }
+}
+
+function convertXValues(values: number[], xMode: XMode, wavelength: number) {
+  return xMode === 'dspacing' ? values.map(value => twoThetaToD(value, wavelength) ?? value) : values
+}
+
+function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], xLabel: string, yLabel: string) {
+  const rows: CsvCell[][] = []
+  datasets.forEach(dataset => {
+    dataset.x.forEach((x, index) => {
+      rows.push([dataset.name, x.toFixed(6), dataset.y[index]?.toFixed(6) ?? ''])
+    })
+  })
+  return toCsv(['dataset', xLabel, yLabel], rows)
 }
 
 function processedSpectrumCsv(result: ProcessResult): string {
@@ -253,6 +338,20 @@ export default function XRD({
   const [detectedPeaks, setDetectedPeaks] = useState<DetectedPeak[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rawFileColors, setRawFileColors] = useState<string[]>([])
+  const [chartLineColors, setChartLineColors] = useState({
+    overlay: 'blue',
+    preprocess: 'teal',
+    gaussian: 'orange',
+    log: 'violet',
+    final: 'blue',
+  })
+  const [rawHidden, setRawHidden] = useState<string[]>([])
+  const [overlayHidden, setOverlayHidden] = useState<string[]>([])
+  const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
+  const [gaussianHidden, setGaussianHidden] = useState<string[]>([])
+  const [logHidden, setLogHidden] = useState<string[]>([])
+  const [finalHidden, setFinalHidden] = useState<string[]>([])
 
   useEffect(() => {
     localStorage.setItem('nigiro-xrd-sidebar-width', String(sidebarWidth))
@@ -261,6 +360,10 @@ export default function XRD({
   useEffect(() => {
     localStorage.setItem('nigiro-xrd-sidebar-collapsed', String(sidebarCollapsed))
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    setRawFileColors(prev => rawFiles.map((_, index) => prev[index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]))
+  }, [rawFiles])
 
   useEffect(() => {
     if (!sidebarResizing) return
@@ -330,6 +433,178 @@ export default function XRD({
   const filteredRefPeaks = useMemo(
     () => refPeaks.filter(peak => peak.rel_i >= refMatchParams.min_rel_intensity),
     [refPeaks, refMatchParams.min_rel_intensity],
+  )
+  const rawChartSourceFiles = useMemo(
+    () => (isOverlayView ? rawFiles.filter(file => overlaySelection.includes(file.name)) : rawFiles),
+    [isOverlayView, overlaySelection, rawFiles],
+  )
+  const rawStageDatasets = useMemo(
+    () => rawChartSourceFiles.map(file => ({
+      name: file.name,
+      x: convertXValues(file.x, xMode, wavelength),
+      y: file.y,
+    })),
+    [rawChartSourceFiles, wavelength, xMode],
+  )
+  const rawChartTraces = useMemo(
+    () => rawChartSourceFiles.map((file, index) => {
+      const paletteKey = rawFileColors[rawFiles.findIndex(item => item.name === file.name)] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
+      const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+      return {
+        x: convertXValues(file.x, xMode, wavelength),
+        y: file.y,
+        type: 'scatter',
+        mode: 'lines',
+        name: file.name,
+        line: { color: palette.primary, width: 2 },
+      } as Plotly.Data
+    }),
+    [rawChartSourceFiles, rawFileColors, rawFiles, wavelength, xMode],
+  )
+  const overlayStageDatasets = useMemo(
+    () => isOverlayView && overlayResult
+      ? overlayResult.datasets.map(dataset => ({
+          name: dataset.name,
+          x: convertXValues(dataset.x, xMode, wavelength),
+          y: dataset.y_processed,
+        }))
+      : [],
+    [isOverlayView, overlayResult, wavelength, xMode],
+  )
+  const overlayChartTraces = useMemo(() => {
+    const colors = (LINE_COLOR_PALETTES[chartLineColors.overlay] ?? LINE_COLOR_PALETTES.blue).series
+    return overlayStageDatasets.map((dataset, index) => ({
+      x: dataset.x,
+      y: dataset.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: dataset.name,
+      line: { color: colors[index % colors.length], width: 2.2 },
+    } as Plotly.Data))
+  }, [chartLineColors.overlay, overlayStageDatasets])
+  const preprocessStageDatasets = useMemo(
+    () => activeDataset ? [
+      { name: `${activeDataset.name} 原始`, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_raw },
+      { name: `${activeDataset.name} 處理後`, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_processed },
+    ] : [],
+    [activeDataset, wavelength, xMode],
+  )
+  const preprocessChartTraces = useMemo(() => {
+    if (!activeDataset) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.preprocess] ?? LINE_COLOR_PALETTES.teal
+    const xValues = convertXValues(activeDataset.x, xMode, wavelength)
+    return [
+      {
+        x: xValues,
+        y: activeDataset.y_raw,
+        type: 'scatter',
+        mode: 'lines',
+        name: '原始',
+        line: { color: palette.secondary, width: 1.35, dash: 'dot' },
+      },
+      {
+        x: xValues,
+        y: activeDataset.y_processed,
+        type: 'scatter',
+        mode: 'lines',
+        name: '處理後',
+        line: { color: palette.primary, width: 2.2 },
+      },
+    ] as Plotly.Data[]
+  }, [activeDataset, chartLineColors.preprocess, wavelength, xMode])
+  const gaussianStageDatasets = useMemo(
+    () => activeDataset?.y_gaussian_subtracted && activeDataset?.y_gaussian_model
+      ? [
+          { name: '原始', x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_raw },
+          { name: '高斯模型', x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_gaussian_model },
+          { name: '扣除後', x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_gaussian_subtracted },
+        ]
+      : [],
+    [activeDataset, wavelength, xMode],
+  )
+  const gaussianChartTraces = useMemo(() => {
+    if (gaussianStageDatasets.length === 0) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.gaussian] ?? LINE_COLOR_PALETTES.orange
+    return [
+      { x: gaussianStageDatasets[0].x, y: gaussianStageDatasets[0].y, type: 'scatter', mode: 'lines', name: '原始', line: { color: palette.secondary, width: 1.25, dash: 'dot' } },
+      { x: gaussianStageDatasets[1].x, y: gaussianStageDatasets[1].y, type: 'scatter', mode: 'lines', name: '高斯模型', line: { color: palette.tertiary, width: 1.5 } },
+      { x: gaussianStageDatasets[2].x, y: gaussianStageDatasets[2].y, type: 'scatter', mode: 'lines', name: '扣除後', line: { color: palette.primary, width: 2.2 } },
+    ] as Plotly.Data[]
+  }, [chartLineColors.gaussian, gaussianStageDatasets])
+  const logStageDatasets = useMemo(() => {
+    if (!activeDataset || !logViewParams.enabled) return []
+    const minValue = activeDataset.y_processed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
+    const shift = minValue <= 0 ? Math.abs(minValue) + logViewParams.floor_value : logViewParams.floor_value
+    return [{
+      name: `${logViewParams.method} 處理後`,
+      x: convertXValues(activeDataset.x, xMode, wavelength),
+      y: activeDataset.y_processed.map(value => safeLogValue(value, shift, logViewParams.method, logViewParams.floor_value)),
+    }]
+  }, [activeDataset, logViewParams, wavelength, xMode])
+  const logChartTraces = useMemo(() => {
+    if (logStageDatasets.length === 0) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.log] ?? LINE_COLOR_PALETTES.violet
+    return [{
+      x: logStageDatasets[0].x,
+      y: logStageDatasets[0].y,
+      type: 'scatter',
+      mode: 'lines',
+      name: logStageDatasets[0].name,
+      line: { color: palette.primary, width: 2.1 },
+    }] as Plotly.Data[]
+  }, [chartLineColors.log, logStageDatasets])
+  const finalChartTraces = useMemo(() => {
+    if (!activeDataset) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.final] ?? LINE_COLOR_PALETTES.blue
+    const xValues = convertXValues(activeDataset.x, xMode, wavelength)
+    const traces: Plotly.Data[] = [
+      {
+        x: xValues,
+        y: activeDataset.y_processed,
+        type: 'scatter',
+        mode: 'lines',
+        name: activeDataset.name,
+        line: { color: palette.primary, width: 2.3 },
+      },
+    ]
+    if (filteredRefPeaks.length > 0) {
+      const yMax = activeDataset.y_processed.reduce((max, value) => Math.max(max, value), Number.NEGATIVE_INFINITY)
+      const xPoints: Array<number | null> = []
+      const yPoints: Array<number | null> = []
+      filteredRefPeaks.forEach(peak => {
+        xPoints.push(xMode === 'dspacing' ? peak.d_spacing : peak.two_theta, xMode === 'dspacing' ? peak.d_spacing : peak.two_theta, null)
+        yPoints.push(0, yMax * (peak.rel_i / 100) * 0.8, null)
+      })
+      traces.push({
+        x: xPoints,
+        y: yPoints,
+        type: 'scatter',
+        mode: 'lines',
+        name: '參考峰',
+        line: { color: palette.accent, width: 1.4, dash: 'dot' },
+        hoverinfo: 'skip',
+      })
+    }
+    if (detectedPeaks.length > 0 && peakParams.enabled) {
+      traces.push({
+        x: detectedPeaks.map(peak => (xMode === 'dspacing' ? peak.d_spacing : peak.two_theta)),
+        y: detectedPeaks.map(peak => peak.intensity),
+        type: 'scatter',
+        mode: 'markers',
+        name: 'Detected peaks',
+        marker: {
+          color: '#f8fafc',
+          size: 8,
+          symbol: 'diamond-open',
+          line: { color: palette.primary, width: 1.5 },
+        },
+      })
+    }
+    return traces
+  }, [activeDataset, chartLineColors.final, detectedPeaks, filteredRefPeaks, peakParams.enabled, wavelength, xMode])
+  const finalStageDatasets = useMemo(
+    () => activeDataset ? [{ name: activeDataset.name, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_processed }] : [],
+    [activeDataset, wavelength, xMode],
   )
   const referenceMatches = useMemo(
     () => buildReferenceMatches(filteredRefPeaks, detectedPeaks, refMatchParams.tolerance_deg),
@@ -526,7 +801,7 @@ export default function XRD({
             sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
           ].join(' ')}
         >
-          <div className="flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <StickySidebarHeader
               activeModule="xrd"
               subtitle="Data Processing"
@@ -710,105 +985,235 @@ export default function XRD({
 
           {result && (
             <>
-              <SpectrumChart
-                result={isOverlayView && overlayResult ? overlayResult : result}
-                refPeaks={isOverlayView ? [] : filteredRefPeaks}
-                detectedPeaks={isOverlayView ? [] : detectedPeaks}
-                xMode={xMode}
-                wavelength={wavelength}
-                showReferencePeaks={!isOverlayView}
-                showDetectedPeaks={!isOverlayView}
-              />
-
-              {logViewParams.enabled && (
-                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
-                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-white">對數弱峰檢視</p>
-                      <p className="mt-1 text-xs leading-5 text-slate-400">
-                        此顯示模式只改變圖表的縮放方式，方便觀察弱峰與寬尾巴。不影響尋峰、Scherrer 或參考峰匹配的計算基礎。
-                      </p>
+              {rawChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始 XRD</p>
+                  {rawChartSourceFiles.length > 0 && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {rawChartSourceFiles.map((file, index) => {
+                        const globalIndex = rawFiles.findIndex(item => item.name === file.name)
+                        const colorKey = rawFileColors[globalIndex >= 0 ? globalIndex : index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
+                        const palette = LINE_COLOR_PALETTES[colorKey] ?? LINE_COLOR_PALETTES.blue
+                        return (
+                          <div key={`${file.name}-${index}`} className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1">
+                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: palette.primary }} />
+                            <span className="max-w-[108px] truncate text-[10px] text-[var(--text-main)]">{file.name}</span>
+                            <select
+                              value={colorKey}
+                              onChange={event => {
+                                const targetIndex = globalIndex >= 0 ? globalIndex : index
+                                setRawFileColors(prev => {
+                                  const next = [...prev]
+                                  next[targetIndex] = event.target.value
+                                  return next
+                                })
+                              }}
+                              className="rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1 py-0.5 text-[10px] text-[var(--input-text)] focus:outline-none"
+                            >
+                              {LINE_COLOR_OPTIONS.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )
+                      })}
                     </div>
-                    <span className="text-xs text-slate-500">
-                      {logViewParams.method} with floor {logViewParams.floor_value}
-                    </span>
-                  </div>
-                  <SpectrumChart
-                    result={result}
-                    refPeaks={[]}
-                    detectedPeaks={[]}
-                    xMode={xMode}
-                    wavelength={wavelength}
-                    displayMode={logViewParams.method}
-                    logFloorValue={logViewParams.floor_value}
-                    showReferencePeaks={false}
-                    showDetectedPeaks={false}
-                    minHeight={360}
+                  )}
+                  <Plot
+                    data={applyHidden(rawChartTraces, rawHidden)}
+                    layout={chartLayout({ xMode, wavelength })}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    style={{ width: '100%', height: 360 }}
+                    onLegendClick={makeLegendClick(setRawHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
                   />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(rawStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_raw'), 'xrd_raw_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
                 </div>
               )}
 
-              {params.gaussian_enabled && (
-                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
-                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-white">高斯模板扣除</p>
-                      <p className="mt-1 text-xs leading-5 text-slate-400">
-                        使用固定面積與固定 FWHM 的高斯模板，只允許中心在局部範圍內移動，適合在後續處理前先扣掉已知峰的影響。
-                      </p>
-                    </div>
-                    <span className="text-xs text-slate-500">
-                      search ±{params.gaussian_search_half_width.toFixed(3)} deg
-                    </span>
+              {isOverlayView && overlayChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="2. 多筆疊圖處理"
+                    colorValue={chartLineColors.overlay}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">這裡直接比照 XPS 疊圖模式，顯示多筆 XRD 的最終處理結果，不改動既有後端步驟邏輯。</p>
+                  <Plot
+                    data={applyHidden(overlayChartTraces, overlayHidden)}
+                    layout={chartLayout({ xMode, wavelength })}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    style={{ width: '100%', height: 360 }}
+                    onLegendClick={makeLegendClick(setOverlayHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(overlayStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_overlay_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
                   </div>
+                </div>
+              )}
 
-                  {activeDataset?.y_gaussian_model && activeDataset?.y_gaussian_subtracted ? (
+              {!isOverlayView && preprocessChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="2. 前處理後"
+                    colorValue={chartLineColors.preprocess}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">把原始 XRD 與目前處理後結果疊在一起，方便對照內插、多檔平均、平滑與歸一化之後的整體變化。</p>
+                  <Plot
+                    data={applyHidden(preprocessChartTraces, preprocessHidden)}
+                    layout={chartLayout({ xMode, wavelength })}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    style={{ width: '100%', height: 360 }}
+                    onLegendClick={makeLegendClick(setPreprocessHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(preprocessStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_preprocess_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isOverlayView && params.gaussian_enabled && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="3. 高斯模板扣除"
+                    colorValue={chartLineColors.gaussian}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, gaussian: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">使用固定面積與固定 FWHM 的高斯模板，先扣除已知峰影響；視覺比照 XPS 分階段圖卡，但計算邏輯仍沿用現有 XRD 後端。</p>
+                  {gaussianChartTraces.length > 0 ? (
                     <>
-                      <GaussianSubtractionChart
-                        dataset={activeDataset}
-                        xMode={xMode}
-                        wavelength={wavelength}
+                      <Plot
+                        data={applyHidden(gaussianChartTraces, gaussianHidden)}
+                        layout={chartLayout({ xMode, wavelength })}
+                        config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                        style={{ width: '100%', height: 360 }}
+                        onLegendClick={makeLegendClick(setGaussianHidden) as never}
+                        onLegendDoubleClick={() => false}
+                        useResizeHandler
                       />
-                      {activeGaussianFits.length > 0 ? (
-                        <div className="mt-4 overflow-x-auto">
-                          <table className="min-w-full text-left text-sm">
-                            <thead>
-                              <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                                <th className="px-3 py-3 font-medium">峰名稱</th>
-                                <th className="px-3 py-3 font-medium">初始 2θ</th>
-                                <th className="px-3 py-3 font-medium">擬合 2θ</th>
-                                <th className="px-3 py-3 font-medium">位移</th>
-                                <th className="px-3 py-3 font-medium">FWHM</th>
-                                <th className="px-3 py-3 font-medium">面積</th>
-                                <th className="px-3 py-3 font-medium">峰高</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {activeGaussianFits.map((fit, idx) => (
-                                <tr key={`${fit.Peak_Name}-${idx}`} className="border-b border-white/5 text-slate-200 last:border-b-0">
-                                  <td className="px-3 py-3 font-medium">{fit.Peak_Name}</td>
-                                  <td className="px-3 py-3">{fit.Seed_Center.toFixed(4)}</td>
-                                  <td className="px-3 py-3">{fit.Fitted_Center.toFixed(4)}</td>
-                                  <td className="px-3 py-3">{fit.Shift.toFixed(4)}</td>
-                                  <td className="px-3 py-3">{fit.Fixed_FWHM.toFixed(4)}</td>
-                                  <td className="px-3 py-3">{fit.Fixed_Area.toFixed(4)}</td>
-                                  <td className="px-3 py-3">{fit.Template_Height.toFixed(4)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="mt-4 rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
-                          目前沒有可用的高斯中心結果。請檢查中心列表是否有啟用、中心位置是否落在目前資料範圍內。
-                        </div>
-                      )}
+                      <div className="mt-3 flex justify-start">
+                        <button
+                          type="button"
+                          onClick={() => downloadFile(buildStageCsv(gaussianStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_gaussian_stage.csv', 'text/csv')}
+                          className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                        >
+                          下載此步驟 CSV
+                        </button>
+                      </div>
                     </>
                   ) : (
                     <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
                       高斯模板扣除已啟用，但目前結果集中還沒有可顯示的模型與扣除後曲線。
                     </div>
                   )}
+
+                  {activeGaussianFits.length > 0 && (
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="min-w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
+                            <th className="px-3 py-3 font-medium">峰名稱</th>
+                            <th className="px-3 py-3 font-medium">初始 2θ</th>
+                            <th className="px-3 py-3 font-medium">擬合 2θ</th>
+                            <th className="px-3 py-3 font-medium">位移</th>
+                            <th className="px-3 py-3 font-medium">FWHM</th>
+                            <th className="px-3 py-3 font-medium">面積</th>
+                            <th className="px-3 py-3 font-medium">峰高</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeGaussianFits.map((fit, idx) => (
+                            <tr key={`${fit.Peak_Name}-${idx}`} className="border-b border-white/5 text-slate-200 last:border-b-0">
+                              <td className="px-3 py-3 font-medium">{fit.Peak_Name}</td>
+                              <td className="px-3 py-3">{fit.Seed_Center.toFixed(4)}</td>
+                              <td className="px-3 py-3">{fit.Fitted_Center.toFixed(4)}</td>
+                              <td className="px-3 py-3">{fit.Shift.toFixed(4)}</td>
+                              <td className="px-3 py-3">{fit.Fixed_FWHM.toFixed(4)}</td>
+                              <td className="px-3 py-3">{fit.Fixed_Area.toFixed(4)}</td>
+                              <td className="px-3 py-3">{fit.Template_Height.toFixed(4)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!isOverlayView && logChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="4. 對數弱峰檢視"
+                    colorValue={chartLineColors.log}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, log: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">
+                    此顯示模式只改變圖表縮放方式，方便觀察弱峰與寬尾巴。不影響尋峰、Scherrer 或參考峰匹配的計算基礎。
+                  </p>
+                  <Plot
+                    data={applyHidden(logChartTraces, logHidden)}
+                    layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} Intensity` })}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    style={{ width: '100%', height: 360 }}
+                    onLegendClick={makeLegendClick(setLogHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                </div>
+              )}
+
+              {!isOverlayView && finalChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="5. 最終處理光譜"
+                    colorValue={chartLineColors.final}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">把最終處理結果、參考峰與偵測到的峰位放在同一張圖上，顯示方式對齊 XPS 的最終圖卡。</p>
+                  <Plot
+                    data={applyHidden(finalChartTraces, finalHidden)}
+                    layout={chartLayout({ xMode, wavelength, height: 380 })}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    style={{ width: '100%', height: 380 }}
+                    onLegendClick={makeLegendClick(setFinalHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(finalStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_final_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
                 </div>
               )}
 

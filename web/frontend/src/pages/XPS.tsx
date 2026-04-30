@@ -363,7 +363,7 @@ function Section({ step, title, hint, children, defaultOpen = true, infoContent 
 
   return (
     <>
-    <div className="glass-panel mb-3 overflow-hidden rounded-[24px]">
+    <div className="sidebar-stage-card mb-3 overflow-hidden rounded-[24px]">
       <div className="flex items-center">
         <button
           type="button"
@@ -1846,9 +1846,9 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </button>
         ) : (
           <>
-            <div className="flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-20 bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] px-4 pb-8 pt-5 backdrop-blur-xl">
-                <div className="glass-panel relative rounded-[30px] px-5 pb-9 pt-5">
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-8 pt-5">
+                <div className="sidebar-header-card relative rounded-[30px] px-5 pb-9 pt-5">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex min-w-0 items-center gap-4">
                       <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[24px] bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_8px_24px_-8px_color-mix(in_srgb,var(--accent-strong)_45%,transparent)]">

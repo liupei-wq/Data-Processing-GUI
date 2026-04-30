@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './AnalysisModuleNav'
 
@@ -12,6 +12,100 @@ type HeaderTabItem = {
 type SummaryStatItem = {
   label: string
   value: string
+}
+
+export const LINE_COLOR_OPTIONS = [
+  { value: 'blue', label: 'Blue' },
+  { value: 'teal', label: 'Teal' },
+  { value: 'orange', label: 'Orange' },
+  { value: 'rose', label: 'Rose' },
+  { value: 'violet', label: 'Violet' },
+]
+
+export const LINE_COLOR_PALETTES: Record<string, { primary: string; secondary: string; tertiary: string; accent: string; series: string[] }> = {
+  blue: {
+    primary: '#38bdf8',
+    secondary: '#94a3b8',
+    tertiary: '#f59e0b',
+    accent: '#14b8a6',
+    series: ['#38bdf8', '#94a3b8', '#60a5fa', '#818cf8', '#22d3ee', '#f59e0b', '#fb7185', '#f472b6'],
+  },
+  teal: {
+    primary: '#14b8a6',
+    secondary: '#9ca3af',
+    tertiary: '#f97316',
+    accent: '#2dd4bf',
+    series: ['#14b8a6', '#2dd4bf', '#5eead4', '#60a5fa', '#f59e0b', '#a78bfa', '#fb7185', '#84cc16'],
+  },
+  orange: {
+    primary: '#f97316',
+    secondary: '#94a3b8',
+    tertiary: '#facc15',
+    accent: '#fb923c',
+    series: ['#f97316', '#fb923c', '#facc15', '#38bdf8', '#818cf8', '#fb7185', '#2dd4bf', '#a3e635'],
+  },
+  rose: {
+    primary: '#fb7185',
+    secondary: '#94a3b8',
+    tertiary: '#f59e0b',
+    accent: '#f472b6',
+    series: ['#fb7185', '#f472b6', '#f9a8d4', '#38bdf8', '#f59e0b', '#2dd4bf', '#a78bfa', '#84cc16'],
+  },
+  violet: {
+    primary: '#a78bfa',
+    secondary: '#94a3b8',
+    tertiary: '#f59e0b',
+    accent: '#c084fc',
+    series: ['#a78bfa', '#c084fc', '#818cf8', '#38bdf8', '#2dd4bf', '#f59e0b', '#fb7185', '#a3e635'],
+  },
+}
+
+export const DEFAULT_SERIES_PALETTE_KEYS = ['blue', 'teal', 'orange', 'rose', 'violet']
+
+export function applyHidden(traces: Plotly.Data[], hidden: string[]): Plotly.Data[] {
+  if (hidden.length === 0) return traces
+  return traces.map(trace => ({
+    ...trace,
+    visible: hidden.includes((trace as { name?: string }).name ?? '') ? ('legendonly' as const) : (true as const),
+  }))
+}
+
+export function makeLegendClick(setHidden: Dispatch<SetStateAction<string[]>>) {
+  return (data: { curveNumber: number; data: Array<{ name?: string }> }) => {
+    const name = data.data[data.curveNumber]?.name
+    if (name != null) {
+      setHidden(prev => (prev.includes(name) ? prev.filter(item => item !== name) : [...prev, name]))
+    }
+    return false
+  }
+}
+
+export function ChartToolbar({
+  title,
+  colorValue,
+  onColorChange,
+}: {
+  title: string
+  colorValue: string
+  onColorChange: (value: string) => void
+}) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+      <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-soft)]">線色</span>
+        <select
+          value={colorValue}
+          onChange={event => onColorChange(event.target.value)}
+          className="rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-xs text-[var(--input-text)] focus:outline-none"
+        >
+          {LINE_COLOR_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  )
 }
 
 export function TogglePill({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
@@ -282,7 +376,7 @@ export function GlassSection({
 
   return (
     <>
-      <div className="glass-panel overflow-hidden rounded-[24px]">
+      <div className="sidebar-stage-card overflow-hidden rounded-[24px]">
         <div className="flex items-center">
           <button
             type="button"
@@ -468,8 +562,8 @@ export function StickySidebarHeader({
   onCollapse: () => void
 }) {
   return (
-    <div className="sticky top-0 z-20 bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] px-4 pb-8 pt-5 backdrop-blur-xl">
-      <div className="glass-panel relative rounded-[30px] px-5 pb-9 pt-5">
+    <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-8 pt-5">
+      <div className="sidebar-header-card relative rounded-[30px] px-5 pb-9 pt-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
             <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[24px] bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_8px_24px_-8px_color-mix(in_srgb,var(--accent-strong)_45%,transparent)]">

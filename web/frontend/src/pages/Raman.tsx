@@ -3,8 +3,14 @@ import Plot from 'react-plotly.js'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import {
+  applyHidden,
+  ChartToolbar,
+  DEFAULT_SERIES_PALETTE_KEYS,
   DatasetSelectionModal,
   GlassSection,
+  LINE_COLOR_OPTIONS,
+  LINE_COLOR_PALETTES,
+  makeLegendClick,
   ProcessingWorkspaceHeader,
   StickySidebarHeader,
   TogglePill,
@@ -339,6 +345,13 @@ function toCsv(headers: string[], rows: Array<Array<unknown>>) {
   return [headers.join(','), ...rows.map(row => row.map(csvEscape).join(','))].join('\n')
 }
 
+function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], xLabel: string, yLabel: string) {
+  return toCsv(
+    ['dataset', xLabel, yLabel],
+    datasets.flatMap(dataset => dataset.x.map((x, index) => [dataset.name, x, dataset.y[index] ?? null])),
+  )
+}
+
 function parseAnchorText(text: string): { x: number[]; y: number[] } {
   const x: number[] = []
   const y: number[] = []
@@ -596,6 +609,18 @@ export default function Raman({
   const [siCoeff, setSiCoeff] = useState(-1.93)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rawFileColors, setRawFileColors] = useState<string[]>([])
+  const [chartLineColors, setChartLineColors] = useState({
+    overlay: 'blue',
+    preprocess: 'teal',
+    background: 'orange',
+    final: 'blue',
+  })
+  const [rawHidden, setRawHidden] = useState<string[]>([])
+  const [overlayHidden, setOverlayHidden] = useState<string[]>([])
+  const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
+  const [backgroundHidden, setBackgroundHidden] = useState<string[]>([])
+  const [finalHidden, setFinalHidden] = useState<string[]>([])
 
   useEffect(() => {
     localStorage.setItem('nigiro-raman-sidebar-width', String(sidebarWidth))
@@ -604,6 +629,10 @@ export default function Raman({
   useEffect(() => {
     localStorage.setItem('nigiro-raman-sidebar-collapsed', String(sidebarCollapsed))
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    setRawFileColors(prev => rawFiles.map((_, index) => prev[index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]))
+  }, [rawFiles])
 
   useEffect(() => {
     if (!sidebarResizing) return
@@ -716,6 +745,135 @@ export default function Raman({
     ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} cm⁻¹`
     : '—'
   const interpolationLabel = params.interpolate ? `${params.n_points} 點` : '未啟用'
+  const rawChartSourceFiles = useMemo(
+    () => (isOverlayView ? rawFiles.filter(file => overlaySelection.includes(file.name)) : rawFiles),
+    [isOverlayView, overlaySelection, rawFiles],
+  )
+  const rawStageDatasets = useMemo(
+    () => rawChartSourceFiles.map(file => ({ name: file.name, x: file.x, y: file.y })),
+    [rawChartSourceFiles],
+  )
+  const rawChartTraces = useMemo(
+    () => rawChartSourceFiles.map((file, index) => {
+      const globalIndex = rawFiles.findIndex(item => item.name === file.name)
+      const paletteKey = rawFileColors[globalIndex >= 0 ? globalIndex : index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
+      const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+      return {
+        x: file.x,
+        y: file.y,
+        type: 'scatter',
+        mode: 'lines',
+        name: file.name,
+        line: { color: palette.primary, width: 2 },
+      } as Plotly.Data
+    }),
+    [rawChartSourceFiles, rawFileColors, rawFiles],
+  )
+  const overlayStageDatasets = useMemo(
+    () => overlayDatasets.map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed })),
+    [overlayDatasets],
+  )
+  const overlayChartTraces = useMemo(() => {
+    const colors = (LINE_COLOR_PALETTES[chartLineColors.overlay] ?? LINE_COLOR_PALETTES.blue).series
+    return overlayStageDatasets.map((dataset, index) => ({
+      x: dataset.x,
+      y: dataset.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: dataset.name,
+      line: { color: colors[index % colors.length], width: 2.2 },
+    } as Plotly.Data))
+  }, [chartLineColors.overlay, overlayStageDatasets])
+  const preprocessStageDatasets = useMemo(() => {
+    if (!activeDataset) return []
+    const comparison = activeDataset.y_despiked ?? activeDataset.y_processed
+    const comparisonLabel = activeDataset.y_despiked ? '去尖峰後' : '前處理後'
+    return [
+      { name: '原始', x: activeDataset.x, y: activeDataset.y_raw },
+      { name: comparisonLabel, x: activeDataset.x, y: comparison },
+    ]
+  }, [activeDataset])
+  const preprocessChartTraces = useMemo(() => {
+    if (preprocessStageDatasets.length === 0) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.preprocess] ?? LINE_COLOR_PALETTES.teal
+    return [
+      { x: preprocessStageDatasets[0].x, y: preprocessStageDatasets[0].y, type: 'scatter', mode: 'lines', name: preprocessStageDatasets[0].name, line: { color: palette.secondary, width: 1.35, dash: 'dot' } },
+      { x: preprocessStageDatasets[1].x, y: preprocessStageDatasets[1].y, type: 'scatter', mode: 'lines', name: preprocessStageDatasets[1].name, line: { color: palette.primary, width: 2.2 } },
+    ] as Plotly.Data[]
+  }, [chartLineColors.preprocess, preprocessStageDatasets])
+  const backgroundStageDatasets = useMemo(() => {
+    if (!activeDataset || !params.bg_enabled || !activeDataset.y_background) return []
+    return [
+      { name: '原始', x: activeDataset.x, y: activeDataset.y_raw },
+      { name: '背景基準線', x: activeDataset.x, y: activeDataset.y_background },
+      { name: '背景扣除後', x: activeDataset.x, y: activeDataset.y_processed },
+    ]
+  }, [activeDataset, params.bg_enabled])
+  const backgroundChartTraces = useMemo(() => {
+    if (backgroundStageDatasets.length === 0) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.background] ?? LINE_COLOR_PALETTES.orange
+    return [
+      { x: backgroundStageDatasets[0].x, y: backgroundStageDatasets[0].y, type: 'scatter', mode: 'lines', name: '原始', line: { color: palette.secondary, width: 1.25, dash: 'dot' } },
+      { x: backgroundStageDatasets[1].x, y: backgroundStageDatasets[1].y, type: 'scatter', mode: 'lines', name: '背景基準線', line: { color: palette.tertiary, width: 1.45, dash: 'dot' } },
+      { x: backgroundStageDatasets[2].x, y: backgroundStageDatasets[2].y, type: 'scatter', mode: 'lines', name: '背景扣除後', line: { color: palette.primary, width: 2.2 } },
+    ] as Plotly.Data[]
+  }, [backgroundStageDatasets, chartLineColors.background])
+  const finalStageDatasets = useMemo(
+    () => activeDataset ? [{ name: activeDataset.name, x: activeDataset.x, y: activeDataset.y_processed }] : [],
+    [activeDataset],
+  )
+  const finalChartTraces = useMemo(() => {
+    if (!activeDataset) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.final] ?? LINE_COLOR_PALETTES.blue
+    const traces: Plotly.Data[] = [
+      {
+        x: activeDataset.x,
+        y: activeDataset.y_processed,
+        type: 'scatter',
+        mode: 'lines',
+        name: activeDataset.name,
+        line: { color: palette.primary, width: 2.25 },
+      },
+    ]
+    if (refPeaks.length > 0) {
+      const yMin = Math.min(...activeDataset.y_processed)
+      const yMax = Math.max(...activeDataset.y_processed)
+      const span = Math.max(yMax - yMin, 1)
+      const base = yMin - span * 0.12
+      const xs: Array<number | null> = []
+      const ys: Array<number | null> = []
+      refPeaks.forEach(peak => {
+        const height = span * 0.18 * (peak.strength / 100)
+        xs.push(peak.position_cm, peak.position_cm, null)
+        ys.push(base, base + height, null)
+      })
+      traces.push({
+        x: xs,
+        y: ys,
+        type: 'scatter',
+        mode: 'lines',
+        name: '參考峰',
+        line: { color: palette.accent, width: 1.4, dash: 'dot' },
+        hoverinfo: 'skip',
+      })
+    }
+    if (peakParams.enabled && detectedPeaks.length > 0) {
+      traces.push({
+        x: detectedPeaks.map(peak => peak.shift_cm),
+        y: detectedPeaks.map(peak => peak.intensity),
+        type: 'scatter',
+        mode: 'markers',
+        name: 'Detected peaks',
+        marker: {
+          color: '#f8fafc',
+          size: 8,
+          symbol: 'diamond-open',
+          line: { color: palette.primary, width: 1.5 },
+        },
+      })
+    }
+    return traces
+  }, [activeDataset, chartLineColors.final, detectedPeaks, peakParams.enabled, refPeaks])
 
   useEffect(() => {
     if (!peakParams.enabled || !activeDataset) {
@@ -1594,7 +1752,7 @@ export default function Raman({
           'module-sidebar__content flex h-full flex-col',
           sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
         ].join(' ')}>
-          <div className="flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <StickySidebarHeader
               activeModule="raman"
               subtitle="Raman Workspace"
@@ -1644,10 +1802,10 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={2} title="前處理" hint="去尖峰、內插、多檔平均" defaultOpen={false} infoContent={
+            <SidebarCard step={2} title="去尖峰" hint="先處理極端尖刺" defaultOpen={false} infoContent={
               <div className="space-y-3">
-                <p className="font-semibold text-[var(--text-main)]">前處理說明</p>
-                <p>這裡整合去尖峰、內插與多檔平均，目的在於先讓 Raman 光譜變得更穩定、更易比較。</p>
+                <p className="font-semibold text-[var(--text-main)]">去尖峰說明</p>
+                <p>先把 Raman 光譜中明顯偏離鄰近點的尖刺壓掉，避免後續背景與擬合被單點異常值主導。</p>
               </div>
             }>
               <TogglePill
@@ -1667,11 +1825,33 @@ export default function Raman({
                   </label>
                 </div>
               )}
+            </SidebarCard>
+
+            <SidebarCard step={3} title="內插" hint="統一點數網格" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">內插說明</p>
+                <p>把每筆 Raman 光譜重取樣到固定點數，方便切換資料時維持一致解析度，也方便後續多筆比較。</p>
+              </div>
+            }>
               <TogglePill
                 checked={params.interpolate}
                 onChange={value => setParams(current => ({ ...current, interpolate: value }))}
                 label="先內插到固定點數"
               />
+              {params.interpolate && (
+                <label className="mt-3 block">
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">內插點數</span>
+                  <input type="number" value={params.n_points} min={200} max={5000} step={50} onChange={e => setParams(current => ({ ...current, n_points: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                </label>
+              )}
+            </SidebarCard>
+
+            <SidebarCard step={4} title="多檔平均" hint="共用同一網格平均" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">多檔平均說明</p>
+                <p>把已載入的多筆 Raman 光譜對齊後做平均，適合重複量測的穩定化比較。</p>
+              </div>
+            }>
               <TogglePill
                 checked={params.average}
                 onChange={value => setParams(current => ({ ...current, average: value }))}
@@ -1685,10 +1865,10 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={3} title="背景與平滑" hint="baseline、平滑曲線形狀" defaultOpen={false} infoContent={
+            <SidebarCard step={5} title="背景扣除" hint="baseline 修正" defaultOpen={false} infoContent={
               <div className="space-y-3">
-                <p className="font-semibold text-[var(--text-main)]">背景與平滑說明</p>
-                <p>背景扣除用來去除基線漂移，平滑則用來壓低高頻雜訊；兩者都只影響光譜形狀呈現，不改你的步驟邏輯。</p>
+                <p className="font-semibold text-[var(--text-main)]">背景扣除說明</p>
+                <p>背景扣除用來去除基線漂移，讓主峰輪廓更清楚；這一步只影響光譜形狀呈現，不改你的步驟邏輯。</p>
               </div>
             }>
               <label className="block">
@@ -1758,7 +1938,14 @@ export default function Raman({
                   )}
                 </>
               )}
+            </SidebarCard>
 
+            <SidebarCard step={6} title="平滑" hint="降低高頻雜訊" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">平滑說明</p>
+                <p>平滑用來降低高頻雜訊，但視窗過大可能會把弱峰洗平；建議把它當作視覺輔助而不是過度依賴。</p>
+              </div>
+            }>
               <label className="mt-4 block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">平滑方法</span>
                 <select value={params.smooth_method} onChange={e => setParams(current => ({ ...current, smooth_method: e.target.value as ProcessParams['smooth_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
@@ -1783,7 +1970,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={4} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
+            <SidebarCard step={7} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
                 <p>歸一化方便比較不同 Raman 光譜的峰型與相對強度，但不適合用來保留絕對訊號高低。</p>
@@ -1813,7 +2000,7 @@ export default function Raman({
 
             </SidebarCard>
 
-            <SidebarCard step={5} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
+            <SidebarCard step={8} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰偵測與參考峰說明</p>
                 <p>先找出可能峰位，再用參考材料或 peak library 輔助建立後續擬合模型。</p>
@@ -1907,7 +2094,7 @@ export default function Raman({
               </div>
             </SidebarCard>
 
-            <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
+            <SidebarCard step={9} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰位管理與擬合說明</p>
                 <p>這一步負責整理峰位表、加入手動峰與執行擬合；我這次只改外觀與資訊層，不改擬合流程。</p>
@@ -2404,24 +2591,176 @@ export default function Raman({
                 ]}
               />
 
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-[var(--text-muted)]">處理結果</div>
-                  <div className="mt-1 text-xs text-[var(--text-soft)]">
-                    顯示原始訊號、去尖峰後、背景基準線與最終處理結果。
+              {rawChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始 Raman</p>
+                  {rawChartSourceFiles.length > 0 && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {rawChartSourceFiles.map((file, index) => {
+                        const globalIndex = rawFiles.findIndex(item => item.name === file.name)
+                        const colorKey = rawFileColors[globalIndex >= 0 ? globalIndex : index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
+                        const palette = LINE_COLOR_PALETTES[colorKey] ?? LINE_COLOR_PALETTES.blue
+                        return (
+                          <div key={`${file.name}-${index}`} className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1">
+                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: palette.primary }} />
+                            <span className="max-w-[108px] truncate text-[10px] text-[var(--text-main)]">{file.name}</span>
+                            <select
+                              value={colorKey}
+                              onChange={event => {
+                                const targetIndex = globalIndex >= 0 ? globalIndex : index
+                                setRawFileColors(prev => {
+                                  const next = [...prev]
+                                  next[targetIndex] = event.target.value
+                                  return next
+                                })
+                              }}
+                              className="rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1 py-0.5 text-[10px] text-[var(--input-text)] focus:outline-none"
+                            >
+                              {LINE_COLOR_OPTIONS.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <Plot
+                    data={applyHidden(rawChartTraces, rawHidden)}
+                    layout={chartLayout()}
+                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    style={{ width: '100%', minHeight: '340px' }}
+                    onLegendClick={makeLegendClick(setRawHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(rawStageDatasets, 'raman_shift_cm-1', 'intensity_raw'), 'raman_raw_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
                   </div>
                 </div>
-              </div>
+              )}
 
-              <div className="theme-block-soft rounded-[28px] p-3 sm:p-4">
-                <Plot
-                  data={isOverlayView ? buildOverlayTraces(overlayDatasets) : buildTraces(activeDataset, params, refPeaks)}
-                  layout={chartLayout()}
-                  config={{ scrollZoom: true, displaylogo: false, responsive: true }}
-                  style={{ width: '100%', minHeight: '560px' }}
-                  useResizeHandler
-                />
-              </div>
+              {isOverlayView && overlayChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="2. 多筆疊圖處理"
+                    colorValue={chartLineColors.overlay}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">這裡改成跟 XPS 一樣的疊圖卡片流程，直接比對多筆 Raman 的最終處理結果。</p>
+                  <Plot
+                    data={applyHidden(overlayChartTraces, overlayHidden)}
+                    layout={chartLayout()}
+                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    style={{ width: '100%', minHeight: '340px' }}
+                    onLegendClick={makeLegendClick(setOverlayHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(overlayStageDatasets, 'raman_shift_cm-1', 'intensity_processed'), 'raman_overlay_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isOverlayView && preprocessChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="2. 前處理後"
+                    colorValue={chartLineColors.preprocess}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">把原始訊號與去尖峰或前處理後結果疊在一起，方便快速檢查變化量。</p>
+                  <Plot
+                    data={applyHidden(preprocessChartTraces, preprocessHidden)}
+                    layout={chartLayout()}
+                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    style={{ width: '100%', minHeight: '340px' }}
+                    onLegendClick={makeLegendClick(setPreprocessHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(preprocessStageDatasets, 'raman_shift_cm-1', 'intensity_processed'), 'raman_preprocess_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isOverlayView && backgroundChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="3. 背景扣除"
+                    colorValue={chartLineColors.background}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, background: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">這張圖把背景基準線和扣除後光譜分開標出，顯示方式比照 XPS 背景步驟。</p>
+                  <Plot
+                    data={applyHidden(backgroundChartTraces, backgroundHidden)}
+                    layout={chartLayout()}
+                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    style={{ width: '100%', minHeight: '340px' }}
+                    onLegendClick={makeLegendClick(setBackgroundHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(backgroundStageDatasets, 'raman_shift_cm-1', 'intensity_processed'), 'raman_background_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isOverlayView && finalChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="4. 最終處理光譜"
+                    colorValue={chartLineColors.final}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">把最終 Raman、參考峰和偵測峰位收斂到同一張圖卡，互動方式與 XPS 最終圖一致。</p>
+                  <Plot
+                    data={applyHidden(finalChartTraces, finalHidden)}
+                    layout={chartLayout()}
+                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    style={{ width: '100%', minHeight: '420px' }}
+                    onLegendClick={makeLegendClick(setFinalHidden) as never}
+                    onLegendDoubleClick={() => false}
+                    useResizeHandler
+                  />
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(finalStageDatasets, 'raman_shift_cm-1', 'intensity_processed'), 'raman_final_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-5 theme-block rounded-[20px] p-0">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">

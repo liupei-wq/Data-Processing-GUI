@@ -219,11 +219,11 @@ export default function ProcessingPanel({
 
   return (
     <div className="space-y-3">
-      <Section step={2} title="多檔平均" hint="內插與統一點數" defaultOpen={false} infoContent={
+      <Section step={2} title="內插" hint="先統一點數" defaultOpen={false} infoContent={
         <div className="space-y-3">
-          <p className="font-semibold text-[var(--text-main)]">多檔平均說明</p>
-          <p>這一步只改變前處理的呈現方式，不更動後續 XRD 計算邏輯。</p>
-          <p>啟用內插後會先把各筆資料重取樣到固定點數；啟用平均後則會在相同點數網格上做平均。</p>
+          <p className="font-semibold text-[var(--text-main)]">內插說明</p>
+          <p>先把各筆 XRD 資料重取樣到固定點數，方便之後做多檔比較或平均。</p>
+          <p>這一步只改變取樣網格，不會改動尋峰、Scherrer 或參考峰匹配的計算邏輯。</p>
         </div>
       }>
         <TogglePill
@@ -241,6 +241,15 @@ export default function ProcessingPanel({
             onChange={value => set('n_points', value)}
           />
         )}
+      </Section>
+
+      <Section step={3} title="多檔平均" hint="共用同一網格平均" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">多檔平均說明</p>
+          <p>這一步只改變前處理的呈現方式，不更動後續 XRD 計算邏輯。</p>
+          <p>啟用平均後會在相同點數網格上做平均；如果前面沒開內插，後端仍會先對齊再平均。</p>
+        </div>
+      }>
         <TogglePill
           checked={params.average}
           onChange={value => set('average', value)}
@@ -248,7 +257,7 @@ export default function ProcessingPanel({
         />
       </Section>
 
-      <Section step={3} title="高斯模板扣除" hint="已知峰先扣除" defaultOpen={false} infoContent={
+      <Section step={4} title="高斯模板扣除" hint="已知峰先扣除" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">高斯模板扣除說明</p>
           <p>以固定 FWHM 與固定高度的高斯模板扣除已知峰，適合先移除明確雜峰或基板峰。</p>
@@ -380,7 +389,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={4} title="平滑" hint="降噪但避免洗平峰型" defaultOpen={false} infoContent={
+      <Section step={5} title="平滑" hint="降噪但避免洗平峰型" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">平滑說明</p>
           <p>平滑只用於降低雜訊，避免鋸齒干擾視覺判讀，但視窗過大可能把弱峰洗平。</p>
@@ -419,7 +428,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
+      <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
           <p>歸一化用於比較不同樣品的峰形與相對強度，不改變原始峰位位置。</p>
@@ -441,7 +450,7 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      <Section step={6} title="弱峰檢視" hint="只改顯示，不改計算" defaultOpen={false} infoContent={
+      <Section step={7} title="弱峰檢視" hint="只改顯示，不改計算" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">弱峰檢視說明</p>
           <p>這裡只改圖表縮放方式，方便觀察弱峰，不會改動任何後端運算。</p>
@@ -477,7 +486,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={7} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false} infoContent={
+      <Section step={8} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">波長與 X 軸說明</p>
           <p>這一步控制顯示與換算基準，方便在 2θ 與 d-spacing 間切換比對。</p>
@@ -523,7 +532,7 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      <Section step={8} title="參考峰比對" hint="快速相辨識" defaultOpen={false} infoContent={
+      <Section step={9} title="參考峰比對" hint="快速相辨識" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">參考峰比對說明</p>
           <p>依照強度門檻與容差顯示可比對的參考峰，方便快速做相辨識。</p>
@@ -578,7 +587,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={9} title="自動尋峰" hint="峰表與後續 Scherrer 的基礎" defaultOpen={false} infoContent={
+      <Section step={10} title="自動尋峰" hint="峰表與後續 Scherrer 的基礎" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">自動尋峰說明</p>
           <p>這一步決定後續峰表內容，也是 Scherrer 快速估算的基礎。</p>
@@ -619,7 +628,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={10} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
+      <Section step={11} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">Scherrer 說明</p>
           <p>使用尋峰得到的 FWHM 估算晶粒尺寸，適合快速比較，不代表完整結構分析。</p>
