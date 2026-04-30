@@ -175,3 +175,7 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 - 2026-04-30 18:00 CST：修改 `web/frontend/src/components/ProcessingPanel.tsx` 與 `web/frontend/src/pages/XRD.tsx`，將 XRD 側欄 header、步驟卡、主要開關樣式與中間欄上方狀態卡改成接近 XPS 的視覺。
 - 2026-04-30 18:02 CST：修改 `web/frontend/src/pages/Raman.tsx`，將 Raman 側欄 header、步驟卡、部分主要開關、步驟說明 modal 與中間欄資料切換區改成接近 XPS 的視覺。
 - 2026-04-30 18:05 CST：執行 `cd web/frontend && npm run build` 驗證 Raman / XRD UI 套版結果，編譯通過；僅保留既有 Vite chunk size 警告，未新增 TypeScript 或建置錯誤。
+- 2026-04-30 18:09 CST：依使用者回饋，確認 Raman / XRD 中間欄最上方尚未完全對齊 XPS，且缺少真正的多筆資料疊圖入口；準備補上前端模式切換、資料選取 modal 與疊圖顯示，但不更動既有步驟處理邏輯。
+
+- 2026-04-30 18:16 CST：修改 `web/frontend/src/pages/XRD.tsx` 頁面骨架，將根容器改為固定視窗高度並補上 `min-h-0` / `overflow-hidden`，讓 XRD 側邊欄與中間欄改成比照 XPS 的分離捲動。
+- 2026-04-30 18:18 CST：執行 `cd web/frontend && npm run build` 驗證 XRD 分離捲動調整，前端編譯通過；僅保留既有的 Vite chunk size 警告與 package module type warning，未新增 TypeScript 或建置錯誤。

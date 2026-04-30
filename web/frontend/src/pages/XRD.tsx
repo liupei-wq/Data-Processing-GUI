@@ -426,10 +426,10 @@ export default function XRD({
   } as CSSProperties
 
   return (
-    <div className="min-h-screen xl:flex">
+    <div className={`flex h-screen flex-col overflow-hidden xl:flex-row${sidebarResizing ? ' select-none' : ''}`}>
       <aside
         className={[
-          'module-sidebar glass-panel relative z-20 flex min-h-screen w-full flex-col overflow-hidden xl:w-[var(--sidebar-width)] xl:transform-gpu xl:[transform:translateX(var(--sidebar-shift))] xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0',
+          'module-sidebar glass-panel relative z-20 flex min-h-0 w-full shrink-0 flex-col overflow-hidden xl:w-[var(--sidebar-width)] xl:transform-gpu xl:[transform:translateX(var(--sidebar-shift))] xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0',
         ].join(' ')}
         style={sidebarStyle}
       >
@@ -452,7 +452,7 @@ export default function XRD({
         </div>
 
         <div className={[
-          'module-sidebar__content flex h-full flex-col',
+          'module-sidebar__content flex h-full min-h-0 flex-col',
           sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
         ].join(' ')}>
           <div className="flex-1 overflow-y-auto">
@@ -555,7 +555,7 @@ export default function XRD({
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
           <div className="mb-8">
             <div className="flex flex-wrap items-baseline gap-3">
