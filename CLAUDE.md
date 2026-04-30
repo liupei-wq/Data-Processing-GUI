@@ -168,3 +168,6 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 - 2026-04-30 17:26 CST：再次讀取 `CLAUDE.md`，搜尋並定位 `web/frontend/src/pages/XPS.tsx` 內的 `Section`、`infoContent`、內插／背景扣除／歸一化／峰擬合相關程式。
 - 2026-04-30 17:35 CST：修改 `web/frontend/src/pages/XPS.tsx`，將 XPS `Section` 的 `?` 說明改為中央覆蓋式 modal，新增內插說明問號視窗，並把步驟卡外框改為玻璃感樣式；同步將元素週期表 modal 改為畫面置中。
 - 2026-04-30 17:37 CST：執行 `cd web/frontend && npm run build` 驗證前端編譯，結果通過；僅出現既有的 Vite chunk size 警告，未新增 TypeScript 或建置錯誤。
+- 2026-04-30 17:41 CST：再次讀取 `CLAUDE.md` 並檢查 XPS 左上角 header，確認目前仍為 `ModuleTabs`；準備改成放大 logo/標題、下方中央標籤式感應下拉選單，且整塊在側欄內 sticky 隨捲動維持可見。
+- 2026-04-30 17:44 CST：依使用者補充，將 XPS 左上角 header 改為「跟著側邊欄捲動區」的 sticky 區塊；放大 logo 與 Nigiro Pro 標題，並把分析模組改成長在卡片底部中央的感應式下拉標籤。
+- 2026-04-30 17:46 CST：再次執行 `cd web/frontend && npm run build` 驗證 sticky 側欄 header 與分析模組下拉選單調整，編譯通過；僅保留既有 Vite chunk size 警告。

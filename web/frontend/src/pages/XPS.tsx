@@ -688,32 +688,144 @@ function ChartToolbar({
   )
 }
 
-function ModuleTabs({ onSelect }: { onSelect?: (m: AnalysisModuleId) => void }) {
-  return (
-    <div className="px-4 pb-4">
-      <p className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)]">分析模組</p>
-      <div className="flex flex-wrap gap-1.5">
-        {ANALYSIS_MODULES.map(mod => {
-          const isActive = mod.id === 'xps'
-          return (
-            <button
-              key={mod.id}
-              type="button"
-              disabled={isActive}
-              onClick={() => { if (!isActive) onSelect?.(mod.id) }}
-              className={[
-                'rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all duration-150',
-                isActive
-                  ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_20%,transparent)] text-[var(--accent-secondary)] [box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent),0_2px_10px_-2px_color-mix(in_srgb,var(--accent-secondary)_28%,transparent)]'
-                  : 'bg-[var(--card-bg)] text-[var(--text-soft)] [box-shadow:inset_0_0_0_1px_var(--card-border)] hover:text-[var(--text-main)] hover:[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--accent-secondary)_45%,var(--card-border))]',
-              ].join(' ')}
-            >
-              {mod.label}
-            </button>
-          )
-        })}
+function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisModuleId; onSelect?: (m: AnalysisModuleId) => void }) {
+  const [open, setOpen] = useState(false)
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const closeTimerRef = useRef<number | null>(null)
+
+  const activeLabel = ANALYSIS_MODULES.find(mod => mod.id === activeModule)?.label ?? activeModule.toUpperCase()
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }
+
+  const updatePanelPosition = useCallback(() => {
+    if (!triggerRef.current) return
+    const rect = triggerRef.current.getBoundingClientRect()
+    setPanelStyle({
+      position: 'fixed',
+      top: rect.bottom + 10,
+      left: rect.left + rect.width / 2,
+      transform: 'translateX(-50%)',
+      width: Math.min(240, Math.max(rect.width + 28, 188)),
+      zIndex: 9999,
+    })
+  }, [])
+
+  const openMenu = useCallback(() => {
+    clearCloseTimer()
+    updatePanelPosition()
+    setOpen(true)
+  }, [updatePanelPosition])
+
+  const closeMenuSoon = useCallback(() => {
+    clearCloseTimer()
+    closeTimerRef.current = window.setTimeout(() => {
+      setOpen(false)
+      closeTimerRef.current = null
+    }, 120)
+  }, [])
+
+  useEffect(() => () => clearCloseTimer(), [])
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (
+        triggerRef.current && !triggerRef.current.contains(target) &&
+        panelRef.current && !panelRef.current.contains(target)
+      ) {
+        setOpen(false)
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    const onReposition = () => updatePanelPosition()
+
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('scroll', onReposition, true)
+    window.addEventListener('resize', onReposition)
+    window.addEventListener('keydown', onKeyDown)
+    updatePanelPosition()
+
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('scroll', onReposition, true)
+      window.removeEventListener('resize', onReposition)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, updatePanelPosition])
+
+  const panel = open ? (
+    <div
+      ref={panelRef}
+      style={panelStyle}
+      onMouseEnter={clearCloseTimer}
+      onMouseLeave={closeMenuSoon}
+      className="glass-panel overflow-hidden rounded-[22px] p-1.5"
+    >
+      <div className="px-3 pb-1.5 pt-2 text-center text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">
+        切換分析模組
       </div>
+      {ANALYSIS_MODULES.map(mod => {
+        const isActive = mod.id === activeModule
+        return (
+          <button
+            key={mod.id}
+            type="button"
+            disabled={isActive}
+            onClick={() => {
+              setOpen(false)
+              if (!isActive) onSelect?.(mod.id)
+            }}
+            className={[
+              'flex w-full items-center justify-between rounded-2xl px-3 py-2 text-sm transition-all duration-150 pressable',
+              isActive
+                ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-secondary)]'
+                : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)] hover:text-[var(--accent-secondary)]',
+            ].join(' ')}
+          >
+            <span>{mod.label}</span>
+            <span className="text-[11px] text-[var(--text-soft)]">{mod.detail}</span>
+          </button>
+        )
+      })}
     </div>
+  ) : null
+
+  return (
+    <>
+      <div className="relative flex justify-center">
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => {
+            if (open) {
+              setOpen(false)
+            } else {
+              openMenu()
+            }
+          }}
+          onMouseEnter={openMenu}
+          onMouseLeave={closeMenuSoon}
+          className="glass-panel flex min-h-[52px] min-w-[168px] items-center justify-center gap-2 rounded-[18px] px-5 py-2.5 text-sm font-semibold text-[var(--text-main)] transition-all duration-150 hover:-translate-y-0.5"
+        >
+          <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模組</span>
+          <span className="rounded-full bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] px-3 py-1 text-sm text-[var(--accent-secondary)]">
+            {activeLabel}
+          </span>
+          <span className={`text-[10px] text-[var(--text-soft)] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>▼</span>
+        </button>
+      </div>
+      {typeof document !== 'undefined' && panel ? createPortal(panel, document.body) : null}
+    </>
   )
 }
 
@@ -1735,25 +1847,30 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         ) : (
           <>
             <div className="flex-1 overflow-y-auto">
-              {/* ── Logo header (scrolls with content) ── */}
-              <div className="flex items-start justify-between px-5 pb-4 pt-6">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_2px_12px_-3px_color-mix(in_srgb,var(--accent-strong)_35%,transparent)]">
-                    <svg width="26" height="22" viewBox="0 0 18 16" fill="none">
-                      <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13"
-                        stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
+              <div className="sticky top-0 z-20 bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] px-4 pb-8 pt-5 backdrop-blur-xl">
+                <div className="glass-panel relative rounded-[30px] px-5 pb-9 pt-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 items-center gap-4">
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[24px] bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_8px_24px_-8px_color-mix(in_srgb,var(--accent-strong)_45%,transparent)]">
+                        <svg width="34" height="28" viewBox="0 0 18 16" fill="none">
+                          <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13"
+                            stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[1.9rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>
+                        <div className="mt-2 text-sm leading-tight text-[var(--text-soft)]">Spectroscopy Analysis</div>
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => setSidebarCollapsed(true)} className="mt-1 shrink-0 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-xl font-bold leading-tight tracking-tight text-[var(--text-main)]">Nigiro Pro</div>
-                    <div className="mt-1 text-xs leading-tight text-[var(--text-soft)]">Spectroscopy Analysis</div>
+                  <div className="pointer-events-none absolute inset-x-0 -bottom-6 flex justify-center px-4">
+                    <div className="pointer-events-auto">
+                      <ModuleDropdownTag activeModule="xps" onSelect={onModuleSelect} />
+                    </div>
                   </div>
                 </div>
-                <button type="button" onClick={() => setSidebarCollapsed(true)} className="mt-1 shrink-0 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
               </div>
-
-              {/* ── Module tabs ── */}
-              <ModuleTabs onSelect={onModuleSelect} />
 
               {/* Mode toggle */}
               <div className="px-4 py-3">
