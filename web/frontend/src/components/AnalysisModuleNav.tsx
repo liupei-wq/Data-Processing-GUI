@@ -10,7 +10,7 @@ export const ANALYSIS_MODULES: {
   { id: 'raman', label: 'Raman', detail: 'Raman Spectroscopy' },
   { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction' },
   { id: 'xps', label: 'XPS', detail: 'X-ray Photoelectron Spectroscopy' },
-  { id: 'xas', label: 'XAS', detail: 'X-ray Absorption' },
+  { id: 'xas', label: 'XAS', detail: 'X-ray Absorption Spectroscopy' },
   { id: 'xes', label: 'XES', detail: 'X-ray Emission Spectroscopy' },
 ]
 

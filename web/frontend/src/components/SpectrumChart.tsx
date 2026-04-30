@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
+import { withPlotFullscreen } from './plotConfig'
 import type { DetectedPeak, ProcessResult, RefPeak, XMode } from '../types/xrd'
 
 type DisplayMode = 'linear' | 'log10' | 'ln'
@@ -198,7 +199,7 @@ export default function SpectrumChart({
       <Plot
         data={traces}
         layout={layout}
-        config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+        config={withPlotFullscreen({ scrollZoom: true })}
         style={{ width: '100%', minHeight: `${minHeight}px` }}
         useResizeHandler
       />

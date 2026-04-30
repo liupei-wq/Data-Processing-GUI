@@ -40,12 +40,17 @@ import {
   ChartToolbar,
   DEFAULT_SERIES_PALETTE_KEYS,
   DatasetSelectionModal,
+  EmptyWorkspaceState,
+  InfoCardGrid,
   LINE_COLOR_OPTIONS,
   LINE_COLOR_PALETTES,
   makeLegendClick,
+  MODULE_CONTENT,
+  ModuleTopBar,
   ProcessingWorkspaceHeader,
   StickySidebarHeader,
 } from '../components/WorkspaceUi'
+import { withPlotFullscreen } from '../components/plotConfig'
 import type { ProcessParams } from '../types/xrd'
 
 type CsvCell = string | number | null | undefined
@@ -384,6 +389,7 @@ export default function XRD({
 }: {
   onModuleSelect?: (module: AnalysisModuleId) => void
 }) {
+  const moduleContent = MODULE_CONTENT.xrd
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('nigiro-xrd-sidebar-width'))
     if (Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) {
@@ -945,7 +951,10 @@ export default function XRD({
         <button
           type="button"
           onClick={() => setSidebarCollapsed(value => !value)}
-          className="pressable absolute right-2 top-5 z-30 hidden h-10 w-10 items-center justify-center rounded-full border border-[var(--pill-border)] bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] text-lg text-[var(--text-main)] shadow-[var(--card-shadow)] xl:flex"
+          className={[
+            'pressable absolute right-2 top-5 z-30 h-10 w-10 items-center justify-center rounded-full border border-[var(--pill-border)] bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] text-lg text-[var(--text-main)] shadow-[var(--card-shadow)]',
+            sidebarCollapsed ? 'hidden xl:flex' : 'hidden',
+          ].join(' ')}
           aria-label={sidebarCollapsed ? '展開左側欄' : '收合左側欄'}
           title={sidebarCollapsed ? '展開左側欄' : '收合左側欄'}
         >
@@ -1071,15 +1080,16 @@ export default function XRD({
 
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
-          <div className="mb-8">
-            <div className="flex flex-wrap items-baseline gap-3">
-              <h1 className="font-display text-4xl font-semibold tracking-[0.02em] text-[var(--text-muted)]">
-                XRD
-              </h1>
-              <span className="text-lg text-[var(--text-soft)]">X-ray Diffraction</span>
-            </div>
-            <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,color-mix(in_srgb,var(--card-border)_85%,transparent),transparent)]" />
-          </div>
+          <ModuleTopBar
+            title={moduleContent.title}
+            subtitle={moduleContent.subtitle}
+            description={moduleContent.description}
+            chips={[
+              { label: `資料量 ${rawFiles.length}` },
+              { label: `平均 ${params.average ? '開啟' : '關閉'}` },
+              { label: `參考峰 ${refPeaks.length}` },
+            ]}
+          />
 
           <ProcessingWorkspaceHeader
             tabs={topTabs}
@@ -1090,6 +1100,14 @@ export default function XRD({
               { label: '資料集', value: `${rawFiles.length} 個` },
               { label: xMode === 'dspacing' ? 'd 範圍' : '2θ 範圍', value: xRangeLabel },
               { label: '內插點數', value: interpolationLabel },
+            ]}
+          />
+
+          <InfoCardGrid
+            items={[
+              { label: '資料集', value: rawFiles.length > 0 ? `${rawFiles.length} 個` : '未載入' },
+              { label: xMode === 'dspacing' ? 'd 範圍' : '2θ 範圍', value: result ? xRangeLabel : '未建立' },
+              { label: '參考峰', value: `${refPeaks.length}` },
             ]}
           />
 
@@ -1108,46 +1126,12 @@ export default function XRD({
           )}
 
           {!result && !isLoading && (
-            <div className="min-h-[38rem]">
-              <div className="rounded-[24px] border border-[var(--pill-border)] bg-[var(--pill-bg)] px-6 py-5 text-xl font-semibold text-[var(--text-main)] shadow-[var(--card-shadow-soft)]">
-                請在左側上傳一個或多個 XRD 檔案。
-              </div>
-
-              <div className="theme-block-soft relative mt-12 min-h-[26rem] overflow-hidden rounded-[32px]">
-                <div className="workspace-float-card left-[24%] top-[6%] h-36 w-56 rounded-[26px] rotate-[-6deg] opacity-70" />
-                <div className="workspace-float-card right-[18%] top-[2%] h-32 w-48 rounded-[24px] rotate-[7deg] opacity-70" />
-                <div className="workspace-float-card left-[8%] bottom-[8%] h-32 w-44 rounded-[22px] rotate-[-8deg] opacity-65" />
-                <div className="workspace-float-card right-[34%] bottom-[12%] h-36 w-52 rounded-[24px] rotate-[4deg] opacity-65" />
-
-                <svg className="absolute left-[25%] top-[10%] h-28 w-52 opacity-40" viewBox="0 0 220 120" fill="none">
-                  <path d="M10 92C34 70 56 66 74 72C86 76 95 69 101 58C107 47 117 41 131 45C164 54 196 42 208 34" stroke="#2f6fbd" strokeWidth="6" strokeLinecap="round" />
-                  <circle cx="87" cy="67" r="5" fill="#5d85bb" />
-                  <circle cx="149" cy="55" r="5" fill="#5d85bb" />
-                </svg>
-                <svg className="absolute right-[19%] top-[5%] h-24 w-36 opacity-35" viewBox="0 0 160 120" fill="none">
-                  <rect x="18" y="34" width="20" height="44" rx="4" fill="#2f6fbd" />
-                  <rect x="58" y="18" width="20" height="60" rx="4" fill="#73829a" />
-                  <rect x="98" y="34" width="20" height="44" rx="4" fill="#25497b" />
-                  <rect x="138" y="18" width="20" height="60" rx="4" fill="#5d6370" />
-                </svg>
-                <svg className="absolute left-[10%] bottom-[14%] h-24 w-36 opacity-35" viewBox="0 0 160 90" fill="none">
-                  <path d="M18 60L114 44" stroke="#566270" strokeWidth="6" strokeLinecap="round" />
-                  <path d="M26 82L122 66" stroke="#566270" strokeWidth="6" strokeLinecap="round" />
-                  <path d="M30 34L126 62" stroke="#566270" strokeWidth="6" strokeLinecap="round" />
-                  <circle cx="30" cy="34" r="9" fill="#2f6fbd" />
-                  <circle cx="102" cy="66" r="9" fill="#2f6fbd" />
-                  <circle cx="132" cy="56" r="9" fill="#25497b" />
-                </svg>
-                <svg className="absolute right-[28%] bottom-[15%] h-28 w-48 opacity-35" viewBox="0 0 200 120" fill="none">
-                  <path d="M34 54L96 32L158 70" stroke="#2a3442" strokeWidth="6" strokeLinecap="round" />
-                  <path d="M34 54L106 90L158 70" stroke="#2a3442" strokeWidth="6" strokeLinecap="round" />
-                  <circle cx="34" cy="54" r="12" fill="#295189" />
-                  <circle cx="96" cy="32" r="9" fill="#5d6370" />
-                  <circle cx="106" cy="90" r="8" fill="#4a5565" />
-                  <circle cx="158" cy="70" r="13" fill="#25497b" />
-                </svg>
-              </div>
-            </div>
+            <EmptyWorkspaceState
+              module="xrd"
+              title={moduleContent.uploadTitle}
+              description="左側已提供內插、多檔平均、背景扣除、平滑、峰值偵測、參考卡比對與結晶尺寸分析。上傳之後會在這裡顯示 XRD 圖譜與分析結果。"
+              formats={moduleContent.formats}
+            />
           )}
 
           {result && (
@@ -1189,7 +1173,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(rawChartTraces, rawHidden)}
                     layout={chartLayout({ xMode, wavelength })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
+                    config={withPlotFullscreen({ scrollZoom: false })}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setRawHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1218,7 +1202,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(overlayChartTraces, overlayHidden)}
                     layout={chartLayout({ xMode, wavelength })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
+                    config={withPlotFullscreen({ scrollZoom: false })}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setOverlayHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1247,7 +1231,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(preprocessChartTraces, preprocessHidden)}
                     layout={chartLayout({ xMode, wavelength })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
+                    config={withPlotFullscreen({ scrollZoom: false })}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setPreprocessHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1278,7 +1262,7 @@ export default function XRD({
                       <Plot
                         data={applyHidden(gaussianChartTraces, gaussianHidden)}
                         layout={chartLayout({ xMode, wavelength })}
-                        config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
+                        config={withPlotFullscreen({ scrollZoom: false })}
                         style={{ width: '100%', height: 360 }}
                         onLegendClick={makeLegendClick(setGaussianHidden) as never}
                         onLegendDoubleClick={() => false}
@@ -1346,7 +1330,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(logChartTraces, logHidden)}
                     layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} Intensity` })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
+                    config={withPlotFullscreen({ scrollZoom: false })}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setLogHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1366,7 +1350,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(finalChartTraces, finalHidden)}
                     layout={chartLayout({ xMode, wavelength, height: 380 })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
+                    config={withPlotFullscreen({ scrollZoom: false })}
                     style={{ width: '100%', height: 380 }}
                     onLegendClick={makeLegendClick(setFinalHidden) as never}
                     onLegendDoubleClick={() => false}

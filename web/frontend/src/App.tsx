@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './components/AnalysisModuleNav'
 import CursorParticles from './components/CursorParticles'
 import Raman from './pages/Raman'
@@ -24,24 +24,25 @@ type FontId = 'ui' | 'kai' | 'serif'
 type FontScale = 'sm' | 'md' | 'lg'
 type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes' | `tool-${SingleToolKind}`
 
-const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft' | 'square' }[] = [
-  { id: 'apricot', label: '核心', tone: '冰藍黑', shape: 'soft' },
-  { id: 'pearl', label: '月白', tone: '銀白藍', shape: 'round' },
-  { id: 'ocean', label: '掃描', tone: '青藍光', shape: 'soft' },
-  { id: 'ink', label: '深場', tone: '黑曜藍', shape: 'square' },
-  { id: 'ember', label: '光譜', tone: '冷藍金', shape: 'square' },
-  { id: 'forest', label: '晶格', tone: '藍綠灰', shape: 'round' },
-  { id: 'amber', label: '琥珀', tone: '暖金棕', shape: 'round' },
-  { id: 'rose', label: '玫瑰', tone: '暖粉褐', shape: 'soft' },
-  { id: 'copper', label: '銅焰', tone: '銅棕橙', shape: 'square' },
-  { id: 'graphite', label: '石墨', tone: '中性灰', shape: 'soft' },
-  { id: 'obsidian', label: '黑曜', tone: '純黑銀', shape: 'square' },
+const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft' | 'square'; palette: [string, string, string] }[] = [
+  // Reference set: retained core / moon / spectrum palettes plus eight supplemental modes.
+  { id: 'apricot', label: '核心', tone: '冰藍黑', shape: 'soft', palette: ['#8FB4C9', '#EAF3FB', '#CFE3F1'] },
+  { id: 'pearl', label: '月白', tone: '銀白藍', shape: 'round', palette: ['#EAF3FB', '#CFE3F1', '#8FB4C9'] },
+  { id: 'ember', label: '光譜', tone: '冷藍金', shape: 'square', palette: ['#F5CF85', '#EAF3FB', '#8FB4C9'] },
+  { id: 'ocean', label: '掃描', tone: '孔雀青', shape: 'soft', palette: ['#43A693', '#ABE9DE', '#76D5C3'] },
+  { id: 'forest', label: '晶格', tone: '葉晶綠', shape: 'round', palette: ['#5DBC52', '#ADE7AA', '#77BF74'] },
+  { id: 'copper', label: '銅焰', tone: '珊瑚紅', shape: 'square', palette: ['#DE3E3E', '#F0CCC5', '#DB7B6F'] },
+  { id: 'rose', label: '玫瑰', tone: '粉紫霧', shape: 'soft', palette: ['#C789B2', '#F6E0F1', '#D7ACCD'] },
+  { id: 'amber', label: '琥珀', tone: '象牙金', shape: 'round', palette: ['#E4D785', '#FFFAD5', '#F1F2C0'] },
+  { id: 'ink', label: '深場', tone: '灰藍霧', shape: 'square', palette: ['#6B828B', '#C8E8E9', '#91B4BF'] },
+  { id: 'graphite', label: '石墨', tone: '中性灰', shape: 'soft', palette: ['#3C403F', '#999999', '#6F6F6F'] },
+  { id: 'obsidian', label: '黑曜', tone: '紫晶黑', shape: 'square', palette: ['#4B39D7', '#746BB8', '#6F588E'] },
 ]
 
 const FONT_FAMILIES: { id: FontId; label: string; note: string }[] = [
-  { id: 'ui', label: '介面體', note: 'IBM Plex' },
-  { id: 'kai', label: '標楷體', note: 'DFKai / KaiTi' },
-  { id: 'serif', label: '襯線體', note: 'Noto Serif' },
+  { id: 'ui', label: '介面體', note: 'Times / 黑體' },
+  { id: 'kai', label: '標楷體', note: 'Times / 楷體' },
+  { id: 'serif', label: '襯線體', note: 'Times / 明體' },
 ]
 
 const FONT_SCALES: { id: FontScale; label: string }[] = [
@@ -99,12 +100,9 @@ export default function App() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[var(--bg-canvas)] text-[var(--text-main)]">
+    <div className="app-root relative min-h-screen overflow-hidden bg-[var(--bg-canvas)] text-[var(--text-main)]">
       <div className="nigiro-backdrop pointer-events-none absolute inset-0 overflow-hidden">
         <div className="nigiro-backdrop__grid" />
-        <div className="nigiro-backdrop__scanline" />
-        <div className="nigiro-backdrop__constellation" />
-        <div className="nigiro-backdrop__orbit" />
       </div>
       <CursorParticles />
 
@@ -128,6 +126,11 @@ export default function App() {
                 key={item.id}
                 type="button"
                 onClick={() => setTheme(item.id)}
+                style={{
+                  '--swatch-a': item.palette[0],
+                  '--swatch-b': item.palette[1],
+                  '--swatch-c': item.palette[2],
+                } as CSSProperties}
                 className={[
                   'theme-swatch theme-swatch--compact pressable',
                   item.shape === 'round'

@@ -26,11 +26,13 @@ export default function FileUpload({ onFiles, isLoading = false, moduleLabel = '
     disabled: isLoading,
   })
 
+  const formatList = accept ?? ['.txt', '.csv', '.xy', '.asc', '.dat']
+
   return (
     <div
       {...getRootProps()}
       className={[
-        'group cursor-pointer rounded-[18px] border border-dashed p-5 text-center transition-all',
+        'upload-zone group cursor-pointer p-5 text-center transition-all',
         isDragActive
           ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] shadow-[var(--card-shadow-soft)]'
           : 'theme-block-soft border-[var(--input-border)] hover:border-[color:color-mix(in_srgb,var(--accent-strong)_42%,var(--input-border))] hover:bg-[var(--card-bg)]',
@@ -38,19 +40,20 @@ export default function FileUpload({ onFiles, isLoading = false, moduleLabel = '
       ].join(' ')}
     >
       <input {...getInputProps()} />
-      <div className="upload-orbit-icon mx-auto mb-4">
-        <span />
-      </div>
+      <svg viewBox="0 0 48 48" aria-hidden="true" className="upload-icon">
+        <path d="M12 33.5h24a4.5 4.5 0 0 0 4.5-4.5V28a4.5 4.5 0 0 0-4.5-4.5H33" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M15 23.5h-3A4.5 4.5 0 0 0 7.5 28v1a4.5 4.5 0 0 0 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity="0.78" />
+        <path d="M24 31V12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M17.5 18.5 24 12l6.5 6.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
       {isDragActive ? (
         <p className="text-sm font-medium text-[var(--accent)]">放開以載入檔案</p>
       ) : (
         <>
-          <div className="theme-pill inline-flex rounded-2xl px-4 py-2 text-base font-semibold text-[var(--text-main)]">
-            Upload
-          </div>
-          <p className="mt-4 text-sm font-medium text-[var(--text-main)]">拖曳或上傳 {moduleLabel} 檔案</p>
-          <p className="mt-1 text-xs text-[var(--text-soft)]">
-            {accept ? accept.map(e => e.toUpperCase().replace('.', '')).join(', ') : 'TXT, CSV, XY, ASC, DAT'}
+          <div className="btn btn-primary inline-flex">選擇檔案</div>
+          <p className="mt-1 text-sm font-medium text-[var(--text-main)]">拖曳或上傳 {moduleLabel} 檔案</p>
+          <p className="upload-help">
+            支援 {formatList.map(ext => ext.toUpperCase()).join(' / ')}
           </p>
         </>
       )}

@@ -7,14 +7,20 @@ import {
   ChartToolbar,
   DEFAULT_SERIES_PALETTE_KEYS,
   DatasetSelectionModal,
+  EmptyWorkspaceState,
   GlassSection,
+  InfoCardGrid,
   LINE_COLOR_OPTIONS,
   LINE_COLOR_PALETTES,
   makeLegendClick,
+  MODULE_CONTENT,
+  ModuleTopBar,
   ProcessingWorkspaceHeader,
   StickySidebarHeader,
+  ThemeSelect,
   TogglePill,
 } from '../components/WorkspaceUi'
+import { withPlotFullscreen } from '../components/plotConfig'
 import {
   detectPeaks,
   fetchPeakLibrary,
@@ -91,6 +97,18 @@ const DEFAULT_FIT_PARAMS: FitParams = {
   residual_target_rounds: 4,
 }
 
+const BACKGROUND_METHOD_HELP: Record<ProcessParams['bg_method'], string> = {
+  none: '不進行扣背，保留原始基線。',
+  constant: '以固定常數當背景，適合整條基線大致平移的情況。',
+  linear: '用起點與終點連成直線當背景，適合緩慢傾斜的基線。',
+  shirley: '背景大小與高結合能端累積訊號相關，常用於具階梯或尾巴的光譜背景。',
+  polynomial: '以多項式擬合彎曲基線，適合緩慢但非線性的背景漂移。',
+  asls: 'AsLS 以平滑懲罰和不對稱權重估計基線，盡量讓背景貼在峰下方。',
+  airpls: 'airPLS 會反覆調整權重，自動把峰當成異常值壓低，對複雜基線通常更穩健。',
+  rubber_band: '把光譜想成由下方橡皮筋撐住，適合寬而平滑的下包絡背景。',
+  manual_anchor: '由你指定 anchor points，再用這些點建出背景線，適合已知基線位置的情況。',
+}
+
 type ReviewRule = 'area_zero' | 'low_area' | 'large_delta' | 'boundary' | 'broad' | 'low_confidence'
 
 const REVIEW_RULE_OPTIONS: { id: ReviewRule; label: string }[] = [
@@ -109,6 +127,51 @@ const PROFILE_OPTIONS: { value: RamanProfile; label: string }[] = [
   { value: 'split_pseudo_voigt', label: 'asymmetric / split pseudo-Voigt' },
   { value: 'gaussian', label: 'Gaussian' },
   { value: 'lorentzian', label: 'Lorentzian' },
+]
+
+const BACKGROUND_METHOD_OPTIONS: { value: ProcessParams['bg_method']; label: string }[] = [
+  { value: 'none', label: '不扣背景' },
+  { value: 'constant', label: 'Constant' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'shirley', label: 'Shirley' },
+  { value: 'polynomial', label: 'Polynomial' },
+  { value: 'asls', label: 'AsLS' },
+  { value: 'airpls', label: 'airPLS' },
+  { value: 'rubber_band', label: 'Rubber band' },
+  { value: 'manual_anchor', label: 'Manual anchor baseline' },
+]
+
+const SMOOTH_METHOD_OPTIONS: { value: ProcessParams['smooth_method']; label: string }[] = [
+  { value: 'none', label: '不平滑' },
+  { value: 'moving_average', label: 'Moving Average' },
+  { value: 'savitzky_golay', label: 'Savitzky-Golay' },
+]
+
+const NORMALIZATION_OPTIONS: { value: ProcessParams['norm_method']; label: string }[] = [
+  { value: 'none', label: '不歸一化' },
+  { value: 'min_max', label: 'Min-Max' },
+  { value: 'max', label: 'Divide by max' },
+  { value: 'area', label: 'Divide by area' },
+]
+
+const ROBUST_LOSS_OPTIONS: { value: FitParams['robust_loss']; label: string }[] = [
+  { value: 'linear', label: 'Linear' },
+  { value: 'soft_l1', label: 'soft_l1' },
+  { value: 'huber', label: 'Huber' },
+  { value: 'cauchy', label: 'Cauchy' },
+  { value: 'arctan', label: 'Arctan' },
+]
+
+const BATCH_NORMALIZE_OPTIONS = [
+  { value: 'si_520', label: 'Normalize to Si 520' },
+  { value: 'total_area', label: 'Normalize to total area' },
+  { value: 'none', label: 'No normalize' },
+]
+
+const OXIDATION_INFERENCE_OPTIONS: { value: FitPeakCandidate['oxidation_state_inference']; label: string }[] = [
+  { value: 'Direct', label: 'Direct' },
+  { value: 'Inferred', label: 'Inferred' },
+  { value: 'Not applicable', label: 'Not applicable' },
 ]
 
 function createPeakCandidateId() {
@@ -261,6 +324,10 @@ function fitChartLayout(): Partial<Plotly.Layout> {
     base.font && typeof base.font === 'object' && 'color' in base.font
       ? base.font.color
       : '#d9e4f0'
+  const legendFamily =
+    base.font && typeof base.font === 'object' && 'family' in base.font
+      ? base.font.family
+      : 'Times New Roman, Noto Sans TC, serif'
   return {
     ...base,
     margin: { l: 68, r: 76, t: 126, b: 70 },
@@ -272,7 +339,7 @@ function fitChartLayout(): Partial<Plotly.Layout> {
       yanchor: 'bottom',
       bgcolor: 'rgba(0,0,0,0)',
       borderwidth: 0,
-      font: { color: legendColor, size: 12 },
+      font: { color: legendColor, family: legendFamily, size: 12 },
       traceorder: 'normal',
     },
     yaxis2: {
@@ -381,6 +448,7 @@ function chartLayout(): Partial<Plotly.Layout> {
   const chartLegendBg = cssVars?.getPropertyValue('--chart-legend-bg').trim() || 'rgba(15, 23, 42, 0.72)'
   const chartHoverBg = cssVars?.getPropertyValue('--chart-hover-bg').trim() || 'rgba(15, 23, 42, 0.95)'
   const chartHoverBorder = cssVars?.getPropertyValue('--chart-hover-border').trim() || 'rgba(148, 163, 184, 0.22)'
+  const chartFont = cssVars?.getPropertyValue('--body-font').trim() || 'Times New Roman, Noto Sans TC, serif'
 
   return {
     xaxis: {
@@ -404,17 +472,17 @@ function chartLayout(): Partial<Plotly.Layout> {
       bgcolor: chartLegendBg,
       bordercolor: chartHoverBorder,
       borderwidth: 1,
-      font: { color: chartText },
+      font: { color: chartText, family: chartFont },
     },
     margin: { l: 60, r: 20, t: 28, b: 58 },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: chartBg,
-    font: { color: chartText },
+    font: { color: chartText, family: chartFont },
     hovermode: 'x unified',
     hoverlabel: {
       bgcolor: chartHoverBg,
       bordercolor: chartHoverBorder,
-      font: { color: chartText },
+      font: { color: chartText, family: chartFont },
     },
     autosize: true,
   }
@@ -543,6 +611,7 @@ export default function Raman({
 }: {
   onModuleSelect?: (module: AnalysisModuleId) => void
 }) {
+  const moduleContent = MODULE_CONTENT.raman
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('nigiro-raman-sidebar-width'))
     if (Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) {
@@ -1733,7 +1802,10 @@ export default function Raman({
         <button
           type="button"
           onClick={() => setSidebarCollapsed(value => !value)}
-          className="pressable absolute right-2 top-5 z-30 hidden h-10 w-10 items-center justify-center rounded-full border border-[var(--pill-border)] bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] text-lg text-[var(--text-main)] shadow-[var(--card-shadow)] xl:flex"
+          className={[
+            'pressable absolute right-2 top-5 z-30 h-10 w-10 items-center justify-center rounded-full border border-[var(--pill-border)] bg-[color:color-mix(in_srgb,var(--panel-bg)_88%,transparent)] text-lg text-[var(--text-main)] shadow-[var(--card-shadow)]',
+            sidebarCollapsed ? 'hidden xl:flex' : 'hidden',
+          ].join(' ')}
           aria-label={sidebarCollapsed ? '展開左側欄' : '收合左側欄'}
           title={sidebarCollapsed ? '展開左側欄' : '收合左側欄'}
         >
@@ -1784,8 +1856,8 @@ export default function Raman({
                 <p>可同時上傳多筆 Raman 光譜，後續是否平均或個別處理，仍由下方步驟控制。</p>
               </div>
             }>
-              <div className="mb-3 text-sm font-medium text-[var(--text-main)]">上傳 Raman 檔案（可多選）</div>
-              <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="Raman" />
+              <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}（可多選）</div>
+              <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="Raman" accept={['.txt', '.csv', '.asc', '.dat']} />
               {rawFiles.length > 0 && (
                 <div className="mt-3 space-y-1.5">
                   {rawFiles.map(file => (
@@ -1869,22 +1941,27 @@ export default function Raman({
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">背景扣除說明</p>
                 <p>背景扣除用來去除基線漂移，讓主峰輪廓更清楚；這一步只影響光譜形狀呈現，不改你的步驟邏輯。</p>
+                <div className="space-y-2 text-sm">
+                  <div><span className="font-medium text-[var(--text-main)]">Constant / Linear</span>：適合簡單平移或傾斜基線。</div>
+                  <div><span className="font-medium text-[var(--text-main)]">Shirley</span>：用累積訊號估背景，常見於有台階或長尾的光譜。</div>
+                  <div><span className="font-medium text-[var(--text-main)]">Polynomial</span>：用多項式追蹤彎曲基線。</div>
+                  <div><span className="font-medium text-[var(--text-main)]">AsLS / airPLS</span>：用懲罰最小平方法估計平滑背景，airPLS 更偏自動化。</div>
+                  <div><span className="font-medium text-[var(--text-main)]">Rubber band / Manual anchor</span>：前者抓下包絡，後者由手動錨點決定背景。</div>
+                </div>
               </div>
             }>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">背景方法</span>
-                <select value={params.bg_method} onChange={e => setParams(current => ({ ...current, bg_enabled: e.target.value !== 'none', bg_method: e.target.value as ProcessParams['bg_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
-                  <option value="none">不扣背景</option>
-                  <option value="constant">Constant</option>
-                  <option value="linear">Linear</option>
-                  <option value="shirley">Shirley</option>
-                  <option value="polynomial">Polynomial</option>
-                  <option value="asls">AsLS</option>
-                  <option value="airpls">airPLS</option>
-                  <option value="rubber_band">Rubber band</option>
-                  <option value="manual_anchor">Manual anchor baseline</option>
-                </select>
+                <ThemeSelect
+                  value={params.bg_method}
+                  onChange={value => setParams(current => ({ ...current, bg_enabled: value !== 'none', bg_method: value as ProcessParams['bg_method'] }))}
+                  options={BACKGROUND_METHOD_OPTIONS}
+                  buttonClassName="text-sm"
+                />
               </label>
+              <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
+                {BACKGROUND_METHOD_HELP[params.bg_method]}
+              </div>
               {params.bg_method !== 'none' && (
                 <>
                   <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1948,11 +2025,12 @@ export default function Raman({
             }>
               <label className="mt-4 block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">平滑方法</span>
-                <select value={params.smooth_method} onChange={e => setParams(current => ({ ...current, smooth_method: e.target.value as ProcessParams['smooth_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
-                  <option value="none">不平滑</option>
-                  <option value="moving_average">Moving Average</option>
-                  <option value="savitzky_golay">Savitzky-Golay</option>
-                </select>
+                <ThemeSelect
+                  value={params.smooth_method}
+                  onChange={value => setParams(current => ({ ...current, smooth_method: value as ProcessParams['smooth_method'] }))}
+                  options={SMOOTH_METHOD_OPTIONS}
+                  buttonClassName="text-sm"
+                />
               </label>
               {params.smooth_method !== 'none' && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1978,12 +2056,12 @@ export default function Raman({
             }>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">歸一化方法</span>
-                <select value={params.norm_method} onChange={e => setParams(current => ({ ...current, norm_method: e.target.value as ProcessParams['norm_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
-                  <option value="none">不歸一化</option>
-                  <option value="min_max">Min-Max</option>
-                  <option value="max">Divide by max</option>
-                  <option value="area">Divide by area</option>
-                </select>
+                <ThemeSelect
+                  value={params.norm_method}
+                  onChange={value => setParams(current => ({ ...current, norm_method: value as ProcessParams['norm_method'] }))}
+                  options={NORMALIZATION_OPTIONS}
+                  buttonClassName="text-sm"
+                />
               </label>
               {params.norm_method !== 'none' && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
@@ -2181,15 +2259,12 @@ export default function Raman({
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">Profile</span>
-                  <select
+                  <ThemeSelect
                     value={manualPeakProfile}
-                    onChange={e => setManualPeakProfile(e.target.value as RamanProfile)}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                  >
-                    {PROFILE_OPTIONS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
+                    onChange={value => setManualPeakProfile(value as RamanProfile)}
+                    options={PROFILE_OPTIONS}
+                    buttonClassName="text-sm"
+                  />
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM min</span>
@@ -2229,19 +2304,21 @@ export default function Raman({
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">擬合對象</span>
-                  <select value={fitTargetName} onChange={e => setFitTargetName(e.target.value)} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
-                    {result?.datasets.map(dataset => (
-                      <option key={dataset.name} value={dataset.name}>{dataset.name}</option>
-                    ))}
-                  </select>
+                  <ThemeSelect
+                    value={fitTargetName}
+                    onChange={setFitTargetName}
+                    options={(result?.datasets ?? []).map(dataset => ({ value: dataset.name, label: dataset.name }))}
+                    buttonClassName="text-sm"
+                  />
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">擬合輪廓</span>
-                  <select value={fitParams.profile} onChange={e => setFitParams(current => ({ ...current, profile: e.target.value as FitParams['profile'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
-                    {PROFILE_OPTIONS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
+                  <ThemeSelect
+                    value={fitParams.profile}
+                    onChange={value => setFitParams(current => ({ ...current, profile: value as FitParams['profile'] }))}
+                    options={PROFILE_OPTIONS}
+                    buttonClassName="text-sm"
+                  />
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">單次擬合迭代上限</span>
@@ -2257,17 +2334,12 @@ export default function Raman({
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">Robust loss</span>
-                  <select
+                  <ThemeSelect
                     value={fitParams.robust_loss}
-                    onChange={e => setFitParams(current => ({ ...current, robust_loss: e.target.value as FitParams['robust_loss'] }))}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                  >
-                    <option value="linear">Linear</option>
-                    <option value="soft_l1">soft_l1</option>
-                    <option value="huber">Huber</option>
-                    <option value="cauchy">Cauchy</option>
-                    <option value="arctan">Arctan</option>
-                  </select>
+                    onChange={value => setFitParams(current => ({ ...current, robust_loss: value as FitParams['robust_loss'] }))}
+                    options={ROBUST_LOSS_OPTIONS}
+                    buttonClassName="text-sm"
+                  />
                 </label>
                 <button
                   type="button"
@@ -2527,33 +2599,24 @@ export default function Raman({
 
       <div className="min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
-          <div className="mb-8">
-            <div className="flex flex-wrap items-baseline gap-3">
-              <h1 className="font-display text-4xl font-semibold tracking-[0.02em] text-[var(--text-muted)]">
-                Raman
-              </h1>
-              <span className="text-lg text-[var(--text-soft)]">Raman Spectroscopy</span>
-            </div>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--text-soft)]">
-              目前網站版已提供常用 Raman 前處理、參考峰對照，以及第一批峰位管理與峰擬合能力；QC review 與 preset 還沒搬完。
-            </p>
-            <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,color-mix(in_srgb,var(--card-border)_85%,transparent),transparent)]" />
-          </div>
+          <ModuleTopBar
+            title={moduleContent.title}
+            subtitle={moduleContent.subtitle}
+            description={moduleContent.description}
+            chips={[
+              { label: `資料量 ${rawFiles.length}` },
+              { label: `平均 ${params.average ? '開啟' : '關閉'}` },
+              { label: `參考峰 ${refPeaks.length}` },
+            ]}
+          />
 
-          <div className="mb-6 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
-              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{activeDataset?.name ?? '未載入'}</p>
-            </div>
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">平均模式</p>
-              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{params.average ? '啟用' : '關閉'}</p>
-            </div>
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">參考峰</p>
-              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{refPeaks.length}</p>
-            </div>
-          </div>
+          <InfoCardGrid
+            items={[
+              { label: '資料集', value: activeDataset?.name ?? '未載入' },
+              { label: '平均模式', value: params.average ? '開啟' : '關閉' },
+              { label: '參考峰', value: `${refPeaks.length}` },
+            ]}
+          />
 
           {error && (
             <div className="mb-5 rounded-[18px] border border-[color:color-mix(in_srgb,var(--accent-secondary)_28%,var(--card-border))] bg-[color:color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] px-4 py-3 text-sm text-[var(--text-main)]">
@@ -2562,13 +2625,12 @@ export default function Raman({
           )}
 
           {!activeDataset && !isLoading && (
-            <div className="theme-block-soft flex min-h-[36rem] flex-col items-center justify-center rounded-[32px] px-6 text-center">
-              <div className="mb-4 text-5xl text-[var(--accent-secondary)]">◌</div>
-              <div className="text-xl font-semibold text-[var(--text-muted)]">先上傳 Raman 檔案</div>
-              <div className="mt-3 max-w-2xl text-sm leading-6 text-[var(--text-soft)]">
-                左側已接好去尖峰、多檔平均、背景扣除、平滑、歸一化、參考峰與基本峰偵測。上傳之後右邊會立即顯示處理結果。
-              </div>
-            </div>
+            <EmptyWorkspaceState
+              module="raman"
+              title={moduleContent.uploadTitle}
+              description="左側已提供去尖峰、多檔平均、背景扣除、平滑、歸一化、參考峰與峰值偵測。上傳之後會在這裡顯示 Raman 圖譜與分析結果。"
+              formats={moduleContent.formats}
+            />
           )}
 
           {isLoading && (
@@ -2604,22 +2666,20 @@ export default function Raman({
                           <div key={`${file.name}-${index}`} className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1">
                             <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: palette.primary }} />
                             <span className="max-w-[108px] truncate text-[10px] text-[var(--text-main)]">{file.name}</span>
-                            <select
+                            <ThemeSelect
                               value={colorKey}
-                              onChange={event => {
+                              onChange={value => {
                                 const targetIndex = globalIndex >= 0 ? globalIndex : index
                                 setRawFileColors(prev => {
                                   const next = [...prev]
-                                  next[targetIndex] = event.target.value
+                                  next[targetIndex] = value
                                   return next
                                 })
                               }}
-                              className="rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1 py-0.5 text-[10px] text-[var(--input-text)] focus:outline-none"
-                            >
-                              {LINE_COLOR_OPTIONS.map(option => (
-                                <option key={option.value} value={option.value}>{option.label}</option>
-                              ))}
-                            </select>
+                              options={LINE_COLOR_OPTIONS}
+                              className="w-[5.6rem]"
+                              buttonClassName="min-h-7 rounded-lg px-2 py-0.5 text-[10px]"
+                            />
                           </div>
                         )
                       })}
@@ -2628,7 +2688,7 @@ export default function Raman({
                   <Plot
                     data={applyHidden(rawChartTraces, rawHidden)}
                     layout={chartLayout()}
-                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    config={withPlotFullscreen({ scrollZoom: true })}
                     style={{ width: '100%', minHeight: '340px' }}
                     onLegendClick={makeLegendClick(setRawHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -2657,7 +2717,7 @@ export default function Raman({
                   <Plot
                     data={applyHidden(overlayChartTraces, overlayHidden)}
                     layout={chartLayout()}
-                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    config={withPlotFullscreen({ scrollZoom: true })}
                     style={{ width: '100%', minHeight: '340px' }}
                     onLegendClick={makeLegendClick(setOverlayHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -2686,7 +2746,7 @@ export default function Raman({
                   <Plot
                     data={applyHidden(preprocessChartTraces, preprocessHidden)}
                     layout={chartLayout()}
-                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    config={withPlotFullscreen({ scrollZoom: true })}
                     style={{ width: '100%', minHeight: '340px' }}
                     onLegendClick={makeLegendClick(setPreprocessHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -2715,7 +2775,7 @@ export default function Raman({
                   <Plot
                     data={applyHidden(backgroundChartTraces, backgroundHidden)}
                     layout={chartLayout()}
-                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    config={withPlotFullscreen({ scrollZoom: true })}
                     style={{ width: '100%', minHeight: '340px' }}
                     onLegendClick={makeLegendClick(setBackgroundHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -2744,7 +2804,7 @@ export default function Raman({
                   <Plot
                     data={applyHidden(finalChartTraces, finalHidden)}
                     layout={chartLayout()}
-                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    config={withPlotFullscreen({ scrollZoom: true })}
                     style={{ width: '100%', minHeight: '420px' }}
                     onLegendClick={makeLegendClick(setFinalHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -2971,7 +3031,7 @@ export default function Raman({
                       <Plot
                         data={fitChartTraces(activeFitDataset, fitResult)}
                         layout={fitChartLayout()}
-                        config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                        config={withPlotFullscreen({ scrollZoom: true })}
                         style={{ width: '100%', minHeight: '520px' }}
                         useResizeHandler
                       />
@@ -3223,15 +3283,13 @@ export default function Raman({
                             <div className="mt-1 text-xs text-[var(--text-soft)]">同一套 peak model 套用到所有資料集的 position / FWHM / Area 趨勢。</div>
                           </div>
                           <div className="flex gap-2">
-                            <select
+                            <ThemeSelect
                               value={batchNormalize}
-                              onChange={e => setBatchNormalize(e.target.value as typeof batchNormalize)}
-                              className="theme-input rounded-xl px-3 py-2 text-xs"
-                            >
-                              <option value="si_520">Normalize to Si 520</option>
-                              <option value="total_area">Normalize to total area</option>
-                              <option value="none">No normalize</option>
-                            </select>
+                              onChange={value => setBatchNormalize(value as typeof batchNormalize)}
+                              options={BATCH_NORMALIZE_OPTIONS}
+                              className="min-w-[12rem]"
+                              buttonClassName="text-xs"
+                            />
                             <button
                               type="button"
                               onClick={exportBatchCsv}
@@ -3373,15 +3431,12 @@ export default function Raman({
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">Profile</span>
-                <select
+                <ThemeSelect
                   value={editingCandidate.profile || fitParams.profile}
-                  onChange={e => updateFitCandidate(editingCandidate.peak_id, { profile: e.target.value as RamanProfile })}
-                  className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                >
-                  {PROFILE_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                  onChange={value => updateFitCandidate(editingCandidate.peak_id, { profile: value as RamanProfile })}
+                  options={PROFILE_OPTIONS}
+                  buttonClassName="text-sm"
+                />
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM min</span>
@@ -3429,15 +3484,12 @@ export default function Raman({
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">Oxidation inference</span>
-                <select
+                <ThemeSelect
                   value={editingCandidate.oxidation_state_inference}
-                  onChange={e => updateFitCandidate(editingCandidate.peak_id, { oxidation_state_inference: e.target.value as FitPeakCandidate['oxidation_state_inference'] })}
-                  className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                >
-                  <option value="Direct">Direct</option>
-                  <option value="Inferred">Inferred</option>
-                  <option value="Not applicable">Not applicable</option>
-                </select>
+                  onChange={value => updateFitCandidate(editingCandidate.peak_id, { oxidation_state_inference: value as FitPeakCandidate['oxidation_state_inference'] })}
+                  options={OXIDATION_INFERENCE_OPTIONS}
+                  buttonClassName="text-sm"
+                />
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">Oxidation state</span>

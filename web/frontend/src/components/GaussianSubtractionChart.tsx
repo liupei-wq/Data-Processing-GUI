@@ -1,4 +1,5 @@
 import Plot from 'react-plotly.js'
+import { withPlotFullscreen } from './plotConfig'
 import type { ProcessedDataset, XMode } from '../types/xrd'
 
 interface Props {
@@ -97,7 +98,7 @@ export default function GaussianSubtractionChart({ dataset, xMode, wavelength }:
           },
           autosize: true,
         }}
-        config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+        config={withPlotFullscreen({ scrollZoom: true })}
         style={{ width: '100%', minHeight: '360px' }}
         useResizeHandler
       />

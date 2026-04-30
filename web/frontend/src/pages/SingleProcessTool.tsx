@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import Plot from 'react-plotly.js'
+import { withPlotFullscreen } from '../components/plotConfig'
 import { parseFiles, processData } from '../api/xrd'
 import FileUpload from '../components/FileUpload'
 import type { GaussianCenter, ParsedFile, ProcessParams, ProcessedDataset } from '../types/xrd'
@@ -546,7 +547,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                   <Plot
                     data={buildTraces(tool, activeDataset)}
                     layout={chartLayout()}
-                    config={{ scrollZoom: true, displaylogo: false, responsive: true }}
+                    config={withPlotFullscreen({ scrollZoom: true })}
                     style={{ width: '100%', minHeight: '520px' }}
                     useResizeHandler
                   />

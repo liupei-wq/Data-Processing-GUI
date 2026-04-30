@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
-import AnalysisModuleNav from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
+import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { withPlotFullscreen } from '../components/plotConfig'
 import { parseFiles, processData, detectPeaks, listReferences, getReferencePeaks } from '../api/xes'
 import type {
   BandAlignParams,
@@ -49,6 +50,14 @@ const DEFAULT_BAND: BandAlignParams = {
   sigma_cbm_a: 0,
   sigma_vbm_b: 0,
   sigma_cbm_b: 0,
+}
+
+const BG_SUBTRACTION_HELP: Record<string, string> = {
+  none: '不做背景扣除，直接保留處理前的訊號。',
+  bg1: '只用上傳的 BG1 當背景，適合前背景最接近樣品條件時。',
+  bg2: '只用上傳的 BG2 當背景，適合後背景比較穩定時。',
+  average: '把 BG1 與 BG2 平均後再扣除，適合前後背景都可信時。',
+  interpolated: '依上傳順序在 BG1 與 BG2 之間逐點內插，適合背景隨量測時間漂移的情況。',
 }
 
 function cssVar(name: string, fallback: string) {
@@ -137,6 +146,7 @@ function Select({ ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
+  const moduleContent = MODULE_CONTENT.xes
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = localStorage.getItem('nigiro-xes-sidebar-width')
     return saved ? Number(saved) : SIDEBAR_DEFAULT_WIDTH
@@ -302,18 +312,12 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       >
         {!sidebarCollapsed && (
           <div className="module-sidebar__content flex flex-1 flex-col overflow-y-auto">
-            {/* brand + modules */}
-            <div className="flex items-center gap-3 px-6 pb-2 pt-6">
-              <div className="nigiro-brand-mark nigiro-brand-mark--sm" aria-hidden="true">
-                <img src="/nigiro-icon.svg" alt="" />
-              </div>
-              <div>
-                <div className="font-display text-xl font-semibold tracking-tight text-[var(--text-main)]">Nigiro Pro</div>
-                <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)]">Material Intelligence</div>
-              </div>
-            </div>
-            <AnalysisModuleNav activeModule="xes" onSelectModule={onModuleSelect} />
-            <div className="mx-4 border-t border-[var(--card-border)]" />
+            <StickySidebarHeader
+              activeModule="xes"
+              subtitle="Material Intelligence Engine"
+              onSelectModule={onModuleSelect}
+              onCollapse={() => setSidebarCollapsed(true)}
+            />
 
             {/* steps */}
             <div className="flex-1 px-4 py-4">
@@ -367,6 +371,9 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   <option value="average">BG1+BG2 平均</option>
                   <option value="interpolated">分點插值（依上傳順序）</option>
                 </Select>
+                <div className="mt-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
+                  {BG_SUBTRACTION_HELP[params.bg_method]}
+                </div>
               </SidebarCard>
 
               {/* Step 4 */}
@@ -556,14 +563,26 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       </div>
 
       {/* main content */}
-      <div className="flex flex-1 flex-col overflow-y-auto">
-        <div className="mx-auto w-full max-w-5xl px-6 py-6">
+      <div className="flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+        <div className="mx-auto w-full max-w-[1500px]">
+          <ModuleTopBar
+            title={moduleContent.title}
+            subtitle={moduleContent.subtitle}
+            description={moduleContent.description}
+            chips={[
+              { label: `資料量 ${samples.length}` },
+              { label: `平均 ${params.average ? '開啟' : '關閉'}` },
+              { label: `參考峰 ${refPeaks.length}` },
+            ]}
+          />
 
-          {/* header */}
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold text-[var(--text-main)]">XES</h1>
-            <p className="text-sm text-[var(--text-soft)]">X-ray Emission Spectroscopy — 1D 光譜模式</p>
-          </div>
+          <InfoCardGrid
+            items={[
+              { label: '資料集', value: samples.length > 0 ? `${samples.length} 個` : '未載入' },
+              { label: '平均模式', value: params.average ? '開啟' : '關閉' },
+              { label: '參考峰', value: `${refPeaks.length}` },
+            ]}
+          />
 
           {/* status pills */}
           {hasSamples && (
@@ -583,13 +602,12 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           )}
 
           {!hasSamples ? (
-            <div className="flex min-h-[40vh] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-bg)]">
-              <div className="text-center text-[var(--text-soft)]">
-                <div className="mb-2 text-3xl opacity-30">⚗</div>
-                <p className="text-sm">在左側上傳 XES 1D 光譜檔案，然後點擊「解析檔案」。</p>
-                <p className="mt-1 text-xs opacity-60">支援 CSV / DAT / TXT，兩欄格式（X, intensity）</p>
-              </div>
-            </div>
+            <EmptyWorkspaceState
+              module="xes"
+              title={moduleContent.uploadTitle}
+              description="左側已提供多檔平均、BG1/BG2 背景扣除、平滑、歸一化、X 軸校正、參考峰、峰值偵測與能帶對齊。上傳之後會在這裡顯示 XES 圖譜與分析結果。"
+              formats={moduleContent.formats}
+            />
           ) : !hasProcessed ? (
             <div className="flex min-h-[32vh] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-bg)]">
               <div className="text-center text-[var(--text-soft)]">
@@ -655,7 +673,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       ...(refPeaks.length > 0 ? {} : {}),
                     },
                   }}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%' }}
                 />
               </div>
@@ -687,7 +705,7 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       },
                     ])}
                     layout={chartLayout('BG1/BG2 扣除比較', xLabel)}
-                    config={{ responsive: true, displayModeBar: false }}
+                    config={withPlotFullscreen()}
                     style={{ width: '100%' }}
                   />
                 </div>

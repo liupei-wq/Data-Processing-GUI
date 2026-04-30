@@ -4,6 +4,8 @@ import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { ANALYSIS_MODULES } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
+import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { withPlotFullscreen } from '../components/plotConfig'
 import { calibrateEnergy, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
 import type {
   CalibrationResult,
@@ -979,6 +981,7 @@ function getOverlayStageDatasets(stage: ProcessResult | null | undefined, useAve
 // ── main component ────────────────────────────────────────────────────────────
 
 export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
+  const moduleContent = MODULE_CONTENT.xps
   const restoringSessionRef = useRef(false)
   const lastLoadedSessionKeyRef = useRef<string | null>(null)
   const datasetBundlesRef = useRef<Record<string, DatasetPipelineBundle>>({})
@@ -1847,27 +1850,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         ) : (
           <>
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-8 pt-5">
-                <div className="sidebar-header-card relative rounded-[30px] px-5 pb-9 pt-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex min-w-0 items-center gap-4">
-                      <div className="nigiro-brand-mark nigiro-brand-mark--lg" aria-hidden="true">
-                        <img src="/nigiro-icon.svg" alt="" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[1.9rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>
-                        <div className="mt-2 text-sm leading-tight text-[var(--text-soft)]">Material Intelligence</div>
-                      </div>
-                    </div>
-                    <button type="button" onClick={() => setSidebarCollapsed(true)} className="mt-1 shrink-0 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
-                  </div>
-                  <div className="pointer-events-none absolute inset-x-0 -bottom-6 flex justify-center px-4">
-                    <div className="pointer-events-auto">
-                      <ModuleDropdownTag activeModule="xps" onSelect={onModuleSelect} />
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <StickySidebarHeader
+                activeModule="xps"
+                subtitle="Material Intelligence Engine"
+                onSelectModule={onModuleSelect}
+                onCollapse={() => setSidebarCollapsed(true)}
+              />
 
               {/* Mode toggle */}
               <div className="px-4 py-3">
@@ -1886,6 +1874,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
               <div className="px-4 pt-4">
                 <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV">
+                  <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}</div>
                   <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="XPS" accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat']} />
                   {rawFiles.length > 0 && (
                     <div className="space-y-1">
@@ -2414,6 +2403,28 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
       {/* ── main content ── */}
       <main className="flex flex-1 flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
+        <ModuleTopBar
+          title={moduleContent.title}
+          subtitle={moduleContent.subtitle}
+          description={moduleContent.description}
+          chips={[
+            { label: `資料量 ${rawFiles.length}` },
+            { label: `模式 ${xpsMode === 'core_level' ? 'Core Level' : 'Valence Band'}` },
+            { label: `峰候選 ${peakCandidates.length}` },
+          ]}
+        />
+
+        <InfoCardGrid
+          items={[
+            { label: '資料量', value: rawFiles.length > 0 ? `${rawFiles.length} 個` : '未載入' },
+            { label: '分析模式', value: xpsMode === 'core_level' ? 'Core Level' : 'Valence Band' },
+            {
+              label: '內插點數',
+              value: currentParams.interpolate || (processingViewMode === 'overlay' && currentParams.average) ? `${effectiveNPoints} 點` : '未啟用',
+            },
+          ]}
+        />
+
         {error && (
           <div className="mb-4 rounded-xl border border-rose-300/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">⚠ {error}</div>
         )}
@@ -2424,18 +2435,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         )}
 
         {rawFiles.length === 0 && !isBusy && (
-          <div className="flex flex-1 flex-col items-center justify-center rounded-[28px] border border-dashed border-[var(--card-border)] bg-[var(--card-bg)] px-6 py-20 text-center">
-            <div className="mb-4 text-5xl opacity-30">⚛</div>
-            <p className="font-display text-xl tracking-wide text-[var(--text-main)]">XPS 分析</p>
-            <p className="mt-3 max-w-md text-sm leading-6 text-[var(--text-soft)]">
-              上傳 XPS 光譜檔（.xy / .txt / .csv / .vms），支援 Shirley / Tougaard 背景扣除與 Voigt 峰擬合。
-            </p>
-            <div className="mt-5 flex flex-wrap justify-center gap-2 text-xs text-[var(--text-soft)]">
-              {['.XY', '.TXT', '.CSV', '.VMS', '.PRO'].map(ext => (
-                <span key={ext} className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1.5">{ext}</span>
-              ))}
-            </div>
-          </div>
+          <EmptyWorkspaceState
+            module="xps"
+            title={moduleContent.uploadTitle}
+            description="左側已提供 Core Level / Valence Band 切換、Shirley / Tougaard 背景、Voigt 擬合與 chemical state 分析。上傳後會在這裡顯示 XPS 光譜與定量結果。"
+            formats={moduleContent.formats}
+          />
         )}
 
         {rawFiles.length > 0 && (
@@ -2483,25 +2488,6 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            <div className="mb-4 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
-                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{rawFiles.length} 個</p>
-              </div>
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">BE 範圍</p>
-                <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
-                  {rawPreview ? `${Math.min(...rawPreview.x).toFixed(1)} – ${Math.max(...rawPreview.x).toFixed(1)} eV` : '—'}
-                </p>
-              </div>
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">內插點數</p>
-                <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">
-                  {currentParams.interpolate || (processingViewMode === 'overlay' && currentParams.average) ? `${effectiveNPoints} 點` : '未啟用'}
-                </p>
-              </div>
-            </div>
-
             {rawChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
@@ -2547,7 +2533,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <Plot
                   data={applyHidden(rawChartTraces as Plotly.Data[], rawHidden)}
                   layout={chartLayout() as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                   onLegendClick={makeLegendClick(setRawHidden) as never}
                   onLegendDoubleClick={() => false}
@@ -2572,7 +2558,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <Plot
                   data={applyHidden(buildOverlayTraces(overlayStage.datasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
                   layout={chartLayout() as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                   onLegendClick={makeLegendClick(setOverlayHidden) as never}
                   onLegendDoubleClick={() => false}
@@ -2597,7 +2583,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <Plot
                   data={applyHidden(preprocessChartTraces as Plotly.Data[], preprocessHidden)}
                   layout={chartLayout() as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                   onLegendClick={makeLegendClick(setPreprocessHidden) as never}
                   onLegendDoubleClick={() => false}
@@ -2627,7 +2613,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <Plot
                   data={applyHidden((showBg ? backgroundChartTraces : backgroundChartTraces.filter(trace => trace.name !== '背景線')) as Plotly.Data[], bgHidden)}
                   layout={backgroundLayout as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                   onLegendClick={makeLegendClick(setBgHidden) as never}
                   onLegendDoubleClick={() => false}
@@ -2652,7 +2638,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <Plot
                   data={applyHidden(normalizationChartTraces as Plotly.Data[], normHidden)}
                   layout={normalizationLayout as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                   onLegendClick={makeLegendClick(setNormHidden) as never}
                   onLegendDoubleClick={() => false}
@@ -2681,7 +2667,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <Plot
                   data={applyHidden((fitResult ? buildFitTraces(activeDataset, fitResult, chartLineColors.final) : buildMainTraces(activeDataset, showRaw, showBg, chartLineColors.final)) as Plotly.Data[], finalHidden)}
                   layout={chartLayout() as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 380 }}
                   onLegendClick={makeLegendClick(setFinalHidden) as never}
                   onLegendDoubleClick={() => false}
@@ -2743,7 +2729,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       font: { color: '#f97316', size: 11 }, arrowcolor: '#f97316',
                     }] : [],
                   }}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 280 }}
                 />
               </div>

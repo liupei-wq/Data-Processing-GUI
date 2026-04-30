@@ -11,7 +11,7 @@ type Particle = {
   hueShift: number
 }
 
-const MAX_PARTICLES = 120
+const MAX_PARTICLES = 88
 
 export default function CursorParticles() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -42,15 +42,15 @@ export default function CursorParticles() {
       const particles = particlesRef.current
       for (let i = 0; i < amount; i += 1) {
         const angle = Math.random() * Math.PI * 2
-        const speed = 0.2 + Math.random() * 1.15
+        const speed = 0.14 + Math.random() * 0.72
         particles.push({
           x: x + (Math.random() - 0.5) * 8,
           y: y + (Math.random() - 0.5) * 8,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed - Math.random() * 0.25,
           life: 0,
-          maxLife: 28 + Math.random() * 32,
-          radius: 0.8 + Math.random() * 1.8,
+          maxLife: 22 + Math.random() * 24,
+          radius: 0.55 + Math.random() * 1.1,
           hueShift: Math.random(),
         })
       }
@@ -67,7 +67,7 @@ export default function CursorParticles() {
       const dy = last ? event.clientY - last.y : 0
       const distance = Math.hypot(dx, dy)
       if (last && distance < 4 && now - last.time < 18) return
-      const amount = Math.min(7, Math.max(2, Math.floor(distance / 18) + 2))
+      const amount = Math.min(5, Math.max(1, Math.floor(distance / 24) + 1))
       spawn(event.clientX, event.clientY, amount)
       lastPointRef.current = { x: event.clientX, y: event.clientY, time: now }
     }
@@ -93,18 +93,18 @@ export default function CursorParticles() {
 
         const alpha = (1 - progress) ** 1.8
         const radius = p.radius * (1 + progress * 1.6)
-        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 4.2)
+        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 3.4)
         const cool = p.hueShift > 0.58
-        gradient.addColorStop(0, cool ? `rgba(234, 248, 255, ${0.52 * alpha})` : `rgba(159, 215, 240, ${0.44 * alpha})`)
-        gradient.addColorStop(0.34, cool ? `rgba(143, 180, 201, ${0.24 * alpha})` : `rgba(207, 227, 241, ${0.2 * alpha})`)
+        gradient.addColorStop(0, cool ? `rgba(234, 248, 255, ${0.34 * alpha})` : `rgba(159, 215, 240, ${0.28 * alpha})`)
+        gradient.addColorStop(0.34, cool ? `rgba(143, 180, 201, ${0.16 * alpha})` : `rgba(207, 227, 241, ${0.14 * alpha})`)
         gradient.addColorStop(1, 'rgba(143, 180, 201, 0)')
 
         ctx.fillStyle = gradient
         ctx.beginPath()
-        ctx.arc(p.x, p.y, radius * 4.2, 0, Math.PI * 2)
+        ctx.arc(p.x, p.y, radius * 3.4, 0, Math.PI * 2)
         ctx.fill()
 
-        ctx.fillStyle = `rgba(248, 251, 255, ${0.72 * alpha})`
+        ctx.fillStyle = `rgba(248, 251, 255, ${0.52 * alpha})`
         ctx.beginPath()
         ctx.arc(p.x, p.y, Math.max(0.45, radius * 0.58), 0, Math.PI * 2)
         ctx.fill()

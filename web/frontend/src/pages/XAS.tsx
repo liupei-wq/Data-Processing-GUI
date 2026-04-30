@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
-import AnalysisModuleNav from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
+import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { withPlotFullscreen } from '../components/plotConfig'
 import { deconvXanes, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
@@ -46,6 +47,13 @@ const DEFAULT_PARAMS: ProcessParams = {
   gauss_peaks: [],
   gauss_search: 0.5,
   d2y_enabled: false,
+}
+
+const BACKGROUND_METHOD_HELP: Record<Exclude<ProcessParams['bg_method'], 'none'>, string> = {
+  linear: '用選定區間的兩端連線作為背景，適合前後緩慢傾斜的 baseline。',
+  polynomial: '以多項式追蹤彎曲背景，適合較平滑但非線性的趨勢。',
+  asls: 'AsLS 透過不對稱加權與平滑懲罰估計背景，會盡量讓基線落在峰形下方。',
+  airpls: 'airPLS 是自適應迭代版的懲罰最小平方法，對複雜基線通常更穩健，手動參數也更少。',
 }
 
 function chartLayout(xLabel: string, yLabel: string): Partial<Plotly.Layout> {
@@ -173,6 +181,7 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
 }
 
 export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
+  const moduleContent = MODULE_CONTENT.xas
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('nigiro-xas-sidebar-width'))
     return Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH ? saved : SIDEBAR_DEFAULT_WIDTH
@@ -310,13 +319,13 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           </button>
         ) : (
           <>
-            <div className="flex items-center justify-between px-5 pb-2 pt-4">
-              <span className="font-display text-base font-semibold tracking-wide text-[var(--text-main)]">XAS / XANES</span>
-              <button type="button" onClick={() => setSidebarCollapsed(true)} className="text-xs text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
-            </div>
-
             <div className="flex-1 overflow-y-auto">
-              <AnalysisModuleNav activeModule="xas" onSelectModule={onModuleSelect} />
+              <StickySidebarHeader
+                activeModule="xas"
+                subtitle="Material Intelligence Engine"
+                onSelectModule={onModuleSelect}
+                onCollapse={() => setSidebarCollapsed(true)}
+              />
 
               <div className="px-4 pt-4">
               {/* 1. 載入 */}
@@ -365,6 +374,9 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     <SelectInput label="方法" value={params.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
                       options={[{ value: 'linear', label: 'Linear' }, { value: 'polynomial', label: 'Polynomial' }, { value: 'asls', label: 'AsLS' }, { value: 'airpls', label: 'airPLS' }]}
                     />
+                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
+                      {BACKGROUND_METHOD_HELP[params.bg_method as Exclude<ProcessParams['bg_method'], 'none'>]}
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <NumInput label="起始 (eV)" value={params.bg_x_start ?? energyMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
                       <NumInput label="結束 (eV)" value={params.bg_x_end ?? energyMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
@@ -597,7 +609,27 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
       </aside>
 
       {/* ── main content ── */}
-      <main className="flex flex-1 flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
+      <main className="flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+        <div className="mx-auto w-full max-w-[1500px]">
+        <ModuleTopBar
+          title={moduleContent.title}
+          subtitle={moduleContent.subtitle}
+          description={moduleContent.description}
+          chips={[
+            { label: `資料量 ${rawFiles.length}` },
+            { label: `平均 ${params.average ? '開啟' : '關閉'}` },
+            { label: `White Line ${activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null ? '已計算' : '未設定'}` },
+          ]}
+        />
+
+        <InfoCardGrid
+          items={[
+            { label: '資料集', value: rawFiles.length > 0 ? `${rawFiles.length} 個` : '未載入' },
+            { label: '平均模式', value: params.average ? '開啟' : '關閉' },
+            { label: '能量範圍', value: activeDataset ? `${activeDataset.x[0].toFixed(1)} – ${activeDataset.x[activeDataset.x.length - 1].toFixed(1)} eV` : '未建立' },
+          ]}
+        />
+
         {/* error */}
         {error && (
           <div className="mb-4 rounded-xl border border-rose-300/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
@@ -615,18 +647,12 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
         {/* empty state */}
         {!result && !isLoading && (
-          <div className="flex flex-1 flex-col items-center justify-center rounded-[28px] border border-dashed border-[var(--card-border)] bg-[var(--card-bg)] px-6 py-20 text-center">
-            <div className="mb-4 text-5xl opacity-30">⚡</div>
-            <p className="font-display text-xl tracking-wide text-[var(--text-main)]">XAS / XANES 分析</p>
-            <p className="mt-3 max-w-md text-sm leading-6 text-[var(--text-soft)]">
-              從左側面板上傳 DAT / XMU / NOR 檔案，自動解析 Energy、TEY、TFY 欄位，進行背景扣除與歸一化。
-            </p>
-            <div className="mt-5 flex flex-wrap justify-center gap-2 text-xs text-[var(--text-soft)]">
-              {['.DAT', '.XMU', '.NOR', '.TXT', '.CSV'].map(ext => (
-                <span key={ext} className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1.5">{ext}</span>
-              ))}
-            </div>
-          </div>
+          <EmptyWorkspaceState
+            module="xas"
+            title={moduleContent.uploadTitle}
+            description="左側已提供內插、多檔平均、背景扣除、歸一化、White Line 搜尋、高斯模板扣除與 XANES 去卷積。上傳之後會在這裡顯示 XAS / XANES 圖譜與分析結果。"
+            formats={['.DAT', '.XMU', '.NOR', '.TXT', '.CSV']}
+          />
         )}
 
         {result && activeDataset && (
@@ -668,7 +694,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <Plot
                 data={buildTraces(activeDataset, 'TEY', showRaw) as Plotly.Data[]}
                 layout={chartLayout('Energy (eV)', 'TEY Intensity') as Plotly.Layout}
-                config={{ responsive: true, displayModeBar: false }}
+                config={withPlotFullscreen()}
                 style={{ width: '100%', height: 340 }}
               />
             </div>
@@ -679,7 +705,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               <Plot
                 data={buildTraces(activeDataset, 'TFY', showRaw) as Plotly.Data[]}
                 layout={chartLayout('Energy (eV)', 'TFY Intensity') as Plotly.Layout}
-                config={{ responsive: true, displayModeBar: false }}
+                config={withPlotFullscreen()}
                 style={{ width: '100%', height: 340 }}
               />
             </div>
@@ -698,7 +724,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                         { x: activeDataset.x, y: activeDataset.tey_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TEY', line: { color: '#38bdf8', width: 2 } },
                       ] as Plotly.Data[]}
                       layout={chartLayout('Energy (eV)', 'TEY Intensity') as Plotly.Layout}
-                      config={{ responsive: true, displayModeBar: false }}
+                      config={withPlotFullscreen()}
                       style={{ width: '100%', height: 300 }}
                     />
                   </>
@@ -713,7 +739,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                         { x: activeDataset.x, y: activeDataset.tfy_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TFY', line: { color: '#a78bfa', width: 2 } },
                       ] as Plotly.Data[]}
                       layout={chartLayout('Energy (eV)', 'TFY Intensity') as Plotly.Layout}
-                      config={{ responsive: true, displayModeBar: false }}
+                      config={withPlotFullscreen()}
                       style={{ width: '100%', height: 300 }}
                     />
                   </>
@@ -731,7 +757,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     ...(activeDataset.tfy_d2y != null ? [{ x: activeDataset.x, y: activeDataset.tfy_d2y, type: 'scatter' as const, mode: 'lines' as const, name: 'TFY d²/dE²', line: { color: '#a78bfa', width: 1.8 } }] : []),
                   ] as Plotly.Data[]}
                   layout={chartLayout('Energy (eV)', 'd²μ/dE²') as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 300 }}
                 />
               </div>
@@ -762,7 +788,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                     })),
                   ] as Plotly.Data[]}
                   layout={chartLayout('Energy (eV)', '歸一化強度') as Plotly.Layout}
-                  config={{ responsive: true, displayModeBar: false }}
+                  config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                 />
                 <div className="mt-3 overflow-x-auto">
@@ -853,6 +879,7 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
             </div>
           </>
         )}
+        </div>
       </main>
     </div>
   )

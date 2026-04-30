@@ -1,40 +1,66 @@
-# Nigiro Pro 專案紀錄
+# Nigiro Pro 協作手冊
 
 ## 協作規則
 
 - 回答使用者時一律使用繁體中文。
 - 每次動作前先讀取 `CLAUDE.md`，每次實作後記錄變更。
 - 不要修改使用者未要求修改的既有程式。
-- 本資料夾只有 `web/` 網頁版；離線 Streamlit 版在獨立 repo：`https://github.com/liupei-wq/Data-Processing-GUI-Desktop`
+- 這個 repo 只處理 `web/` 網頁版；離線 Streamlit 版在獨立 repo：`https://github.com/liupei-wq/Data-Processing-GUI-Desktop`
 
 ---
 
-## 倉庫與部署
+## 專案定位
 
-| 用途 | 網址 |
+| 項目 | 說明 |
 |---|---|
-| 網頁版（Render 主力） | https://github.com/liupei-wq/Data-Processing-GUI |
-| Streamlit 離線版 | https://github.com/liupei-wq/Data-Processing-GUI-Desktop |
+| 網頁版主倉庫 | https://github.com/liupei-wq/Data-Processing-GUI |
+| 離線桌面版 | https://github.com/liupei-wq/Data-Processing-GUI-Desktop |
 | Render 線上站 | https://data-processing-gui-web.onrender.com/ |
+| 目前維護範圍 | `web/` 內的 FastAPI + React/Vite 網頁版 |
+
+---
+
+## 快速啟動與驗證
 
 **本機啟動**
+
 ```bash
 # Terminal 1
 cd web && uvicorn backend.main:app --reload --port 8000
+
 # Terminal 2
-cd web/frontend && npm run dev   # → http://localhost:3000
+cd web/frontend && npm run dev
+```
+
+前端預設位址：`http://localhost:3000`
+
+**常用驗證**
+
+```bash
+# 前端建置
+cd web/frontend && npm run build
+
+# 後端語法檢查
+python3 -m py_compile web/backend/main.py web/backend/routers/*.py
 ```
 
 **部署注意**
-- `railway.toml`：`builder=DOCKERFILE`，不要設 startCommand
-- Dockerfile 在 `web/Dockerfile`（多階段 build）
-- `python3 -m py_compile web/backend/main.py web/backend/routers/*.py` 可驗證後端語法
+
+- `railway.toml` 使用 `builder=DOCKERFILE`，不要設定 `startCommand`。
+- Dockerfile 位於 `web/Dockerfile`，採多階段 build。
+- Render 線上站是目前網頁版主要部署目標。
 
 ---
 
-## 目錄結構
+## 架構與目錄
 
-```
+**資料流**
+
+`Browser` → `React/Vite frontend` → `FastAPI backend` → `core processing / db`
+
+**目錄結構**
+
+```text
 web/
 ├── backend/
 │   ├── main.py              # FastAPI 入口
@@ -54,7 +80,7 @@ web/
 
 ---
 
-## API 端點
+## API 概覽
 
 | Prefix | 端點 |
 |---|---|
@@ -66,88 +92,90 @@ web/
 
 ---
 
-## 各模組完成度
+## 模組狀態
 
 | 模組 | 狀態 |
 |---|---|
 | **XRD** | ✅ 完整：Scherrer / 高斯模板扣除 / log 弱峰 / 參考峰匹配 |
-| **Raman** | ✅ 完整：Si 應力估算 / Preset 匯入/匯出 / 峰擬合 |
+| **Raman** | ✅ 完整：Si 應力估算 / Preset 匯入匯出 / 峰擬合 |
 | **XAS** | ✅ 完整：TEY+TFY / 高斯模板扣除 / 二階微分 / XANES 去卷積 |
-| **XPS** | ✅ 完整：見下方詳述 |
+| **XPS** | ✅ 完整，且目前是功能最完整的模組 |
 | **XES** | ⚠️ 僅 1D 光譜模式，缺 FITS 影像模式 |
 | **SEM** | ⏳ 未實作 |
 
----
+### XPS 重點現況
 
-## XPS 現況（最完整的模組）
+**Sidebar 流程**
 
-### 步驟流程（sidebar）
 1. 載入：`.xy / .txt / .csv / .vms / .pro / .dat`
-2. 內插：每筆各自 linspace（不建共同 x 軸），`INTERP_POINTS_MIN=50 / MAX=5000`
-3. 多檔平均：疊圖模式限定，平均前先對齊到同一內插網格
+2. 內插：每筆各自 `linspace`，不建立共同 x 軸，`INTERP_POINTS_MIN=50 / MAX=5000`
+3. 多檔平均：僅疊圖模式可用，平均前先對齊到同一內插網格
 4. 能量校正：手動位移 + 標準樣品資料庫自動校正（`POST /api/xps/calibrate`）
-5. 背景扣除：Shirley / Tougaard(B=2866,C=1643) / Linear / Polynomial / AsLS / airPLS；`?` 按鈕有方法說明
-6. 歸一化：None / Min-Max / Max / Area / Mean Region；`?` 按鈕有方法說明
-7. 峰擬合：元素資料庫 + 手動新增；Voigt / Gaussian / Lorentzian；`POST /api/xps/fit`
-8. VBM（VB 模式）：線性外推 → `POST /api/xps/vbm`
+5. 背景扣除：Shirley / Tougaard(B=2866,C=1643) / Linear / Polynomial / AsLS / airPLS
+6. 歸一化：None / Min-Max / Max / Area / Mean Region
+7. 峰擬合：元素資料庫 + 手動新增；Voigt / Gaussian / Lorentzian（`POST /api/xps/fit`）
+8. VBM（VB 模式）：線性外推（`POST /api/xps/vbm`）
 9. 能帶偏移（VB 模式）：VBM 差值法 / Kraut Method（前端純計算）
-10. RSF 定量：`POST /api/xps/rsf`，Scofield 1976 Al Kα
+10. RSF 定量：`POST /api/xps/rsf`，採 Scofield 1976 Al Kα
 
-### 中間欄圖表
-- 原始光譜 → 前處理後 → 背景扣除 → 歸一化 → 最終/擬合
-- 背景/歸一化圖有 shaded region 標示區間（橘/青綠）
+**圖表與匯出**
+
+- 中間欄流程圖：原始光譜 → 前處理後 → 背景扣除 → 歸一化 → 最終/擬合
+- 背景與歸一化圖表有 shaded region 標示區間（橘 / 青綠）
 - 所有圖表支援 legend 點擊隱藏/顯示（`applyHidden` + `makeLegendClick`）
-- 每張圖右上角有線色下拉（`ChartToolbar`）
+- 每張圖右上角都有線色下拉（`ChartToolbar`）
+- 匯出分成三類：研究常用、分析表格、追溯/設定
 
-### 匯出（三欄 grid）
-- **研究常用**：最終 CSV / 背景後 CSV / 歸一化後 CSV / 原始 CSV
-- **分析表格**：峰擬合 CSV / RSF 定量 CSV / VBM TXT
-- **追溯/設定**：處理報告 JSON
+**資料模式**
 
-### 單筆 / 疊圖雙模式
 - `processingViewMode = 'single' | 'overlay'`
-- 單筆：每筆資料各自保存 session（params / peaks / fitResult / rsfRows）
-- 疊圖：獨立 `overlayState`，不共用單筆參數；`overlayDraftSelection` 避免勾選中途觸發處理
-- 疊圖入口：右上角「選擇疊圖資料」按鈕 → modal 選取
+- 單筆模式：每筆資料各自保存 session（`params / peaks / fitResult / rsfRows`）
+- 疊圖模式：使用獨立 `overlayState`，不共用單筆參數
+- `overlayDraftSelection` 用來避免勾選中途就觸發處理
+- 入口位於右上角「選擇疊圖資料」按鈕，透過 modal 選取
 
-### UI 元件
-- `Section`：可折疊步驟卡，支援 `infoContent`（`?` 按鈕展開方法說明）
-- `TogglePill`：玻璃感啟用按鈕（accent glow 亮起 / 暗沉停用），取代 CheckRow 的主要開關
-  - 替換：啟用內插 / 自動調整點數 / 啟用多檔平均 / 手動調整偏移量 / 啟用背景扣除
-  - 保留 CheckRow：顯示背景線 / 顯示原始（圖表工具列）
-- 峰候選卡片：`enabled` 時整張卡亮起（accent border + bg glow）
-- `CustomSelect`：`createPortal` + `position:fixed`，避免 `overflow-hidden` 裁切
-- `ModuleTabs`：取代 `ModuleDropdown`，always-visible 水平 pill tabs，位於 logo 下方，隨側欄捲動（在 `flex-1 overflow-y-auto` 內）
+**主要 UI 元件**
+
+- `Section`：可折疊步驟卡，支援 `infoContent`
+- `TogglePill`：玻璃感啟用按鈕，取代多數主要開關
+- `CustomSelect`：`createPortal` + `position: fixed`，避免被 `overflow-hidden` 裁切
+- `ModuleTabs`：位於 logo 下方的水平 pill tabs，隨側欄捲動
 
 ---
 
-## 重要技術細節
+## 重要技術備忘
 
 ### XPS x 軸反轉
-XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 `autorange: 'reversed'`
+
+XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端圖表使用 `autorange: 'reversed'`。
 
 ### Plotly legend 點擊隱藏
-`applyHidden(traces, hidden[])` 設 `visible: 'legendonly'`；`makeLegendClick` return false 防 Plotly 內部切換；各圖各自維護 `xxxHidden` state
+
+`applyHidden(traces, hidden[])` 會把 trace 設成 `visible: 'legendonly'`；`makeLegendClick` 需 `return false` 來阻止 Plotly 內建切換；各張圖各自維護 `xxxHidden` state。
 
 ### XRD 防抖
-`processData` / `detectPeaks` effect 加 300ms debounce；`SpectrumChart` CSS vars 用 `useMemo([], [])` 只在 mount 讀一次
+
+`processData` / `detectPeaks` 的 effect 加了 300ms debounce；`SpectrumChart` 的 CSS vars 用 `useMemo([], [])`，只在 mount 時讀取一次。
 
 ### XAS parser
-不可 import `modules/xas_auto.py`（含 Streamlit），parser helpers 直接寫在 `routers/xas.py`
+
+不要 import `modules/xas_auto.py`（含 Streamlit 依賴）；parser helpers 直接維護在 `routers/xas.py`。
 
 ### 高斯面積換算
-`area = peak_height × fwhm × 1.0645`（XAS / XRD 高斯模板共用）
 
-### 後端 core / db 位置
-`web/backend/core/` 與 `web/backend/db/`（從 Desktop repo 複製，不含 `core/ui_helpers.py`）
+`area = peak_height × fwhm × 1.0645`，XAS / XRD 高斯模板共用這個換算。
+
+### 後端 core / db 來源
+
+`web/backend/core/` 與 `web/backend/db/` 是從 Desktop repo 複製過來的，但不包含 `core/ui_helpers.py`。
 
 ---
 
-## 各資料庫格式（供新增資料參考）
+## 資料庫格式備忘
 
 - **Raman DB**：`{ material: { peaks: [{position_cm, label, fwhm_cm, peak_type}] } }`
 - **XRD DB**：`{ phase: { peaks: [{two_theta, relative_intensity, hkl}], color, ... } }`
-- **XPS DB**：`ELEMENTS`（be/fwhm per orbital）、`ORBITAL_RSF`（格式：`"Ni 2p3/2": 14.07`）
+- **XPS DB**：`ELEMENTS`（be/fwhm per orbital）、`ORBITAL_RSF`（例如 `"Ni 2p3/2": 14.07`）
 - **XES DB**：`{ material: { peaks: [{label, energy_eV, tolerance_eV, relative_intensity, meaning}] } }`
 
 ---
@@ -157,12 +185,22 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 | 項目 | 說明 |
 |---|---|
 | XES FITS 影像模式 | Dark/Bias 扣除 → hot pixel → 曲率校正 → ROI 積分；需 `astropy` |
-| XES I0 正規化 | 上傳 CSV（dataset_name, i0_value），各光譜除以對應 I0 |
-| SEM 模組 | 未開始 |
+| XES I0 正規化 | 上傳 CSV（`dataset_name, i0_value`），各光譜除以對應 I0 |
+| SEM 模組 | 尚未開始 |
+
+---
+
+## 紀錄規範
+
+- 有實作或明確驗證動作時，請在下方「動作紀錄」追加一筆。
+- 建議格式：`YYYY-MM-DD HH:MM TZ：動作 + 影響檔案 + 驗證結果`
+- 純討論若沒有修改檔案，可視情況省略；若內容會影響後續判斷，仍建議記錄。
 
 ---
 
 ## 動作紀錄
+
+### 2026-04-30
 
 - 2026-04-30 17:24 CST：讀取 `CLAUDE.md`、確認專案根目錄內容，準備只針對 `web/` 網頁版調整 XPS 前端說明彈窗與玻璃感外框。
 - 2026-04-30 17:26 CST：再次讀取 `CLAUDE.md`，搜尋並定位 `web/frontend/src/pages/XPS.tsx` 內的 `Section`、`infoContent`、內插／背景扣除／歸一化／峰擬合相關程式。
@@ -176,7 +214,6 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 - 2026-04-30 18:02 CST：修改 `web/frontend/src/pages/Raman.tsx`，將 Raman 側欄 header、步驟卡、部分主要開關、步驟說明 modal 與中間欄資料切換區改成接近 XPS 的視覺。
 - 2026-04-30 18:05 CST：執行 `cd web/frontend && npm run build` 驗證 Raman / XRD UI 套版結果，編譯通過；僅保留既有 Vite chunk size 警告，未新增 TypeScript 或建置錯誤。
 - 2026-04-30 18:09 CST：依使用者回饋，確認 Raman / XRD 中間欄最上方尚未完全對齊 XPS，且缺少真正的多筆資料疊圖入口；準備補上前端模式切換、資料選取 modal 與疊圖顯示，但不更動既有步驟處理邏輯。
-
 - 2026-04-30 18:16 CST：修改 `web/frontend/src/pages/XRD.tsx` 頁面骨架，將根容器改為固定視窗高度並補上 `min-h-0` / `overflow-hidden`，讓 XRD 側邊欄與中間欄改成比照 XPS 的分離捲動。
 - 2026-04-30 18:18 CST：執行 `cd web/frontend && npm run build` 驗證 XRD 分離捲動調整，前端編譯通過；僅保留既有的 Vite chunk size 警告與 package module type warning，未新增 TypeScript 或建置錯誤。
 - 2026-04-30 18:34 CST：修改 `web/frontend/src/components/WorkspaceUi.tsx`、`web/frontend/src/pages/XRD.tsx`、`web/frontend/src/pages/Raman.tsx`，新增共用的 XPS 式中間欄頂部切換區與疊圖資料選取 modal，並將 Raman / XRD 補上比照 XPS 的單筆／多筆疊圖前端狀態流程與主圖切換。
@@ -193,3 +230,4 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 - 2026-04-30 20:36 CST：讀取 `CLAUDE.md` 後依使用者要求補充一版更直觀的網站版架構圖，整理成「瀏覽器 → React/Vite 前端 → FastAPI 後端 → core processing / db」的資料流與目錄對照說明。
 - 2026-04-30 20:42 CST：讀取 `CLAUDE.md` 後審閱使用者貼上的 XRD 自動找峰推薦方案；雖然外部 share link 本體未成功抓取，但使用者貼出的內容已足夠，先整理可實作項目、分階段導入建議與需要和使用者確認的企劃方向，暫不先修改 XRD 程式。
 - 2026-04-30 20:46 CST：讀取 `CLAUDE.md` 後回覆使用者目前網站版可用的前端與後端網址資訊，包含 Render 線上站與本機開發預設位址。
+- 2026-04-30 15:42 UTC：整理 `CLAUDE.md` 結構，將內容重編為協作規則、專案定位、啟動驗證、架構/API、模組狀態、技術備忘、資料庫格式、待實作與紀錄規範等區塊；未改動任何程式碼。

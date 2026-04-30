@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './AnalysisModuleNav'
 
@@ -12,6 +12,63 @@ type HeaderTabItem = {
 type SummaryStatItem = {
   label: string
   value: string
+}
+
+type ModuleChipItem = {
+  label: string
+}
+
+export type ThemeSelectOption = {
+  value: string
+  label: ReactNode
+  disabled?: boolean
+}
+
+export const MODULE_CONTENT: Record<
+  AnalysisModuleId,
+  {
+    title: string
+    subtitle: string
+    description: string
+    uploadTitle: string
+    formats: string[]
+  }
+> = {
+  raman: {
+    title: 'Raman',
+    subtitle: 'Raman Spectroscopy',
+    description: '進行去尖峰、多檔平均、背景扣除、平滑、歸一化、參考峰與峰值偵測分析。',
+    uploadTitle: '上傳 Raman 檔案',
+    formats: ['.TXT', '.CSV', '.ASC', '.DAT'],
+  },
+  xrd: {
+    title: 'XRD',
+    subtitle: 'X-ray Diffraction',
+    description: '進行繞射峰偵測、背景扣除、平滑、峰位校正、參考卡比對與結晶結構分析。',
+    uploadTitle: '上傳 XRD 檔案',
+    formats: ['.XY', '.TXT', '.CSV', '.DAT'],
+  },
+  xps: {
+    title: 'XPS',
+    subtitle: 'X-ray Photoelectron Spectroscopy',
+    description: '進行 Shirley / Tougaard 背景扣除、Voigt 擬合、束縛能校正與化學態分析。',
+    uploadTitle: '上傳 XPS 光譜檔',
+    formats: ['.XY', '.TXT', '.CSV', '.VMS', '.PRO', '.DAT'],
+  },
+  xes: {
+    title: 'XES',
+    subtitle: 'X-ray Emission Spectroscopy',
+    description: '進行發射光譜處理、峰形分析、訊號平滑、歸一化與能量位置比對。',
+    uploadTitle: '上傳 XES 光譜檔',
+    formats: ['.TXT', '.CSV', '.DAT', '.XY'],
+  },
+  xas: {
+    title: 'XAS',
+    subtitle: 'X-ray Absorption Spectroscopy',
+    description: '進行吸收邊分析、背景扣除、歸一化、白線強度與能量位移比對。',
+    uploadTitle: '上傳 XAS 光譜檔',
+    formats: ['.TXT', '.CSV', '.DAT', '.XY'],
+  },
 }
 
 export const LINE_COLOR_OPTIONS = [
@@ -94,16 +151,128 @@ export function ChartToolbar({
       <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
       <div className="flex items-center gap-2">
         <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-soft)]">線色</span>
-        <select
+        <ThemeSelect
           value={colorValue}
-          onChange={event => onColorChange(event.target.value)}
-          className="rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-xs text-[var(--input-text)] focus:outline-none"
-        >
-          {LINE_COLOR_OPTIONS.map(option => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
+          onChange={onColorChange}
+          options={LINE_COLOR_OPTIONS}
+          className="min-w-[6.25rem]"
+          buttonClassName="min-h-8 rounded-lg px-2 py-1 text-xs"
+        />
       </div>
+    </div>
+  )
+}
+
+export function ThemeSelect({
+  value,
+  onChange,
+  options,
+  className = '',
+  buttonClassName = '',
+  panelClassName = '',
+  disabled = false,
+  ariaLabel,
+}: {
+  value: string
+  onChange: (value: string) => void
+  options: ThemeSelectOption[]
+  className?: string
+  buttonClassName?: string
+  panelClassName?: string
+  disabled?: boolean
+  ariaLabel?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const selected = options.find(option => option.value === value)
+
+  useEffect(() => {
+    if (!open) return
+
+    const updateRect = () => {
+      const nextRect = buttonRef.current?.getBoundingClientRect()
+      if (nextRect) setRect(nextRect)
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (buttonRef.current?.contains(target) || panelRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+
+    updateRect()
+    window.addEventListener('resize', updateRect)
+    window.addEventListener('scroll', updateRect, true)
+    window.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('resize', updateRect)
+      window.removeEventListener('scroll', updateRect, true)
+      window.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div className={['theme-select', className].filter(Boolean).join(' ')}>
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => {
+          if (disabled) return
+          const nextRect = buttonRef.current?.getBoundingClientRect()
+          if (nextRect) setRect(nextRect)
+          setOpen(current => !current)
+        }}
+        className={['theme-select__button', buttonClassName].filter(Boolean).join(' ')}
+      >
+        <span className="theme-select__value">{selected?.label ?? value}</span>
+        <span className="theme-select__chevron" aria-hidden="true" />
+      </button>
+      {open && rect && createPortal(
+        <div
+          ref={panelRef}
+          role="listbox"
+          className={['theme-select__panel', panelClassName].filter(Boolean).join(' ')}
+          style={{
+            left: rect.left,
+            top: rect.bottom + 6,
+            width: rect.width,
+            maxHeight: Math.min(320, window.innerHeight - rect.bottom - 16),
+          }}
+        >
+          {options.map(option => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              disabled={option.disabled}
+              onClick={() => {
+                if (option.disabled) return
+                onChange(option.value)
+                setOpen(false)
+              }}
+              className={[
+                'theme-select__option',
+                option.value === value ? 'theme-select__option--active' : '',
+              ].join(' ')}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }
@@ -158,7 +327,7 @@ export function ProcessingWorkspaceHeader({
   return (
     <>
       {tabs.length > 1 && (
-        <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+        <div className="workspace-stage-card mb-4 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex-1">
               <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -206,15 +375,145 @@ export function ProcessingWorkspaceHeader({
         </div>
       )}
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+      <div className="info-grid mb-4 !px-0 !pb-0">
         {stats.map(item => (
-          <div key={item.label} className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">{item.label}</p>
-            <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{item.value}</p>
+          <div key={item.label} className="info-card">
+            <p className="info-card-label">{item.label}</p>
+            <p className="info-card-value">{item.value}</p>
           </div>
         ))}
       </div>
     </>
+  )
+}
+
+export function ModuleTopBar({
+  title,
+  subtitle,
+  description,
+  chips = [],
+}: {
+  title: string
+  subtitle: string
+  description: string
+  chips?: ModuleChipItem[]
+}) {
+  return (
+    <div className="topbar-panel">
+      <div className="topbar-eyebrow">Analysis Module</div>
+      <div className="module-title-row">
+        <h1 className="module-title">{title}</h1>
+        <span className="module-subtitle">{subtitle}</span>
+      </div>
+      <p className="module-description">{description}</p>
+      {chips.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {chips.map(chip => (
+            <span key={chip.label} className="status-chip">
+              {chip.label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function InfoCardGrid({ items }: { items: SummaryStatItem[] }) {
+  return (
+    <div className="info-grid">
+      {items.map(item => (
+        <div key={item.label} className="info-card">
+          <p className="info-card-label">{item.label}</p>
+          <p className="info-card-value">{item.value}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function ModuleGlyph({
+  module,
+  className = '',
+}: {
+  module: AnalysisModuleId
+  className?: string
+}) {
+  const svgClassName = ['empty-icon', className].filter(Boolean).join(' ')
+
+  if (module === 'raman') {
+    return (
+      <svg viewBox="0 0 64 64" aria-hidden="true" className={svgClassName}>
+        <path d="M8 39c6-8 11-12 16-12 7 0 10 13 16 13 4 0 8-4 16-15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M8 32c5 0 8-9 13-9 7 0 8 20 16 20 6 0 8-11 19-11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity="0.72" />
+        <path d="M8 25c6 0 10 22 18 22 7 0 10-26 16-26 4 0 7 7 14 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity="0.46" />
+      </svg>
+    )
+  }
+
+  if (module === 'xrd') {
+    return (
+      <svg viewBox="0 0 64 64" aria-hidden="true" className={svgClassName}>
+        <path d="M8 52h48" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.45" />
+        {[16, 24, 33, 41, 49].map((x, index) => (
+          <path key={x} d={`M${x} 52 L${x + 2} ${18 + index * 4} L${x + 4} 52`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        ))}
+      </svg>
+    )
+  }
+
+  if (module === 'xps') {
+    return (
+      <svg viewBox="0 0 64 64" aria-hidden="true" className={svgClassName}>
+        <path d="M8 50h48" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.45" />
+        <path d="M12 20c7 0 7 18 14 18 6 0 8-24 16-24 7 0 8 30 14 30 4 0 5-8 8-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    )
+  }
+
+  if (module === 'xes') {
+    return (
+      <svg viewBox="0 0 64 64" aria-hidden="true" className={svgClassName}>
+        <path d="M8 50h48" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.45" />
+        <path d="M10 46c6 0 8-18 20-18 10 0 11 18 24 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    )
+  }
+
+  return (
+    <svg viewBox="0 0 64 64" aria-hidden="true" className={svgClassName}>
+      <path d="M8 50h48" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.45" />
+      <path d="M10 18c0 0 7 0 10 0 5 0 7 28 18 28 7 0 8-14 12-21 3-6 7-7 12-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+export function EmptyWorkspaceState({
+  module,
+  title,
+  description,
+  formats,
+}: {
+  module: AnalysisModuleId
+  title: string
+  description: string
+  formats: string[]
+}) {
+  return (
+    <div className="workspace-surface">
+      <div className="empty-state">
+        <ModuleGlyph module={module} />
+        <div className="empty-title">{title}</div>
+        <div className="empty-description">{description}</div>
+        <div className="format-chips">
+          {formats.map(format => (
+            <span key={format} className="format-chip">
+              {format}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -376,23 +675,23 @@ export function GlassSection({
 
   return (
     <>
-      <div className="sidebar-stage-card overflow-hidden rounded-[24px]">
+      <div className="sidebar-stage-card step-card overflow-hidden rounded-[24px]">
         <div className="flex items-center">
           <button
             type="button"
             onClick={() => setOpen(current => !current)}
-            className="flex flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
+            className="step-header flex flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
           >
             <div className="flex min-w-0 items-center gap-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
+              <span className="step-number flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
                 {step}
               </span>
               <div className="min-w-0">
-                <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
-                {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+                <div className="step-title truncate text-base font-semibold text-[var(--text-main)]">{title}</div>
+                {hint && <div className="step-subtitle mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
               </div>
             </div>
-            <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
+            <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '▾' : '▸'}</span>
           </button>
           {infoContent && (
             <button
@@ -405,148 +704,35 @@ export function GlassSection({
             </button>
           )}
         </div>
-        {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
+        {open && <div className="step-content space-y-3 p-4 pt-2">{children}</div>}
       </div>
       {infoModal}
     </>
   )
 }
 
-function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisModuleId; onSelect?: (m: AnalysisModuleId) => void }) {
-  const [open, setOpen] = useState(false)
-  const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-  const closeTimerRef = useRef<number | null>(null)
-
-  const activeLabel = ANALYSIS_MODULES.find(module => module.id === activeModule)?.label ?? activeModule.toUpperCase()
-
-  const clearCloseTimer = () => {
-    if (closeTimerRef.current != null) {
-      window.clearTimeout(closeTimerRef.current)
-      closeTimerRef.current = null
-    }
-  }
-
-  const updatePanelPosition = useCallback(() => {
-    if (!triggerRef.current) return
-    const rect = triggerRef.current.getBoundingClientRect()
-    setPanelStyle({
-      position: 'fixed',
-      top: rect.bottom + 6,
-      left: rect.left + rect.width / 2,
-      transform: 'translateX(-50%)',
-      width: Math.min(220, Math.max(rect.width + 18, 184)),
-      zIndex: 9999,
-    })
-  }, [])
-
-  const openMenu = useCallback(() => {
-    clearCloseTimer()
-    updatePanelPosition()
-    setOpen(true)
-  }, [updatePanelPosition])
-
-  const closeMenuSoon = useCallback(() => {
-    clearCloseTimer()
-    closeTimerRef.current = window.setTimeout(() => {
-      setOpen(false)
-      closeTimerRef.current = null
-    }, 120)
-  }, [])
-
-  useEffect(() => () => clearCloseTimer(), [])
-
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node
-      if (
-        triggerRef.current && !triggerRef.current.contains(target) &&
-        panelRef.current && !panelRef.current.contains(target)
-      ) {
-        setOpen(false)
-      }
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    const onReposition = () => updatePanelPosition()
-
-    document.addEventListener('mousedown', onPointerDown)
-    document.addEventListener('scroll', onReposition, true)
-    window.addEventListener('resize', onReposition)
-    window.addEventListener('keydown', onKeyDown)
-    updatePanelPosition()
-
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown)
-      document.removeEventListener('scroll', onReposition, true)
-      window.removeEventListener('resize', onReposition)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open, updatePanelPosition])
-
-  const panel = open ? (
-    <div
-      ref={panelRef}
-      style={panelStyle}
-      onMouseEnter={clearCloseTimer}
-      onMouseLeave={closeMenuSoon}
-      className="glass-panel overflow-hidden rounded-[16px] p-1"
-    >
-      <div className="px-3 pb-1 pt-2 text-center text-[9px] uppercase tracking-[0.18em] text-[var(--text-soft)]">
-        切換分析模組
-      </div>
+function ModuleTabs({ activeModule, onSelect }: { activeModule: AnalysisModuleId; onSelect?: (m: AnalysisModuleId) => void }) {
+  return (
+    <div className="module-tabs" role="tablist" aria-label="分析模組切換">
       {ANALYSIS_MODULES.map(module => {
         const isActive = module.id === activeModule
         return (
           <button
             key={module.id}
             type="button"
+            role="tab"
+            aria-selected={isActive}
             disabled={isActive}
             onClick={() => {
-              setOpen(false)
               if (!isActive) onSelect?.(module.id)
             }}
-            className={[
-              'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-[13px] transition-all duration-150 pressable',
-              isActive
-                ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-secondary)]'
-                : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)] hover:text-[var(--accent-secondary)]',
-            ].join(' ')}
+            className={['module-tab', isActive ? 'module-tab--active' : ''].join(' ').trim()}
           >
-            <span className="shrink-0">{module.label}</span>
-            <span className="min-w-0 truncate text-right text-[10px] text-[var(--text-soft)]">{module.detail}</span>
+            {module.label}
           </button>
         )
       })}
     </div>
-  ) : null
-
-  return (
-    <>
-      <div className="relative flex justify-center">
-        <button
-          ref={triggerRef}
-          type="button"
-          onClick={() => {
-            if (open) setOpen(false)
-            else openMenu()
-          }}
-          onMouseEnter={openMenu}
-          onMouseLeave={closeMenuSoon}
-          className="glass-panel flex min-h-[44px] min-w-[148px] items-center justify-center gap-1.5 rounded-[16px] px-4 py-2 text-sm font-semibold text-[var(--text-main)] transition-all duration-150 hover:-translate-y-0.5"
-        >
-          <span className="text-[9px] uppercase tracking-[0.16em] text-[var(--text-soft)]">分析模組</span>
-          <span className="rounded-full bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] px-2.5 py-0.5 text-[13px] text-[var(--accent-secondary)]">
-            {activeLabel}
-          </span>
-          <span className={`text-[10px] text-[var(--text-soft)] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>▼</span>
-        </button>
-      </div>
-      {typeof document !== 'undefined' && panel ? createPortal(panel, document.body) : null}
-    </>
   )
 }
 
@@ -563,23 +749,22 @@ export function StickySidebarHeader({
 }) {
   return (
     <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-10 pt-5">
-      <div className="sidebar-header-card relative rounded-[30px] px-5 pb-8 pt-4.5">
-        <div className="flex items-start justify-between gap-4">
+      <div className="sidebar-header-card relative rounded-[30px] px-5 pb-5 pt-4.5">
+        <div className="sidebar-header-card__brand-row flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
             <div className="nigiro-brand-mark nigiro-brand-mark--lg" aria-hidden="true">
-              <img src="/nigiro-icon.svg" alt="" />
+              <img className="nigiro-brand-mark__img nigiro-brand-mark__img--dark" src="/nigiro-icon.svg" alt="" />
+              <img className="nigiro-brand-mark__img nigiro-brand-mark__img--light" src="/nigiro-icon-light.svg" alt="" />
             </div>
             <div className="min-w-0">
-              <div className="text-[1.65rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>
+              <div className="text-[1.7rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>
               <div className="mt-1.5 text-[13px] leading-tight text-[var(--text-soft)]">{subtitle}</div>
             </div>
           </div>
-          <button type="button" onClick={onCollapse} className="mt-1 shrink-0 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
+          <button type="button" onClick={onCollapse} className="sidebar-collapse-button btn btn-secondary mt-1 h-10 w-10 shrink-0 !px-0 text-sm">←</button>
         </div>
-        <div className="pointer-events-none absolute inset-x-0 -bottom-5 flex justify-center px-4">
-          <div className="pointer-events-auto">
-            <ModuleDropdownTag activeModule={activeModule} onSelect={onSelectModule} />
-          </div>
+        <div className="mt-4">
+          <ModuleTabs activeModule={activeModule} onSelect={onSelectModule} />
         </div>
       </div>
     </div>
