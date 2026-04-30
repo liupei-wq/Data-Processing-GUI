@@ -186,3 +186,7 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 - 2026-04-30 19:08 CST：修改 `web/frontend/src/components/ProcessingPanel.tsx` 與 `web/frontend/src/pages/Raman.tsx`，將 XRD 的「內插 / 多檔平均」拆成獨立步驟，並把 Raman 側邊欄重新拆成「去尖峰 / 內插 / 多檔平均 / 背景扣除 / 平滑 / 歸一化 / 峰偵測與參考峰 / 峰位管理與擬合」，比照 XPS 的單步驟結構，但不改動後端處理邏輯。
 - 2026-04-30 19:14 CST：修改 `web/frontend/src/pages/XRD.tsx` 與 `web/frontend/src/pages/Raman.tsx`，新增共用 ChartToolbar / legend hide / 線色切換與 stage CSV 匯出，將中間欄主圖改成比照 XPS 的多張分階段圖卡：原始、前處理、疊圖、背景或高斯模板、最終結果；多筆資料模式也統一用 XPS 式卡片顯示流程。
 - 2026-04-30 19:16 CST：再次讀取 `CLAUDE.md` 後執行 `cd web/frontend && npm run build` 驗證本輪 sidebar 效能優化、Raman/XRD 圖卡重構與步驟拆分；前端編譯通過，僅保留既有 Vite chunk size 警告與 package module type warning，未新增 TypeScript 或建置錯誤。
+- 2026-04-30 19:24 CST：讀取 `CLAUDE.md` 並依使用者截圖調整 `web/frontend/src/components/WorkspaceUi.tsx`，縮小 sidebar sticky header 的 logo、標題字級與分析模組標籤尺寸，同時增加 header 底部保留空間，避免模組標籤被下方區塊裁切。
+- 2026-04-30 19:27 CST：檢視 `web/frontend/src/pages/XRD.tsx` 與 Plotly 設定後，確認 XRD 卡頓主因較偏向「同時掛載多張 Plotly 圖表且每張都啟用 scrollZoom / resize handler」，不是單純因為 sidebar 步驟數量太多；先將 XRD 分階段圖卡的 `scrollZoom` 全部關閉，降低滾輪與重繪負擔。
+- 2026-04-30 19:29 CST：再次讀取 `CLAUDE.md` 後執行 `cd web/frontend && npm run build` 驗證 header 尺寸調整與 XRD Plotly 減負設定；前端編譯通過，僅保留既有 Vite chunk size 警告與 package module type warning，未新增 TypeScript 或建置錯誤。
+- 2026-04-30 19:34 CST：讀取 `CLAUDE.md` 並檢視 `web/backend/main.py`、`web/backend/requirements.txt`、`web/frontend` 相關檔案，整理目前網站版專案的前後端架構、主要語言與關鍵套件，回覆使用者目前技術棧概況。

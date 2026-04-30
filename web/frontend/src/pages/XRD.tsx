@@ -1022,7 +1022,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(rawChartTraces, rawHidden)}
                     layout={chartLayout({ xMode, wavelength })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setRawHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1051,7 +1051,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(overlayChartTraces, overlayHidden)}
                     layout={chartLayout({ xMode, wavelength })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setOverlayHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1080,7 +1080,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(preprocessChartTraces, preprocessHidden)}
                     layout={chartLayout({ xMode, wavelength })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setPreprocessHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1111,7 +1111,7 @@ export default function XRD({
                       <Plot
                         data={applyHidden(gaussianChartTraces, gaussianHidden)}
                         layout={chartLayout({ xMode, wavelength })}
-                        config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                        config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
                         style={{ width: '100%', height: 360 }}
                         onLegendClick={makeLegendClick(setGaussianHidden) as never}
                         onLegendDoubleClick={() => false}
@@ -1179,7 +1179,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(logChartTraces, logHidden)}
                     layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} Intensity` })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
                     style={{ width: '100%', height: 360 }}
                     onLegendClick={makeLegendClick(setLogHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -1199,7 +1199,7 @@ export default function XRD({
                   <Plot
                     data={applyHidden(finalChartTraces, finalHidden)}
                     layout={chartLayout({ xMode, wavelength, height: 380 })}
-                    config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
+                    config={{ responsive: true, displayModeBar: false, scrollZoom: false }}
                     style={{ width: '100%', height: 380 }}
                     onLegendClick={makeLegendClick(setFinalHidden) as never}
                     onLegendDoubleClick={() => false}

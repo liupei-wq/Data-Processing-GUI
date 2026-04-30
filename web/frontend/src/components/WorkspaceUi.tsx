@@ -493,7 +493,7 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
       style={panelStyle}
       onMouseEnter={clearCloseTimer}
       onMouseLeave={closeMenuSoon}
-      className="glass-panel overflow-hidden rounded-[22px] p-1.5"
+      className="glass-panel overflow-hidden rounded-[20px] p-1.5"
     >
       <div className="px-3 pb-1.5 pt-2 text-center text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">
         切換分析模組
@@ -510,7 +510,7 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
               if (!isActive) onSelect?.(module.id)
             }}
             className={[
-              'flex w-full items-center justify-between rounded-2xl px-3 py-2 text-sm transition-all duration-150 pressable',
+              'flex w-full items-center justify-between rounded-2xl px-3 py-2 text-[13px] transition-all duration-150 pressable',
               isActive
                 ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-secondary)]'
                 : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)] hover:text-[var(--accent-secondary)]',
@@ -536,10 +536,10 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
           }}
           onMouseEnter={openMenu}
           onMouseLeave={closeMenuSoon}
-          className="glass-panel flex min-h-[52px] min-w-[168px] items-center justify-center gap-2 rounded-[18px] px-5 py-2.5 text-sm font-semibold text-[var(--text-main)] transition-all duration-150 hover:-translate-y-0.5"
+          className="glass-panel flex min-h-[44px] min-w-[148px] items-center justify-center gap-1.5 rounded-[16px] px-4 py-2 text-sm font-semibold text-[var(--text-main)] transition-all duration-150 hover:-translate-y-0.5"
         >
-          <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模組</span>
-          <span className="rounded-full bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] px-3 py-1 text-sm text-[var(--accent-secondary)]">
+          <span className="text-[9px] uppercase tracking-[0.16em] text-[var(--text-soft)]">分析模組</span>
+          <span className="rounded-full bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] px-2.5 py-0.5 text-[13px] text-[var(--accent-secondary)]">
             {activeLabel}
           </span>
           <span className={`text-[10px] text-[var(--text-soft)] transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>▼</span>
@@ -562,23 +562,23 @@ export function StickySidebarHeader({
   onCollapse: () => void
 }) {
   return (
-    <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-8 pt-5">
-      <div className="sidebar-header-card relative rounded-[30px] px-5 pb-9 pt-5">
+    <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-10 pt-5">
+      <div className="sidebar-header-card relative rounded-[30px] px-5 pb-8 pt-4.5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[24px] bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_8px_24px_-8px_color-mix(in_srgb,var(--accent-strong)_45%,transparent)]">
-              <svg width="34" height="28" viewBox="0 0 18 16" fill="none">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[22px] bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_8px_24px_-8px_color-mix(in_srgb,var(--accent-strong)_45%,transparent)]">
+              <svg width="30" height="24" viewBox="0 0 18 16" fill="none">
                 <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13" stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
             <div className="min-w-0">
-              <div className="text-[1.9rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>
-              <div className="mt-2 text-sm leading-tight text-[var(--text-soft)]">{subtitle}</div>
+              <div className="text-[1.65rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>
+              <div className="mt-1.5 text-[13px] leading-tight text-[var(--text-soft)]">{subtitle}</div>
             </div>
           </div>
           <button type="button" onClick={onCollapse} className="mt-1 shrink-0 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>
         </div>
-        <div className="pointer-events-none absolute inset-x-0 -bottom-6 flex justify-center px-4">
+        <div className="pointer-events-none absolute inset-x-0 -bottom-5 flex justify-center px-4">
           <div className="pointer-events-auto">
             <ModuleDropdownTag activeModule={activeModule} onSelect={onSelectModule} />
           </div>
