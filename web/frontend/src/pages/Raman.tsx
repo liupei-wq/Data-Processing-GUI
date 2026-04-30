@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type Rea
 import Plot from 'react-plotly.js'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { GlassSection, StickySidebarHeader, TogglePill } from '../components/WorkspaceUi'
+import {
+  DatasetSelectionModal,
+  GlassSection,
+  ProcessingWorkspaceHeader,
+  StickySidebarHeader,
+  TogglePill,
+} from '../components/WorkspaceUi'
 import {
   detectPeaks,
   fetchPeakLibrary,
@@ -485,6 +491,18 @@ function buildTraces(dataset: ProcessedDataset | null, params: ProcessParams, re
   return traces
 }
 
+function buildOverlayTraces(datasets: ProcessedDataset[]): Plotly.Data[] {
+  const palette = ['#38bdf8', '#f97316', '#a855f7', '#22c55e', '#ef4444', '#14b8a6']
+  return datasets.map((dataset, index) => ({
+    x: dataset.x,
+    y: dataset.y_processed,
+    type: 'scatter',
+    mode: 'lines',
+    name: dataset.name,
+    line: { color: palette[index % palette.length], width: 2.1 },
+  }))
+}
+
 function SidebarCard({
   step,
   title,
@@ -526,6 +544,10 @@ export default function Raman({
   const [peakParams, setPeakParams] = useState<PeakDetectionParams>(DEFAULT_PEAK_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
   const [selectedSeries, setSelectedSeries] = useState<string>('')
+  const [processingViewMode, setProcessingViewMode] = useState<'single' | 'overlay'>('single')
+  const [overlaySelection, setOverlaySelection] = useState<string[]>([])
+  const [overlayDraftSelection, setOverlayDraftSelection] = useState<string[]>([])
+  const [overlaySelectorOpen, setOverlaySelectorOpen] = useState(false)
   const [refMaterials, setRefMaterials] = useState<string[]>([])
   const [selectedRefs, setSelectedRefs] = useState<string[]>([])
   const [refPeaks, setRefPeaks] = useState<RefPeak[]>([])
@@ -652,31 +674,48 @@ export default function Raman({
   }, [selectedSeries, params, result, fitTargetName])
 
   useEffect(() => {
-    const options = [
-      ...(result?.average ? ['__average__'] : []),
-      ...(result?.datasets.map(dataset => dataset.name) ?? []),
-    ]
+    const options = result?.datasets.map(dataset => dataset.name) ?? []
     if (!options.length) {
       setSelectedSeries('')
       return
     }
     if (!options.includes(selectedSeries)) {
-      setSelectedSeries(result?.average ? '__average__' : options[0])
+      setSelectedSeries(options[0])
     }
   }, [result, selectedSeries])
 
   const activeDataset = useMemo(() => {
     if (!result) return null
-    if (selectedSeries === '__average__') return result.average
-    return result.datasets.find(dataset => dataset.name === selectedSeries) ?? result.average ?? result.datasets[0] ?? null
+    return result.datasets.find(dataset => dataset.name === selectedSeries) ?? result.datasets[0] ?? result.average ?? null
   }, [result, selectedSeries])
   const datasetTabItems = useMemo(
-    () => [
-      ...(result?.average ? [{ key: '__average__', label: 'Average' }] : []),
-      ...((result?.datasets ?? []).map(dataset => ({ key: dataset.name, label: dataset.name }))),
-    ],
+    () => (result?.datasets ?? []).map(dataset => ({ key: dataset.name, label: dataset.name })),
     [result],
   )
+  const overlayDatasets = useMemo(
+    () => result?.datasets.filter(dataset => overlaySelection.includes(dataset.name)) ?? [],
+    [overlaySelection, result],
+  )
+  const isOverlayView = processingViewMode === 'overlay' && overlayDatasets.length >= 2
+  const topTabs = useMemo(
+    () => datasetTabItems.map(item => ({
+      ...item,
+      active: !isOverlayView && selectedSeries === item.key,
+      onClick: () => {
+        setProcessingViewMode('single')
+        setSelectedSeries(item.key)
+      },
+    })),
+    [datasetTabItems, isOverlayView, selectedSeries],
+  )
+  const overlayItems = useMemo(
+    () => datasetTabItems.map(item => ({ key: item.key, label: item.label })),
+    [datasetTabItems],
+  )
+  const ramanRangeLabel = activeDataset
+    ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} cm⁻¹`
+    : '—'
+  const interpolationLabel = params.interpolate ? `${params.n_points} 點` : '未啟用'
 
   useEffect(() => {
     if (!peakParams.enabled || !activeDataset) {
@@ -701,7 +740,7 @@ export default function Raman({
       setFitTargetName('')
       return
     }
-    setFitTargetName(selectedSeries === '__average__' ? '__average__' : activeDataset.name)
+    setFitTargetName(activeDataset.name)
     if (manualPeakPosition == null) {
       const xMin = Math.min(...activeDataset.x)
       const xMax = Math.max(...activeDataset.x)
@@ -734,6 +773,35 @@ export default function Raman({
       setIsLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    const validNames = new Set(rawFiles.map(file => file.name))
+    setOverlaySelection(prev => prev.filter(name => validNames.has(name)))
+    setOverlayDraftSelection(prev => prev.filter(name => validNames.has(name)))
+    if (rawFiles.length === 0) {
+      setProcessingViewMode('single')
+      return
+    }
+    if (!validNames.has(selectedSeries)) {
+      setSelectedSeries(rawFiles[0].name)
+    }
+  }, [rawFiles, selectedSeries])
+
+  useEffect(() => {
+    if (overlaySelectorOpen) setOverlayDraftSelection(overlaySelection)
+  }, [overlaySelection, overlaySelectorOpen])
+
+  const toggleOverlayDraft = useCallback((name: string) => {
+    setOverlayDraftSelection(current =>
+      current.includes(name) ? current.filter(item => item !== name) : [...current, name],
+    )
+  }, [])
+
+  const applyOverlaySelection = useCallback(() => {
+    setOverlaySelection(overlayDraftSelection)
+    setProcessingViewMode(overlayDraftSelection.length >= 2 ? 'overlay' : 'single')
+    setOverlaySelectorOpen(false)
+  }, [overlayDraftSelection])
 
   const loadReferencePeaksToCandidates = useCallback(() => {
     if (refPeaks.length === 0) return
@@ -823,7 +891,6 @@ export default function Raman({
 
   const activeFitDataset = useMemo(() => {
     if (!result) return null
-    if (fitTargetName === '__average__') return result.average
     return result.datasets.find(dataset => dataset.name === fitTargetName) ?? null
   }, [fitTargetName, result])
 
@@ -1976,7 +2043,6 @@ export default function Raman({
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">擬合對象</span>
                   <select value={fitTargetName} onChange={e => setFitTargetName(e.target.value)} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
-                    {result?.average && <option value="__average__">Average</option>}
                     {result?.datasets.map(dataset => (
                       <option key={dataset.name} value={dataset.name}>{dataset.name}</option>
                     ))}
@@ -2326,58 +2392,17 @@ export default function Raman({
 
           {activeDataset && (
             <>
-              {datasetTabItems.length > 1 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
-                      <div className="flex flex-wrap gap-2">
-                        {datasetTabItems.map(item => (
-                          <button
-                            key={item.key}
-                            type="button"
-                            onClick={() => setSelectedSeries(item.key)}
-                            className={[
-                              'rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
-                              selectedSeries === item.key
-                                ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
-                                : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
-                            ].join(' ')}
-                          >
-                            {item.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    {batchResults.length > 0 && (
-                      <div className="shrink-0 lg:pl-4">
-                        <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">多筆資料比較</p>
-                        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-left">
-                          <span className="block text-sm font-semibold text-[var(--text-main)]">Batch trend 已建立</span>
-                          <span className="mt-1 block text-xs text-[var(--text-soft)]">
-                            已有 {batchResults.length} 筆批次擬合結果，可往下查看比較表格。
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="mb-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">處理資料</p>
-                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{activeDataset?.name ?? '—'}</p>
-                </div>
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">平均輸出</p>
-                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{result?.average ? '可用' : '未建立'}</p>
-                </div>
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-                  <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">批次比較</p>
-                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{batchResults.length > 0 ? `${batchResults.length} 筆` : '未執行'}</p>
-                </div>
-              </div>
+              <ProcessingWorkspaceHeader
+                tabs={topTabs}
+                isOverlayView={isOverlayView}
+                overlaySelectionCount={overlaySelection.length}
+                onOpenOverlaySelector={() => setOverlaySelectorOpen(true)}
+                stats={[
+                  { label: '資料集', value: `${rawFiles.length} 個` },
+                  { label: 'Raman 範圍', value: ramanRangeLabel },
+                  { label: '內插點數', value: interpolationLabel },
+                ]}
+              />
 
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -2390,7 +2415,7 @@ export default function Raman({
 
               <div className="theme-block-soft rounded-[28px] p-3 sm:p-4">
                 <Plot
-                  data={buildTraces(activeDataset, params, refPeaks)}
+                  data={isOverlayView ? buildOverlayTraces(overlayDatasets) : buildTraces(activeDataset, params, refPeaks)}
                   layout={chartLayout()}
                   config={{ scrollZoom: true, displaylogo: false, responsive: true }}
                   style={{ width: '100%', minHeight: '560px' }}
@@ -3105,6 +3130,15 @@ export default function Raman({
           </div>
         </div>
       )}
+      <DatasetSelectionModal
+        open={overlaySelectorOpen}
+        title="選擇 Raman 疊圖資料"
+        items={overlayItems}
+        selectedKeys={overlayDraftSelection}
+        onToggle={toggleOverlayDraft}
+        onClose={() => setOverlaySelectorOpen(false)}
+        onConfirm={applyOverlaySelection}
+      />
     </div>
   )
 }

@@ -2,6 +2,18 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { createPortal } from 'react-dom'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './AnalysisModuleNav'
 
+type HeaderTabItem = {
+  key: string
+  label: string
+  active: boolean
+  onClick: () => void
+}
+
+type SummaryStatItem = {
+  label: string
+  value: string
+}
+
 export function TogglePill({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
@@ -33,6 +45,179 @@ export function TogglePill({ label, checked, onChange }: { label: string; checke
         ].join(' ')}
       />
     </button>
+  )
+}
+
+export function ProcessingWorkspaceHeader({
+  tabs,
+  isOverlayView,
+  overlaySelectionCount,
+  onOpenOverlaySelector,
+  stats,
+}: {
+  tabs: HeaderTabItem[]
+  isOverlayView: boolean
+  overlaySelectionCount: number
+  onOpenOverlaySelector: () => void
+  stats: SummaryStatItem[]
+}) {
+  return (
+    <>
+      {tabs.length > 1 && (
+        <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
+                {isOverlayView && (
+                  <span className="rounded-full border border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_14%,transparent)] px-2.5 py-0.5 text-[10px] font-medium text-[var(--accent-secondary)]">
+                    目前顯示疊圖模式
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {tabs.map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={item.onClick}
+                    className={[
+                      'rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
+                      item.active
+                        ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
+                        : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
+                    ].join(' ')}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="shrink-0 lg:pl-4">
+              <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">多筆疊圖處理</p>
+              <button
+                type="button"
+                onClick={onOpenOverlaySelector}
+                className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-left transition-colors hover:border-[var(--accent-secondary)] hover:bg-[color:color-mix(in_srgb,var(--accent-secondary)_10%,transparent)] pressable"
+              >
+                <span className="block text-sm font-semibold text-[var(--text-main)]">選擇疊圖資料</span>
+                <span className="mt-1 block text-xs text-[var(--text-soft)]">
+                  {isOverlayView ? '目前疊圖模式獨立顯示。 ' : ''}
+                  已選 {overlaySelectionCount} 筆
+                  {overlaySelectionCount >= 2 ? '，可直接看中間欄疊圖結果' : '，至少選 2 筆才會顯示疊圖'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        {stats.map(item => (
+          <div key={item.label} className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">{item.label}</p>
+            <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{item.value}</p>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
+export function DatasetSelectionModal({
+  open,
+  title,
+  items,
+  selectedKeys,
+  onToggle,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean
+  title: string
+  items: Array<{ key: string; label: string }>
+  selectedKeys: string[]
+  onToggle: (key: string) => void
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
+  if (!open || typeof document === 'undefined') return null
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-[3px]"
+      onClick={onClose}
+    >
+      <div
+        className="theme-block max-h-[calc(100vh-4rem)] w-full max-w-4xl overflow-hidden rounded-[28px]"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 border-b border-[var(--card-divider)] px-5 py-4">
+          <div>
+            <div className="text-lg font-semibold text-[var(--text-main)]">{title}</div>
+            <p className="mt-1 text-sm text-[var(--text-soft)]">至少選 2 筆才會切換到多筆疊圖模式。</p>
+          </div>
+          <span className="ml-auto text-xs text-[var(--text-soft)]">目前已選 {selectedKeys.length} / {items.length} 筆</span>
+        </div>
+
+        <div className="max-h-[60vh] overflow-y-auto p-5">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {items.map(item => {
+              const checked = selectedKeys.includes(item.key)
+              return (
+                <label
+                  key={item.key}
+                  className={[
+                    'flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition-colors',
+                    checked
+                      ? 'border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_12%,transparent)]'
+                      : 'border-[var(--card-border)] bg-[var(--card-bg)] hover:border-[var(--accent-secondary)]/60',
+                  ].join(' ')}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggle(item.key)}
+                    className="mt-1 h-4 w-4 accent-[var(--accent-strong)]"
+                  />
+                  <span className="min-w-0 text-sm font-medium text-[var(--text-main)]">{item.label}</span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--card-divider)] px-5 py-4">
+          <p className="text-xs text-[var(--text-soft)]">多筆疊圖模式只切換中間欄顯示，不會改動既有的步驟處理邏輯。</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full border border-[var(--card-border)] px-4 py-2 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--accent-contrast)] transition-opacity hover:opacity-90 pressable"
+            >
+              套用疊圖
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 

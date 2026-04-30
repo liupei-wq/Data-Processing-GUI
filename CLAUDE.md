@@ -179,3 +179,5 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 
 - 2026-04-30 18:16 CST：修改 `web/frontend/src/pages/XRD.tsx` 頁面骨架，將根容器改為固定視窗高度並補上 `min-h-0` / `overflow-hidden`，讓 XRD 側邊欄與中間欄改成比照 XPS 的分離捲動。
 - 2026-04-30 18:18 CST：執行 `cd web/frontend && npm run build` 驗證 XRD 分離捲動調整，前端編譯通過；僅保留既有的 Vite chunk size 警告與 package module type warning，未新增 TypeScript 或建置錯誤。
+- 2026-04-30 18:34 CST：修改 `web/frontend/src/components/WorkspaceUi.tsx`、`web/frontend/src/pages/XRD.tsx`、`web/frontend/src/pages/Raman.tsx`，新增共用的 XPS 式中間欄頂部切換區與疊圖資料選取 modal，並將 Raman / XRD 補上比照 XPS 的單筆／多筆疊圖前端狀態流程與主圖切換。
+- 2026-04-30 18:36 CST：修正 `web/frontend/src/pages/XRD.tsx` 的 JSX 包裹層級後重新執行 `cd web/frontend && npm run build`，前端編譯通過；僅保留既有的 Vite chunk size 警告與 package module type warning，未新增 TypeScript 或建置錯誤。

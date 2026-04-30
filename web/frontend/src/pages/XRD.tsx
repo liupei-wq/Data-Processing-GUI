@@ -33,7 +33,11 @@ import ProcessingPanel, {
   DEFAULT_PARAMS,
   WAVELENGTH_MAP,
 } from '../components/ProcessingPanel'
-import { StickySidebarHeader } from '../components/WorkspaceUi'
+import {
+  DatasetSelectionModal,
+  ProcessingWorkspaceHeader,
+  StickySidebarHeader,
+} from '../components/WorkspaceUi'
 import type { ProcessParams } from '../types/xrd'
 
 type CsvCell = string | number | null | undefined
@@ -241,6 +245,11 @@ export default function XRD({
     instrument_broadening_deg: 0,
     broadening_correction: 'none',
   })
+  const [selectedDatasetName, setSelectedDatasetName] = useState('')
+  const [processingViewMode, setProcessingViewMode] = useState<'single' | 'overlay'>('single')
+  const [overlaySelection, setOverlaySelection] = useState<string[]>([])
+  const [overlayDraftSelection, setOverlayDraftSelection] = useState<string[]>([])
+  const [overlaySelectorOpen, setOverlaySelectorOpen] = useState(false)
   const [detectedPeaks, setDetectedPeaks] = useState<DetectedPeak[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -286,8 +295,38 @@ export default function XRD({
 
   const wavelength =
     wavelengthPreset === 'Custom' ? customWavelength : WAVELENGTH_MAP[wavelengthPreset]
-  const activeDataset = result?.average ?? result?.datasets[0] ?? null
+  const activeDataset = useMemo(
+    () => result?.datasets.find(dataset => dataset.name === selectedDatasetName) ?? result?.datasets[0] ?? result?.average ?? null,
+    [result, selectedDatasetName],
+  )
   const activeGaussianFits = activeDataset?.gaussian_fits ?? []
+  const overlayResult = useMemo(() => {
+    if (!result) return null
+    const datasets = result.datasets.filter(dataset => overlaySelection.includes(dataset.name))
+    if (datasets.length < 2) return null
+    return { datasets, average: null }
+  }, [overlaySelection, result])
+  const isOverlayView = processingViewMode === 'overlay' && Boolean(overlayResult)
+  const topTabs = useMemo(
+    () => rawFiles.map(file => ({
+      key: file.name,
+      label: file.name,
+      active: !isOverlayView && activeDataset?.name === file.name,
+      onClick: () => {
+        setProcessingViewMode('single')
+        setSelectedDatasetName(file.name)
+      },
+    })),
+    [activeDataset?.name, isOverlayView, rawFiles],
+  )
+  const overlayItems = useMemo(
+    () => rawFiles.map(file => ({ key: file.name, label: file.name })),
+    [rawFiles],
+  )
+  const xRangeLabel = activeDataset
+    ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} ${xMode === 'dspacing' ? 'Å' : 'deg'}`
+    : '—'
+  const interpolationLabel = params.interpolate ? `${params.n_points} 點` : '未啟用'
   const filteredRefPeaks = useMemo(
     () => refPeaks.filter(peak => peak.rel_i >= refMatchParams.min_rel_intensity),
     [refPeaks, refMatchParams.min_rel_intensity],
@@ -369,6 +408,24 @@ export default function XRD({
   }, [rawFiles, params])
 
   useEffect(() => {
+    const validNames = new Set(rawFiles.map(file => file.name))
+    setOverlaySelection(prev => prev.filter(name => validNames.has(name)))
+    setOverlayDraftSelection(prev => prev.filter(name => validNames.has(name)))
+    if (rawFiles.length === 0) {
+      setSelectedDatasetName('')
+      setProcessingViewMode('single')
+      return
+    }
+    if (!validNames.has(selectedDatasetName)) {
+      setSelectedDatasetName(rawFiles[0].name)
+    }
+  }, [rawFiles, selectedDatasetName])
+
+  useEffect(() => {
+    if (overlaySelectorOpen) setOverlayDraftSelection(overlaySelection)
+  }, [overlaySelection, overlaySelectorOpen])
+
+  useEffect(() => {
     if (selectedRefs.length === 0) {
       setRefPeaks([])
       return
@@ -418,6 +475,18 @@ export default function XRD({
     }
   }, [])
 
+  const toggleOverlayDraft = useCallback((name: string) => {
+    setOverlayDraftSelection(current =>
+      current.includes(name) ? current.filter(item => item !== name) : [...current, name],
+    )
+  }, [])
+
+  const applyOverlaySelection = useCallback(() => {
+    setOverlaySelection(overlayDraftSelection)
+    setProcessingViewMode(overlayDraftSelection.length >= 2 ? 'overlay' : 'single')
+    setOverlaySelectorOpen(false)
+  }, [overlayDraftSelection])
+
   const sidebarStyle = {
     '--sidebar-width': `${sidebarWidth}px`,
     '--sidebar-shift': sidebarCollapsed
@@ -451,10 +520,12 @@ export default function XRD({
           <div className="mx-auto h-full w-px bg-[linear-gradient(180deg,transparent,var(--card-border),transparent)]" />
         </div>
 
-        <div className={[
-          'module-sidebar__content flex h-full min-h-0 flex-col',
-          sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
-        ].join(' ')}>
+        <div
+          className={[
+            'module-sidebar__content flex h-full min-h-0 flex-col',
+            sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
+          ].join(' ')}
+        >
           <div className="flex-1 overflow-y-auto">
             <StickySidebarHeader
               activeModule="xrd"
@@ -482,74 +553,75 @@ export default function XRD({
 
             <div className="sidebar-scroll px-4 py-5">
               <div className="theme-block mb-3 overflow-hidden rounded-[24px]">
-            <div className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="flex items-center gap-3">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-                  1
-                </span>
-                <div>
-                  <div className="text-base font-semibold text-[var(--text-muted)]">載入檔案</div>
-                  <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">支援多檔上傳與後續平均</div>
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
+                      1
+                    </span>
+                    <div>
+                      <div className="text-base font-semibold text-[var(--text-muted)]">載入檔案</div>
+                      <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">支援多檔上傳與後續平均</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 pt-2">
+                  <div className="mb-3 text-sm font-medium text-[var(--text-main)]">上傳 XRD 檔案（可多選）</div>
+                  <FileUpload onFiles={handleFiles} isLoading={isLoading} />
+                  {rawFiles.length > 0 && (
+                    <div className="mt-3 space-y-1.5">
+                      {rawFiles.map(file => (
+                        <div
+                          key={file.name}
+                          className="theme-block-soft flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
+                        >
+                          <span className="text-[var(--accent-tertiary)]">✓</span>
+                          <span className="truncate">{file.name}</span>
+                          <span className="shrink-0 text-[var(--text-soft)]">({file.x.length} pts)</span>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRawFiles([])
+                          setResult(null)
+                          setRefPeaks([])
+                          setDetectedPeaks([])
+                        }}
+                        className="text-xs font-medium text-[var(--accent-secondary)] transition-colors hover:opacity-80"
+                      >
+                        清除全部
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-            <div className="p-4 pt-2">
-              <div className="mb-3 text-sm font-medium text-[var(--text-main)]">上傳 XRD 檔案（可多選）</div>
-              <FileUpload onFiles={handleFiles} isLoading={isLoading} />
-              {rawFiles.length > 0 && (
-                <div className="mt-3 space-y-1.5">
-                  {rawFiles.map(file => (
-                    <div
-                      key={file.name}
-                      className="theme-block-soft flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
-                    >
-                      <span className="text-[var(--accent-tertiary)]">✓</span>
-                      <span className="truncate">{file.name}</span>
-                      <span className="shrink-0 text-[var(--text-soft)]">({file.x.length} pts)</span>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRawFiles([])
-                      setResult(null)
-                      setRefPeaks([])
-                      setDetectedPeaks([])
-                    }}
-                    className="text-xs font-medium text-[var(--accent-secondary)] transition-colors hover:opacity-80"
-                  >
-                    清除全部
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
 
-            <ProcessingPanel
-              params={params}
-              onChange={setParams}
-            fileCount={rawFiles.length}
-            xMode={xMode}
-            onXModeChange={setXMode}
-            wavelengthPreset={wavelengthPreset}
-            onWavelengthPresetChange={p => {
-              setWavelengthPreset(p)
-              if (p !== 'Custom') setCustomWavelength(WAVELENGTH_MAP[p])
-            }}
-            customWavelength={customWavelength}
-            onCustomWavelengthChange={setCustomWavelength}
-            refMaterials={refMaterials}
-            selectedRefs={selectedRefs}
-            onSelectedRefsChange={setSelectedRefs}
-            logViewParams={logViewParams}
-            onLogViewParamsChange={setLogViewParams}
-            refMatchParams={refMatchParams}
-            onRefMatchParamsChange={setRefMatchParams}
-            peakParams={peakParams}
-            onPeakParamsChange={setPeakParams}
-              scherrerParams={scherrerParams}
-              onScherrerParamsChange={setScherrerParams}
-            />
+              <ProcessingPanel
+                params={params}
+                onChange={setParams}
+                fileCount={rawFiles.length}
+                xMode={xMode}
+                onXModeChange={setXMode}
+                wavelengthPreset={wavelengthPreset}
+                onWavelengthPresetChange={p => {
+                  setWavelengthPreset(p)
+                  if (p !== 'Custom') setCustomWavelength(WAVELENGTH_MAP[p])
+                }}
+                customWavelength={customWavelength}
+                onCustomWavelengthChange={setCustomWavelength}
+                refMaterials={refMaterials}
+                selectedRefs={selectedRefs}
+                onSelectedRefsChange={setSelectedRefs}
+                logViewParams={logViewParams}
+                onLogViewParamsChange={setLogViewParams}
+                refMatchParams={refMatchParams}
+                onRefMatchParamsChange={setRefMatchParams}
+                peakParams={peakParams}
+                onPeakParamsChange={setPeakParams}
+                scherrerParams={scherrerParams}
+                onScherrerParamsChange={setScherrerParams}
+              />
             </div>
           </div>
         </div>
@@ -567,63 +639,17 @@ export default function XRD({
             <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,color-mix(in_srgb,var(--card-border)_85%,transparent),transparent)]" />
           </div>
 
-          {rawFiles.length > 1 && (
-            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0 flex-1">
-                  <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">載入資料</p>
-                  <div className="flex flex-wrap gap-2">
-                    {rawFiles.map(file => (
-                      <span
-                        key={file.name}
-                        className={[
-                          'rounded-full border px-3 py-1 text-xs font-medium',
-                          activeDataset?.name === file.name
-                            ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
-                            : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
-                        ].join(' ')}
-                      >
-                        {file.name}
-                      </span>
-                    ))}
-                    {result?.average && (
-                      <span className="rounded-full border border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] px-3 py-1 text-xs font-medium text-[var(--accent-secondary)]">
-                        Average Output
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="shrink-0 lg:pl-4">
-                  <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">處理模式</p>
-                  <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-left">
-                    <span className="block text-sm font-semibold text-[var(--text-main)]">沿用既有 XRD 邏輯</span>
-                    <span className="mt-1 block text-xs text-[var(--text-soft)]">
-                      目前不更動資料處理流程，僅同步 XPS 的 UI 呈現方式。
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="mb-6 grid gap-3 sm:grid-cols-4">
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">波長</p>
-              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{wavelength.toFixed(4)} Å</p>
-            </div>
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
-              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{activeDataset ? activeDataset.name : '未載入'}</p>
-            </div>
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">參考峰</p>
-              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{selectedRefs.length} 個</p>
-            </div>
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">自動尋峰</p>
-              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{peakParams.enabled ? `${detectedPeaks.length} 個` : '未啟用'}</p>
-            </div>
-          </div>
+          <ProcessingWorkspaceHeader
+            tabs={topTabs}
+            isOverlayView={isOverlayView}
+            overlaySelectionCount={overlaySelection.length}
+            onOpenOverlaySelector={() => setOverlaySelectorOpen(true)}
+            stats={[
+              { label: '資料集', value: `${rawFiles.length} 個` },
+              { label: xMode === 'dspacing' ? 'd 範圍' : '2θ 範圍', value: xRangeLabel },
+              { label: '內插點數', value: interpolationLabel },
+            ]}
+          />
 
           <div className="glass-panel rounded-[30px] p-4 sm:p-5 lg:p-6">
           {error && (
@@ -685,11 +711,13 @@ export default function XRD({
           {result && (
             <>
               <SpectrumChart
-                result={result}
-                refPeaks={filteredRefPeaks}
-                detectedPeaks={detectedPeaks}
+                result={isOverlayView && overlayResult ? overlayResult : result}
+                refPeaks={isOverlayView ? [] : filteredRefPeaks}
+                detectedPeaks={isOverlayView ? [] : detectedPeaks}
                 xMode={xMode}
                 wavelength={wavelength}
+                showReferencePeaks={!isOverlayView}
+                showDetectedPeaks={!isOverlayView}
               />
 
               {logViewParams.enabled && (
@@ -1171,9 +1199,19 @@ export default function XRD({
               </div>
             </>
           )}
+          </div>
         </div>
       </div>
-    </div>
+
+      <DatasetSelectionModal
+        open={overlaySelectorOpen}
+        title="選擇 XRD 疊圖資料"
+        items={overlayItems}
+        selectedKeys={overlayDraftSelection}
+        onToggle={toggleOverlayDraft}
+        onClose={() => setOverlaySelectorOpen(false)}
+        onConfirm={applyOverlaySelection}
+      />
     </div>
   )
 }
