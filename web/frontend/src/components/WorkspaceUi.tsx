@@ -433,10 +433,10 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
     const rect = triggerRef.current.getBoundingClientRect()
     setPanelStyle({
       position: 'fixed',
-      top: rect.bottom + 10,
+      top: rect.bottom + 6,
       left: rect.left + rect.width / 2,
       transform: 'translateX(-50%)',
-      width: Math.min(240, Math.max(rect.width + 28, 188)),
+      width: Math.min(220, Math.max(rect.width + 18, 184)),
       zIndex: 9999,
     })
   }, [])
@@ -493,9 +493,9 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
       style={panelStyle}
       onMouseEnter={clearCloseTimer}
       onMouseLeave={closeMenuSoon}
-      className="glass-panel overflow-hidden rounded-[20px] p-1.5"
+      className="glass-panel overflow-hidden rounded-[16px] p-1"
     >
-      <div className="px-3 pb-1.5 pt-2 text-center text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">
+      <div className="px-3 pb-1 pt-2 text-center text-[9px] uppercase tracking-[0.18em] text-[var(--text-soft)]">
         切換分析模組
       </div>
       {ANALYSIS_MODULES.map(module => {
@@ -510,14 +510,14 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
               if (!isActive) onSelect?.(module.id)
             }}
             className={[
-              'flex w-full items-center justify-between rounded-2xl px-3 py-2 text-[13px] transition-all duration-150 pressable',
+              'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-[13px] transition-all duration-150 pressable',
               isActive
                 ? 'bg-[var(--accent-soft)] font-semibold text-[var(--accent-secondary)]'
                 : 'text-[var(--text-main)] hover:bg-[var(--card-ghost)] hover:text-[var(--accent-secondary)]',
             ].join(' ')}
           >
-            <span>{module.label}</span>
-            <span className="text-[11px] text-[var(--text-soft)]">{module.detail}</span>
+            <span className="shrink-0">{module.label}</span>
+            <span className="min-w-0 truncate text-right text-[10px] text-[var(--text-soft)]">{module.detail}</span>
           </button>
         )
       })}
@@ -566,8 +566,8 @@ export function StickySidebarHeader({
       <div className="sidebar-header-card relative rounded-[30px] px-5 pb-8 pt-4.5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
-            <div className="nigiro-brand-mark nigiro-brand-mark--lg">
-              <span aria-hidden="true" />
+            <div className="nigiro-brand-mark nigiro-brand-mark--lg" aria-hidden="true">
+              <img src="/nigiro-icon.svg" alt="" />
             </div>
             <div className="min-w-0">
               <div className="text-[1.65rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>

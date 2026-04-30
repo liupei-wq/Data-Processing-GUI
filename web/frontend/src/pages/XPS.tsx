@@ -1851,8 +1851,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <div className="sidebar-header-card relative rounded-[30px] px-5 pb-9 pt-5">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex min-w-0 items-center gap-4">
-                      <div className="nigiro-brand-mark nigiro-brand-mark--lg">
-                        <span aria-hidden="true" />
+                      <div className="nigiro-brand-mark nigiro-brand-mark--lg" aria-hidden="true">
+                        <img src="/nigiro-icon.svg" alt="" />
                       </div>
                       <div className="min-w-0">
                         <div className="text-[1.9rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>

@@ -268,6 +268,225 @@
     --chart-hover-border: rgba(207, 227, 241, 0.2);
   }
 
+  [data-theme='amber'] {
+    --bg-canvas: #130d06;
+    --bg-gradient:
+      radial-gradient(circle at 48% -12%, rgba(255, 221, 161, 0.18), transparent 31rem),
+      radial-gradient(circle at 18% 20%, rgba(245, 158, 11, 0.13), transparent 24rem),
+      radial-gradient(circle at 86% 12%, rgba(209, 169, 98, 0.1), transparent 24rem),
+      linear-gradient(180deg, #130d06 0%, #1a1209 48%, #070402 100%);
+    --panel-bg: rgba(31, 22, 12, 0.92);
+    --panel-border: rgba(255, 221, 161, 0.2);
+    --panel-shadow: 0 28px 72px rgba(0, 0, 0, 0.42), 0 0 34px rgba(245, 158, 11, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --text-main: #f0e1c7;
+    --text-muted: #fff7e8;
+    --text-soft: #b69b72;
+    --hero-grid-line: rgba(255, 221, 161, 0.045);
+    --orb-left: rgba(245, 158, 11, 0.12);
+    --orb-right: rgba(255, 221, 161, 0.09);
+    --card-bg: rgba(35, 24, 13, 0.8);
+    --card-bg-strong: rgba(44, 29, 14, 0.96);
+    --card-ghost: rgba(255, 221, 161, 0.052);
+    --card-border: rgba(255, 221, 161, 0.17);
+    --card-divider: rgba(255, 221, 161, 0.12);
+    --card-shadow: 0 18px 42px rgba(0, 0, 0, 0.31), 0 0 18px rgba(245, 158, 11, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    --card-shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.22);
+    --input-bg: rgba(13, 8, 4, 0.94);
+    --input-border: rgba(255, 221, 161, 0.23);
+    --input-text: #fff7e8;
+    --pill-bg: rgba(255, 221, 161, 0.075);
+    --pill-border: rgba(255, 221, 161, 0.2);
+    --accent: #ffe2aa;
+    --accent-strong: #f5b85b;
+    --accent-soft: rgba(245, 158, 11, 0.12);
+    --accent-secondary: #ffd28a;
+    --accent-tertiary: #f59e0b;
+    --accent-contrast: #130d06;
+    --float-bg: rgba(255, 221, 161, 0.05);
+    --float-border: rgba(255, 221, 161, 0.14);
+    --chart-bg: rgba(13, 8, 4, 0.78);
+    --chart-grid: rgba(255, 221, 161, 0.13);
+    --chart-text: #f0e1c7;
+    --chart-legend-bg: rgba(21, 14, 7, 0.9);
+    --chart-hover-bg: rgba(13, 8, 4, 0.96);
+    --chart-hover-border: rgba(255, 221, 161, 0.2);
+  }
+
+  [data-theme='rose'] {
+    --bg-canvas: #140a0d;
+    --bg-gradient:
+      radial-gradient(circle at 48% -12%, rgba(255, 207, 216, 0.17), transparent 31rem),
+      radial-gradient(circle at 16% 22%, rgba(244, 114, 182, 0.12), transparent 24rem),
+      radial-gradient(circle at 84% 12%, rgba(214, 154, 136, 0.1), transparent 24rem),
+      linear-gradient(180deg, #140a0d 0%, #1a0f12 48%, #080304 100%);
+    --panel-bg: rgba(32, 17, 21, 0.92);
+    --panel-border: rgba(255, 207, 216, 0.19);
+    --panel-shadow: 0 28px 72px rgba(0, 0, 0, 0.42), 0 0 34px rgba(244, 114, 182, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --text-main: #f1dce1;
+    --text-muted: #fff7f8;
+    --text-soft: #b99098;
+    --hero-grid-line: rgba(255, 207, 216, 0.045);
+    --orb-left: rgba(244, 114, 182, 0.11);
+    --orb-right: rgba(255, 207, 216, 0.09);
+    --card-bg: rgba(36, 19, 24, 0.8);
+    --card-bg-strong: rgba(45, 23, 28, 0.96);
+    --card-ghost: rgba(255, 207, 216, 0.052);
+    --card-border: rgba(255, 207, 216, 0.16);
+    --card-divider: rgba(255, 207, 216, 0.12);
+    --card-shadow: 0 18px 42px rgba(0, 0, 0, 0.3), 0 0 18px rgba(244, 114, 182, 0.048), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    --card-shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.22);
+    --input-bg: rgba(14, 7, 9, 0.94);
+    --input-border: rgba(255, 207, 216, 0.22);
+    --input-text: #fff7f8;
+    --pill-bg: rgba(255, 207, 216, 0.075);
+    --pill-border: rgba(255, 207, 216, 0.19);
+    --accent: #ffd5df;
+    --accent-strong: #e9a0ad;
+    --accent-soft: rgba(244, 114, 182, 0.1);
+    --accent-secondary: #ffc0cb;
+    --accent-tertiary: #d6a08e;
+    --accent-contrast: #140a0d;
+    --float-bg: rgba(255, 207, 216, 0.048);
+    --float-border: rgba(255, 207, 216, 0.14);
+    --chart-bg: rgba(14, 7, 9, 0.78);
+    --chart-grid: rgba(255, 207, 216, 0.13);
+    --chart-text: #f1dce1;
+    --chart-legend-bg: rgba(23, 12, 15, 0.9);
+    --chart-hover-bg: rgba(14, 7, 9, 0.96);
+    --chart-hover-border: rgba(255, 207, 216, 0.19);
+  }
+
+  [data-theme='copper'] {
+    --bg-canvas: #120805;
+    --bg-gradient:
+      radial-gradient(circle at 48% -12%, rgba(255, 196, 148, 0.17), transparent 31rem),
+      radial-gradient(circle at 16% 22%, rgba(194, 92, 45, 0.14), transparent 24rem),
+      radial-gradient(circle at 84% 12%, rgba(255, 237, 213, 0.08), transparent 24rem),
+      linear-gradient(180deg, #120805 0%, #190c07 48%, #070201 100%);
+    --panel-bg: rgba(31, 15, 9, 0.92);
+    --panel-border: rgba(255, 196, 148, 0.19);
+    --panel-shadow: 0 28px 72px rgba(0, 0, 0, 0.43), 0 0 34px rgba(194, 92, 45, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --text-main: #f1dac9;
+    --text-muted: #fff4eb;
+    --text-soft: #b78d74;
+    --hero-grid-line: rgba(255, 196, 148, 0.045);
+    --orb-left: rgba(194, 92, 45, 0.12);
+    --orb-right: rgba(255, 196, 148, 0.09);
+    --card-bg: rgba(37, 17, 10, 0.8);
+    --card-bg-strong: rgba(46, 21, 12, 0.96);
+    --card-ghost: rgba(255, 196, 148, 0.052);
+    --card-border: rgba(255, 196, 148, 0.16);
+    --card-divider: rgba(255, 196, 148, 0.12);
+    --card-shadow: 0 18px 42px rgba(0, 0, 0, 0.31), 0 0 18px rgba(194, 92, 45, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    --card-shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.22);
+    --input-bg: rgba(13, 6, 3, 0.94);
+    --input-border: rgba(255, 196, 148, 0.22);
+    --input-text: #fff4eb;
+    --pill-bg: rgba(255, 196, 148, 0.075);
+    --pill-border: rgba(255, 196, 148, 0.19);
+    --accent: #ffd4b4;
+    --accent-strong: #c97b4f;
+    --accent-soft: rgba(194, 92, 45, 0.12);
+    --accent-secondary: #f2a46f;
+    --accent-tertiary: #f6c58f;
+    --accent-contrast: #120805;
+    --float-bg: rgba(255, 196, 148, 0.048);
+    --float-border: rgba(255, 196, 148, 0.14);
+    --chart-bg: rgba(13, 6, 3, 0.78);
+    --chart-grid: rgba(255, 196, 148, 0.13);
+    --chart-text: #f1dac9;
+    --chart-legend-bg: rgba(21, 10, 6, 0.9);
+    --chart-hover-bg: rgba(13, 6, 3, 0.96);
+    --chart-hover-border: rgba(255, 196, 148, 0.19);
+  }
+
+  [data-theme='graphite'] {
+    --bg-canvas: #0b0d10;
+    --bg-gradient:
+      radial-gradient(circle at 48% -12%, rgba(210, 216, 224, 0.15), transparent 31rem),
+      radial-gradient(circle at 16% 22%, rgba(148, 163, 184, 0.11), transparent 24rem),
+      radial-gradient(circle at 84% 12%, rgba(255, 255, 255, 0.07), transparent 24rem),
+      linear-gradient(180deg, #0b0d10 0%, #111418 48%, #050607 100%);
+    --panel-bg: rgba(20, 23, 28, 0.92);
+    --panel-border: rgba(210, 216, 224, 0.19);
+    --panel-shadow: 0 28px 72px rgba(0, 0, 0, 0.43), 0 0 32px rgba(148, 163, 184, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --text-main: #dde2e8;
+    --text-muted: #ffffff;
+    --text-soft: #9aa3ad;
+    --hero-grid-line: rgba(210, 216, 224, 0.045);
+    --orb-left: rgba(148, 163, 184, 0.1);
+    --orb-right: rgba(210, 216, 224, 0.08);
+    --card-bg: rgba(24, 27, 32, 0.8);
+    --card-bg-strong: rgba(28, 32, 38, 0.96);
+    --card-ghost: rgba(210, 216, 224, 0.048);
+    --card-border: rgba(210, 216, 224, 0.16);
+    --card-divider: rgba(210, 216, 224, 0.11);
+    --card-shadow: 0 18px 42px rgba(0, 0, 0, 0.31), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    --card-shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.23);
+    --input-bg: rgba(10, 12, 15, 0.94);
+    --input-border: rgba(210, 216, 224, 0.21);
+    --input-text: #f5f7fa;
+    --pill-bg: rgba(210, 216, 224, 0.07);
+    --pill-border: rgba(210, 216, 224, 0.18);
+    --accent: #e5e7eb;
+    --accent-strong: #b7c0ca;
+    --accent-soft: rgba(148, 163, 184, 0.11);
+    --accent-secondary: #d1d5db;
+    --accent-tertiary: #aeb7c2;
+    --accent-contrast: #0b0d10;
+    --float-bg: rgba(210, 216, 224, 0.045);
+    --float-border: rgba(210, 216, 224, 0.13);
+    --chart-bg: rgba(10, 12, 15, 0.78);
+    --chart-grid: rgba(210, 216, 224, 0.12);
+    --chart-text: #dde2e8;
+    --chart-legend-bg: rgba(14, 16, 20, 0.9);
+    --chart-hover-bg: rgba(10, 12, 15, 0.96);
+    --chart-hover-border: rgba(210, 216, 224, 0.18);
+  }
+
+  [data-theme='obsidian'] {
+    --bg-canvas: #000000;
+    --bg-gradient:
+      radial-gradient(circle at 50% -12%, rgba(255, 255, 255, 0.1), transparent 31rem),
+      radial-gradient(circle at 18% 22%, rgba(80, 86, 94, 0.14), transparent 24rem),
+      linear-gradient(180deg, #000000 0%, #050505 48%, #000000 100%);
+    --panel-bg: rgba(5, 5, 5, 0.94);
+    --panel-border: rgba(255, 255, 255, 0.18);
+    --panel-shadow: 0 28px 72px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    --text-main: #ececec;
+    --text-muted: #ffffff;
+    --text-soft: #8f8f8f;
+    --hero-grid-line: rgba(255, 255, 255, 0.035);
+    --orb-left: rgba(255, 255, 255, 0.045);
+    --orb-right: rgba(150, 150, 150, 0.07);
+    --card-bg: rgba(8, 8, 8, 0.86);
+    --card-bg-strong: rgba(2, 2, 2, 0.98);
+    --card-ghost: rgba(255, 255, 255, 0.032);
+    --card-border: rgba(255, 255, 255, 0.14);
+    --card-divider: rgba(255, 255, 255, 0.1);
+    --card-shadow: 0 18px 42px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    --card-shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.28);
+    --input-bg: rgba(0, 0, 0, 0.96);
+    --input-border: rgba(255, 255, 255, 0.17);
+    --input-text: #ffffff;
+    --pill-bg: rgba(255, 255, 255, 0.055);
+    --pill-border: rgba(255, 255, 255, 0.16);
+    --accent: #ffffff;
+    --accent-strong: #d8d8d8;
+    --accent-soft: rgba(255, 255, 255, 0.055);
+    --accent-secondary: #f5f5f5;
+    --accent-tertiary: #bdbdbd;
+    --accent-contrast: #000000;
+    --float-bg: rgba(255, 255, 255, 0.035);
+    --float-border: rgba(255, 255, 255, 0.11);
+    --chart-bg: rgba(0, 0, 0, 0.82);
+    --chart-grid: rgba(255, 255, 255, 0.1);
+    --chart-text: #ececec;
+    --chart-legend-bg: rgba(5, 5, 5, 0.9);
+    --chart-hover-bg: rgba(0, 0, 0, 0.96);
+    --chart-hover-border: rgba(255, 255, 255, 0.17);
+  }
+
   [data-font='ui'] {
     --body-font: 'IBM Plex Sans', 'Segoe UI', sans-serif;
     --display-font: 'Space Grotesk', 'IBM Plex Sans', sans-serif;
@@ -946,110 +1165,42 @@ summary:active,
   backdrop-filter: blur(10px);
 }
 
+.cursor-particles {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0.72;
+}
+
 .nigiro-brand-mark {
-  position: relative;
-  display: grid;
-  place-items: center;
+  display: block;
   flex-shrink: 0;
-  border: 1px solid var(--pill-border);
   overflow: hidden;
-  background:
-    radial-gradient(ellipse at 50% 88%, rgba(143, 180, 201, 0.24), transparent 30%),
-    radial-gradient(circle at 42% 40%, rgba(234, 243, 251, 0.12), transparent 32%),
-    var(--card-bg-strong);
-  box-shadow: var(--card-shadow), 0 0 30px rgba(143, 180, 201, 0.18);
-  isolation: isolate;
+  background: #030913;
+  box-shadow:
+    0 18px 36px rgba(0, 0, 0, 0.34),
+    0 0 24px rgba(143, 180, 201, 0.16);
 }
 
 .nigiro-brand-mark--lg {
-  width: 4rem;
-  height: 4rem;
-  border-radius: 1.1rem;
+  width: 4.55rem;
+  height: 4.55rem;
+  border-radius: 1.15rem;
 }
 
 .nigiro-brand-mark--sm {
-  width: 2rem;
-  height: 2rem;
+  width: 2.15rem;
+  height: 2.15rem;
   border-radius: 0.65rem;
 }
 
-.nigiro-brand-mark::before,
-.nigiro-brand-mark::after {
-  content: '';
-  position: absolute;
-}
-
-.nigiro-brand-mark::before {
-  z-index: 2;
-  right: 17%;
-  top: 17%;
-  width: 39%;
-  height: 64%;
-  border-radius: 50%;
-  background: linear-gradient(100deg, rgba(255, 255, 255, 0.98) 0%, rgba(207, 227, 241, 0.88) 42%, rgba(112, 126, 142, 0.88) 100%);
-  box-shadow:
-    inset -0.35rem 0 0 rgba(255, 255, 255, 0.36),
-    0 0 18px rgba(234, 243, 251, 0.28);
-  transform: rotate(-8deg);
-}
-
-.nigiro-brand-mark::after {
-  z-index: 3;
-  right: 29%;
-  top: 11%;
-  width: 35%;
-  height: 76%;
-  border-radius: 50%;
-  background: var(--card-bg-strong);
-  box-shadow: inset 0 0 14px rgba(143, 180, 201, 0.08);
-  transform: rotate(-8deg);
-}
-
-.nigiro-brand-mark span {
-  position: absolute;
-  z-index: 5;
-  left: 43%;
-  top: 48%;
-  width: 69%;
-  height: 30%;
-  border: 1px solid rgba(234, 243, 251, 0.82);
-  border-radius: 50%;
-  box-shadow: 0 0 10px rgba(207, 227, 241, 0.28);
-  transform: translate(-50%, -50%) rotate(18deg);
-}
-
-.nigiro-brand-mark span::before,
-.nigiro-brand-mark span::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-}
-
-.nigiro-brand-mark span::before {
-  z-index: 2;
-  width: 43%;
-  height: 98%;
-  border-radius: 0.14rem;
-  background:
-    linear-gradient(135deg, rgba(234, 243, 251, 0.98) 0 24%, transparent 24%),
-    linear-gradient(45deg, rgba(159, 215, 240, 0.92) 0 34%, transparent 34%),
-    conic-gradient(from 18deg, #eaf3fb, #8fb4c9, #30445a, #cfe3f1, #eaf3fb);
-  box-shadow:
-    0 0 14px rgba(207, 227, 241, 0.5),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
-  clip-path: polygon(50% 0, 100% 32%, 82% 100%, 16% 100%, 0 34%);
-  transform: translate(-50%, -50%) rotate(-7deg);
-}
-
-.nigiro-brand-mark span::after {
-  width: 55%;
-  height: 238%;
-  border: 1px solid rgba(207, 227, 241, 0.72);
-  border-radius: 50%;
-  border-color: rgba(207, 227, 241, 0.72);
-  box-shadow: 0 0 10px rgba(207, 227, 241, 0.22);
-  transform: translate(-50%, -50%) rotate(-76deg);
+.nigiro-brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .upload-orbit-icon {

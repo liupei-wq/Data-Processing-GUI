@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './components/AnalysisModuleNav'
+import CursorParticles from './components/CursorParticles'
 import Raman from './pages/Raman'
 import XAS from './pages/XAS'
 import XES from './pages/XES'
@@ -7,7 +8,18 @@ import XPS from './pages/XPS'
 import XRD from './pages/XRD'
 import SingleProcessTool, { type SingleToolKind } from './pages/SingleProcessTool'
 
-type ThemeId = 'apricot' | 'pearl' | 'ocean' | 'ink' | 'ember' | 'forest'
+type ThemeId =
+  | 'apricot'
+  | 'pearl'
+  | 'ocean'
+  | 'ink'
+  | 'ember'
+  | 'forest'
+  | 'amber'
+  | 'rose'
+  | 'copper'
+  | 'graphite'
+  | 'obsidian'
 type FontId = 'ui' | 'kai' | 'serif'
 type FontScale = 'sm' | 'md' | 'lg'
 type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes' | `tool-${SingleToolKind}`
@@ -19,6 +31,11 @@ const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft
   { id: 'ink', label: '深場', tone: '黑曜藍', shape: 'square' },
   { id: 'ember', label: '光譜', tone: '冷藍金', shape: 'square' },
   { id: 'forest', label: '晶格', tone: '藍綠灰', shape: 'round' },
+  { id: 'amber', label: '琥珀', tone: '暖金棕', shape: 'round' },
+  { id: 'rose', label: '玫瑰', tone: '暖粉褐', shape: 'soft' },
+  { id: 'copper', label: '銅焰', tone: '銅棕橙', shape: 'square' },
+  { id: 'graphite', label: '石墨', tone: '中性灰', shape: 'soft' },
+  { id: 'obsidian', label: '黑曜', tone: '純黑銀', shape: 'square' },
 ]
 
 const FONT_FAMILIES: { id: FontId; label: string; note: string }[] = [
@@ -89,6 +106,7 @@ export default function App() {
         <div className="nigiro-backdrop__constellation" />
         <div className="nigiro-backdrop__orbit" />
       </div>
+      <CursorParticles />
 
       <div className="theme-launcher fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6">
         <div className="theme-dock theme-launcher__panel">
@@ -100,11 +118,11 @@ export default function App() {
               <div className="mt-1 text-sm font-semibold text-[var(--text-main)]">核心介面</div>
             </div>
             <div className="rounded-full border border-[var(--pill-border)] bg-[var(--pill-bg)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-soft)]">
-              6 modes
+              {THEMES.length} modes
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2.5">
+          <div className="grid max-h-[28rem] grid-cols-3 gap-2.5 overflow-y-auto pr-1">
             {THEMES.map(item => (
               <button
                 key={item.id}

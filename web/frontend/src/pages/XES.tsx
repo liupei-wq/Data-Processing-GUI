@@ -304,8 +304,8 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
           <div className="module-sidebar__content flex flex-1 flex-col overflow-y-auto">
             {/* brand + modules */}
             <div className="flex items-center gap-3 px-6 pb-2 pt-6">
-              <div className="nigiro-brand-mark nigiro-brand-mark--sm">
-                <span aria-hidden="true" />
+              <div className="nigiro-brand-mark nigiro-brand-mark--sm" aria-hidden="true">
+                <img src="/nigiro-icon.svg" alt="" />
               </div>
               <div>
                 <div className="font-display text-xl font-semibold tracking-tight text-[var(--text-main)]">Nigiro Pro</div>

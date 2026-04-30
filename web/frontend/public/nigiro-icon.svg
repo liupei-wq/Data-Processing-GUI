@@ -1,37 +1,78 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <defs>
-    <radialGradient id="bg" cx="50%" cy="40%" r="70%">
-      <stop offset="0%" stop-color="#102033"/>
-      <stop offset="58%" stop-color="#050b14"/>
-      <stop offset="100%" stop-color="#02060c"/>
+    <radialGradient id="bg" cx="50%" cy="43%" r="72%">
+      <stop offset="0%" stop-color="#142333"/>
+      <stop offset="58%" stop-color="#08111b"/>
+      <stop offset="100%" stop-color="#02070d"/>
     </radialGradient>
-    <linearGradient id="moon" x1="34" y1="18" x2="96" y2="104" gradientUnits="userSpaceOnUse">
+    <linearGradient id="rim" x1="34" y1="20" x2="225" y2="230" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8b97a4"/>
+      <stop offset="0.42" stop-color="#313b46"/>
+      <stop offset="1" stop-color="#6b7480"/>
+    </linearGradient>
+    <linearGradient id="moon" x1="132" y1="40" x2="194" y2="209" gradientUnits="userSpaceOnUse">
       <stop stop-color="#ffffff"/>
-      <stop offset="0.52" stop-color="#cfe3f1"/>
-      <stop offset="1" stop-color="#7d8794"/>
+      <stop offset="0.3" stop-color="#eff4f8"/>
+      <stop offset="0.62" stop-color="#c8d2dc"/>
+      <stop offset="1" stop-color="#6f7883"/>
     </linearGradient>
-    <linearGradient id="crystal" x1="37" y1="38" x2="78" y2="82" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#eaf8ff"/>
-      <stop offset="0.42" stop-color="#8fb4c9"/>
-      <stop offset="1" stop-color="#27394d"/>
+    <linearGradient id="moonShade" x1="159" y1="54" x2="182" y2="206" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity="0.78"/>
+      <stop offset="0.54" stop-color="#d6dee6" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
+    <linearGradient id="crystalA" x1="81" y1="78" x2="160" y2="171" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f3fbff"/>
+      <stop offset="0.42" stop-color="#9fc5d5"/>
+      <stop offset="1" stop-color="#223142"/>
+    </linearGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-  <rect width="128" height="128" rx="22" fill="url(#bg)"/>
-  <ellipse cx="64" cy="111" rx="28" ry="4" fill="#8fb4c9" opacity="0.35"/>
-  <path d="M76 18c20 16 26 47 12 70C76 108 50 111 31 96c20 6 42-2 53-20 11-19 8-43-8-58Z" fill="url(#moon)"/>
-  <path d="M80 19c11 18 12 40 1 58-10 17-27 27-47 25 18 10 43 4 55-15 14-23 9-53-9-68Z" fill="#ffffff" opacity="0.28"/>
-  <g fill="none" stroke="#eff7fc" stroke-width="2.2" opacity="0.9">
-    <ellipse cx="58" cy="61" rx="48" ry="14" transform="rotate(18 58 61)"/>
-    <ellipse cx="58" cy="61" rx="48" ry="14" transform="rotate(-58 58 61)"/>
+
+  <rect x="12" y="12" width="232" height="232" rx="35" fill="url(#bg)"/>
+  <rect x="13.5" y="13.5" width="229" height="229" rx="33.5" fill="none" stroke="url(#rim)" stroke-width="3.2" opacity="0.74"/>
+  <ellipse cx="128" cy="225" rx="42" ry="8" fill="#8fb4c9" opacity="0.18" filter="url(#softGlow)"/>
+
+  <g fill="none" stroke-linecap="round" filter="url(#softGlow)">
+    <ellipse cx="119" cy="125" rx="93" ry="26" transform="rotate(16 119 125)" stroke="#f5f6f8" stroke-width="4.3" opacity="0.92"/>
+    <ellipse cx="119" cy="125" rx="94" ry="26" transform="rotate(-58 119 125)" stroke="#f5f6f8" stroke-width="3.5" opacity="0.86"/>
+    <ellipse cx="121" cy="126" rx="99" ry="21" transform="rotate(4 121 126)" stroke="#8b96a3" stroke-width="2" opacity="0.62"/>
   </g>
-  <path d="M55 36 83 54 74 86 43 88 32 57Z" fill="url(#crystal)"/>
-  <path d="M55 36 57 63 32 57Z" fill="#cfe3f1" opacity="0.88"/>
-  <path d="M57 63 83 54 74 86Z" fill="#33495f" opacity="0.78"/>
-  <path d="M57 63 74 86 43 88Z" fill="#87adbf" opacity="0.84"/>
-  <path d="M55 36 83 54 57 63Z" fill="#dff4ff" opacity="0.76"/>
-  <g fill="#f8fbff">
-    <circle cx="18" cy="61" r="2.5"/>
-    <circle cx="95" cy="91" r="2.5"/>
-    <circle cx="60" cy="13" r="2.5"/>
+
+  <path
+    d="M153 35C190 60 204 111 181 153C159 194 111 209 73 184C105 192 139 177 156 146C175 111 165 67 136 42C142 39 147 37 153 35Z"
+    fill="url(#moon)"
+    filter="url(#softGlow)"
+  />
+  <path
+    d="M160 43C178 72 181 112 163 146C148 174 121 192 91 193C125 198 160 182 180 151C203 114 191 64 160 43Z"
+    fill="url(#moonShade)"
+  />
+  <path
+    d="M150 38C167 67 169 104 153 136C138 168 111 187 79 189C108 199 151 184 174 150C196 116 189 66 150 38Z"
+    fill="#ffffff"
+    opacity="0.18"
+  />
+
+  <g filter="url(#softGlow)">
+    <path d="M108 70 164 107 147 171 84 176 62 114Z" fill="url(#crystalA)"/>
+    <path d="M108 70 113 124 62 114Z" fill="#dff4ff" opacity="0.9"/>
+    <path d="M113 124 164 107 147 171Z" fill="#243548" opacity="0.78"/>
+    <path d="M113 124 147 171 84 176Z" fill="#7faabe" opacity="0.9"/>
+    <path d="M108 70 164 107 113 124Z" fill="#cce9f4" opacity="0.9"/>
+    <path d="M84 176 113 124 62 114Z" fill="#a9d2df" opacity="0.58"/>
+    <path d="M108 70 164 107 147 171 84 176 62 114Z" fill="none" stroke="#d6edf5" stroke-width="1.2" opacity="0.42"/>
+  </g>
+
+  <g fill="#f8fbff" filter="url(#softGlow)">
+    <circle cx="61" cy="33" r="4.3"/>
+    <circle cx="181" cy="212" r="4.1"/>
+    <circle cx="223" cy="173" r="2.8"/>
   </g>
 </svg>
