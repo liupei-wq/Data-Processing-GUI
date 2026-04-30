@@ -171,3 +171,7 @@ XPS binding energy 習慣高 BE 在左：後端峰偵測先 flip，前端圖表 
 - 2026-04-30 17:41 CST：再次讀取 `CLAUDE.md` 並檢查 XPS 左上角 header，確認目前仍為 `ModuleTabs`；準備改成放大 logo/標題、下方中央標籤式感應下拉選單，且整塊在側欄內 sticky 隨捲動維持可見。
 - 2026-04-30 17:44 CST：依使用者補充，將 XPS 左上角 header 改為「跟著側邊欄捲動區」的 sticky 區塊；放大 logo 與 Nigiro Pro 標題，並把分析模組改成長在卡片底部中央的感應式下拉標籤。
 - 2026-04-30 17:46 CST：再次執行 `cd web/frontend && npm run build` 驗證 sticky 側欄 header 與分析模組下拉選單調整，編譯通過；僅保留既有 Vite chunk size 警告。
+- 2026-04-30 17:58 CST：依使用者要求擴散 XPS UI 到 Raman / XRD，並確認本次只改 UI、不改步驟處理邏輯；新增共用 `WorkspaceUi.tsx`，提供 sticky sidebar header、分析模組下拉、玻璃感步驟卡與說明 modal。
+- 2026-04-30 18:00 CST：修改 `web/frontend/src/components/ProcessingPanel.tsx` 與 `web/frontend/src/pages/XRD.tsx`，將 XRD 側欄 header、步驟卡、主要開關樣式與中間欄上方狀態卡改成接近 XPS 的視覺。
+- 2026-04-30 18:02 CST：修改 `web/frontend/src/pages/Raman.tsx`，將 Raman 側欄 header、步驟卡、部分主要開關、步驟說明 modal 與中間欄資料切換區改成接近 XPS 的視覺。
+- 2026-04-30 18:05 CST：執行 `cd web/frontend && npm run build` 驗證 Raman / XRD UI 套版結果，編譯通過；僅保留既有 Vite chunk size 警告，未新增 TypeScript 或建置錯誤。

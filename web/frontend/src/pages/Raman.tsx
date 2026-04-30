@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import Plot from 'react-plotly.js'
-import AnalysisModuleNav, { type AnalysisModuleId } from '../components/AnalysisModuleNav'
+import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
+import { GlassSection, StickySidebarHeader, TogglePill } from '../components/WorkspaceUi'
 import {
   detectPeaks,
   fetchPeakLibrary,
@@ -490,34 +491,19 @@ function SidebarCard({
   hint,
   children,
   defaultOpen = true,
+  infoContent,
 }: {
   step: number
   title: string
   hint: string
   children: ReactNode
   defaultOpen?: boolean
+  infoContent?: ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="theme-block mb-3 overflow-hidden rounded-[24px]">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-            {step}
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
-            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
-          </div>
-        </div>
-        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
-      </button>
-      {open && <div className="p-4 pt-2">{children}</div>}
-    </div>
+    <GlassSection step={step} title={title} hint={hint} defaultOpen={defaultOpen} infoContent={infoContent}>
+      {children}
+    </GlassSection>
   )
 }
 
@@ -684,6 +670,13 @@ export default function Raman({
     if (selectedSeries === '__average__') return result.average
     return result.datasets.find(dataset => dataset.name === selectedSeries) ?? result.average ?? result.datasets[0] ?? null
   }, [result, selectedSeries])
+  const datasetTabItems = useMemo(
+    () => [
+      ...(result?.average ? [{ key: '__average__', label: 'Average' }] : []),
+      ...((result?.datasets ?? []).map(dataset => ({ key: dataset.name, label: dataset.name }))),
+    ],
+    [result],
+  )
 
   useEffect(() => {
     if (!peakParams.enabled || !activeDataset) {
@@ -1531,46 +1524,41 @@ export default function Raman({
         </div>
 
         <div className={[
-          'module-sidebar__content',
+          'module-sidebar__content flex h-full flex-col',
           sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
         ].join(' ')}>
-          <div className="px-6 py-8">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] border border-[var(--pill-border)] bg-[radial-gradient(circle_at_30%_30%,color-mix(in_srgb,var(--accent-strong)_38%,white_8%),var(--card-bg-strong))] shadow-[var(--card-shadow)]">
-                <span className="font-display text-3xl font-bold tracking-[0.04em] text-[var(--accent-contrast)]">N</span>
-              </div>
-              <div>
-                <div className="font-display text-[2rem] font-semibold leading-none text-[var(--text-muted)]">
-                  Nigiro Pro
+          <div className="flex-1 overflow-y-auto">
+            <StickySidebarHeader
+              activeModule="raman"
+              subtitle="Raman Workspace"
+              onSelectModule={onModuleSelect}
+              onCollapse={() => setSidebarCollapsed(true)}
+            />
+
+            <div className="px-4 py-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{rawFiles.length}</p>
                 </div>
-                <div className="mt-2 text-[0.95rem] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">
-                  Raman Workspace
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{selectedRefs.length}</p>
+                </div>
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">峰數</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{detectedPeaks.length}</p>
                 </div>
               </div>
             </div>
-          </div>
 
-          <AnalysisModuleNav activeModule="raman" onSelectModule={onModuleSelect} />
-
-          <div className="px-6 py-4">
-            <div className="grid grid-cols-3 gap-2">
-              <div className="theme-block-soft rounded-[18px] px-3 py-2">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
-                <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{rawFiles.length}</p>
+            <div className="sidebar-scroll px-4 py-5">
+            <SidebarCard step={1} title="載入檔案" hint="支援 TXT / CSV / ASC / DAT" infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">載入檔案說明</p>
+                <p>可同時上傳多筆 Raman 光譜，後續是否平均或個別處理，仍由下方步驟控制。</p>
               </div>
-              <div className="theme-block-soft rounded-[14px] px-3 py-2">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考</p>
-                <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{selectedRefs.length}</p>
-              </div>
-              <div className="theme-block-soft rounded-[22px] px-3 py-2">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">峰數</p>
-                <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{detectedPeaks.length}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="sidebar-scroll flex-1 overflow-y-auto px-4 py-5">
-            <SidebarCard step={1} title="載入檔案" hint="支援 TXT / CSV / ASC / DAT">
+            }>
               <div className="mb-3 text-sm font-medium text-[var(--text-main)]">上傳 Raman 檔案（可多選）</div>
               <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="Raman" />
               {rawFiles.length > 0 && (
@@ -1589,16 +1577,17 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={2} title="前處理" hint="去尖峰、內插、多檔平均" defaultOpen={false}>
-              <label className="theme-block-soft mb-3 flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
-                <input
-                  type="checkbox"
-                  checked={params.despike_enabled}
-                  onChange={e => setParams(current => ({ ...current, despike_enabled: e.target.checked }))}
-                  className="h-4 w-4 accent-[var(--accent-strong)]"
-                />
-                <span>啟用去尖峰</span>
-              </label>
+            <SidebarCard step={2} title="前處理" hint="去尖峰、內插、多檔平均" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">前處理說明</p>
+                <p>這裡整合去尖峰、內插與多檔平均，目的在於先讓 Raman 光譜變得更穩定、更易比較。</p>
+              </div>
+            }>
+              <TogglePill
+                checked={params.despike_enabled}
+                onChange={value => setParams(current => ({ ...current, despike_enabled: value }))}
+                label="啟用去尖峰"
+              />
               {params.despike_enabled && (
                 <div className="mb-3 grid grid-cols-2 gap-2">
                   <label className="block">
@@ -1611,24 +1600,16 @@ export default function Raman({
                   </label>
                 </div>
               )}
-              <label className="theme-block-soft mb-3 flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
-                <input
-                  type="checkbox"
-                  checked={params.interpolate}
-                  onChange={e => setParams(current => ({ ...current, interpolate: e.target.checked }))}
-                  className="h-4 w-4 accent-[var(--accent-strong)]"
-                />
-                <span>先內插到固定點數</span>
-              </label>
-              <label className="theme-block-soft flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
-                <input
-                  type="checkbox"
-                  checked={params.average}
-                  onChange={e => setParams(current => ({ ...current, average: e.target.checked }))}
-                  className="h-4 w-4 accent-[var(--accent-strong)]"
-                />
-                <span>對所有檔案做平均</span>
-              </label>
+              <TogglePill
+                checked={params.interpolate}
+                onChange={value => setParams(current => ({ ...current, interpolate: value }))}
+                label="先內插到固定點數"
+              />
+              <TogglePill
+                checked={params.average}
+                onChange={value => setParams(current => ({ ...current, average: value }))}
+                label="對所有檔案做平均"
+              />
               {(params.interpolate || params.average) && (
                 <label className="mt-3 block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">內插點數</span>
@@ -1637,7 +1618,12 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={3} title="背景與平滑" hint="baseline、平滑曲線形狀" defaultOpen={false}>
+            <SidebarCard step={3} title="背景與平滑" hint="baseline、平滑曲線形狀" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">背景與平滑說明</p>
+                <p>背景扣除用來去除基線漂移，平滑則用來壓低高頻雜訊；兩者都只影響光譜形狀呈現，不改你的步驟邏輯。</p>
+              </div>
+            }>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">背景方法</span>
                 <select value={params.bg_method} onChange={e => setParams(current => ({ ...current, bg_enabled: e.target.value !== 'none', bg_method: e.target.value as ProcessParams['bg_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
@@ -1730,7 +1716,12 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={4} title="歸一化" hint="設定強度正規化方式" defaultOpen={false}>
+            <SidebarCard step={4} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
+                <p>歸一化方便比較不同 Raman 光譜的峰型與相對強度，但不適合用來保留絕對訊號高低。</p>
+              </div>
+            }>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">歸一化方法</span>
                 <select value={params.norm_method} onChange={e => setParams(current => ({ ...current, norm_method: e.target.value as ProcessParams['norm_method'] }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm">
@@ -1755,16 +1746,17 @@ export default function Raman({
 
             </SidebarCard>
 
-            <SidebarCard step={5} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false}>
-              <label className="theme-block-soft mb-3 flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
-                <input
-                  type="checkbox"
-                  checked={peakParams.enabled}
-                  onChange={e => setPeakParams(current => ({ ...current, enabled: e.target.checked }))}
-                  className="h-4 w-4 accent-[var(--accent-strong)]"
-                />
-                <span>啟用峰偵測</span>
-              </label>
+            <SidebarCard step={5} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">峰偵測與參考峰說明</p>
+                <p>先找出可能峰位，再用參考材料或 peak library 輔助建立後續擬合模型。</p>
+              </div>
+            }>
+              <TogglePill
+                checked={peakParams.enabled}
+                onChange={value => setPeakParams(current => ({ ...current, enabled: value }))}
+                label="啟用峰偵測"
+              />
               {peakParams.enabled && (
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block">
@@ -1848,7 +1840,12 @@ export default function Raman({
               </div>
             </SidebarCard>
 
-            <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false}>
+            <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">峰位管理與擬合說明</p>
+                <p>這一步負責整理峰位表、加入手動峰與執行擬合；我這次只改外觀與資訊層，不改擬合流程。</p>
+              </div>
+            }>
               <label className="block">
                 <span className="mb-1 block text-xs text-[var(--text-soft)]">預設 FWHM</span>
                 <input
@@ -2270,6 +2267,7 @@ export default function Raman({
                 <p className="mt-2 text-[10px] text-[var(--text-soft)]">儲存目前的處理參數與峰位表，下次可直接載入。</p>
               </div>
             </SidebarCard>
+            </div>
           </div>
         </div>
       </aside>
@@ -2289,15 +2287,18 @@ export default function Raman({
             <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,color-mix(in_srgb,var(--card-border)_85%,transparent),transparent)]" />
           </div>
 
-          <div className="mb-6 flex flex-wrap gap-3">
-            <div className="theme-pill rounded-full px-4 py-2 text-sm text-[var(--text-main)]">
-              資料集 <span className="ml-2 font-semibold text-[var(--text-muted)]">{activeDataset?.name ?? '未載入'}</span>
+          <div className="mb-6 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
+              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{activeDataset?.name ?? '未載入'}</p>
             </div>
-            <div className="theme-pill rounded-[18px] px-4 py-2 text-sm text-[var(--text-main)]">
-              平均 <span className="ml-2 font-semibold text-[var(--text-muted)]">{params.average ? '啟用' : '關閉'}</span>
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">平均模式</p>
+              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{params.average ? '啟用' : '關閉'}</p>
             </div>
-            <div className="theme-pill rounded-[24px] px-4 py-2 text-sm text-[var(--text-main)]">
-              參考峰 <span className="ml-2 font-semibold text-[var(--text-muted)]">{refPeaks.length}</span>
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">參考峰</p>
+              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{refPeaks.length}</p>
             </div>
           </div>
 
@@ -2325,6 +2326,59 @@ export default function Raman({
 
           {activeDataset && (
             <>
+              {datasetTabItems.length > 1 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
+                      <div className="flex flex-wrap gap-2">
+                        {datasetTabItems.map(item => (
+                          <button
+                            key={item.key}
+                            type="button"
+                            onClick={() => setSelectedSeries(item.key)}
+                            className={[
+                              'rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
+                              selectedSeries === item.key
+                                ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
+                                : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
+                            ].join(' ')}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {batchResults.length > 0 && (
+                      <div className="shrink-0 lg:pl-4">
+                        <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">多筆資料比較</p>
+                        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-left">
+                          <span className="block text-sm font-semibold text-[var(--text-main)]">Batch trend 已建立</span>
+                          <span className="mt-1 block text-xs text-[var(--text-soft)]">
+                            已有 {batchResults.length} 筆批次擬合結果，可往下查看比較表格。
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="mb-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">處理資料</p>
+                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{activeDataset?.name ?? '—'}</p>
+                </div>
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">平均輸出</p>
+                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{result?.average ? '可用' : '未建立'}</p>
+                </div>
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">批次比較</p>
+                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{batchResults.length > 0 ? `${batchResults.length} 筆` : '未執行'}</p>
+                </div>
+              </div>
+
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-[var(--text-muted)]">處理結果</div>
@@ -2332,16 +2386,6 @@ export default function Raman({
                     顯示原始訊號、去尖峰後、背景基準線與最終處理結果。
                   </div>
                 </div>
-                <select
-                  value={selectedSeries}
-                  onChange={e => setSelectedSeries(e.target.value)}
-                  className="theme-input rounded-xl px-3 py-2 text-sm"
-                >
-                  {result?.average && <option value="__average__">Average</option>}
-                  {result?.datasets.map(dataset => (
-                    <option key={dataset.name} value={dataset.name}>{dataset.name}</option>
-                  ))}
-                </select>
               </div>
 
               <div className="theme-block-soft rounded-[28px] p-3 sm:p-4">

@@ -25,7 +25,7 @@ import type {
   WavelengthPreset,
 } from '../types/xrd'
 import { detectPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
-import AnalysisModuleNav, { type AnalysisModuleId } from '../components/AnalysisModuleNav'
+import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import GaussianSubtractionChart from '../components/GaussianSubtractionChart'
 import SpectrumChart from '../components/SpectrumChart'
@@ -33,6 +33,7 @@ import ProcessingPanel, {
   DEFAULT_PARAMS,
   WAVELENGTH_MAP,
 } from '../components/ProcessingPanel'
+import { StickySidebarHeader } from '../components/WorkspaceUi'
 import type { ProcessParams } from '../types/xrd'
 
 type CsvCell = string | number | null | undefined
@@ -451,48 +452,36 @@ export default function XRD({
         </div>
 
         <div className={[
-          'module-sidebar__content',
+          'module-sidebar__content flex h-full flex-col',
           sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
         ].join(' ')}>
-        <div className="px-6 py-8">
-          <div className="flex items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] border border-[var(--pill-border)] bg-[radial-gradient(circle_at_30%_30%,color-mix(in_srgb,var(--accent-strong)_38%,white_8%),var(--card-bg-strong))] shadow-[var(--card-shadow)]">
-              <span className="font-display text-3xl font-bold tracking-[0.04em] text-[var(--accent-contrast)]">N</span>
-            </div>
-            <div>
-              <div className="font-display text-[2rem] font-semibold leading-none text-[var(--text-muted)]">
-                Nigiro Pro
+          <div className="flex-1 overflow-y-auto">
+            <StickySidebarHeader
+              activeModule="xrd"
+              subtitle="Data Processing"
+              onSelectModule={onModuleSelect}
+              onCollapse={() => setSidebarCollapsed(true)}
+            />
+
+            <div className="px-4 py-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{rawFiles.length}</p>
+                </div>
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">X 軸</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{xMode === 'twotheta' ? '2θ' : 'd'}</p>
+                </div>
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考相</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{selectedRefs.length}</p>
+                </div>
               </div>
-              <div className="mt-2 text-[0.95rem] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">
-                Data Processing
-              </div>
             </div>
-          </div>
-        </div>
 
-        <AnalysisModuleNav activeModule="xrd" onSelectModule={onModuleSelect} />
-
-        <div className="px-6 py-4">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="theme-block-soft rounded-[18px] px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
-              <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{rawFiles.length}</p>
-            </div>
-            <div className="theme-block-soft rounded-[14px] px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">X 軸</p>
-              <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">
-                {xMode === 'twotheta' ? '2θ' : 'd'}
-              </p>
-            </div>
-            <div className="theme-block-soft rounded-[22px] px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考相</p>
-              <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{selectedRefs.length}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="sidebar-scroll flex-1 overflow-y-auto px-4 py-5">
-          <div className="theme-block mb-3 overflow-hidden rounded-[24px]">
+            <div className="sidebar-scroll px-4 py-5">
+              <div className="theme-block mb-3 overflow-hidden rounded-[24px]">
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <div className="flex items-center gap-3">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
@@ -536,9 +525,9 @@ export default function XRD({
             </div>
           </div>
 
-          <ProcessingPanel
-            params={params}
-            onChange={setParams}
+            <ProcessingPanel
+              params={params}
+              onChange={setParams}
             fileCount={rawFiles.length}
             xMode={xMode}
             onXModeChange={setXMode}
@@ -558,10 +547,11 @@ export default function XRD({
             onRefMatchParamsChange={setRefMatchParams}
             peakParams={peakParams}
             onPeakParamsChange={setPeakParams}
-            scherrerParams={scherrerParams}
-            onScherrerParamsChange={setScherrerParams}
-          />
-        </div>
+              scherrerParams={scherrerParams}
+              onScherrerParamsChange={setScherrerParams}
+            />
+            </div>
+          </div>
         </div>
       </aside>
 
@@ -577,21 +567,62 @@ export default function XRD({
             <div className="mt-6 h-px w-full bg-[linear-gradient(90deg,color-mix(in_srgb,var(--card-border)_85%,transparent),transparent)]" />
           </div>
 
-          <div className="mb-6 flex flex-wrap gap-3">
-            <div className="theme-pill rounded-full px-4 py-2 text-sm text-[var(--text-main)]">
-              波長 <span className="ml-2 font-semibold text-[var(--text-muted)]">{wavelength.toFixed(4)} Å</span>
-            </div>
-            <div className="theme-pill rounded-[18px] px-4 py-2 text-sm text-[var(--text-main)]">
-              資料集 <span className="ml-2 font-semibold text-[var(--text-muted)]">{activeDataset ? activeDataset.name : '未載入'}</span>
-            </div>
-            <div className="theme-pill rounded-[24px] px-4 py-2 text-sm text-[var(--text-main)]">
-              參考峰 <span className="ml-2 font-semibold text-[var(--text-muted)]">{selectedRefs.length} 個</span>
-            </div>
-            {peakParams.enabled && (
-              <div className="rounded-[16px] border border-[var(--pill-border)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-medium text-[var(--accent)] shadow-[var(--card-shadow-soft)]">
-                自動尋峰 {detectedPeaks.length} 個
+          {rawFiles.length > 1 && (
+            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">載入資料</p>
+                  <div className="flex flex-wrap gap-2">
+                    {rawFiles.map(file => (
+                      <span
+                        key={file.name}
+                        className={[
+                          'rounded-full border px-3 py-1 text-xs font-medium',
+                          activeDataset?.name === file.name
+                            ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
+                            : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
+                        ].join(' ')}
+                      >
+                        {file.name}
+                      </span>
+                    ))}
+                    {result?.average && (
+                      <span className="rounded-full border border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] px-3 py-1 text-xs font-medium text-[var(--accent-secondary)]">
+                        Average Output
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="shrink-0 lg:pl-4">
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">處理模式</p>
+                  <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-left">
+                    <span className="block text-sm font-semibold text-[var(--text-main)]">沿用既有 XRD 邏輯</span>
+                    <span className="mt-1 block text-xs text-[var(--text-soft)]">
+                      目前不更動資料處理流程，僅同步 XPS 的 UI 呈現方式。
+                    </span>
+                  </div>
+                </div>
               </div>
-            )}
+            </div>
+          )}
+
+          <div className="mb-6 grid gap-3 sm:grid-cols-4">
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">波長</p>
+              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{wavelength.toFixed(4)} Å</p>
+            </div>
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
+              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{activeDataset ? activeDataset.name : '未載入'}</p>
+            </div>
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">參考峰</p>
+              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{selectedRefs.length} 個</p>
+            </div>
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">自動尋峰</p>
+              <p className="mt-1 text-base font-semibold text-[var(--text-main)]">{peakParams.enabled ? `${detectedPeaks.length} 個` : '未啟用'}</p>
+            </div>
           </div>
 
           <div className="glass-panel rounded-[30px] p-4 sm:p-5 lg:p-6">

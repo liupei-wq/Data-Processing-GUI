@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import type {
   LogViewParams,
   PeakDetectionParams,
@@ -8,6 +8,7 @@ import type {
   XMode,
   WavelengthPreset,
 } from '../types/xrd'
+import { GlassSection, TogglePill } from './WorkspaceUi'
 
 export type { XMode, WavelengthPreset }
 
@@ -53,36 +54,19 @@ function Section({
   hint,
   children,
   defaultOpen = true,
+  infoContent,
 }: {
   step: number
   title: string
   hint?: string
   children: ReactNode
   defaultOpen?: boolean
+  infoContent?: ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
-
   return (
-    <div className="theme-block overflow-hidden rounded-[22px]">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-            {step}
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
-            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
-          </div>
-        </div>
-        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
-      </button>
-
-      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
-    </div>
+    <GlassSection step={step} title={title} hint={hint} defaultOpen={defaultOpen} infoContent={infoContent}>
+      {children}
+    </GlassSection>
   )
 }
 
@@ -235,8 +219,14 @@ export default function ProcessingPanel({
 
   return (
     <div className="space-y-3">
-      <Section step={2} title="多檔平均" hint="內插與統一點數" defaultOpen={false}>
-        <Checkbox
+      <Section step={2} title="多檔平均" hint="內插與統一點數" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">多檔平均說明</p>
+          <p>這一步只改變前處理的呈現方式，不更動後續 XRD 計算邏輯。</p>
+          <p>啟用內插後會先把各筆資料重取樣到固定點數；啟用平均後則會在相同點數網格上做平均。</p>
+        </div>
+      }>
+        <TogglePill
           checked={params.interpolate}
           onChange={value => set('interpolate', value)}
           label="統一點數後再處理"
@@ -251,15 +241,21 @@ export default function ProcessingPanel({
             onChange={value => set('n_points', value)}
           />
         )}
-        <Checkbox
+        <TogglePill
           checked={params.average}
           onChange={value => set('average', value)}
           label={`對所有載入檔案做平均${fileCount < 2 ? '（至少 2 個）' : ''}`}
         />
       </Section>
 
-      <Section step={3} title="高斯模板扣除" hint="已知峰先扣除" defaultOpen={false}>
-        <Checkbox
+      <Section step={3} title="高斯模板扣除" hint="已知峰先扣除" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">高斯模板扣除說明</p>
+          <p>以固定 FWHM 與固定高度的高斯模板扣除已知峰，適合先移除明確雜峰或基板峰。</p>
+          <p>這一步只調整輸入光譜，不改變後續尋峰與 Scherrer 的核心算法。</p>
+        </div>
+      }>
+        <TogglePill
           checked={params.gaussian_enabled}
           onChange={value => set('gaussian_enabled', value)}
           label="啟用高斯模板扣除"
@@ -384,7 +380,12 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={4} title="平滑" hint="降噪但避免洗平峰型" defaultOpen={false}>
+      <Section step={4} title="平滑" hint="降噪但避免洗平峰型" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">平滑說明</p>
+          <p>平滑只用於降低雜訊，避免鋸齒干擾視覺判讀，但視窗過大可能把弱峰洗平。</p>
+        </div>
+      }>
         <div>
           <Label>方法</Label>
           <Select
@@ -418,7 +419,13 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false}>
+      <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
+          <p>歸一化用於比較不同樣品的峰形與相對強度，不改變原始峰位位置。</p>
+          <p>若需要保留絕對強度資訊，請維持不歸一化。</p>
+        </div>
+      }>
         <div>
           <Label>方法</Label>
           <Select
@@ -434,8 +441,13 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      <Section step={6} title="弱峰檢視" hint="只改顯示，不改計算" defaultOpen={false}>
-        <Checkbox
+      <Section step={6} title="弱峰檢視" hint="只改顯示，不改計算" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">弱峰檢視說明</p>
+          <p>這裡只改圖表縮放方式，方便觀察弱峰，不會改動任何後端運算。</p>
+        </div>
+      }>
+        <TogglePill
           checked={logViewParams.enabled}
           onChange={value => setLogView('enabled', value)}
           label="建立對數顯示曲線"
@@ -465,7 +477,12 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={7} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false}>
+      <Section step={7} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">波長與 X 軸說明</p>
+          <p>這一步控制顯示與換算基準，方便在 2θ 與 d-spacing 間切換比對。</p>
+        </div>
+      }>
         <div>
           <Label>光源</Label>
           <Select
@@ -506,7 +523,12 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      <Section step={8} title="參考峰比對" hint="快速相辨識" defaultOpen={false}>
+      <Section step={8} title="參考峰比對" hint="快速相辨識" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">參考峰比對說明</p>
+          <p>依照強度門檻與容差顯示可比對的參考峰，方便快速做相辨識。</p>
+        </div>
+      }>
         <NumberInput
           label="最小參考相對強度 (%)"
           value={refMatchParams.min_rel_intensity}
@@ -556,8 +578,13 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={9} title="自動尋峰" hint="峰表與後續 Scherrer 的基礎" defaultOpen={false}>
-        <Checkbox
+      <Section step={9} title="自動尋峰" hint="峰表與後續 Scherrer 的基礎" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">自動尋峰說明</p>
+          <p>這一步決定後續峰表內容，也是 Scherrer 快速估算的基礎。</p>
+        </div>
+      }>
+        <TogglePill
           checked={peakParams.enabled}
           onChange={value => setPeak('enabled', value)}
           label="啟用尋峰結果"
@@ -592,8 +619,13 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={10} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false}>
-        <Checkbox
+      <Section step={10} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">Scherrer 說明</p>
+          <p>使用尋峰得到的 FWHM 估算晶粒尺寸，適合快速比較，不代表完整結構分析。</p>
+        </div>
+      }>
+        <TogglePill
           checked={scherrerParams.enabled}
           onChange={value => setScherrer('enabled', value)}
           label="啟用 Scherrer 計算"
