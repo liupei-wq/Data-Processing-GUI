@@ -9,6 +9,7 @@ import type {
   ProcessResult,
   RefPeak,
 } from '../types/raman'
+import { readApiError } from './http'
 
 const BASE = '/api/raman'
 
@@ -18,8 +19,7 @@ export async function parseFiles(files: File[]): Promise<ParsedFile[]> {
 
   const res = await fetch(`${BASE}/parse`, { method: 'POST', body: form })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Parse failed')
+    throw new Error(await readApiError(res, 'Raman 檔案解析失敗'))
   }
   const data = await res.json()
   return data.files as ParsedFile[]
@@ -35,8 +35,7 @@ export async function processData(
     body: JSON.stringify({ datasets, params }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Processing failed')
+    throw new Error(await readApiError(res, 'Raman 資料處理失敗'))
   }
   return res.json() as Promise<ProcessResult>
 }
@@ -58,14 +57,14 @@ export async function detectPeaks(
       max_peaks: options.max_peaks,
     }),
   })
-  if (!res.ok) throw new Error('Peak detection failed')
+  if (!res.ok) throw new Error(await readApiError(res, 'Raman 尋峰失敗'))
   const data = await res.json()
   return data.peaks as DetectedPeak[]
 }
 
 export async function fetchReferences(): Promise<string[]> {
   const res = await fetch(`${BASE}/references`)
-  if (!res.ok) throw new Error('Could not load references')
+  if (!res.ok) throw new Error(await readApiError(res, 'Raman 參考資料載入失敗'))
   const data = await res.json()
   return data.materials as string[]
 }
@@ -76,14 +75,14 @@ export async function fetchReferencePeaks(materials: string[]): Promise<RefPeak[
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ materials }),
   })
-  if (!res.ok) throw new Error('Could not load reference peaks')
+  if (!res.ok) throw new Error(await readApiError(res, 'Raman 參考峰載入失敗'))
   const data = await res.json()
   return data.peaks as RefPeak[]
 }
 
 export async function fetchPeakLibrary(): Promise<RefPeak[]> {
   const res = await fetch(`${BASE}/peak-library`)
-  if (!res.ok) throw new Error('Could not load peak library')
+  if (!res.ok) throw new Error(await readApiError(res, 'Raman peak library 載入失敗'))
   const data = await res.json()
   return (data.peaks ?? []).map((row: Record<string, unknown>) => ({
     material: row.material,
@@ -138,8 +137,7 @@ export async function fitSpectrum(
     }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Peak fitting failed')
+    throw new Error(await readApiError(res, 'Raman peak fitting 失敗'))
   }
   return res.json() as Promise<FitResult>
 }

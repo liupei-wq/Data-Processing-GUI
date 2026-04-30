@@ -30,7 +30,7 @@ export default function FileUpload({ onFiles, isLoading = false, moduleLabel = '
     <div
       {...getRootProps()}
       className={[
-        'cursor-pointer rounded-[24px] border border-dashed p-5 text-center transition-all',
+        'group cursor-pointer rounded-[18px] border border-dashed p-5 text-center transition-all',
         isDragActive
           ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] shadow-[var(--card-shadow-soft)]'
           : 'theme-block-soft border-[var(--input-border)] hover:border-[color:color-mix(in_srgb,var(--accent-strong)_42%,var(--input-border))] hover:bg-[var(--card-bg)]',
@@ -38,8 +38,8 @@ export default function FileUpload({ onFiles, isLoading = false, moduleLabel = '
       ].join(' ')}
     >
       <input {...getInputProps()} />
-      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[20px] border border-[var(--pill-border)] bg-[var(--pill-bg)] text-2xl text-[var(--accent)] shadow-[var(--card-shadow-soft)]">
-        ↑
+      <div className="upload-orbit-icon mx-auto mb-4">
+        <span />
       </div>
       {isDragActive ? (
         <p className="text-sm font-medium text-[var(--accent)]">放開以載入檔案</p>

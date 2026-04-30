@@ -566,10 +566,8 @@ export function StickySidebarHeader({
       <div className="sidebar-header-card relative rounded-[30px] px-5 pb-8 pt-4.5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[22px] bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_8px_24px_-8px_color-mix(in_srgb,var(--accent-strong)_45%,transparent)]">
-              <svg width="30" height="24" viewBox="0 0 18 16" fill="none">
-                <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13" stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+            <div className="nigiro-brand-mark nigiro-brand-mark--lg">
+              <span aria-hidden="true" />
             </div>
             <div className="min-w-0">
               <div className="text-[1.65rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>

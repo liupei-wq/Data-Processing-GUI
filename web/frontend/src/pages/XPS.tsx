@@ -1851,15 +1851,12 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 <div className="sidebar-header-card relative rounded-[30px] px-5 pb-9 pt-5">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex min-w-0 items-center gap-4">
-                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[24px] bg-[color:color-mix(in_srgb,var(--accent-strong)_14%,var(--card-bg))] [box-shadow:0_8px_24px_-8px_color-mix(in_srgb,var(--accent-strong)_45%,transparent)]">
-                        <svg width="34" height="28" viewBox="0 0 18 16" fill="none">
-                          <path d="M1 13 L4.5 13 L6.5 8 L9 1 L11.5 8 L13.5 13 L17 13"
-                            stroke="var(--accent-strong)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
+                      <div className="nigiro-brand-mark nigiro-brand-mark--lg">
+                        <span aria-hidden="true" />
                       </div>
                       <div className="min-w-0">
                         <div className="text-[1.9rem] font-bold leading-none tracking-[-0.04em] text-[var(--text-main)]">Nigiro Pro</div>
-                        <div className="mt-2 text-sm leading-tight text-[var(--text-soft)]">Spectroscopy Analysis</div>
+                        <div className="mt-2 text-sm leading-tight text-[var(--text-soft)]">Material Intelligence</div>
                       </div>
                     </div>
                     <button type="button" onClick={() => setSidebarCollapsed(true)} className="mt-1 shrink-0 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)]">‹</button>

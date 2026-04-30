@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#102033"/>
+      <stop offset="58%" stop-color="#050b14"/>
+      <stop offset="100%" stop-color="#02060c"/>
+    </radialGradient>
+    <linearGradient id="moon" x1="34" y1="18" x2="96" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="0.52" stop-color="#cfe3f1"/>
+      <stop offset="1" stop-color="#7d8794"/>
+    </linearGradient>
+    <linearGradient id="crystal" x1="37" y1="38" x2="78" y2="82" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#eaf8ff"/>
+      <stop offset="0.42" stop-color="#8fb4c9"/>
+      <stop offset="1" stop-color="#27394d"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="22" fill="url(#bg)"/>
+  <ellipse cx="64" cy="111" rx="28" ry="4" fill="#8fb4c9" opacity="0.35"/>
+  <path d="M76 18c20 16 26 47 12 70C76 108 50 111 31 96c20 6 42-2 53-20 11-19 8-43-8-58Z" fill="url(#moon)"/>
+  <path d="M80 19c11 18 12 40 1 58-10 17-27 27-47 25 18 10 43 4 55-15 14-23 9-53-9-68Z" fill="#ffffff" opacity="0.28"/>
+  <g fill="none" stroke="#eff7fc" stroke-width="2.2" opacity="0.9">
+    <ellipse cx="58" cy="61" rx="48" ry="14" transform="rotate(18 58 61)"/>
+    <ellipse cx="58" cy="61" rx="48" ry="14" transform="rotate(-58 58 61)"/>
+  </g>
+  <path d="M55 36 83 54 74 86 43 88 32 57Z" fill="url(#crystal)"/>
+  <path d="M55 36 57 63 32 57Z" fill="#cfe3f1" opacity="0.88"/>
+  <path d="M57 63 83 54 74 86Z" fill="#33495f" opacity="0.78"/>
+  <path d="M57 63 74 86 43 88Z" fill="#87adbf" opacity="0.84"/>
+  <path d="M55 36 83 54 57 63Z" fill="#dff4ff" opacity="0.76"/>
+  <g fill="#f8fbff">
+    <circle cx="18" cy="61" r="2.5"/>
+    <circle cx="95" cy="91" r="2.5"/>
+    <circle cx="60" cy="13" r="2.5"/>
+  </g>
+</svg>

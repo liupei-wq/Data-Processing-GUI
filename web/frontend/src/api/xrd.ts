@@ -12,6 +12,7 @@ import type {
   DetectedPeak,
   RefPeak,
 } from '../types/xrd'
+import { readApiError } from './http'
 
 const BASE = '/api/xrd'
 
@@ -22,8 +23,7 @@ export async function parseFiles(files: File[]): Promise<ParsedFile[]> {
 
   const res = await fetch(`${BASE}/parse`, { method: 'POST', body: form })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Parse failed')
+    throw new Error(await readApiError(res, 'XRD 檔案解析失敗'))
   }
   const data = await res.json()
   return data.files as ParsedFile[]
@@ -40,8 +40,7 @@ export async function processData(
     body: JSON.stringify({ datasets, params }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Processing failed')
+    throw new Error(await readApiError(res, 'XRD 資料處理失敗'))
   }
   return res.json() as Promise<ProcessResult>
 }
@@ -66,7 +65,7 @@ export async function detectPeaks(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ x, y, ...options }),
   })
-  if (!res.ok) throw new Error('Peak detection failed')
+  if (!res.ok) throw new Error(await readApiError(res, 'XRD 尋峰失敗'))
   const data = await res.json()
   return data.peaks as DetectedPeak[]
 }
@@ -74,7 +73,7 @@ export async function detectPeaks(
 /** Fetch the list of available reference material names. */
 export async function fetchReferences(): Promise<string[]> {
   const res = await fetch(`${BASE}/references`)
-  if (!res.ok) throw new Error('Could not load references')
+  if (!res.ok) throw new Error(await readApiError(res, 'XRD 參考資料載入失敗'))
   const data = await res.json()
   return data.materials as string[]
 }
@@ -89,7 +88,7 @@ export async function fetchReferencePeaks(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ materials, wavelength }),
   })
-  if (!res.ok) throw new Error('Could not load reference peaks')
+  if (!res.ok) throw new Error(await readApiError(res, 'XRD 參考峰載入失敗'))
   const data = await res.json()
   return data.peaks as RefPeak[]
 }

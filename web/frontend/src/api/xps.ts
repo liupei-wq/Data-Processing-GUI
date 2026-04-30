@@ -14,6 +14,7 @@ import type {
   RsfRequestItem,
   RsfResultRow,
 } from '../types/xps'
+import { readApiError } from './http'
 
 const BASE = '/api/xps'
 
@@ -21,7 +22,7 @@ export async function parseFiles(files: File[]): Promise<ParseResponse> {
   const form = new FormData()
   for (const f of files) form.append('files', f)
   const res = await fetch(`${BASE}/parse`, { method: 'POST', body: form })
-  if (!res.ok) throw new Error(`Parse failed: ${res.statusText}`)
+  if (!res.ok) throw new Error(await readApiError(res, 'XPS 檔案解析失敗'))
   return res.json()
 }
 
@@ -35,8 +36,7 @@ export async function processData(
     body: JSON.stringify({ datasets, params }),
   })
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(detail.detail ?? res.statusText)
+    throw new Error(await readApiError(res, 'XPS 資料處理失敗'))
   }
   return res.json()
 }
@@ -53,26 +53,26 @@ export async function detectPeaks(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ x, y, prominence, min_distance: minDistance, max_peaks: maxPeaks }),
   })
-  if (!res.ok) throw new Error(`Peak detection failed: ${res.statusText}`)
+  if (!res.ok) throw new Error(await readApiError(res, 'XPS 尋峰失敗'))
   const data = await res.json()
   return data.peaks
 }
 
 export async function fetchElementPeaks(element: string): Promise<ElementPeaksResponse> {
   const res = await fetch(`${BASE}/element-peaks/${encodeURIComponent(element)}`)
-  if (!res.ok) throw new Error(`Element peaks fetch failed: ${res.statusText}`)
+  if (!res.ok) throw new Error(await readApiError(res, 'XPS 元素峰資料載入失敗'))
   return res.json()
 }
 
 export async function listElements(): Promise<ElementListItem[]> {
   const res = await fetch(`${BASE}/elements`)
-  if (!res.ok) throw new Error(`Elements list fetch failed: ${res.statusText}`)
+  if (!res.ok) throw new Error(await readApiError(res, 'XPS 元素列表載入失敗'))
   return res.json()
 }
 
 export async function fetchPeriodicTable(): Promise<PeriodicTableItem[]> {
   const res = await fetch(`${BASE}/periodic-table`)
-  if (!res.ok) throw new Error(`Periodic table fetch failed: ${res.statusText}`)
+  if (!res.ok) throw new Error(await readApiError(res, '週期表資料載入失敗'))
   return res.json()
 }
 
@@ -97,8 +97,7 @@ export async function calibrateEnergy(
     }),
   })
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(detail.detail ?? res.statusText)
+    throw new Error(await readApiError(res, 'XPS 能量校正失敗'))
   }
   return res.json()
 }
@@ -118,8 +117,7 @@ export async function fitPeaks(
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(detail.detail ?? res.statusText)
+    throw new Error(await readApiError(res, 'XPS peak fitting 失敗'))
   }
   return res.json()
 }
@@ -138,8 +136,7 @@ export async function computeVbm(
     body: JSON.stringify({ x, y, edge_lo: edgeLo, edge_hi: edgeHi, baseline_lo: baselineLo, baseline_hi: baselineHi }),
   })
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(detail.detail ?? res.statusText)
+    throw new Error(await readApiError(res, 'XPS VBM 計算失敗'))
   }
   return res.json()
 }
@@ -150,6 +147,6 @@ export async function lookupRsf(items: RsfRequestItem[]): Promise<RsfResultRow[]
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(items),
   })
-  if (!res.ok) throw new Error(`RSF lookup failed: ${res.statusText}`)
+  if (!res.ok) throw new Error(await readApiError(res, 'XPS RSF 查詢失敗'))
   return res.json()
 }

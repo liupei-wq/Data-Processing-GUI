@@ -15,6 +15,15 @@ function toD(twoTheta: number, wl: number): number {
 export default function GaussianSubtractionChart({ dataset, xMode, wavelength }: Props) {
   if (!dataset.y_gaussian_model || !dataset.y_gaussian_subtracted) return null
 
+  const cssVars = typeof window !== 'undefined'
+    ? getComputedStyle(document.documentElement)
+    : null
+  const chartGrid = cssVars?.getPropertyValue('--chart-grid').trim() || 'rgba(148, 163, 184, 0.14)'
+  const chartText = cssVars?.getPropertyValue('--chart-text').trim() || '#d9e4f0'
+  const chartBg = cssVars?.getPropertyValue('--chart-bg').trim() || 'rgba(15, 23, 42, 0.52)'
+  const chartLegendBg = cssVars?.getPropertyValue('--chart-legend-bg').trim() || 'rgba(15, 23, 42, 0.72)'
+  const chartHoverBg = cssVars?.getPropertyValue('--chart-hover-bg').trim() || 'rgba(15, 23, 42, 0.95)'
+  const chartHoverBorder = cssVars?.getPropertyValue('--chart-hover-border').trim() || 'rgba(148, 163, 184, 0.22)'
   const xDisplay = xMode === 'dspacing'
     ? dataset.x.map(value => toD(value, wavelength))
     : dataset.x
@@ -48,43 +57,43 @@ export default function GaussianSubtractionChart({ dataset, xMode, wavelength }:
   ]
 
   return (
-    <div className="rounded-[28px] border border-white/10 bg-slate-950/28 p-3 sm:p-4">
+    <div className="theme-block-soft rounded-[18px] p-3 sm:p-4">
       <Plot
         data={traces}
         layout={{
           xaxis: {
             title: { text: xMode === 'dspacing' ? 'd-spacing (Å)' : '2θ (degrees)', font: { size: 13 } },
             showgrid: true,
-            gridcolor: 'rgba(148, 163, 184, 0.14)',
+            gridcolor: chartGrid,
             zeroline: false,
-            color: '#d9e4f0',
+            color: chartText,
             autorange: xMode === 'dspacing' ? 'reversed' : true,
           },
           yaxis: {
             title: { text: 'Intensity (a.u.)', font: { size: 13 } },
             showgrid: true,
-            gridcolor: 'rgba(148, 163, 184, 0.14)',
+            gridcolor: chartGrid,
             zeroline: false,
-            color: '#d9e4f0',
+            color: chartText,
           },
           legend: {
             x: 1,
             xanchor: 'right',
             y: 1,
-            bgcolor: 'rgba(15, 23, 42, 0.72)',
-            bordercolor: 'rgba(148, 163, 184, 0.18)',
+            bgcolor: chartLegendBg,
+            bordercolor: chartHoverBorder,
             borderwidth: 1,
-            font: { color: '#d9e4f0' },
+            font: { color: chartText },
           },
           margin: { l: 60, r: 20, t: 30, b: 60 },
           paper_bgcolor: 'rgba(0,0,0,0)',
-          plot_bgcolor: 'rgba(15, 23, 42, 0.52)',
-          font: { color: '#d9e4f0' },
+          plot_bgcolor: chartBg,
+          font: { color: chartText },
           hovermode: 'x unified',
           hoverlabel: {
-            bgcolor: 'rgba(15, 23, 42, 0.95)',
-            bordercolor: 'rgba(148, 163, 184, 0.22)',
-            font: { color: '#f8fafc' },
+            bgcolor: chartHoverBg,
+            bordercolor: chartHoverBorder,
+            font: { color: chartText },
           },
           autosize: true,
         }}

@@ -1755,7 +1755,7 @@ export default function Raman({
           <div className="min-h-0 flex-1 overflow-y-auto">
             <StickySidebarHeader
               activeModule="raman"
-              subtitle="Raman Workspace"
+              subtitle="Material Intelligence Engine"
               onSelectModule={onModuleSelect}
               onCollapse={() => setSidebarCollapsed(true)}
             />

@@ -303,9 +303,14 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         {!sidebarCollapsed && (
           <div className="module-sidebar__content flex flex-1 flex-col overflow-y-auto">
             {/* brand + modules */}
-            <div className="px-6 pt-6 pb-2">
-              <div className="text-xl font-bold tracking-tight text-[var(--text-main)]">Nigiro Pro</div>
-              <div className="text-xs text-[var(--text-soft)]">data processing</div>
+            <div className="flex items-center gap-3 px-6 pb-2 pt-6">
+              <div className="nigiro-brand-mark nigiro-brand-mark--sm">
+                <span aria-hidden="true" />
+              </div>
+              <div>
+                <div className="font-display text-xl font-semibold tracking-tight text-[var(--text-main)]">Nigiro Pro</div>
+                <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)]">Material Intelligence</div>
+              </div>
             </div>
             <AnalysisModuleNav activeModule="xes" onSelectModule={onModuleSelect} />
             <div className="mx-4 border-t border-[var(--card-border)]" />

@@ -13,12 +13,12 @@ type FontScale = 'sm' | 'md' | 'lg'
 type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes' | `tool-${SingleToolKind}`
 
 const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft' | 'square' }[] = [
-  { id: 'apricot', label: '杏桃', tone: '暖奶油', shape: 'round' },
-  { id: 'pearl', label: '柔白', tone: '灰白藍', shape: 'soft' },
-  { id: 'ocean', label: '海霧', tone: '海藍綠', shape: 'soft' },
-  { id: 'ink', label: '黑曜', tone: '黑白藍', shape: 'square' },
-  { id: 'ember', label: '暮焰', tone: '酒紅橙', shape: 'square' },
-  { id: 'forest', label: '森夜', tone: '墨綠金', shape: 'round' },
+  { id: 'apricot', label: '核心', tone: '冰藍黑', shape: 'soft' },
+  { id: 'pearl', label: '月白', tone: '銀白藍', shape: 'round' },
+  { id: 'ocean', label: '掃描', tone: '青藍光', shape: 'soft' },
+  { id: 'ink', label: '深場', tone: '黑曜藍', shape: 'square' },
+  { id: 'ember', label: '光譜', tone: '冷藍金', shape: 'square' },
+  { id: 'forest', label: '晶格', tone: '藍綠灰', shape: 'round' },
 ]
 
 const FONT_FAMILIES: { id: FontId; label: string; note: string }[] = [
@@ -83,10 +83,11 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[var(--bg-canvas)] text-[var(--text-main)]">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="hero-orb hero-orb-left" />
-        <div className="hero-orb hero-orb-right" />
-        <div className="hero-grid" />
+      <div className="nigiro-backdrop pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="nigiro-backdrop__grid" />
+        <div className="nigiro-backdrop__scanline" />
+        <div className="nigiro-backdrop__constellation" />
+        <div className="nigiro-backdrop__orbit" />
       </div>
 
       <div className="theme-launcher fixed bottom-4 right-4 z-40 sm:bottom-6 sm:right-6">
@@ -94,12 +95,12 @@ export default function App() {
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--text-soft)]">
-                Theme
+                System
               </div>
-              <div className="mt-1 text-sm font-semibold text-[var(--text-main)]">介面主題</div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text-main)]">核心介面</div>
             </div>
             <div className="rounded-full border border-[var(--pill-border)] bg-[var(--pill-bg)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-soft)]">
-              6 styles
+              6 modes
             </div>
           </div>
 
@@ -187,7 +188,7 @@ export default function App() {
         </div>
 
         <button type="button" className="theme-launcher__gear pressable" aria-label="打開主題設定">
-          <span className="theme-launcher__gear-icon">⚙</span>
+          <span className="theme-launcher__gear-icon" aria-hidden="true" />
         </button>
       </div>
 
