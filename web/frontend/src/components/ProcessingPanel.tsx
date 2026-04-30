@@ -6,6 +6,7 @@ import type {
   ReferenceMatchParams,
   ScherrerParams,
   XMode,
+  XAxisCorrectionParams,
   WavelengthPreset,
 } from '../types/xrd'
 import { GlassSection, TogglePill } from './WorkspaceUi'
@@ -168,6 +169,8 @@ interface Props {
   onLogViewParamsChange: (p: LogViewParams) => void
   refMatchParams: ReferenceMatchParams
   onRefMatchParamsChange: (p: ReferenceMatchParams) => void
+  xAxisCorrection: XAxisCorrectionParams
+  onXAxisCorrectionChange: (p: XAxisCorrectionParams) => void
   peakParams: PeakDetectionParams
   onPeakParamsChange: (p: PeakDetectionParams) => void
   scherrerParams: ScherrerParams
@@ -191,6 +194,8 @@ export default function ProcessingPanel({
   onLogViewParamsChange,
   refMatchParams,
   onRefMatchParamsChange,
+  xAxisCorrection,
+  onXAxisCorrectionChange,
   peakParams,
   onPeakParamsChange,
   scherrerParams,
@@ -204,6 +209,10 @@ export default function ProcessingPanel({
     key: K,
     value: ReferenceMatchParams[K],
   ) => onRefMatchParamsChange({ ...refMatchParams, [key]: value })
+  const setXAxisCorrection = <K extends keyof XAxisCorrectionParams>(
+    key: K,
+    value: XAxisCorrectionParams[K],
+  ) => onXAxisCorrectionChange({ ...xAxisCorrection, [key]: value })
   const setPeak = <K extends keyof PeakDetectionParams>(key: K, value: PeakDetectionParams[K]) =>
     onPeakParamsChange({ ...peakParams, [key]: value })
   const setScherrer = <K extends keyof ScherrerParams>(key: K, value: ScherrerParams[K]) =>
@@ -530,6 +539,92 @@ export default function ProcessingPanel({
             ))}
           </div>
         </div>
+        <div className="theme-block-soft space-y-3 rounded-xl p-3">
+          <TogglePill
+            checked={xAxisCorrection.enabled}
+            onChange={value => setXAxisCorrection('enabled', value)}
+            label="Enable X-axis correction"
+          />
+          {xAxisCorrection.enabled && (
+            <>
+              <div>
+                <Label>Correction mode</Label>
+                <Select
+                  value={xAxisCorrection.mode}
+                  onChange={value => setXAxisCorrection('mode', value as XAxisCorrectionParams['mode'])}
+                  options={[
+                    { value: 'manual', label: 'Manual offset' },
+                    { value: 'calibration', label: 'Expected vs measured peaks' },
+                  ]}
+                />
+              </div>
+              {xAxisCorrection.mode === 'manual' ? (
+                <NumberInput
+                  label="Offset added to 2theta (deg)"
+                  value={xAxisCorrection.manual_offset}
+                  min={-5}
+                  max={5}
+                  step={0.001}
+                  onChange={value => setXAxisCorrection('manual_offset', value)}
+                />
+              ) : (
+                <>
+                  <div>
+                    <Label>Fit type</Label>
+                    <Select
+                      value={xAxisCorrection.correction_type}
+                      onChange={value => setXAxisCorrection('correction_type', value as XAxisCorrectionParams['correction_type'])}
+                      options={[
+                        { value: 'constant', label: 'Constant offset' },
+                        { value: 'linear', label: 'Linear correction' },
+                      ]}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Calibration peaks: expected / measured</Label>
+                    {xAxisCorrection.calibration_points.map((point, idx) => (
+                      <div key={`xcal-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                        <input
+                          type="number"
+                          value={point.expected}
+                          step={0.001}
+                          onChange={event => setXAxisCorrection('calibration_points', xAxisCorrection.calibration_points.map((item, itemIdx) => itemIdx === idx ? { ...item, expected: Number(event.target.value) } : item))}
+                          className="theme-input min-w-0 rounded-xl px-3 py-2 text-sm"
+                          title="Expected 2theta"
+                        />
+                        <input
+                          type="number"
+                          value={point.measured}
+                          step={0.001}
+                          onChange={event => setXAxisCorrection('calibration_points', xAxisCorrection.calibration_points.map((item, itemIdx) => itemIdx === idx ? { ...item, measured: Number(event.target.value) } : item))}
+                          className="theme-input min-w-0 rounded-xl px-3 py-2 text-sm"
+                          title="Measured 2theta"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setXAxisCorrection('calibration_points', xAxisCorrection.calibration_points.filter((_, itemIdx) => itemIdx !== idx))}
+                          className="rounded-xl border border-[var(--card-border)] px-3 text-xs text-[var(--text-main)]"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setXAxisCorrection('calibration_points', [...xAxisCorrection.calibration_points, { expected: 0, measured: 0 }])}
+                      className="w-full rounded-xl border border-dashed border-[var(--pill-border)] bg-[var(--pill-bg)] px-3 py-2 text-sm font-medium text-[var(--accent)]"
+                    >
+                      Add calibration peak
+                    </button>
+                  </div>
+                </>
+              )}
+              <Checkbox checked={xAxisCorrection.show_raw_curve} onChange={value => setXAxisCorrection('show_raw_curve', value)} label="Show raw curve" />
+              <Checkbox checked={xAxisCorrection.show_corrected_curve} onChange={value => setXAxisCorrection('show_corrected_curve', value)} label="Show corrected curve" />
+              <Checkbox checked={xAxisCorrection.show_reference_markers} onChange={value => setXAxisCorrection('show_reference_markers', value)} label="Show reference peak markers" />
+            </>
+          )}
+        </div>
       </Section>
 
       <Section step={9} title="參考峰比對" hint="快速相辨識" defaultOpen={false} infoContent={
@@ -623,6 +718,45 @@ export default function ProcessingPanel({
               max={100}
               step={1}
               onChange={value => setPeak('max_peaks', value)}
+            />
+            <Checkbox
+              checked={peakParams.include_weak_peaks}
+              onChange={value => setPeak('include_weak_peaks', value)}
+              label="Include weak peaks in final result"
+            />
+            <Checkbox
+              checked={peakParams.show_unmatched_peaks}
+              onChange={value => setPeak('show_unmatched_peaks', value)}
+              label="Show unmatched peaks"
+            />
+            <NumberInput
+              label="Weak peak threshold (% relative intensity)"
+              value={peakParams.weak_peak_threshold}
+              min={0}
+              max={100}
+              step={1}
+              onChange={value => setPeak('weak_peak_threshold', value)}
+            />
+            <NumberInput
+              label="Minimum S/N ratio"
+              value={peakParams.min_snr}
+              min={0}
+              max={100}
+              step={0.1}
+              onChange={value => setPeak('min_snr', value)}
+            />
+            <NumberInput
+              label="Minimum prominence"
+              value={peakParams.min_prominence}
+              min={0}
+              max={1000000000}
+              step={0.001}
+              onChange={value => setPeak('min_prominence', value)}
+            />
+            <Checkbox
+              checked={peakParams.export_weak_peaks}
+              onChange={value => setPeak('export_weak_peaks', value)}
+              label="Export weak peaks"
             />
           </>
         )}

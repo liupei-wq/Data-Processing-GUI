@@ -50,7 +50,16 @@ export async function processData(
 export async function detectPeaks(
   x: number[],
   y: number[],
-  options: { prominence?: number; min_distance?: number; max_peaks?: number; wavelength?: number },
+  options: {
+    prominence?: number
+    min_distance?: number
+    max_peaks?: number
+    wavelength?: number
+    include_weak_peaks?: boolean
+    weak_peak_threshold?: number
+    min_snr?: number
+    min_prominence?: number
+  },
 ): Promise<DetectedPeak[]> {
   const res = await fetch(`${BASE}/peaks`, {
     method: 'POST',

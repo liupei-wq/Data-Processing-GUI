@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'r
 import Plot from 'react-plotly.js'
 import type {
   DetectedPeak,
+  FinalPeakRow,
   LogViewParams,
   ParsedFile,
   PeakDetectionParams,
@@ -23,6 +24,7 @@ import type {
   ReferenceMatchRow,
   ScherrerParams,
   XMode,
+  XAxisCorrectionParams,
   WavelengthPreset,
 } from '../types/xrd'
 import { detectPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
@@ -62,6 +64,14 @@ function toCsv(headers: string[], rows: CsvCell[][]): string {
     headers.map(csvEscape).join(','),
     ...rows.map(row => row.map(csvEscape).join(',')),
   ].join('\n')
+}
+
+function toExcelHtml(headers: string[], rows: CsvCell[][]): string {
+  const esc = (value: CsvCell) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  return `<!doctype html><html><head><meta charset="utf-8"></head><body><table><thead><tr>${headers.map(header => `<th>${esc(header)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></body></html>`
 }
 
 function downloadFile(content: string, filename: string, mime: string) {
@@ -153,6 +163,37 @@ function chartLayout({
 
 function convertXValues(values: number[], xMode: XMode, wavelength: number) {
   return xMode === 'dspacing' ? values.map(value => twoThetaToD(value, wavelength) ?? value) : values
+}
+
+function xAxisCorrectionCoefficients(params: XAxisCorrectionParams) {
+  if (!params.enabled) return { slope: 1, intercept: 0, description: 'none' }
+  if (params.mode === 'manual') {
+    return { slope: 1, intercept: params.manual_offset, description: `offset ${params.manual_offset.toFixed(4)} deg` }
+  }
+
+  const points = params.calibration_points.filter(point =>
+    Number.isFinite(point.expected) && Number.isFinite(point.measured) && point.measured > 0 && point.expected > 0,
+  )
+  if (points.length === 0) return { slope: 1, intercept: 0, description: 'no valid calibration peaks' }
+
+  if (params.correction_type === 'linear' && points.length >= 2) {
+    const meanMeasured = points.reduce((sum, point) => sum + point.measured, 0) / points.length
+    const meanExpected = points.reduce((sum, point) => sum + point.expected, 0) / points.length
+    const denom = points.reduce((sum, point) => sum + (point.measured - meanMeasured) ** 2, 0)
+    if (denom > 0) {
+      const slope = points.reduce((sum, point) => sum + (point.measured - meanMeasured) * (point.expected - meanExpected), 0) / denom
+      const intercept = meanExpected - slope * meanMeasured
+      return { slope, intercept, description: `linear ${slope.toFixed(6)}x + ${intercept.toFixed(4)}` }
+    }
+  }
+
+  const offset = points.reduce((sum, point) => sum + (point.expected - point.measured), 0) / points.length
+  return { slope: 1, intercept: offset, description: `offset ${offset.toFixed(4)} deg` }
+}
+
+function applyXAxisCorrection(values: number[], params: XAxisCorrectionParams) {
+  const { slope, intercept } = xAxisCorrectionCoefficients(params)
+  return values.map(value => slope * value + intercept)
 }
 
 function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], xLabel: string, yLabel: string) {
@@ -256,14 +297,30 @@ function buildReferenceMatches(
           observed_intensity: null,
           delta_two_theta: null,
           matched: false,
+          confidence: 'unmatched',
+          candidates: '',
+          note: 'unmatched reference peak',
         }
       }
 
-      const closest = observedPeaks.reduce((best, peak) => {
+      const tolerance = refPeak.tolerance || toleranceDeg
+      const candidates = observedPeaks
+        .map(peak => ({ peak, delta: Math.abs(peak.two_theta - refPeak.two_theta) }))
+        .filter(item => item.delta <= tolerance)
+        .sort((a, b) => a.delta - b.delta)
+      const closest = candidates[0] ?? observedPeaks.reduce((best, peak) => {
         const delta = Math.abs(peak.two_theta - refPeak.two_theta)
         if (best == null || delta < best.delta) return { peak, delta }
         return best
       }, null as { peak: DetectedPeak; delta: number } | null)
+      const matched = closest != null && closest.delta <= tolerance
+      const confidence = !matched
+        ? 'unmatched'
+        : closest.peak.confidence === 'strong' && closest.delta <= tolerance * 0.5
+          ? 'high'
+          : closest.peak.confidence === 'tentative'
+            ? 'tentative'
+            : 'medium'
 
       return {
         material: refPeak.material,
@@ -275,9 +332,46 @@ function buildReferenceMatches(
         observed_d_spacing: closest?.peak.d_spacing ?? null,
         observed_intensity: closest?.peak.intensity ?? null,
         delta_two_theta: closest?.delta ?? null,
-        matched: closest != null && closest.delta <= toleranceDeg,
+        matched,
+        confidence,
+        candidates: candidates.map(item => `${item.peak.two_theta.toFixed(4)} (${item.peak.confidence}, d=${item.delta.toFixed(4)})`).join('; '),
+        note: candidates.length > 1 ? 'multiple candidates' : matched ? closest.peak.note : 'unmatched reference peak',
       }
     })
+}
+
+function buildFinalPeakRows(
+  peaks: DetectedPeak[],
+  referencePeaks: RefPeak[],
+  toleranceDeg: number,
+  showUnmatched: boolean,
+): FinalPeakRow[] {
+  return peaks
+    .map(peak => {
+      const candidates = referencePeaks
+        .map(ref => ({ ref, delta: Math.abs(peak.two_theta - ref.two_theta), tolerance: ref.tolerance || toleranceDeg }))
+        .filter(item => item.delta <= item.tolerance)
+        .sort((a, b) => a.delta - b.delta)
+      const best = candidates[0]
+      const candidateText = candidates.map(item => `${item.ref.phase || item.ref.material} ${item.ref.hkl} d=${item.delta.toFixed(4)}`).join('; ')
+      const noteParts = [peak.note].filter(Boolean)
+      if (candidates.length > 1) noteParts.push(`multiple candidates: ${candidateText}`)
+      if (!best) noteParts.push('unmatched peak')
+      return {
+        two_theta: peak.two_theta,
+        intensity: peak.intensity,
+        fwhm_deg: peak.fwhm_deg,
+        snr: peak.snr,
+        prominence: peak.prominence,
+        phase: best ? (best.ref.phase || best.ref.material) : 'unmatched',
+        hkl: best?.ref.hkl ?? '',
+        reference_2theta: best?.ref.two_theta ?? null,
+        delta_2theta: best?.delta ?? null,
+        confidence: best ? (peak.confidence === 'strong' && best.delta <= best.tolerance * 0.5 ? 'high' : peak.confidence) : 'unmatched',
+        note: noteParts.join('; '),
+      }
+    })
+    .filter(row => showUnmatched || row.phase !== 'unmatched')
 }
 
 const SIDEBAR_MIN_WIDTH = 320
@@ -313,7 +407,17 @@ export default function XRD({
   const [refMatchParams, setRefMatchParams] = useState<ReferenceMatchParams>({
     min_rel_intensity: 10,
     tolerance_deg: 0.3,
-    only_show_matched: true,
+    only_show_matched: false,
+  })
+  const [xAxisCorrection, setXAxisCorrection] = useState<XAxisCorrectionParams>({
+    enabled: false,
+    mode: 'manual',
+    manual_offset: 0,
+    correction_type: 'constant',
+    calibration_points: [{ expected: 0, measured: 0 }],
+    show_raw_curve: true,
+    show_corrected_curve: true,
+    show_reference_markers: true,
   })
   const [xMode, setXMode] = useState<XMode>('twotheta')
   const [wavelengthPreset, setWavelengthPreset] = useState<WavelengthPreset>('Cu Kα (1.5406 Å)')
@@ -323,6 +427,12 @@ export default function XRD({
     prominence: 0.05,
     min_distance: 0.3,
     max_peaks: 30,
+    include_weak_peaks: true,
+    show_unmatched_peaks: true,
+    weak_peak_threshold: 10,
+    min_snr: 1,
+    min_prominence: 0,
+    export_weak_peaks: true,
   })
   const [scherrerParams, setScherrerParams] = useState<ScherrerParams>({
     enabled: false,
@@ -398,6 +508,17 @@ export default function XRD({
 
   const wavelength =
     wavelengthPreset === 'Custom' ? customWavelength : WAVELENGTH_MAP[wavelengthPreset]
+  const xAxisCorrectionInfo = useMemo(
+    () => xAxisCorrectionCoefficients(xAxisCorrection),
+    [xAxisCorrection],
+  )
+  const correctedRawFiles = useMemo(
+    () => rawFiles.map(file => ({
+      ...file,
+      x: xAxisCorrection.enabled ? applyXAxisCorrection(file.x, xAxisCorrection) : file.x,
+    })),
+    [rawFiles, xAxisCorrection],
+  )
   const activeDataset = useMemo(
     () => result?.datasets.find(dataset => dataset.name === selectedDatasetName) ?? result?.datasets[0] ?? result?.average ?? null,
     [result, selectedDatasetName],
@@ -447,19 +568,30 @@ export default function XRD({
     [rawChartSourceFiles, wavelength, xMode],
   )
   const rawChartTraces = useMemo(
-    () => rawChartSourceFiles.map((file, index) => {
+    () => rawChartSourceFiles.flatMap((file, index) => {
       const paletteKey = rawFileColors[rawFiles.findIndex(item => item.name === file.name)] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
       const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
-      return {
+      const correctedX = xAxisCorrection.enabled ? applyXAxisCorrection(file.x, xAxisCorrection) : file.x
+      const traces: Plotly.Data[] = []
+      if (!xAxisCorrection.enabled || xAxisCorrection.show_raw_curve) traces.push({
         x: convertXValues(file.x, xMode, wavelength),
         y: file.y,
         type: 'scatter',
         mode: 'lines',
-        name: file.name,
+        name: xAxisCorrection.enabled ? `${file.name} raw` : file.name,
+        line: { color: palette.secondary, width: 1.5, dash: xAxisCorrection.enabled ? 'dot' : 'solid' },
+      })
+      if (xAxisCorrection.enabled && xAxisCorrection.show_corrected_curve) traces.push({
+        x: convertXValues(correctedX, xMode, wavelength),
+        y: file.y,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${file.name} corrected`,
         line: { color: palette.primary, width: 2 },
-      } as Plotly.Data
+      })
+      return traces
     }),
-    [rawChartSourceFiles, rawFileColors, rawFiles, wavelength, xMode],
+    [rawChartSourceFiles, rawFileColors, rawFiles, wavelength, xAxisCorrection, xMode],
   )
   const overlayStageDatasets = useMemo(
     () => isOverlayView && overlayResult
@@ -557,6 +689,7 @@ export default function XRD({
     if (!activeDataset) return []
     const palette = LINE_COLOR_PALETTES[chartLineColors.final] ?? LINE_COLOR_PALETTES.blue
     const xValues = convertXValues(activeDataset.x, xMode, wavelength)
+    const activeRawFile = rawFiles.find(file => file.name === activeDataset.name)
     const traces: Plotly.Data[] = [
       {
         x: xValues,
@@ -567,7 +700,17 @@ export default function XRD({
         line: { color: palette.primary, width: 2.3 },
       },
     ]
-    if (filteredRefPeaks.length > 0) {
+    if (xAxisCorrection.enabled && xAxisCorrection.show_raw_curve && activeRawFile) {
+      traces.unshift({
+        x: convertXValues(activeRawFile.x, xMode, wavelength),
+        y: activeRawFile.y,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${activeRawFile.name} raw`,
+        line: { color: palette.secondary, width: 1.25, dash: 'dot' },
+      })
+    }
+    if (filteredRefPeaks.length > 0 && (!xAxisCorrection.enabled || xAxisCorrection.show_reference_markers)) {
       const yMax = activeDataset.y_processed.reduce((max, value) => Math.max(max, value), Number.NEGATIVE_INFINITY)
       const xPoints: Array<number | null> = []
       const yPoints: Array<number | null> = []
@@ -601,7 +744,7 @@ export default function XRD({
       })
     }
     return traces
-  }, [activeDataset, chartLineColors.final, detectedPeaks, filteredRefPeaks, peakParams.enabled, wavelength, xMode])
+  }, [activeDataset, chartLineColors.final, detectedPeaks, filteredRefPeaks, peakParams.enabled, rawFiles, wavelength, xAxisCorrection.enabled, xAxisCorrection.show_raw_curve, xAxisCorrection.show_reference_markers, xMode])
   const finalStageDatasets = useMemo(
     () => activeDataset ? [{ name: activeDataset.name, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_processed }] : [],
     [activeDataset, wavelength, xMode],
@@ -613,6 +756,10 @@ export default function XRD({
   const visibleReferenceMatches = useMemo(
     () => refMatchParams.only_show_matched ? referenceMatches.filter(row => row.matched) : referenceMatches,
     [referenceMatches, refMatchParams.only_show_matched],
+  )
+  const finalPeakRows = useMemo(
+    () => buildFinalPeakRows(detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg, peakParams.show_unmatched_peaks),
+    [detectedPeaks, filteredRefPeaks, peakParams.show_unmatched_peaks, refMatchParams.tolerance_deg],
   )
   const matchedReferenceCount = useMemo(
     () => referenceMatches.filter(row => row.matched).length,
@@ -644,6 +791,12 @@ export default function XRD({
       angstrom: wavelength,
     },
     processing: params,
+    x_axis_correction: {
+      ...xAxisCorrection,
+      slope: xAxisCorrectionInfo.slope,
+      intercept: xAxisCorrectionInfo.intercept,
+      description: xAxisCorrectionInfo.description,
+    },
     log_view: logViewParams,
     reference_matching: {
       selected_refs: selectedRefs,
@@ -662,10 +815,18 @@ export default function XRD({
     gaussian_fit_rows: activeGaussianFits,
     reference_peaks: filteredRefPeaks,
     reference_matches: referenceMatches,
+    final_peaks: finalPeakRows,
   }
 
   useEffect(() => {
-    fetchReferences().then(setRefMaterials).catch(console.error)
+    fetchReferences()
+      .then(materials => {
+        setRefMaterials(materials)
+        setSelectedRefs(current => current.length > 0 ? current : materials.filter(material =>
+          material.includes('beta-Ga2O3') || material.includes('NiO') || material.includes('Si substrate'),
+        ))
+      })
+      .catch(console.error)
   }, [])
 
   useEffect(() => {
@@ -674,13 +835,13 @@ export default function XRD({
     setIsLoading(true)
     setError(null)
     const timer = setTimeout(() => {
-      processData(rawFiles, params)
+      processData(correctedRawFiles, params)
         .then(r => { if (!cancelled) setResult(r) })
         .catch(e => { if (!cancelled) setError(String(e.message)) })
         .finally(() => { if (!cancelled) setIsLoading(false) })
     }, 300)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [rawFiles, params])
+  }, [rawFiles.length, correctedRawFiles, params])
 
   useEffect(() => {
     const validNames = new Set(rawFiles.map(file => file.name))
@@ -722,6 +883,10 @@ export default function XRD({
         prominence: peakParams.prominence,
         min_distance: peakParams.min_distance,
         max_peaks: peakParams.max_peaks,
+        include_weak_peaks: peakParams.include_weak_peaks,
+        weak_peak_threshold: peakParams.weak_peak_threshold,
+        min_snr: peakParams.min_snr,
+        min_prominence: peakParams.min_prominence,
         wavelength,
       })
         .then(peaks => {
@@ -892,6 +1057,8 @@ export default function XRD({
                 onLogViewParamsChange={setLogViewParams}
                 refMatchParams={refMatchParams}
                 onRefMatchParamsChange={setRefMatchParams}
+                xAxisCorrection={xAxisCorrection}
+                onXAxisCorrectionChange={setXAxisCorrection}
                 peakParams={peakParams}
                 onPeakParamsChange={setPeakParams}
                 scherrerParams={scherrerParams}
@@ -1236,6 +1403,44 @@ export default function XRD({
                       目前條件下沒有找到可用峰位。可以降低 prominence，或調整平滑與歸一化後再試一次。
                     </div>
                   ) : (
+                    <div className="mb-4 overflow-x-auto">
+                      <table className="min-w-full text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
+                            <th className="px-3 py-3 font-medium">2theta</th>
+                            <th className="px-3 py-3 font-medium">intensity</th>
+                            <th className="px-3 py-3 font-medium">FWHM</th>
+                            <th className="px-3 py-3 font-medium">SNR</th>
+                            <th className="px-3 py-3 font-medium">prominence</th>
+                            <th className="px-3 py-3 font-medium">phase</th>
+                            <th className="px-3 py-3 font-medium">hkl</th>
+                            <th className="px-3 py-3 font-medium">reference_2theta</th>
+                            <th className="px-3 py-3 font-medium">delta_2theta</th>
+                            <th className="px-3 py-3 font-medium">confidence</th>
+                            <th className="px-3 py-3 font-medium">note</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {finalPeakRows.map((peak, idx) => (
+                            <tr key={`final-${peak.two_theta}-${idx}`} className="border-b border-white/5 text-slate-200 last:border-b-0">
+                              <td className="px-3 py-3 font-medium">{peak.two_theta.toFixed(4)}</td>
+                              <td className="px-3 py-3">{peak.intensity.toFixed(2)}</td>
+                              <td className="px-3 py-3">{peak.fwhm_deg.toFixed(4)}</td>
+                              <td className="px-3 py-3">{peak.snr.toFixed(2)}</td>
+                              <td className="px-3 py-3">{peak.prominence.toFixed(4)}</td>
+                              <td className="px-3 py-3">{peak.phase}</td>
+                              <td className="px-3 py-3">{peak.hkl || '-'}</td>
+                              <td className="px-3 py-3">{peak.reference_2theta == null ? 'N/A' : peak.reference_2theta.toFixed(4)}</td>
+                              <td className="px-3 py-3">{peak.delta_2theta == null ? 'N/A' : peak.delta_2theta.toFixed(4)}</td>
+                              <td className="px-3 py-3">{peak.confidence}</td>
+                              <td className="px-3 py-3">{peak.note || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {detectedPeaks.length > 0 && (
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-left text-sm">
                         <thead>
@@ -1499,16 +1704,24 @@ export default function XRD({
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['two_theta_deg', 'd_spacing_A', 'intensity', 'relative_intensity_pct', 'fwhm_deg'],
-                                detectedPeaks.map(row => [
+                                ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'reference_2theta', 'delta_2theta', 'confidence', 'note'],
+                                finalPeakRows
+                                  .filter(row => peakParams.export_weak_peaks || !['weak', 'tentative'].includes(row.confidence))
+                                  .map(row => [
                                   row.two_theta.toFixed(4),
-                                  row.d_spacing.toFixed(4),
                                   row.intensity.toFixed(2),
-                                  row.rel_intensity.toFixed(1),
                                   row.fwhm_deg.toFixed(4),
+                                  row.snr.toFixed(2),
+                                  row.prominence.toFixed(4),
+                                  row.phase,
+                                  row.hkl,
+                                  row.reference_2theta == null ? '' : row.reference_2theta.toFixed(4),
+                                  row.delta_2theta == null ? '' : row.delta_2theta.toFixed(4),
+                                  row.confidence,
+                                  row.note,
                                 ]),
                               ),
-                              'xrd_detected_peaks.csv',
+                              'xrd_final_peaks.csv',
                               'text/csv',
                             )
                           }}
@@ -1517,18 +1730,45 @@ export default function XRD({
                           下載自動尋峰 CSV
                         </button>
                       )}
+                      {peakParams.enabled && finalPeakRows.length > 0 && (
+                        <button
+                          onClick={() => {
+                            const headers = ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'reference_2theta', 'delta_2theta', 'confidence', 'note']
+                            const rows = finalPeakRows
+                              .filter(row => peakParams.export_weak_peaks || !['weak', 'tentative'].includes(row.confidence))
+                              .map(row => [
+                                row.two_theta.toFixed(4),
+                                row.intensity.toFixed(2),
+                                row.fwhm_deg.toFixed(4),
+                                row.snr.toFixed(2),
+                                row.prominence.toFixed(4),
+                                row.phase,
+                                row.hkl,
+                                row.reference_2theta == null ? '' : row.reference_2theta.toFixed(4),
+                                row.delta_2theta == null ? '' : row.delta_2theta.toFixed(4),
+                                row.confidence,
+                                row.note,
+                              ])
+                            downloadFile(toExcelHtml(headers, rows), 'xrd_final_peaks.xls', 'application/vnd.ms-excel')
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          Export final peaks Excel
+                        </button>
+                      )}
                       {filteredRefPeaks.length > 0 && (
                         <button
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['material', 'hkl', 'two_theta_deg', 'd_spacing_A', 'relative_intensity_pct'],
+                                ['phase', 'hkl', 'reference_2theta', 'relative_intensity', 'source', 'tolerance'],
                                 filteredRefPeaks.map(row => [
-                                  row.material,
+                                  row.phase || row.material,
                                   row.hkl,
                                   row.two_theta.toFixed(4),
-                                  row.d_spacing.toFixed(4),
                                   row.rel_i.toFixed(1),
+                                  row.source,
+                                  row.tolerance.toFixed(3),
                                 ]),
                               ),
                               'xrd_reference_peaks.csv',
@@ -1545,7 +1785,7 @@ export default function XRD({
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['material', 'hkl', 'ref_two_theta_deg', 'ref_d_spacing_A', 'ref_relative_intensity_pct', 'obs_two_theta_deg', 'obs_d_spacing_A', 'obs_intensity', 'delta_two_theta_deg', 'matched'],
+                                ['material', 'hkl', 'ref_two_theta_deg', 'ref_d_spacing_A', 'ref_relative_intensity_pct', 'obs_two_theta_deg', 'obs_d_spacing_A', 'obs_intensity', 'delta_two_theta_deg', 'matched', 'confidence', 'candidates', 'note'],
                                 referenceMatches.map(row => [
                                   row.material,
                                   row.hkl,
@@ -1557,6 +1797,9 @@ export default function XRD({
                                   row.observed_intensity == null ? '' : row.observed_intensity.toFixed(2),
                                   row.delta_two_theta == null ? '' : row.delta_two_theta.toFixed(4),
                                   row.matched ? 'true' : 'false',
+                                  row.confidence,
+                                  row.candidates,
+                                  row.note,
                                 ]),
                               ),
                               'xrd_reference_matches.csv',

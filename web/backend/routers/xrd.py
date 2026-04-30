@@ -17,12 +17,11 @@ from typing import List, Optional
 import numpy as np
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
-from scipy.signal import peak_widths
+from scipy.signal import find_peaks, peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.processing import smooth_signal, apply_normalization, apply_background
 from core.spectrum_ops import (
-    detect_spectrum_peaks,
     fit_fixed_gaussian_templates,
     interpolate_spectrum_to_grid,
     mean_spectrum_arrays,
@@ -133,6 +132,10 @@ class PeakDetectRequest(BaseModel):
     min_distance: float = 0.3
     max_peaks: int = 30
     wavelength: float = 1.5406
+    include_weak_peaks: bool = True
+    weak_peak_threshold: float = 10.0
+    min_snr: float = 1.0
+    min_prominence: float = 0.0
 
 
 class PeakRow(BaseModel):
@@ -141,6 +144,10 @@ class PeakRow(BaseModel):
     intensity: float
     rel_intensity: float
     fwhm_deg: float
+    snr: float
+    prominence: float
+    confidence: str
+    note: str
 
 
 class PeakDetectResponse(BaseModel):
@@ -154,10 +161,13 @@ class RefPeaksRequest(BaseModel):
 
 class RefPeak(BaseModel):
     material: str
+    phase: str
     hkl: str
     two_theta: float
     d_spacing: float
     rel_i: float
+    source: str = "Built-in XRD reference library"
+    tolerance: float = 0.3
 
 
 class RefPeaksResponse(BaseModel):
@@ -308,16 +318,56 @@ def detect_peaks(req: PeakDetectRequest):
     x = np.array(req.x, dtype=float)
     y = np.array(req.y, dtype=float)
 
-    idx = detect_spectrum_peaks(
-        x, y,
-        prominence_ratio=req.prominence,
-        height_ratio=0.0,
-        min_distance_x=req.min_distance,
-        max_peaks=req.max_peaks,
-    )
+    dx = np.diff(x)
+    dx = dx[np.isfinite(dx) & (dx > 0)]
+    median_dx = float(np.median(dx)) if len(dx) else 0.0
+    distance_pts = max(1, int(round(float(req.min_distance) / median_dx))) if median_dx > 0 else 1
+
+    y_max = float(np.max(y))
+    y_min = float(np.min(y))
+    y_range = y_max - y_min
+    if not np.isfinite(y_range) or y_range <= 0:
+        return PeakDetectResponse(peaks=[])
+
+    strong_prominence = max(float(req.prominence), 0.0) * y_range
+    detection_prominence = strong_prominence
+    if req.include_weak_peaks:
+        weak_prominence = max(float(req.min_prominence), strong_prominence * 0.2, y_range * 0.002)
+        detection_prominence = min(strong_prominence, weak_prominence) if strong_prominence > 0 else weak_prominence
+
+    find_kwargs = {"prominence": max(detection_prominence, 0.0)}
+    if distance_pts > 1:
+        find_kwargs["distance"] = distance_pts
+    idx, props = find_peaks(y, **find_kwargs)
 
     if len(idx) == 0:
         return PeakDetectResponse(peaks=[])
+
+    prominences = np.asarray(props.get("prominences", np.zeros(len(idx))), dtype=float)
+    baseline = np.percentile(y, 10)
+    residual = y - baseline
+    noise = 1.4826 * float(np.median(np.abs(residual - np.median(residual))))
+    if not np.isfinite(noise) or noise <= 0:
+        noise = max(float(np.std(residual)), 1e-12)
+
+    keep_mask = prominences >= max(float(req.min_prominence), 0.0)
+    snr_values = prominences / noise
+    keep_mask &= snr_values >= max(float(req.min_snr), 0.0)
+    if not req.include_weak_peaks:
+        keep_mask &= prominences >= strong_prominence
+    idx = idx[keep_mask]
+    prominences = prominences[keep_mask]
+    snr_values = snr_values[keep_mask]
+
+    if len(idx) == 0:
+        return PeakDetectResponse(peaks=[])
+
+    if req.max_peaks > 0 and len(idx) > req.max_peaks:
+        order = np.argsort(prominences)[::-1][: req.max_peaks]
+        order = np.sort(order)
+        idx = idx[order]
+        prominences = prominences[order]
+        snr_values = snr_values[order]
 
     widths, _, left_ips, right_ips = peak_widths(y, idx, rel_height=0.5)
     sample_axis = np.arange(len(x), dtype=float)
@@ -330,12 +380,32 @@ def detect_peaks(req: PeakDetectRequest):
         tt = float(x[i])
         d = _two_theta_to_d(tt, req.wavelength)
         fwhm_deg = abs(float(right_x[pos] - left_x[pos]))
+        rel_intensity = float(y[i]) / y_max * 100
+        prominence = float(prominences[pos])
+        snr = float(snr_values[pos])
+        weak_by_intensity = rel_intensity < float(req.weak_peak_threshold)
+        weak_by_prominence = strong_prominence > 0 and prominence < strong_prominence
+        if weak_by_intensity or weak_by_prominence:
+            confidence = "weak" if snr >= max(float(req.min_snr), 1.0) * 2 else "tentative"
+        else:
+            confidence = "strong"
+        note_parts = []
+        if confidence != "strong":
+            note_parts.append("weak peak retained")
+        if weak_by_intensity:
+            note_parts.append(f"relative intensity below {req.weak_peak_threshold:g}%")
+        if weak_by_prominence:
+            note_parts.append("below strong-peak prominence threshold")
         peaks.append(PeakRow(
             two_theta=round(tt, 4),
             d_spacing=round(d, 4),
             intensity=round(float(y[i]), 2),
-            rel_intensity=round(float(y[i]) / y_max * 100, 1),
+            rel_intensity=round(rel_intensity, 1),
             fwhm_deg=round(fwhm_deg, 5),
+            snr=round(snr, 2),
+            prominence=round(prominence, 5),
+            confidence=confidence,
+            note="; ".join(note_parts),
         ))
 
     return PeakDetectResponse(peaks=sorted(peaks, key=lambda p: p.two_theta))
@@ -365,10 +435,13 @@ def get_reference_peaks(req: RefPeaksRequest):
                 continue
             peaks.append(RefPeak(
                 material=material,
+                phase=str(ref.get("phase", material)),
                 hkl=p["hkl"],
                 two_theta=round(tt, 4),
                 d_spacing=round(p["d"], 4),
                 rel_i=float(p["rel_i"]),
+                source=str(p.get("source", ref.get("source", "Built-in XRD reference library"))),
+                tolerance=float(p.get("tolerance", ref.get("tolerance", 0.3))),
             ))
 
     return RefPeaksResponse(peaks=sorted(peaks, key=lambda p: p.two_theta))

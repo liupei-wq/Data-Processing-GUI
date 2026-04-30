@@ -74,6 +74,10 @@ export interface DetectedPeak {
   intensity: number
   rel_intensity: number
   fwhm_deg: number
+  snr: number
+  prominence: number
+  confidence: 'strong' | 'weak' | 'tentative'
+  note: string
 }
 
 /** Peak detection controls used by the frontend */
@@ -82,12 +86,34 @@ export interface PeakDetectionParams {
   prominence: number
   min_distance: number
   max_peaks: number
+  include_weak_peaks: boolean
+  show_unmatched_peaks: boolean
+  weak_peak_threshold: number
+  min_snr: number
+  min_prominence: number
+  export_weak_peaks: boolean
 }
 
 export interface ReferenceMatchParams {
   min_rel_intensity: number
   tolerance_deg: number
   only_show_matched: boolean
+}
+
+export interface XAxisCalibrationPoint {
+  expected: number
+  measured: number
+}
+
+export interface XAxisCorrectionParams {
+  enabled: boolean
+  mode: 'manual' | 'calibration'
+  manual_offset: number
+  correction_type: 'constant' | 'linear'
+  calibration_points: XAxisCalibrationPoint[]
+  show_raw_curve: boolean
+  show_corrected_curve: boolean
+  show_reference_markers: boolean
 }
 
 export interface LogViewParams {
@@ -106,10 +132,13 @@ export interface ScherrerParams {
 /** One reference peak from the database */
 export interface RefPeak {
   material: string
+  phase: string
   hkl: string
   two_theta: number
   d_spacing: number
   rel_i: number
+  source: string
+  tolerance: number
 }
 
 export interface ReferenceMatchRow {
@@ -123,6 +152,23 @@ export interface ReferenceMatchRow {
   observed_intensity: number | null
   delta_two_theta: number | null
   matched: boolean
+  confidence: string
+  candidates: string
+  note: string
+}
+
+export interface FinalPeakRow {
+  two_theta: number
+  intensity: number
+  fwhm_deg: number
+  snr: number
+  prominence: number
+  phase: string
+  hkl: string
+  reference_2theta: number | null
+  delta_2theta: number | null
+  confidence: string
+  note: string
 }
 
 /** X-axis display mode */
