@@ -161,7 +161,11 @@ function buildParams(
   return base
 }
 
-function buildTraces(tool: SingleToolKind, dataset: ProcessedDataset): Plotly.Data[] {
+function buildTraces(
+  tool: SingleToolKind,
+  dataset: ProcessedDataset,
+  minimumPoint?: RangeMinimum | null,
+): Plotly.Data[] {
   const traces: Plotly.Data[] = [
     {
       x: dataset.x,
@@ -215,6 +219,21 @@ function buildTraces(tool: SingleToolKind, dataset: ProcessedDataset): Plotly.Da
       mode: 'lines',
       name: tool === 'normalize' ? '歸一化後' : '處理後',
       line: { color: '#38bdf8', width: 2.2 },
+    })
+  }
+
+  if (tool === 'gaussian' && minimumPoint) {
+    traces.push({
+      x: [minimumPoint.x],
+      y: [minimumPoint.y],
+      type: 'scatter',
+      mode: 'markers',
+      name: '403–406 最低點',
+      marker: {
+        color: '#fb7185',
+        size: 11,
+        line: { color: '#fff1f2', width: 1.5 },
+      },
     })
   }
 
@@ -276,28 +295,57 @@ function SliderRow({
   label: string; value: number; min: number; max: number; step: number; decimals?: number; onChange: (v: number) => void
 }) {
   const fmt = (v: number) => v.toFixed(decimals)
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  const commitValue = useCallback((raw: string) => {
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value))
+      return
+    }
+    const clamped = Math.min(Math.max(parsed, min), max)
+    setDraft(String(clamped))
+    if (Math.abs(clamped - value) > step / 10) onChange(clamped)
+  }, [max, min, onChange, step, value])
+
+  const displayValue = Number.isFinite(Number(draft)) ? Number(draft) : value
+
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <span className="text-xs text-[var(--text-soft)]">{label}</span>
-        <span className="font-mono text-xs text-[var(--text-main)]">{fmt(value)}</span>
+        <span className="font-mono text-xs text-[var(--text-main)]">{fmt(displayValue)}</span>
       </div>
       <input
         type="number"
-        value={value}
+        value={draft}
         min={min}
         max={max}
         step={step}
-        onChange={e => onChange(Number(e.target.value))}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => commitValue(draft)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commitValue(draft)
+          }
+        }}
         className="theme-input w-full rounded-xl px-3 py-2 text-sm"
       />
       <input
         type="range"
-        value={value}
+        value={displayValue}
         min={min}
         max={max}
         step={step}
-        onChange={e => onChange(Number(e.target.value))}
+        onChange={e => setDraft(e.target.value)}
+        onMouseUp={() => commitValue(draft)}
+        onTouchEnd={() => commitValue(draft)}
+        onKeyUp={() => commitValue(draft)}
         className="w-full cursor-pointer"
         style={{ accentColor: 'var(--accent-strong)' }}
       />
@@ -535,14 +583,9 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     () => (anchorMinimum && gaussianMinTargetY ? gaussianMinTargetY[anchorMinimum.index] ?? null : null),
     [anchorMinimum, gaussianMinTargetY],
   )
-  const alignCurveToMinimum = useCallback(() => {
-    if (autoBoundGaussianHeight == null) return
-    setGaussianHeight(autoBoundGaussianHeight)
-  }, [autoBoundGaussianHeight])
-
   const plotTraces = useMemo(
-    () => (activeDataset ? buildTraces(tool, activeDataset) : []),
-    [activeDataset, tool],
+    () => (activeDataset ? buildTraces(tool, activeDataset, anchorMinimum) : []),
+    [activeDataset, tool, anchorMinimum],
   )
 
   const plotLayout = useMemo(() => {
