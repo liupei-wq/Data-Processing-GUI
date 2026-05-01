@@ -331,6 +331,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
   const [gaussianSearchHalfWidth, setGaussianSearchHalfWidth] = useState(0.5)
   const [minimumRangeStart, setMinimumRangeStart] = useState(403)
   const [minimumRangeEnd, setMinimumRangeEnd] = useState(406)
+  const [bindCurveToMinimum, setBindCurveToMinimum] = useState(false)
   const [gaussianCenters, setGaussianCenters] = useState<GaussianCenter[]>([
     { enabled: true, name: 'Peak 1', center: 30 },
   ])
@@ -356,6 +357,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     setGaussianSearchHalfWidth(0.5)
     setMinimumRangeStart(403)
     setMinimumRangeEnd(406)
+    setBindCurveToMinimum(false)
     setGaussianCenters([{ enabled: true, name: 'Peak 1', center: 30 }])
   }, [tool])
 
@@ -373,6 +375,25 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     result[0] ??
     null
 
+  const anchorMinimum = useMemo(
+    () => (
+      tool === 'gaussian' && activeDataset
+        ? findMinimumInRange(activeDataset.x, activeDataset.y_raw, minimumRangeStart, minimumRangeEnd)
+        : null
+    ),
+    [tool, activeDataset, minimumRangeStart, minimumRangeEnd],
+  )
+
+  const effectiveGaussianHeight = useMemo(() => {
+    if (!bindCurveToMinimum) return gaussianHeight
+    const firstCenter = gaussianCenters[0]?.center
+    if (firstCenter == null || !anchorMinimum || gaussianFwhm <= 0) return gaussianHeight
+    const sigma = gaussianFwhm / (2 * Math.sqrt(2 * Math.log(2)))
+    const attenuation = Math.exp(-0.5 * ((anchorMinimum.x - firstCenter) / sigma) ** 2)
+    if (!Number.isFinite(attenuation) || attenuation <= 1e-9) return gaussianHeight
+    return Math.max(anchorMinimum.y / attenuation, 0)
+  }, [bindCurveToMinimum, gaussianHeight, gaussianCenters, anchorMinimum, gaussianFwhm])
+
   const params = buildParams(
     tool,
     backgroundMethod,
@@ -386,18 +407,30 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     normStart,
     normEnd,
     gaussianFwhm,
-    gaussianHeight,
+    effectiveGaussianHeight,
     gaussianNonnegativeGuard,
     gaussianSearchHalfWidth,
     gaussianCenters,
   )
+
+  const [debouncedParams, setDebouncedParams] = useState(params)
+
+  useEffect(() => {
+    const debounceMs = tool === 'gaussian' ? 180 : 80
+    const timer = window.setTimeout(() => {
+      setDebouncedParams(params)
+    }, debounceMs)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [params, tool])
 
   useEffect(() => {
     if (rawFiles.length === 0) return
     let cancelled = false
     setIsLoading(true)
     setError(null)
-    processData(rawFiles, params)
+    processData(rawFiles, debouncedParams)
       .then(response => {
         if (cancelled) return
         setResult(response.datasets)
@@ -411,7 +444,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     return () => {
       cancelled = true
     }
-  }, [rawFiles, params])
+  }, [rawFiles, debouncedParams])
 
   const handleFiles = useCallback(async (files: File[]) => {
     setIsLoading(true)
@@ -481,22 +514,14 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     : Math.max(gSliderYMax, 1)
 
   useEffect(() => {
-    if (tool !== 'gaussian' || !gaussianNonnegativeGuard) return
+    if (tool !== 'gaussian' || !gaussianNonnegativeGuard || bindCurveToMinimum) return
     if (gaussianSafeHeightMax == null) return
     if (gaussianHeight > gaussianSafeHeightMax) {
       setGaussianHeight(gaussianSafeHeightMax)
     }
-  }, [tool, gaussianNonnegativeGuard, gaussianSafeHeightMax, gaussianHeight])
+  }, [tool, gaussianNonnegativeGuard, bindCurveToMinimum, gaussianSafeHeightMax, gaussianHeight])
 
   const gaussianMinTargetY = activeDataset?.y_gaussian_subtracted ?? activeDataset?.y_processed ?? null
-  const anchorMinimum = useMemo(
-    () => (
-      tool === 'gaussian' && activeDataset
-        ? findMinimumInRange(activeDataset.x, activeDataset.y_raw, minimumRangeStart, minimumRangeEnd)
-        : null
-    ),
-    [tool, activeDataset, minimumRangeStart, minimumRangeEnd],
-  )
   const autoBoundGaussianHeight = useMemo(() => {
     if (tool !== 'gaussian' || !anchorMinimum || gaussianFwhm <= 0) return null
     const firstCenter = gaussianCenters[0]?.center
@@ -523,6 +548,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
   const plotLayout = useMemo(() => {
     const base = chartLayout()
     base.dragmode = 'zoom'
+    base.uirevision = `${tool}:${selectedDatasetName || 'default'}`
     base.xaxis = {
       ...base.xaxis,
       fixedrange: false,
@@ -547,7 +573,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
       ]
     }
     return base
-  }, [tool, minimumRangeStart, minimumRangeEnd])
+  }, [tool, minimumRangeStart, minimumRangeEnd, selectedDatasetName])
 
   const handleExport = useCallback(() => {
     if (!activeDataset) return
@@ -773,15 +799,29 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                           decimals={2}
                           onChange={setGaussianFwhm}
                         />
-                        <SliderRow
-                          label="固定高度"
-                          value={gaussianHeight}
-                          min={0}
-                          max={gaussianHeightSliderMax}
-                          step={heightSliderStep}
-                          decimals={2}
-                          onChange={setGaussianHeight}
-                        />
+                        {bindCurveToMinimum ? (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-[var(--text-soft)]">固定高度</span>
+                              <span className="font-mono text-xs text-[var(--text-main)]">
+                                {autoBoundGaussianHeight != null ? autoBoundGaussianHeight.toFixed(2) : '無法計算'}
+                              </span>
+                            </div>
+                            <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+                              已綁定最低點。你移動中心或改 `FWHM` 時，系統會自動重算高度，讓高斯曲線持續切到那個最低點。
+                            </div>
+                          </div>
+                        ) : (
+                          <SliderRow
+                            label="固定高度"
+                            value={gaussianHeight}
+                            min={0}
+                            max={gaussianHeightSliderMax}
+                            step={heightSliderStep}
+                            decimals={2}
+                            onChange={setGaussianHeight}
+                          />
+                        )}
                         <SliderRow
                           label="搜尋半寬"
                           value={gaussianSearchHalfWidth}
@@ -792,7 +832,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                           onChange={setGaussianSearchHalfWidth}
                         />
                       </div>
-                      {gaussianNonnegativeGuard && gaussianSafeHeightMax != null && (
+                      {gaussianNonnegativeGuard && gaussianSafeHeightMax != null && !bindCurveToMinimum && (
                         <div className="mt-3 text-xs leading-6 text-[var(--text-soft)]">
                           目前這筆資料的安全高度上限約為 <span className="font-mono text-[var(--text-main)]">{gaussianSafeHeightMax.toFixed(2)}</span>，滑桿已自動限制在這個範圍內。
                         </div>
@@ -833,11 +873,18 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3">
                         <button
                           type="button"
-                          onClick={alignCurveToMinimum}
+                          onClick={() => setBindCurveToMinimum(true)}
                           disabled={autoBoundGaussianHeight == null}
                           className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--accent)]"
                         >
-                          對齊到最低點
+                          鎖定到最低點
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBindCurveToMinimum(false)}
+                          className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--text-main)]"
+                        >
+                          解除綁定
                         </button>
                         <div className="text-sm text-[var(--text-main)]">
                           {autoBoundGaussianHeight != null
@@ -845,7 +892,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                             : '目前無法計算建議高度'}
                         </div>
                         <div className="w-full text-xs leading-6 text-[var(--text-soft)]">
-                          按下「對齊到最低點」後，系統只會把目前高度調整到切中最低點一次；之後高度和中心都還是可以自由再調。
+                          按下「鎖定到最低點」後，高斯中心仍可移動，但系統會持續自動重算高度；按「解除綁定」就會回到手動高度模式。
                         </div>
                       </div>
                       <div className="grid gap-3 md:grid-cols-3">
@@ -885,7 +932,9 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                           <div className="text-sm font-semibold text-[var(--text-muted)]">高斯中心</div>
                           <div className="mt-1 text-xs text-[var(--text-soft)]">
                             每個中心位置也改成 `0.01` 步進，右側橘線就是目前要扣掉的高斯曲線。
-                            你可以先移動中心，再按上方按鈕把目前高斯曲線對齊到最低點。
+                            {bindCurveToMinimum
+                              ? ' 目前已綁定；你移動中心時，系統會自動調整高度讓曲線維持切到最低點。'
+                              : ' 你可以先移動中心，再按上方按鈕把高斯曲線綁定到最低點。'}
                           </div>
                         </div>
                         <button
@@ -952,7 +1001,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                     </div>
                   )}
                   <div className="mb-3 rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-xs leading-6 text-[var(--text-soft)]">
-                    縮放改為穩定模式：左鍵拖曳可框選放大，雙擊圖面可重置；滑鼠滾輪縮放已停用，避免目前異常的縮放行為。
+                    縮放已改成穩定模式：左鍵拖曳可框選放大，雙擊圖面可重置；同時保留目前視角，不會因為每次小幅調整數值就整張圖跳回初始狀態。
                   </div>
                   <Plot
                     data={plotTraces}
