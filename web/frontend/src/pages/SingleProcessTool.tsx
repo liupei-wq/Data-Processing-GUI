@@ -189,6 +189,41 @@ function chartLayout(): Partial<Plotly.Layout> {
   }
 }
 
+function SliderRow({
+  label, value, min, max, step, decimals = 3, onChange,
+}: {
+  label: string; value: number; min: number; max: number; step: number; decimals?: number; onChange: (v: number) => void
+}) {
+  const fmt = (v: number) => v.toFixed(decimals)
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-[var(--text-soft)]">{label}</span>
+        <span className="font-mono text-xs text-[var(--text-main)]">{fmt(value)}</span>
+      </div>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={e => onChange(Number(e.target.value))}
+        className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+      />
+      <input
+        type="range"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={e => onChange(Number(e.target.value))}
+        className="w-full cursor-pointer"
+        style={{ accentColor: 'var(--accent-strong)' }}
+      />
+    </div>
+  )
+}
+
 export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
   const meta = TOOL_META[tool]
   const [rawFiles, setRawFiles] = useState<ParsedFile[]>([])
@@ -313,6 +348,17 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     }
   }, [])
 
+  const gSliderXMin = rawFiles.length > 0 ? Math.min(...rawFiles.flatMap(f => f.x)) : 0
+  const gSliderXMax = rawFiles.length > 0 ? Math.max(...rawFiles.flatMap(f => f.x)) : 180
+  const gSliderXRange = Math.max(gSliderXMax - gSliderXMin, 1)
+  const gSliderYMax = rawFiles.length > 0 ? Math.max(...rawFiles.flatMap(f => f.y)) : 10000
+  const fwhmSliderMax = Math.max(gSliderXRange / 4, 2)
+  const fwhmSliderStep = Math.max(gSliderXRange / 5000, 0.001)
+  const heightSliderStep = Math.max(gSliderYMax / 2000, 1)
+  const searchHwSliderMax = Math.max(gSliderXRange / 2, 5)
+  const searchHwSliderStep = Math.max(gSliderXRange / 5000, 0.001)
+  const centerSliderStep = Math.max(gSliderXRange / 2000, 0.001)
+
   return (
     <div className="px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
       <div className="mx-auto max-w-[1500px]">
@@ -432,19 +478,34 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
             {tool === 'gaussian' && (
               <div className="theme-block rounded-[24px] p-4">
                 <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">高斯模板設定</div>
-                <div className="space-y-3">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">固定 FWHM</span>
-                    <input type="number" value={gaussianFwhm} min={0.001} step={0.001} onChange={e => setGaussianFwhm(Number(e.target.value))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">固定高度</span>
-                    <input type="number" value={gaussianHeight} min={0.001} step={1} onChange={e => setGaussianHeight(Number(e.target.value))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">搜尋半寬</span>
-                    <input type="number" value={gaussianSearchHalfWidth} min={0.001} step={0.01} onChange={e => setGaussianSearchHalfWidth(Number(e.target.value))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
+                <div className="space-y-4">
+                  <SliderRow
+                    label="固定 FWHM"
+                    value={gaussianFwhm}
+                    min={0.001}
+                    max={fwhmSliderMax}
+                    step={fwhmSliderStep}
+                    decimals={3}
+                    onChange={setGaussianFwhm}
+                  />
+                  <SliderRow
+                    label="固定高度"
+                    value={gaussianHeight}
+                    min={0}
+                    max={Math.max(gSliderYMax * 1.5, 200)}
+                    step={heightSliderStep}
+                    decimals={0}
+                    onChange={setGaussianHeight}
+                  />
+                  <SliderRow
+                    label="搜尋半寬"
+                    value={gaussianSearchHalfWidth}
+                    min={0.001}
+                    max={searchHwSliderMax}
+                    step={searchHwSliderStep}
+                    decimals={3}
+                    onChange={setGaussianSearchHalfWidth}
+                  />
                   <div className="space-y-2">
                     {gaussianCenters.map((center, idx) => (
                       <div key={`${center.name}-${idx}`} className="theme-block-soft rounded-[16px] p-3">
@@ -467,12 +528,29 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                             onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, name: e.target.value } : item))}
                             className="theme-input w-full rounded-xl px-3 py-2 text-sm"
                           />
-                          <input
-                            type="number"
-                            value={center.center}
-                            onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, center: Number(e.target.value) } : item))}
-                            className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                          />
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-[var(--text-soft)]">中心位置</span>
+                              <span className="font-mono text-[10px] text-[var(--text-main)]">{center.center.toFixed(3)}</span>
+                            </div>
+                            <input
+                              type="number"
+                              value={center.center}
+                              step={centerSliderStep}
+                              onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, center: Number(e.target.value) } : item))}
+                              className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                            />
+                            <input
+                              type="range"
+                              value={center.center}
+                              min={gSliderXMin}
+                              max={gSliderXMax}
+                              step={centerSliderStep}
+                              onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, center: Number(e.target.value) } : item))}
+                              className="w-full cursor-pointer"
+                              style={{ accentColor: 'var(--accent-strong)' }}
+                            />
+                          </div>
                         </div>
                       </div>
                     ))}
