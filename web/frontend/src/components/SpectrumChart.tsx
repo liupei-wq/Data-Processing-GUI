@@ -16,6 +16,7 @@ interface Props {
   showReferencePeaks?: boolean
   showDetectedPeaks?: boolean
   minHeight?: number
+  onOpenPopup?: () => void
 }
 
 const COLORS = [
@@ -46,6 +47,7 @@ export default function SpectrumChart({
   showReferencePeaks = true,
   showDetectedPeaks = true,
   minHeight = 460,
+  onOpenPopup,
 }: Props) {
   const { chartGrid, chartText, chartBg, chartLegendBg, chartHoverBg, chartHoverBorder } = useMemo(() => {
     if (typeof window === 'undefined') {
@@ -196,6 +198,13 @@ export default function SpectrumChart({
 
   return (
     <div className="theme-block-soft rounded-[28px] p-3 sm:p-4">
+      {onOpenPopup && (
+        <div className="mb-2 flex justify-end">
+          <button type="button" className="chart-popup-button" onClick={onOpenPopup} aria-label="彈出圖表">
+            彈出圖表
+          </button>
+        </div>
+      )}
       <Plot
         data={traces}
         layout={layout}

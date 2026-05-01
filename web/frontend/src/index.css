@@ -1997,6 +1997,109 @@ summary:active,
   backdrop-filter: blur(10px);
 }
 
+.plot-popup-host {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: none;
+}
+
+.plot-popup {
+  position: fixed;
+  width: min(46rem, calc(100vw - 1.5rem));
+  max-height: min(36rem, calc(100vh - 1.5rem));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--card-bg-strong) 94%, transparent);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(18px);
+}
+
+.plot-popup__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.85rem 0.65rem 1rem;
+  border-bottom: 1px solid var(--card-divider);
+  background: color-mix(in srgb, var(--accent-soft) 42%, transparent);
+  user-select: none;
+}
+
+.plot-popup__drag-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+.plot-popup__drag-handle:active {
+  cursor: grabbing;
+}
+
+.plot-popup__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-popup__close,
+.chart-popup-button {
+  flex-shrink: 0;
+  border: 1px solid var(--pill-border);
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--text-main);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: var(--card-shadow-soft);
+}
+
+.plot-popup__close {
+  padding: 0.45rem 0.7rem;
+}
+
+.chart-popup-button {
+  padding: 0.5rem 0.75rem;
+}
+
+.plot-popup__close:hover,
+.chart-popup-button:hover {
+  border-color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.plot-popup__body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .plot-popup {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+  }
+
+  .plot-popup__header {
+    min-height: 2.5rem;
+    padding: 0.55rem 0.65rem 0.55rem 0.75rem;
+  }
+
+  .plot-popup__body {
+    padding: 0.5rem;
+  }
+}
+
 .cursor-particles {
   position: fixed;
   inset: 0;

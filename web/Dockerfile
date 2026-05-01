@@ -3,7 +3,7 @@
 # Usage: docker build -f web/Dockerfile -t spectroscopy-web .
 
 # ── Stage 1: Build React frontend ────────────────────────────────────────────
-FROM node:20-alpine AS frontend-build
+FROM node:24-alpine AS frontend-build
 WORKDIR /build
 
 COPY web/frontend/package.json web/frontend/package-lock.json* ./

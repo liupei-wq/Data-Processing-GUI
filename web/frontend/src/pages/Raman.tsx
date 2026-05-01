@@ -22,6 +22,7 @@ import {
   TogglePill,
 } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
+import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import {
   detectPeaks,
   fetchPeakLibrary,
@@ -609,8 +610,10 @@ function SidebarCard({
 
 export default function Raman({
   onModuleSelect,
+  onOpenPlotPopup,
 }: {
   onModuleSelect?: (module: AnalysisModuleId) => void
+  onOpenPlotPopup?: (popup: PlotPopupRequest) => void
 }) {
   const moduleContent = MODULE_CONTENT.raman
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -944,6 +947,25 @@ export default function Raman({
     }
     return traces
   }, [activeDataset, chartLineColors.final, detectedPeaks, peakParams.enabled, refPeaks])
+  const renderFinalChart = useCallback((minHeight: number, bindLegend = true) => (
+    <Plot
+      data={applyHidden(finalChartTraces, finalHidden)}
+      layout={chartLayout()}
+      config={withPlotFullscreen({ scrollZoom: false })}
+      style={{ width: '100%', minHeight: `${minHeight}px` }}
+      onLegendClick={bindLegend ? (makeLegendClick(setFinalHidden) as never) : undefined}
+      onLegendDoubleClick={bindLegend ? (() => false) : undefined}
+      useResizeHandler
+    />
+  ), [finalChartTraces, finalHidden])
+  const openFinalChartPopup = useCallback(() => {
+    if (!onOpenPlotPopup || finalChartTraces.length === 0) return
+
+    onOpenPlotPopup({
+      title: `Raman 最終圖表 - ${activeDataset?.name ?? 'dataset'}`,
+      content: renderFinalChart(460, false),
+    })
+  }, [activeDataset?.name, finalChartTraces.length, onOpenPlotPopup, renderFinalChart])
 
   useEffect(() => {
     if (!peakParams.enabled || !activeDataset) {
@@ -2806,18 +2828,15 @@ export default function Raman({
                     title="4. 最終處理光譜"
                     colorValue={chartLineColors.final}
                     onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
+                    actions={onOpenPlotPopup ? (
+                      <button type="button" className="chart-popup-button" onClick={openFinalChartPopup}>
+                        彈出圖表
+                      </button>
+                    ) : undefined}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">把最終 Raman、參考峰和偵測峰位收斂到同一張圖卡，互動方式與 XPS 最終圖一致。</p>
                   <DeferredRender minHeight={420}>
-                    <Plot
-                      data={applyHidden(finalChartTraces, finalHidden)}
-                      layout={chartLayout()}
-                      config={withPlotFullscreen({ scrollZoom: false })}
-                      style={{ width: '100%', minHeight: '420px' }}
-                      onLegendClick={makeLegendClick(setFinalHidden) as never}
-                      onLegendDoubleClick={() => false}
-                      useResizeHandler
-                    />
+                    {renderFinalChart(420)}
                   </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from 'react-plotly.js'
 import { withPlotFullscreen } from '../components/plotConfig'
+import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { parseFiles, processData } from '../api/xrd'
 import FileUpload from '../components/FileUpload'
 import type { GaussianCenter, ParsedFile, ProcessParams, ProcessedDataset } from '../types/xrd'
@@ -182,7 +183,13 @@ function SliderRow({
   )
 }
 
-export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
+export default function SingleProcessTool({
+  tool,
+  onOpenPlotPopup,
+}: {
+  tool: SingleToolKind
+  onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+}) {
   const meta = TOOL_META[tool]
 
   // ── Core state ──────────────────────────────────────────────────────────────
@@ -520,6 +527,33 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
 
   const plotConfig = withPlotFullscreen({ scrollZoom: false, displayModeBar: true, doubleClick: 'reset+autosize' })
   const showTwoCharts = tool === 'gaussian' || tool === 'background'
+  const renderBeforeChart = (minHeight = 360) => (
+    <Plot
+      data={beforeTraces}
+      layout={beforeLayout}
+      config={plotConfig}
+      style={{ width: '100%', minHeight: `${minHeight}px` }}
+      useResizeHandler
+    />
+  )
+  const renderAfterChart = (minHeight = 360) => (
+    <Plot
+      data={afterTraces}
+      layout={afterLayout}
+      config={plotConfig}
+      style={{ width: '100%', minHeight: `${minHeight}px` }}
+      useResizeHandler
+    />
+  )
+  const openSingleToolPopup = (kind: 'before' | 'after') => {
+    if (!onOpenPlotPopup || !activeDataset) return
+    const isAfter = kind === 'after'
+
+    onOpenPlotPopup({
+      title: `${TOOL_META[tool].subtitle} - ${isAfter ? 'After' : 'Before'} - ${activeDataset.name}`,
+      content: isAfter ? renderAfterChart(420) : renderBeforeChart(420),
+    })
+  }
 
   // ── JSX ──────────────────────────────────────────────────────────────────────
   return (
@@ -835,12 +869,16 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                   {tool === 'gaussian' ? '原始訊號 + 高斯模型（即時）'
                     : tool === 'background' ? '原始訊號 + 背景基準線' : '處理前後'}
                 </span>
+                {onOpenPlotPopup && (
+                  <button type="button" className="chart-popup-button" onClick={() => openSingleToolPopup('before')}>
+                    彈出圖表
+                  </button>
+                )}
                 {isLoading && (
                   <span className="rounded-full bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]">更新中…</span>
                 )}
               </div>
-              <Plot data={beforeTraces} layout={beforeLayout} config={plotConfig}
-                style={{ width: '100%', minHeight: '360px' }} useResizeHandler />
+              {renderBeforeChart()}
             </div>
           )}
 
@@ -850,8 +888,14 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text-soft)]">
                 {tool === 'gaussian' ? '扣除後結果（前端即時）' : '扣背景後結果'}
               </div>
-              <Plot data={afterTraces} layout={afterLayout} config={plotConfig}
-                style={{ width: '100%', minHeight: '360px' }} useResizeHandler />
+              {onOpenPlotPopup && (
+                <div className="mb-2 flex justify-end">
+                  <button type="button" className="chart-popup-button" onClick={() => openSingleToolPopup('after')}>
+                    彈出圖表
+                  </button>
+                </div>
+              )}
+              {renderAfterChart()}
             </div>
           )}
 

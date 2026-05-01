@@ -51,6 +51,7 @@ import {
   StickySidebarHeader,
 } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
+import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import type { ProcessParams } from '../types/xrd'
 
 type CsvCell = string | number | null | undefined
@@ -438,8 +439,10 @@ const SIDEBAR_COLLAPSED_PEEK = 28
 
 export default function XRD({
   onModuleSelect,
+  onOpenPlotPopup,
 }: {
   onModuleSelect?: (module: AnalysisModuleId) => void
+  onOpenPlotPopup?: (popup: PlotPopupRequest) => void
 }) {
   const moduleContent = MODULE_CONTENT.xrd
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -779,6 +782,27 @@ export default function XRD({
     () => activeDataset ? [{ name: activeDataset.name, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_processed }] : [],
     [activeDataset, wavelength, xMode],
   )
+  const renderFinalChart = useCallback((height: number, bindLegend = true) => {
+    return (
+      <Plot
+        data={applyHidden(finalChartTraces, finalHidden)}
+        layout={chartLayout({ xMode, wavelength, height })}
+        config={withPlotFullscreen({ scrollZoom: false })}
+        style={{ width: '100%', height }}
+        onLegendClick={bindLegend ? (makeLegendClick(setFinalHidden) as never) : undefined}
+        onLegendDoubleClick={bindLegend ? (() => false) : undefined}
+        useResizeHandler
+      />
+    )
+  }, [finalChartTraces, finalHidden, wavelength, xMode])
+  const openFinalChartPopup = useCallback(() => {
+    if (!onOpenPlotPopup || finalChartTraces.length === 0) return
+
+    onOpenPlotPopup({
+      title: `XRD 最終圖表 - ${activeDataset?.name ?? 'dataset'}`,
+      content: renderFinalChart(460, false),
+    })
+  }, [activeDataset?.name, finalChartTraces.length, onOpenPlotPopup, renderFinalChart])
   const referenceMatches = useMemo(
     () => buildReferenceMatches(filteredRefPeaks, detectedPeaks, refMatchParams.tolerance_deg),
     [filteredRefPeaks, detectedPeaks, refMatchParams.tolerance_deg],
@@ -1319,18 +1343,15 @@ export default function XRD({
                     title="4. 最終處理光譜"
                     colorValue={chartLineColors.final}
                     onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
+                    actions={onOpenPlotPopup ? (
+                      <button type="button" className="chart-popup-button" onClick={openFinalChartPopup}>
+                        彈出圖表
+                      </button>
+                    ) : undefined}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">把最終處理結果、參考峰與偵測到的峰位放在同一張圖上，顯示方式對齊 XPS 的最終圖卡。</p>
                   <DeferredRender minHeight={380}>
-                    <Plot
-                      data={applyHidden(finalChartTraces, finalHidden)}
-                      layout={chartLayout({ xMode, wavelength, height: 380 })}
-                      config={withPlotFullscreen({ scrollZoom: false })}
-                      style={{ width: '100%', height: 380 }}
-                      onLegendClick={makeLegendClick(setFinalHidden) as never}
-                      onLegendDoubleClick={() => false}
-                      useResizeHandler
-                    />
+                    {renderFinalChart(380)}
                   </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button

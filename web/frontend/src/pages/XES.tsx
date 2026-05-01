@@ -4,6 +4,7 @@ import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
+import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { parseFiles, processData, detectPeaks, listReferences, getReferencePeaks } from '../api/xes'
 import type {
   BandAlignParams,
@@ -146,7 +147,13 @@ function Select({ ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
+export default function XES({
+  onModuleSelect,
+  onOpenPlotPopup,
+}: {
+  onModuleSelect?: (m: AnalysisModuleId) => void
+  onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+}) {
   const moduleContent = MODULE_CONTENT.xes
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = localStorage.getItem('nigiro-xes-sidebar-width')
@@ -322,6 +329,72 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
   const hasSamples = samples.length > 0
   const hasProcessed = processed.length > 0
+  const renderMainSpectraChart = (height = 340) => (
+    <Plot
+      data={[
+        ...processed.map((ds, i) => ({
+          x: getX(ds),
+          y: ds.y_processed,
+          type: 'scatter' as const,
+          mode: 'lines' as const,
+          name: ds.name,
+          line: { color: COLORS[i % COLORS.length], width: 1.8 },
+        })),
+        ...(average ? [{
+          x: getX(average),
+          y: average.y_processed,
+          type: 'scatter' as const,
+          mode: 'lines' as const,
+          name: '平均',
+          line: { color: '#f59e0b', width: 2.5, dash: 'dot' as const },
+        }] : []),
+        ...(bg1 && params.bg_method !== 'none' ? [{
+          x: bg1.x, y: bg1.y,
+          type: 'scatter' as const, mode: 'lines' as const, name: 'BG1',
+          line: { color: '#19D3F3', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
+        }] : []),
+        ...(bg2 && params.bg_method !== 'none' ? [{
+          x: bg2.x, y: bg2.y,
+          type: 'scatter' as const, mode: 'lines' as const, name: 'BG2',
+          line: { color: '#FFA15A', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
+        }] : []),
+        ...refPeaks.map(rp => ({
+          x: [rp.energy_eV, rp.energy_eV],
+          y: [0, 1],
+          type: 'scatter' as const, mode: 'lines' as const,
+          name: `${rp.material} ${rp.label}`,
+          line: { color: '#a78bfa', width: 1, dash: 'dot' as const },
+          yaxis: 'y' as const,
+          showlegend: false,
+          hovertemplate: `${rp.material}: ${rp.label}<br>${rp.energy_eV} eV<extra></extra>`,
+        })),
+        ...(detectedPeaks.length > 0 ? [{
+          x: detectedPeaks.map(pk => pk.x),
+          y: detectedPeaks.map(pk => pk.intensity),
+          type: 'scatter' as const, mode: 'markers' as const, name: '偵測峰',
+          marker: { color: '#f59e0b', size: 9, symbol: 'triangle-down' },
+        }] : []),
+      ]}
+      layout={{
+        ...chartLayout('處理後光譜', xLabel),
+        height,
+        yaxis: {
+          ...(chartLayout('', '').yaxis),
+          ...(refPeaks.length > 0 ? {} : {}),
+        },
+      }}
+      config={withPlotFullscreen()}
+      style={{ width: '100%' }}
+    />
+  )
+  const openMainSpectraPopup = () => {
+    if (!onOpenPlotPopup || !hasProcessed) return
+
+    onOpenPlotPopup({
+      title: 'XES 主光譜圖表',
+      content: renderMainSpectraChart(420),
+    })
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-canvas)]">
@@ -680,6 +753,13 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
             <>
               {/* Main spectra chart */}
               <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
+                <div className="mb-2 flex justify-end">
+                  {onOpenPlotPopup && (
+                    <button type="button" className="chart-popup-button" onClick={openMainSpectraPopup}>
+                      彈出圖表
+                    </button>
+                  )}
+                </div>
                 <Plot
                   data={[
                     ...processed.map((ds, i) => ({

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Plot from 'react-plotly.js'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
@@ -6,6 +6,7 @@ import { ANALYSIS_MODULES } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
+import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { calibrateEnergy, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
 import type {
   CalibrationResult,
@@ -666,16 +667,19 @@ function ChartToolbar({
   title,
   colorValue,
   onColorChange,
+  actions,
 }: {
   title: string
   colorValue: string
   onColorChange: (value: string) => void
+  actions?: ReactNode
 }) {
   return (
     <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
       <div className="flex items-center gap-2">
         <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-soft)]">線色</span>
+        {actions}
         <select
           value={colorValue}
           onChange={e => onColorChange(e.target.value)}
@@ -980,7 +984,13 @@ function getOverlayStageDatasets(stage: ProcessResult | null | undefined, useAve
 
 // ── main component ────────────────────────────────────────────────────────────
 
-export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
+export default function XPS({
+  onModuleSelect,
+  onOpenPlotPopup,
+}: {
+  onModuleSelect?: (m: AnalysisModuleId) => void
+  onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+}) {
   const moduleContent = MODULE_CONTENT.xps
   const restoringSessionRef = useRef(false)
   const lastLoadedSessionKeyRef = useRef<string | null>(null)
@@ -1760,6 +1770,28 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const finalStageDatasets = processingViewMode === 'single' && activeDataset
     ? [{ name: activeDataset.name, x: activeDataset.x, y: activeDataset.y_processed }]
     : []
+  const renderFinalChart = (height = 380, bindLegend = true) => {
+    if (!activeDataset) return null
+
+    return (
+      <Plot
+        data={applyHidden((fitResult ? buildFitTraces(activeDataset, fitResult, chartLineColors.final) : buildMainTraces(activeDataset, showRaw, showBg, chartLineColors.final)) as Plotly.Data[], finalHidden)}
+        layout={chartLayout() as Plotly.Layout}
+        config={withPlotFullscreen()}
+        style={{ width: '100%', height }}
+        onLegendClick={bindLegend ? (makeLegendClick(setFinalHidden) as never) : undefined}
+        onLegendDoubleClick={bindLegend ? (() => false) : undefined}
+      />
+    )
+  }
+  const openFinalChartPopup = () => {
+    if (!onOpenPlotPopup || !activeDataset) return
+
+    onOpenPlotPopup({
+      title: `XPS 最終圖表 - ${activeDataset.name}`,
+      content: renderFinalChart(440, false),
+    })
+  }
   const overlayFinalDatasets = getOverlayStageDatasets(overlayBundle?.final ?? null, overlayState.params.average)
   const overlayBackgroundDatasets = getOverlayStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
   const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
@@ -2741,18 +2773,16 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                       title={`最終處理光譜${fitResult ? '（含擬合結果）' : ''}`}
                       colorValue={chartLineColors.final}
                       onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
+                      actions={onOpenPlotPopup ? (
+                        <button type="button" className="chart-popup-button" onClick={openFinalChartPopup}>
+                          彈出圖表
+                        </button>
+                      ) : undefined}
                     />
                   </div>
                   <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
                 </div>
-                <Plot
-                  data={applyHidden((fitResult ? buildFitTraces(activeDataset, fitResult, chartLineColors.final) : buildMainTraces(activeDataset, showRaw, showBg, chartLineColors.final)) as Plotly.Data[], finalHidden)}
-                  layout={chartLayout() as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 380 }}
-                  onLegendClick={makeLegendClick(setFinalHidden) as never}
-                  onLegendDoubleClick={() => false}
-                />
+                {renderFinalChart()}
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
                     label="下載此步驟 CSV"

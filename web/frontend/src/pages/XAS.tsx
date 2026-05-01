@@ -4,6 +4,7 @@ import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
+import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { deconvXanes, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
@@ -180,7 +181,13 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
   )
 }
 
-export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisModuleId) => void }) {
+export default function XAS({
+  onModuleSelect,
+  onOpenPlotPopup,
+}: {
+  onModuleSelect?: (m: AnalysisModuleId) => void
+  onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+}) {
   const moduleContent = MODULE_CONTENT.xas
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('nigiro-xas-sidebar-width'))
@@ -212,6 +219,22 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [deconvError, setDeconvError] = useState<string | null>(null)
 
   const activeDataset = result?.average ?? result?.datasets[0] ?? null
+  const renderChannelChart = useCallback((dataset: ProcessedDataset, channel: 'TEY' | 'TFY', height: number) => (
+    <Plot
+      data={buildTraces(dataset, channel, showRaw) as Plotly.Data[]}
+      layout={chartLayout('Energy (eV)', `${channel} Intensity`) as Plotly.Layout}
+      config={withPlotFullscreen()}
+      style={{ width: '100%', height }}
+    />
+  ), [showRaw])
+  const openChannelPopup = useCallback((channel: 'TEY' | 'TFY') => {
+    if (!activeDataset || !onOpenPlotPopup) return
+
+    onOpenPlotPopup({
+      title: `XAS ${channel} 圖表 - ${activeDataset.name}`,
+      content: renderChannelChart(activeDataset, channel, 420),
+    })
+  }, [activeDataset, onOpenPlotPopup, renderChannelChart])
 
   // reprocess whenever rawFiles or params change
   useEffect(() => {
@@ -690,24 +713,28 @@ export default function XAS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
             {/* TEY chart */}
             <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-              <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">TEY（Total Electron Yield）</p>
-              <Plot
-                data={buildTraces(activeDataset, 'TEY', showRaw) as Plotly.Data[]}
-                layout={chartLayout('Energy (eV)', 'TEY Intensity') as Plotly.Layout}
-                config={withPlotFullscreen()}
-                style={{ width: '100%', height: 340 }}
-              />
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-[var(--text-main)]">TEY（Total Electron Yield）</p>
+                {onOpenPlotPopup && (
+                  <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TEY')}>
+                    彈出圖表
+                  </button>
+                )}
+              </div>
+              {renderChannelChart(activeDataset, 'TEY', 340)}
             </div>
 
             {/* TFY chart */}
             <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-              <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">TFY（Total Fluorescence Yield）</p>
-              <Plot
-                data={buildTraces(activeDataset, 'TFY', showRaw) as Plotly.Data[]}
-                layout={chartLayout('Energy (eV)', 'TFY Intensity') as Plotly.Layout}
-                config={withPlotFullscreen()}
-                style={{ width: '100%', height: 340 }}
-              />
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-[var(--text-main)]">TFY（Total Fluorescence Yield）</p>
+                {onOpenPlotPopup && (
+                  <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TFY')}>
+                    彈出圖表
+                  </button>
+                )}
+              </div>
+              {renderChannelChart(activeDataset, 'TFY', 340)}
             </div>
 
             {/* Gaussian subtraction comparison chart */}

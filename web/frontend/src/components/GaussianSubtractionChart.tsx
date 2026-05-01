@@ -6,6 +6,7 @@ interface Props {
   dataset: ProcessedDataset
   xMode: XMode
   wavelength: number
+  onOpenPopup?: () => void
 }
 
 function toD(twoTheta: number, wl: number): number {
@@ -13,7 +14,7 @@ function toD(twoTheta: number, wl: number): number {
   return wl / (2 * Math.sin(theta))
 }
 
-export default function GaussianSubtractionChart({ dataset, xMode, wavelength }: Props) {
+export default function GaussianSubtractionChart({ dataset, xMode, wavelength, onOpenPopup }: Props) {
   if (!dataset.y_gaussian_model || !dataset.y_gaussian_subtracted) return null
 
   const cssVars = typeof window !== 'undefined'
@@ -59,6 +60,13 @@ export default function GaussianSubtractionChart({ dataset, xMode, wavelength }:
 
   return (
     <div className="theme-block-soft rounded-[18px] p-3 sm:p-4">
+      {onOpenPopup && (
+        <div className="mb-2 flex justify-end">
+          <button type="button" className="chart-popup-button" onClick={onOpenPopup} aria-label="彈出圖表">
+            彈出圖表
+          </button>
+        </div>
+      )}
       <Plot
         data={traces}
         layout={{

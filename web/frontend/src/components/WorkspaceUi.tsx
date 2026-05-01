@@ -141,15 +141,18 @@ export function ChartToolbar({
   title,
   colorValue,
   onColorChange,
+  actions,
 }: {
   title: string
   colorValue: string
   onColorChange: (value: string) => void
+  actions?: ReactNode
 }) {
   return (
     <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
       <div className="flex items-center gap-2">
+        {actions}
         <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-soft)]">線色</span>
         <ThemeSelect
           value={colorValue}

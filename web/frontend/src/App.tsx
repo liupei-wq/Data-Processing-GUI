@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './components/AnalysisModuleNav'
 import CursorParticles from './components/CursorParticles'
+import PlotPopupHost from './components/plots/PlotPopupHost'
+import { usePlotPopups } from './hooks/usePlotPopups'
 import Raman from './pages/Raman'
 import XAS from './pages/XAS'
 import XES from './pages/XES'
@@ -62,6 +64,7 @@ const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
 
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>('workflow-raman')
+  const { popupPlots, openPlotPopup, closePlotPopup, closeAllPlotPopups } = usePlotPopups()
   const [workspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeId>(() => {
     const saved = localStorage.getItem('nigiro-theme') as ThemeId | 'midnight' | null
@@ -115,6 +118,7 @@ export default function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setWorkspaceLauncherOpen(false)
+        closeAllPlotPopups()
       }
     }
 
@@ -124,7 +128,7 @@ export default function App() {
       window.removeEventListener('pointerdown', handlePointerDown)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [])
+  }, [closeAllPlotPopups])
 
   const openWorkspaceLauncher = () => {
     if (workspaceLauncherCloseTimerRef.current != null) {
@@ -357,15 +361,16 @@ export default function App() {
       </div>
 
       <main className="relative z-10 min-h-screen">
-        {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} />}
-        {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} />}
-        {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} />}
-        {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} />}
-        {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} />}
-        {workspace === 'tool-background' && <SingleProcessTool tool="background" />}
-        {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" />}
-        {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" />}
+        {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+        {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+        {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+        {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+        {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+        {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} />}
+        {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" onOpenPlotPopup={openPlotPopup} />}
+        {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" onOpenPlotPopup={openPlotPopup} />}
       </main>
+      <PlotPopupHost popupPlots={popupPlots} onClose={closePlotPopup} />
     </div>
   )
 }
