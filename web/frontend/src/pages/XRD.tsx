@@ -23,17 +23,13 @@ import type {
   ReferenceMatchParams,
   ReferenceMatchRow,
   ScherrerParams,
-  XrdFitParams,
-  XrdFitResult,
-  XrdFitSeed,
   XMode,
   XAxisCorrectionParams,
   WavelengthPreset,
 } from '../types/xrd'
-import { detectPeaks, fitXrdPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
+import { detectPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import GaussianSubtractionChart from '../components/GaussianSubtractionChart'
 import ProcessingPanel, {
   DEFAULT_PARAMS,
   WAVELENGTH_MAP,
@@ -254,13 +250,6 @@ function inferPeakWorkflowPreset(params: PeakDetectionParams): 'thin_film_si' | 
   return 'custom'
 }
 
-function clipFitWindow(lo: number, hi: number, domainLo: number, domainHi: number) {
-  const start = Math.max(domainLo, Math.min(lo, hi))
-  const end = Math.min(domainHi, Math.max(lo, hi))
-  if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) return null
-  return { lo: start, hi: end }
-}
-
 function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], xLabel: string, yLabel: string) {
   const rows: CsvCell[][] = []
   datasets.forEach(dataset => {
@@ -287,7 +276,7 @@ function detailedDatasetCsv(
   wavelength: number,
   logViewParams: LogViewParams,
 ): string {
-  const headers = ['2theta_deg', 'd_spacing_A', 'raw', 'gaussian_model', 'gaussian_subtracted', 'processed']
+  const headers = ['2theta_deg', 'd_spacing_A', 'raw', 'processed']
   const processedMin = dataset.y_processed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
   const logShift = logViewParams.enabled && processedMin <= 0
     ? Math.abs(processedMin) + logViewParams.floor_value
@@ -300,8 +289,6 @@ function detailedDatasetCsv(
       x.toFixed(4),
       dSpacing == null ? '' : dSpacing.toFixed(4),
       dataset.y_raw[idx]?.toFixed(6) ?? '',
-      dataset.y_gaussian_model?.[idx]?.toFixed(6) ?? '',
-      dataset.y_gaussian_subtracted?.[idx]?.toFixed(6) ?? '',
       processed?.toFixed(6) ?? '',
     ]
     if (logViewParams.enabled) {
@@ -499,17 +486,6 @@ export default function XRD({
     show_unmatched_peaks: true,
     export_weak_peaks: true,
   })
-  const [fitParams, setFitParams] = useState<XrdFitParams>({
-    enabled: false,
-    profile: 'pseudo_voigt',
-    seed_source: 'matched_only',
-    range_mode: 'auto',
-    auto_padding: 0.45,
-    fit_lo: null,
-    fit_hi: null,
-    maxfev: 20000,
-  })
-  const [fitResult, setFitResult] = useState<XrdFitResult | null>(null)
   const [scherrerParams, setScherrerParams] = useState<ScherrerParams>({
     enabled: false,
     k: 0.9,
@@ -528,18 +504,14 @@ export default function XRD({
   const [chartLineColors, setChartLineColors] = useState({
     overlay: 'blue',
     preprocess: 'teal',
-    gaussian: 'orange',
     log: 'violet',
     final: 'blue',
-    fit: 'rose',
   })
   const [rawHidden, setRawHidden] = useState<string[]>([])
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
   const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
-  const [gaussianHidden, setGaussianHidden] = useState<string[]>([])
   const [logHidden, setLogHidden] = useState<string[]>([])
   const [finalHidden, setFinalHidden] = useState<string[]>([])
-  const [fitHidden, setFitHidden] = useState<string[]>([])
 
   useEffect(() => {
     localStorage.setItem('nigiro-xrd-sidebar-width', String(sidebarWidth))
@@ -601,7 +573,6 @@ export default function XRD({
     () => result?.datasets.find(dataset => dataset.name === selectedDatasetName) ?? result?.datasets[0] ?? result?.average ?? null,
     [result, selectedDatasetName],
   )
-  const activeGaussianFits = activeDataset?.gaussian_fits ?? []
   const overlayResult = useMemo(() => {
     if (!result) return null
     const datasets = result.datasets.filter(dataset => overlaySelection.includes(dataset.name))
@@ -722,25 +693,6 @@ export default function XRD({
       },
     ] as Plotly.Data[]
   }, [activeDataset, chartLineColors.preprocess, wavelength, xMode])
-  const gaussianStageDatasets = useMemo(
-    () => activeDataset?.y_gaussian_subtracted && activeDataset?.y_gaussian_model
-      ? [
-          { name: '原始', x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_raw },
-          { name: '高斯模型', x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_gaussian_model },
-          { name: '扣除後', x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_gaussian_subtracted },
-        ]
-      : [],
-    [activeDataset, wavelength, xMode],
-  )
-  const gaussianChartTraces = useMemo(() => {
-    if (gaussianStageDatasets.length === 0) return []
-    const palette = LINE_COLOR_PALETTES[chartLineColors.gaussian] ?? LINE_COLOR_PALETTES.orange
-    return [
-      { x: gaussianStageDatasets[0].x, y: gaussianStageDatasets[0].y, type: 'scatter', mode: 'lines', name: '原始', line: { color: palette.secondary, width: 1.25, dash: 'dot' } },
-      { x: gaussianStageDatasets[1].x, y: gaussianStageDatasets[1].y, type: 'scatter', mode: 'lines', name: '高斯模型', line: { color: palette.tertiary, width: 1.5 } },
-      { x: gaussianStageDatasets[2].x, y: gaussianStageDatasets[2].y, type: 'scatter', mode: 'lines', name: '扣除後', line: { color: palette.primary, width: 2.2 } },
-    ] as Plotly.Data[]
-  }, [chartLineColors.gaussian, gaussianStageDatasets])
   const logStageDatasets = useMemo(() => {
     if (!activeDataset || !logViewParams.enabled) return []
     const minValue = activeDataset.y_processed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
@@ -835,107 +787,14 @@ export default function XRD({
     () => refMatchParams.only_show_matched ? referenceMatches.filter(row => row.matched) : referenceMatches,
     [referenceMatches, refMatchParams.only_show_matched],
   )
-  const allPeakRows = useMemo(
-    () => buildFinalPeakRows(detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg, true),
-    [detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg],
-  )
   const finalPeakRows = useMemo(
     () => buildFinalPeakRows(detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg, peakParams.show_unmatched_peaks),
     [detectedPeaks, filteredRefPeaks, peakParams.show_unmatched_peaks, refMatchParams.tolerance_deg],
   )
-  const fitSeedRows = useMemo(() => {
-    if (!fitParams.enabled || !activeDataset || isOverlayView) return []
-    let rows = allPeakRows
-    if (fitParams.seed_source === 'matched_only') {
-      rows = rows.filter(row => row.near_reference)
-    } else if (fitParams.seed_source === 'high_confidence') {
-      rows = rows.filter(row => row.confidence === 'high' || row.confidence === 'medium')
-    }
-    if (fitParams.range_mode === 'manual' && fitParams.fit_lo != null && fitParams.fit_hi != null) {
-      const lo = Math.min(fitParams.fit_lo, fitParams.fit_hi)
-      const hi = Math.max(fitParams.fit_lo, fitParams.fit_hi)
-      rows = rows.filter(row => row.two_theta >= lo && row.two_theta <= hi)
-    }
-    return rows.sort((a, b) => a.two_theta - b.two_theta)
-  }, [activeDataset, allPeakRows, fitParams, isOverlayView])
-  const fitWindow = useMemo(() => {
-    if (!activeDataset || fitSeedRows.length === 0 || isOverlayView) return null
-    const domainLo = Math.min(...activeDataset.x)
-    const domainHi = Math.max(...activeDataset.x)
-    if (fitParams.range_mode === 'manual') {
-      return clipFitWindow(
-        fitParams.fit_lo ?? domainLo,
-        fitParams.fit_hi ?? domainHi,
-        domainLo,
-        domainHi,
-      )
-    }
-    const pad = Math.max(fitParams.auto_padding, 0.01)
-    return clipFitWindow(
-      fitSeedRows[0].two_theta - pad,
-      fitSeedRows[fitSeedRows.length - 1].two_theta + pad,
-      domainLo,
-      domainHi,
-    )
-  }, [activeDataset, fitParams.auto_padding, fitParams.fit_hi, fitParams.fit_lo, fitParams.range_mode, fitSeedRows, isOverlayView])
-  const fitSeeds = useMemo<XrdFitSeed[]>(() => fitSeedRows.map((row, index) => ({
-    peak_id: `fit_seed_${index + 1}_${row.two_theta.toFixed(4)}`,
-    label: row.hkl ? `${row.phase} ${row.hkl}` : (row.phase !== 'unmatched' ? row.phase : `Peak ${index + 1}`),
-    center: row.two_theta,
-    fwhm: Math.max(row.fwhm_deg, 0.03),
-    amplitude: Math.max(row.intensity, 1e-6),
-    phase: row.phase,
-    hkl: row.hkl,
-    confidence: row.confidence,
-    near_reference: row.near_reference,
-    center_tolerance: Math.max(0.08, Math.min(0.8, row.fwhm_deg * 1.5)),
-    fwhm_min: Math.max(0.01, row.fwhm_deg * 0.45),
-    fwhm_max: Math.max(row.fwhm_deg * 2.8, row.fwhm_deg + 0.12),
-    note: row.note,
-  })), [fitSeedRows])
   const matchedReferenceCount = useMemo(
     () => referenceMatches.filter(row => row.matched).length,
     [referenceMatches],
   )
-  const fitChartTraces = useMemo(() => {
-    if (!fitResult || !activeDataset || !fitWindow) return []
-    const palette = LINE_COLOR_PALETTES[chartLineColors.fit] ?? LINE_COLOR_PALETTES.rose
-    const mask = activeDataset.x.map(value => value >= fitWindow.lo && value <= fitWindow.hi)
-    const pick = (values: number[]) => values.filter((_, index) => mask[index])
-    const xValues = convertXValues(activeDataset.x.filter((value) => value >= fitWindow.lo && value <= fitWindow.hi), xMode, wavelength)
-    const traces: Plotly.Data[] = [
-      {
-        x: xValues,
-        y: pick(activeDataset.y_processed),
-        type: 'scatter',
-        mode: 'lines',
-        name: '處理後光譜',
-        line: { color: palette.secondary, width: 1.35, dash: 'dot' },
-      },
-      {
-        x: xValues,
-        y: pick(fitResult.y_fit),
-        type: 'scatter',
-        mode: 'lines',
-        name: '總擬合',
-        line: { color: palette.primary, width: 2.4 },
-      },
-    ]
-    fitResult.y_individual.forEach((component, index) => {
-      traces.push({
-        x: xValues,
-        y: pick(component),
-        type: 'scatter',
-        mode: 'lines',
-        name: fitResult.peaks[index]?.Peak_Name ?? `Peak ${index + 1}`,
-        line: {
-          color: palette.series[index % palette.series.length],
-          width: 1.6,
-        },
-      })
-    })
-    return traces
-  }, [activeDataset, chartLineColors.fit, fitResult, fitWindow, wavelength, xMode])
   const scherrerRows = useMemo(
     () => detectedPeaks.map(peak => ({
       ...peak,
@@ -980,18 +839,10 @@ export default function XRD({
       ...peakParams,
       detected_count: detectedPeaks.length,
     },
-    peak_fitting: {
-      ...fitParams,
-      fit_window: fitWindow,
-      seed_count: fitSeeds.length,
-      seed_labels: fitSeeds.map(seed => seed.label),
-      result: fitResult,
-    },
     scherrer: {
       ...scherrerParams,
       rows: scherrerRows,
     },
-    gaussian_fit_rows: activeGaussianFits,
     reference_peaks: filteredRefPeaks,
     reference_matches: referenceMatches,
     final_peaks: finalPeakRows,
@@ -1079,39 +930,6 @@ export default function XRD({
     return () => { cancelled = true; clearTimeout(timer) }
   }, [activeDataset, peakParams, wavelength])
 
-  useEffect(() => {
-    if (!fitParams.enabled || !activeDataset || isOverlayView) {
-      setFitResult(null)
-      return
-    }
-    if (!fitWindow || fitSeeds.length === 0) {
-      setFitResult(null)
-      return
-    }
-
-    let cancelled = false
-    const timer = setTimeout(() => {
-      fitXrdPeaks(activeDataset.name, activeDataset.x, activeDataset.y_processed, {
-        peaks: fitSeeds,
-        profile: fitParams.profile,
-        fit_lo: fitWindow.lo,
-        fit_hi: fitWindow.hi,
-        maxfev: fitParams.maxfev,
-      })
-        .then(result => {
-          if (!cancelled) setFitResult(result)
-        })
-        .catch(e => {
-          if (!cancelled) {
-            setFitResult(null)
-            setError(String(e.message))
-          }
-        })
-    }, 300)
-
-    return () => { cancelled = true; clearTimeout(timer) }
-  }, [activeDataset, fitParams, fitSeeds, fitWindow, isOverlayView])
-
   const handleFiles = useCallback(async (files: File[]) => {
     setIsLoading(true)
     setError(null)
@@ -1119,7 +937,6 @@ export default function XRD({
       const parsed = await parseFiles(files)
       setRawFiles(parsed)
       setDetectedPeaks([])
-      setFitResult(null)
       setParams(p => ({ ...p, norm_x_start: null, norm_x_end: null }))
     } catch (e: unknown) {
       setError((e as Error).message)
@@ -1254,7 +1071,6 @@ export default function XRD({
                           setResult(null)
                           setRefPeaks([])
                           setDetectedPeaks([])
-                          setFitResult(null)
                         }}
                         className="text-xs font-medium text-[var(--accent-secondary)] transition-colors hover:opacity-80"
                       >
@@ -1290,8 +1106,6 @@ export default function XRD({
                 peakParams={peakParams}
                 onPeakParamsChange={setPeakParams}
                 onApplyPeakPreset={applyPeakPreset}
-                fitParams={fitParams}
-                onFitParamsChange={setFitParams}
                 scherrerParams={scherrerParams}
                 onScherrerParamsChange={setScherrerParams}
               />
@@ -1300,7 +1114,7 @@ export default function XRD({
         </div>
       </aside>
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+      <div className="workspace-main-scroll min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
           <ModuleTopBar
             title={moduleContent.title}
@@ -1475,80 +1289,10 @@ export default function XRD({
                 </div>
               )}
 
-              {!isOverlayView && params.gaussian_enabled && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                  <ChartToolbar
-                    title="3. 高斯模板扣除"
-                    colorValue={chartLineColors.gaussian}
-                    onColorChange={value => setChartLineColors(current => ({ ...current, gaussian: value }))}
-                  />
-                  <p className="mb-3 text-xs text-[var(--text-soft)]">使用固定面積與固定 FWHM 的高斯模板，先扣除已知峰影響；視覺比照 XPS 分階段圖卡，但計算邏輯仍沿用現有 XRD 後端。</p>
-                  {gaussianChartTraces.length > 0 ? (
-                    <>
-                      <DeferredRender minHeight={360}>
-                        <Plot
-                          data={applyHidden(gaussianChartTraces, gaussianHidden)}
-                          layout={chartLayout({ xMode, wavelength })}
-                          config={withPlotFullscreen({ scrollZoom: false })}
-                          style={{ width: '100%', height: 360 }}
-                          onLegendClick={makeLegendClick(setGaussianHidden) as never}
-                          onLegendDoubleClick={() => false}
-                          useResizeHandler
-                        />
-                      </DeferredRender>
-                      <div className="mt-3 flex justify-start">
-                        <button
-                          type="button"
-                          onClick={() => downloadFile(buildStageCsv(gaussianStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_gaussian_stage.csv', 'text/csv')}
-                          className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
-                        >
-                          下載此步驟 CSV
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
-                      高斯模板扣除已啟用，但目前結果集中還沒有可顯示的模型與扣除後曲線。
-                    </div>
-                  )}
-
-                  {activeGaussianFits.length > 0 && (
-                    <div className="mt-4 overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
-                        <thead>
-                          <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            <th className="px-3 py-3 font-medium">峰名稱</th>
-                            <th className="px-3 py-3 font-medium">初始 2θ</th>
-                            <th className="px-3 py-3 font-medium">擬合 2θ</th>
-                            <th className="px-3 py-3 font-medium">位移</th>
-                            <th className="px-3 py-3 font-medium">FWHM</th>
-                            <th className="px-3 py-3 font-medium">面積</th>
-                            <th className="px-3 py-3 font-medium">峰高</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {activeGaussianFits.map((fit, idx) => (
-                            <tr key={`${fit.Peak_Name}-${idx}`} className="border-b border-white/5 text-slate-200 last:border-b-0">
-                              <td className="px-3 py-3 font-medium">{fit.Peak_Name}</td>
-                              <td className="px-3 py-3">{fit.Seed_Center.toFixed(4)}</td>
-                              <td className="px-3 py-3">{fit.Fitted_Center.toFixed(4)}</td>
-                              <td className="px-3 py-3">{fit.Shift.toFixed(4)}</td>
-                              <td className="px-3 py-3">{fit.Fixed_FWHM.toFixed(4)}</td>
-                              <td className="px-3 py-3">{fit.Fixed_Area.toFixed(4)}</td>
-                              <td className="px-3 py-3">{fit.Template_Height.toFixed(4)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-
               {!isOverlayView && logChartTraces.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                   <ChartToolbar
-                    title="4. 對數弱峰檢視"
+                    title="3. 對數弱峰檢視"
                     colorValue={chartLineColors.log}
                     onColorChange={value => setChartLineColors(current => ({ ...current, log: value }))}
                   />
@@ -1572,7 +1316,7 @@ export default function XRD({
               {!isOverlayView && finalChartTraces.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                   <ChartToolbar
-                    title="5. 最終處理光譜"
+                    title="4. 最終處理光譜"
                     colorValue={chartLineColors.final}
                     onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
                   />
@@ -1600,53 +1344,6 @@ export default function XRD({
                 </div>
               )}
 
-              {fitParams.enabled && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                  <ChartToolbar
-                    title="6. Peak Fitting"
-                    colorValue={chartLineColors.fit}
-                    onColorChange={value => setChartLineColors(current => ({ ...current, fit: value }))}
-                  />
-                  {isOverlayView ? (
-                    <div className="rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-6 text-sm text-[var(--text-soft)]">
-                      峰擬合目前先支援單筆資料模式。請先切回單筆資料，再執行 Pseudo-Voigt / Voigt 擬合。
-                    </div>
-                  ) : fitSeeds.length === 0 || !fitWindow ? (
-                    <div className="rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-6 text-sm text-[var(--text-soft)]">
-                      目前沒有可用的擬合 seed。可以先啟用自動尋峰，或調整擬合的 seed 來源與範圍。
-                    </div>
-                  ) : fitResult && fitChartTraces.length > 0 ? (
-                    <>
-                      <p className="mb-3 text-xs text-[var(--text-soft)]">
-                        擬合範圍：{fitWindow.lo.toFixed(3)} – {fitWindow.hi.toFixed(3)} deg，使用 {fitSeeds.length} 個 seed，主要峰形為 {fitResult.profile}。
-                      </p>
-                      <DeferredRender minHeight={400}>
-                        <Plot
-                          data={applyHidden(fitChartTraces, fitHidden)}
-                          layout={chartLayout({ xMode, wavelength, height: 400 })}
-                          config={withPlotFullscreen({ scrollZoom: false })}
-                          style={{ width: '100%', height: 400 }}
-                          onLegendClick={makeLegendClick(setFitHidden) as never}
-                          onLegendDoubleClick={() => false}
-                          useResizeHandler
-                        />
-                      </DeferredRender>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-soft)]">
-                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">R² {fitResult.r_squared.toFixed(4)}</span>
-                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">Adj R² {fitResult.adjusted_r_squared.toFixed(4)}</span>
-                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">RMSE {fitResult.rmse.toExponential(3)}</span>
-                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">AIC {fitResult.aic.toFixed(2)}</span>
-                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">BIC {fitResult.bic.toFixed(2)}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-6 text-sm text-[var(--text-soft)]">
-                      正在依據目前尋峰結果執行峰擬合。
-                    </div>
-                  )}
-                </div>
-              )}
-
               {peakParams.enabled && (
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -1666,7 +1363,8 @@ export default function XRD({
                       目前條件下沒有找到可用峰位。可以提高偵測靈敏度、放寬排除區間，或重新調整峰寬範圍後再試一次。
                     </div>
                   ) : (
-                    <div className="mb-4 overflow-x-auto">
+                    <DeferredRender minHeight={320}>
+                      <div className="mb-4 overflow-x-auto">
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
@@ -1716,74 +1414,8 @@ export default function XRD({
                           ))}
                         </tbody>
                       </table>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {fitParams.enabled && (
-                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
-                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-white">峰擬合結果</p>
-                      <p className="mt-1 text-xs leading-5 text-slate-400">
-                        目前以尋峰結果作為 seed，輸出峰中心、FWHM、面積與峰形參數，方便後續做論文表格整理。
-                      </p>
-                    </div>
-                    <span className="text-xs text-slate-500">
-                      {fitResult?.peaks.length ?? 0} 個擬合峰
-                    </span>
-                  </div>
-
-                  {isOverlayView ? (
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
-                      疊圖模式暫不提供峰擬合結果表。
-                    </div>
-                  ) : !fitResult || fitResult.peaks.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
-                      啟用峰擬合後，這裡會顯示每個擬合峰的中心、FWHM、面積、η 與位移資訊。
-                    </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
-                        <thead>
-                          <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            <th className="px-3 py-3 font-medium">peak</th>
-                            <th className="px-3 py-3 font-medium">phase</th>
-                            <th className="px-3 py-3 font-medium">hkl</th>
-                            <th className="px-3 py-3 font-medium">profile</th>
-                            <th className="px-3 py-3 font-medium">seed</th>
-                            <th className="px-3 py-3 font-medium">center</th>
-                            <th className="px-3 py-3 font-medium">delta</th>
-                            <th className="px-3 py-3 font-medium">FWHM</th>
-                            <th className="px-3 py-3 font-medium">height</th>
-                            <th className="px-3 py-3 font-medium">area</th>
-                            <th className="px-3 py-3 font-medium">area %</th>
-                            <th className="px-3 py-3 font-medium">eta</th>
-                            <th className="px-3 py-3 font-medium">status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {fitResult.peaks.map(row => (
-                            <tr key={row.Peak_ID} className="border-b border-white/5 text-slate-200 last:border-b-0">
-                              <td className="px-3 py-3 font-medium">{row.Peak_Name}</td>
-                              <td className="px-3 py-3">{row.Phase || '-'}</td>
-                              <td className="px-3 py-3">{row.HKL || '-'}</td>
-                              <td className="px-3 py-3">{row.Profile}</td>
-                              <td className="px-3 py-3">{row.Seed_Center_deg.toFixed(4)}</td>
-                              <td className="px-3 py-3">{row.Center_deg.toFixed(4)}</td>
-                              <td className="px-3 py-3">{row.Delta_deg.toFixed(4)}</td>
-                              <td className="px-3 py-3">{row.FWHM_deg.toFixed(4)}</td>
-                              <td className="px-3 py-3">{row.Height.toFixed(2)}</td>
-                              <td className="px-3 py-3">{row.Area.toFixed(4)}</td>
-                              <td className="px-3 py-3">{row.Area_pct.toFixed(2)}</td>
-                              <td className="px-3 py-3">{row.Eta == null ? 'N/A' : row.Eta.toFixed(3)}</td>
-                              <td className="px-3 py-3">{row.Fit_Status}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                      </div>
+                    </DeferredRender>
                   )}
                 </div>
               )}
@@ -1807,7 +1439,8 @@ export default function XRD({
                       先啟用自動尋峰並確認有峰位結果，Scherrer 才能計算。
                     </div>
                   ) : (
-                    <div className="overflow-x-auto">
+                    <DeferredRender minHeight={280}>
+                      <div className="overflow-x-auto">
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
@@ -1834,7 +1467,8 @@ export default function XRD({
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                      </div>
+                    </DeferredRender>
                   )}
                 </div>
               )}
@@ -1866,7 +1500,8 @@ export default function XRD({
                       目前容差下沒有匹配到參考峰。可以放寬容差，或重新調整平滑與尋峰條件。
                     </div>
                   ) : (
-                    <div className="overflow-x-auto">
+                    <DeferredRender minHeight={320}>
+                      <div className="overflow-x-auto">
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
@@ -1923,16 +1558,18 @@ export default function XRD({
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                      </div>
+                    </DeferredRender>
                   )}
                 </div>
               )}
 
-              <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+              <DeferredRender minHeight={260}>
+                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                 <div className="mb-4">
                   <p className="text-sm font-semibold text-white">匯出</p>
                   <p className="mt-1 text-xs leading-5 text-slate-400">
-                    下載處理後光譜、峰位表、匹配表、高斯中心結果，以及目前 XRD 流程的 JSON 紀錄。
+                    下載處理後光譜、峰位表、匹配表，以及目前 XRD 流程的 JSON 紀錄。
                   </p>
                 </div>
 
@@ -1985,31 +1622,6 @@ export default function XRD({
                           className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
                         >
                           下載 Scherrer CSV
-                        </button>
-                      )}
-                      {activeGaussianFits.length > 0 && (
-                        <button
-                          onClick={() => {
-                            downloadFile(
-                              toCsv(
-                                ['peak_name', 'seed_center_2theta_deg', 'fitted_center_2theta_deg', 'shift_deg', 'fixed_fwhm_deg', 'fixed_area', 'template_height'],
-                                activeGaussianFits.map(row => [
-                                  row.Peak_Name,
-                                  row.Seed_Center.toFixed(4),
-                                  row.Fitted_Center.toFixed(4),
-                                  row.Shift.toFixed(4),
-                                  row.Fixed_FWHM.toFixed(4),
-                                  row.Fixed_Area.toFixed(4),
-                                  row.Template_Height.toFixed(4),
-                                ]),
-                              ),
-                              'xrd_gaussian_centers.csv',
-                              'text/csv',
-                            )
-                          }}
-                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
-                        >
-                          下載高斯中心結果 CSV
                         </button>
                       )}
                     </div>
@@ -2077,41 +1689,6 @@ export default function XRD({
                           className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
                         >
                           Export final peaks Excel
-                        </button>
-                      )}
-                      {fitParams.enabled && fitResult && fitResult.peaks.length > 0 && (
-                        <button
-                          onClick={() => {
-                            downloadFile(
-                              toCsv(
-                                ['peak_id', 'peak_name', 'phase', 'hkl', 'profile', 'seed_center_deg', 'center_deg', 'delta_deg', 'fwhm_deg', 'height', 'area', 'area_pct', 'eta', 'confidence', 'near_reference', 'fit_status', 'note'],
-                                fitResult.peaks.map(row => [
-                                  row.Peak_ID,
-                                  row.Peak_Name,
-                                  row.Phase,
-                                  row.HKL,
-                                  row.Profile,
-                                  row.Seed_Center_deg.toFixed(4),
-                                  row.Center_deg.toFixed(4),
-                                  row.Delta_deg.toFixed(4),
-                                  row.FWHM_deg.toFixed(4),
-                                  row.Height.toFixed(4),
-                                  row.Area.toFixed(6),
-                                  row.Area_pct.toFixed(4),
-                                  row.Eta == null ? '' : row.Eta.toFixed(4),
-                                  row.Confidence,
-                                  row.Near_Reference ? 'true' : 'false',
-                                  row.Fit_Status,
-                                  row.Note,
-                                ]),
-                              ),
-                              'xrd_peak_fit.csv',
-                              'text/csv',
-                            )
-                          }}
-                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
-                        >
-                          下載峰擬合 CSV
                         </button>
                       )}
                       {filteredRefPeaks.length > 0 && (
@@ -2193,7 +1770,7 @@ export default function XRD({
                         下載處理報告 JSON
                       </button>
                       <p className="text-xs leading-5 text-slate-500">
-                        會保存目前波長、處理參數、log 設定、高斯中心、尋峰結果、匹配結果與 Scherrer 結果摘要。
+                        會保存目前波長、處理參數、log 設定、尋峰結果、匹配結果與 Scherrer 結果摘要。
                       </p>
                       <span className="text-xs text-slate-500">
                         {result.datasets.length} 個資料集
@@ -2202,7 +1779,8 @@ export default function XRD({
                     </div>
                   </div>
                 </div>
-              </div>
+                </div>
+              </DeferredRender>
             </>
           )}
           </div>

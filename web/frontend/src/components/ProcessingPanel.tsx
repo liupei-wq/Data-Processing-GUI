@@ -5,7 +5,6 @@ import type {
   ProcessParams,
   ReferenceMatchParams,
   ScherrerParams,
-  XrdFitParams,
   XMode,
   XAxisCorrectionParams,
   WavelengthPreset,
@@ -176,8 +175,6 @@ interface Props {
   peakParams: PeakDetectionParams
   onPeakParamsChange: (p: PeakDetectionParams) => void
   onApplyPeakPreset?: (preset: 'thin_film_si' | 'general') => void
-  fitParams: XrdFitParams
-  onFitParamsChange: (p: XrdFitParams) => void
   scherrerParams: ScherrerParams
   onScherrerParamsChange: (p: ScherrerParams) => void
 }
@@ -204,8 +201,6 @@ export default function ProcessingPanel({
   peakParams,
   onPeakParamsChange,
   onApplyPeakPreset,
-  fitParams,
-  onFitParamsChange,
   scherrerParams,
   onScherrerParamsChange,
 }: Props) {
@@ -223,8 +218,6 @@ export default function ProcessingPanel({
   ) => onXAxisCorrectionChange({ ...xAxisCorrection, [key]: value })
   const setPeak = <K extends keyof PeakDetectionParams>(key: K, value: PeakDetectionParams[K]) =>
     onPeakParamsChange({ ...peakParams, [key]: value })
-  const setFit = <K extends keyof XrdFitParams>(key: K, value: XrdFitParams[K]) =>
-    onFitParamsChange({ ...fitParams, [key]: value })
   const setScherrer = <K extends keyof ScherrerParams>(key: K, value: ScherrerParams[K]) =>
     onScherrerParamsChange({ ...scherrerParams, [key]: value })
 
@@ -276,139 +269,7 @@ export default function ProcessingPanel({
         />
       </Section>
 
-      <Section step={4} title="高斯模板扣除" hint="已知峰先扣除" defaultOpen={false} infoContent={
-        <div className="space-y-3">
-          <p className="font-semibold text-[var(--text-main)]">高斯模板扣除說明</p>
-          <p>以固定 FWHM 與固定高度的高斯模板扣除已知峰，適合先移除明確雜峰或基板峰。</p>
-          <p>這一步只調整輸入光譜，不改變後續尋峰與 Scherrer 的核心算法。</p>
-        </div>
-      }>
-        <TogglePill
-          checked={params.gaussian_enabled}
-          onChange={value => set('gaussian_enabled', value)}
-          label="啟用高斯模板扣除"
-        />
-        {params.gaussian_enabled && (
-          <>
-            <NumberInput
-              label="固定 FWHM (deg)"
-              value={params.gaussian_fwhm}
-              min={0.001}
-              max={5}
-              step={0.001}
-              onChange={value => set('gaussian_fwhm', value)}
-            />
-            <NumberInput
-              label="固定高度"
-              value={params.gaussian_height}
-              min={0.000001}
-              max={1000000000}
-              step={1}
-              onChange={value => set('gaussian_height', value)}
-            />
-            <div className="theme-block-soft rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
-              換算面積 = {(params.gaussian_height * params.gaussian_fwhm * 1.0645).toFixed(4)}
-            </div>
-            <NumberInput
-              label="中心搜尋半寬 (deg)"
-              value={params.gaussian_search_half_width}
-              min={0.001}
-              max={10}
-              step={0.01}
-              onChange={value => set('gaussian_search_half_width', value)}
-            />
-
-            <div className="space-y-2">
-              <Label>高斯中心列表</Label>
-              {params.gaussian_centers.map((center, idx) => (
-                <div key={`${center.name}-${idx}`} className="theme-block-soft rounded-2xl p-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <Checkbox
-                      checked={center.enabled}
-                      onChange={value =>
-                        set(
-                          'gaussian_centers',
-                          params.gaussian_centers.map((item, itemIdx) =>
-                            itemIdx === idx ? { ...item, enabled: value } : item,
-                          ),
-                        )
-                      }
-                      label={`中心 ${idx + 1}`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        set(
-                          'gaussian_centers',
-                          params.gaussian_centers.filter((_, itemIdx) => itemIdx !== idx),
-                        )
-                      }
-                      className="text-xs text-[var(--accent-secondary)] transition-colors hover:opacity-80"
-                    >
-                      刪除
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    <div>
-                      <Label>峰名稱</Label>
-                      <input
-                        type="text"
-                        value={center.name}
-                        onChange={e =>
-                          set(
-                            'gaussian_centers',
-                            params.gaussian_centers.map((item, itemIdx) =>
-                              itemIdx === idx ? { ...item, name: e.target.value } : item,
-                            ),
-                          )
-                        }
-                        className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                      />
-                    </div>
-                    <NumberInput
-                      label="中心 2θ (deg)"
-                      value={center.center}
-                      min={0}
-                      max={180}
-                      step={0.01}
-                      onChange={value =>
-                        set(
-                          'gaussian_centers',
-                          params.gaussian_centers.map((item, itemIdx) =>
-                            itemIdx === idx ? { ...item, center: value } : item,
-                          ),
-                        )
-                      }
-                    />
-                  </div>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => {
-                  const lastCenter =
-                    params.gaussian_centers.length > 0
-                      ? params.gaussian_centers[params.gaussian_centers.length - 1].center
-                      : 30
-                  set('gaussian_centers', [
-                    ...params.gaussian_centers,
-                    {
-                      enabled: true,
-                      name: `Peak ${params.gaussian_centers.length + 1}`,
-                      center: lastCenter,
-                    },
-                  ])
-                }}
-                className="w-full rounded-xl border border-dashed border-[var(--pill-border)] bg-[var(--pill-bg)] px-3 py-2 text-sm font-medium text-[var(--accent)] transition-colors hover:opacity-90"
-              >
-                新增高斯中心
-              </button>
-            </div>
-          </>
-        )}
-      </Section>
-
-      <Section step={5} title="平滑" hint="降噪但避免洗平峰型" defaultOpen={false} infoContent={
+      <Section step={4} title="平滑" hint="降噪但避免洗平峰型" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">平滑說明</p>
           <p>平滑只用於降低雜訊，避免鋸齒干擾視覺判讀，但視窗過大可能把弱峰洗平。</p>
@@ -447,7 +308,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
+      <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
           <p>歸一化用於比較不同樣品的峰形與相對強度，不改變原始峰位位置。</p>
@@ -469,7 +330,7 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      <Section step={7} title="弱峰檢視" hint="只改顯示，不改計算" defaultOpen={false} infoContent={
+      <Section step={6} title="弱峰檢視" hint="只改顯示，不改計算" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">弱峰檢視說明</p>
           <p>這裡只改圖表縮放方式，方便觀察弱峰，不會改動任何後端運算。</p>
@@ -505,7 +366,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={8} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false} infoContent={
+      <Section step={7} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">波長與 X 軸說明</p>
           <p>這一步控制顯示與換算基準，方便在 2θ 與 d-spacing 間切換比對。</p>
@@ -637,7 +498,7 @@ export default function ProcessingPanel({
         </div>
       </Section>
 
-      <Section step={9} title="參考峰比對" hint="快速相辨識" defaultOpen={false} infoContent={
+      <Section step={8} title="參考峰比對" hint="快速相辨識" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">參考峰比對說明</p>
           <p>依照強度門檻與容差顯示可比對的參考峰，方便快速做相辨識。</p>
@@ -692,7 +553,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={10} title="自動尋峰" hint="峰表與後續 Scherrer 的基礎" defaultOpen={false} infoContent={
+      <Section step={9} title="自動尋峰" hint="峰表與後續 Scherrer 的基礎" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">自動尋峰說明</p>
           <p>這一步決定後續峰表內容，也是 Scherrer 快速估算的基礎。</p>
@@ -843,100 +704,7 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={11} title="峰擬合" hint="Pseudo-Voigt / Voigt" defaultOpen={false} infoContent={
-        <div className="space-y-3">
-          <p className="font-semibold text-[var(--text-main)]">峰擬合說明</p>
-          <p>這一步會直接使用目前尋峰結果作為 seed，對選定範圍做峰形擬合。建議先完成背景扣除與尋峰，再啟用擬合。</p>
-        </div>
-      }>
-        <TogglePill
-          checked={fitParams.enabled}
-          onChange={value => setFit('enabled', value)}
-          label="啟用峰擬合"
-        />
-        {fitParams.enabled && (
-          <>
-            <div>
-              <Label>擬合峰形</Label>
-              <Select
-                value={fitParams.profile}
-                onChange={value => setFit('profile', value as XrdFitParams['profile'])}
-                options={[
-                  { value: 'pseudo_voigt', label: 'Pseudo-Voigt' },
-                  { value: 'voigt', label: 'Voigt' },
-                  { value: 'gaussian', label: 'Gaussian' },
-                  { value: 'lorentzian', label: 'Lorentzian' },
-                ]}
-              />
-            </div>
-            <div>
-              <Label>Seed 來源</Label>
-              <Select
-                value={fitParams.seed_source}
-                onChange={value => setFit('seed_source', value as XrdFitParams['seed_source'])}
-                options={[
-                  { value: 'matched_only', label: '僅近參考峰' },
-                  { value: 'high_confidence', label: '高 / 中信心峰' },
-                  { value: 'all_detected', label: '全部偵測峰' },
-                ]}
-              />
-            </div>
-            <div>
-              <Label>擬合範圍</Label>
-              <Select
-                value={fitParams.range_mode}
-                onChange={value => setFit('range_mode', value as XrdFitParams['range_mode'])}
-                options={[
-                  { value: 'auto', label: '自動包住選定峰' },
-                  { value: 'manual', label: '手動輸入範圍' },
-                ]}
-              />
-            </div>
-            {fitParams.range_mode === 'auto' ? (
-              <NumberInput
-                label="自動延伸 padding (deg)"
-                value={fitParams.auto_padding}
-                min={0.05}
-                max={5}
-                step={0.01}
-                onChange={value => setFit('auto_padding', value)}
-              />
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <NumberInput
-                  label="Fit 起點 (deg)"
-                  value={fitParams.fit_lo ?? 20}
-                  min={-360}
-                  max={360}
-                  step={0.01}
-                  onChange={value => setFit('fit_lo', value)}
-                />
-                <NumberInput
-                  label="Fit 終點 (deg)"
-                  value={fitParams.fit_hi ?? 80}
-                  min={-360}
-                  max={360}
-                  step={0.01}
-                  onChange={value => setFit('fit_hi', value)}
-                />
-              </div>
-            )}
-            <NumberInput
-              label="最大迭代次數"
-              value={fitParams.maxfev}
-              min={1000}
-              max={100000}
-              step={1000}
-              onChange={value => setFit('maxfev', value)}
-            />
-            <p className="text-xs leading-5 text-[var(--text-soft)]">
-              目前先支援單筆資料模式；疊圖模式下不會自動執行峰擬合。
-            </p>
-          </>
-        )}
-      </Section>
-
-      <Section step={12} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
+      <Section step={10} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">Scherrer 說明</p>
           <p>使用尋峰得到的 FWHM 估算晶粒尺寸，適合快速比較，不代表完整結構分析。</p>

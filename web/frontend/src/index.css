@@ -1827,6 +1827,13 @@ summary:active,
   -webkit-overflow-scrolling: touch;
 }
 
+.workspace-main-scroll {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  -webkit-overflow-scrolling: touch;
+  contain: layout paint style;
+}
+
 .sidebar-scroll > * {
   content-visibility: auto;
   contain-intrinsic-size: 280px;
