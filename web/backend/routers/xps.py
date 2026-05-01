@@ -395,29 +395,36 @@ def fit_xps_peaks(req: FitRequest):
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"擬合失敗：{exc}") from exc
 
-    total_area = sum(abs(pk.get("Area", 0)) for pk in result.get("peaks", []))
+    if not result.get("success", False):
+        raise HTTPException(status_code=422, detail=result.get("message", "擬合失敗"))
+
+    raw_peaks = result.get("peaks", [])
+    total_area = sum(abs(pk.get("area", 0)) for pk in raw_peaks)
 
     rows: list[FitPeakRow] = []
-    for i, pk in enumerate(result.get("peaks", []), 1):
-        area = float(pk.get("Area", 0))
+    for i, pk in enumerate(raw_peaks, 1):
+        area = float(pk.get("area", 0))
         name = (
             req.peak_labels[i - 1]
             if req.peak_labels and i - 1 < len(req.peak_labels)
-            else str(pk.get("Peak_Name", f"Peak {i}"))
+            else str(pk.get("label", f"Peak {i}"))
         )
         rows.append(FitPeakRow(
             Peak_Name=name,
-            Center_eV=float(pk.get("Center", 0)),
-            FWHM_eV=float(pk.get("FWHM", 0)),
+            Center_eV=float(pk.get("center", 0)),
+            FWHM_eV=float(pk.get("fwhm", 0)),
             Area=area,
-            Height=float(pk.get("Height", 0)),
+            Height=float(pk.get("amplitude", 0)),
             Area_pct=round(100 * abs(area) / total_area, 2) if total_area > 0 else 0,
         ))
 
+    def _to_list(arr):
+        return arr.tolist() if hasattr(arr, "tolist") else list(arr)
+
     return FitResponse(
-        y_fit=result.get("y_fit", []),
-        y_individual=result.get("y_individual", []),
-        residuals=result.get("residuals", []),
+        y_fit=_to_list(result.get("y_fit", [])),
+        y_individual=[_to_list(yi) for yi in result.get("y_individual", [])],
+        residuals=_to_list(result.get("residuals", [])),
         peaks=rows,
     )
 

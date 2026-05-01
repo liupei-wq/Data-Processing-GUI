@@ -1013,6 +1013,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     raw: 'blue',
     preprocess: 'blue',
     overlay: 'teal',
+    overlayBg: 'orange',
+    overlayNorm: 'teal',
     background: 'orange',
     normalization: 'teal',
     final: 'blue',
@@ -1029,6 +1031,8 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [activeDatasetIdx, setActiveDatasetIdx] = useState(0)
   const [rawHidden, setRawHidden] = useState<string[]>([])
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
+  const [overlayBgHidden, setOverlayBgHidden] = useState<string[]>([])
+  const [overlayNormHidden, setOverlayNormHidden] = useState<string[]>([])
   const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
   const [bgHidden, setBgHidden] = useState<string[]>([])
   const [normHidden, setNormHidden] = useState<string[]>([])
@@ -1770,7 +1774,7 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
         : overlayFinalDatasets.length >= overlayMinCount
           ? { title: '多筆疊圖比較：最終處理後', description: '這裡疊的是各筆資料目前最新的處理結果。', datasets: overlayFinalDatasets }
           : null
-  const isOverlayView = processingViewMode === 'overlay' && Boolean(overlayStage && overlaySelection.length >= 2)
+  const isOverlayView = processingViewMode === 'overlay' && overlaySelection.length >= 2
   const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, rawChartActiveIndex, rawFileColors)
   const preprocessChartTraces = rawPreview && preprocessDataset
     ? buildPipelineOverlayTraces(
@@ -1831,6 +1835,16 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
     ...(chartLayout() as Plotly.Layout),
     shapes: buildRegionShapes(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '#14b8a6'),
     annotations: buildRegionAnnotations(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '歸一化區間', '#14b8a6'),
+  }
+  const overlayBgLayout = {
+    ...(chartLayout() as Plotly.Layout),
+    shapes: buildRegionShapes(overlayState.params.bg_x_start ?? beMin, overlayState.params.bg_x_end ?? beMax, '#f59e0b'),
+    annotations: buildRegionAnnotations(overlayState.params.bg_x_start ?? beMin, overlayState.params.bg_x_end ?? beMax, '背景區間', '#f59e0b'),
+  }
+  const overlayNormLayout = {
+    ...(chartLayout() as Plotly.Layout),
+    shapes: buildRegionShapes(overlayState.params.norm_x_start ?? beMin, overlayState.params.norm_x_end ?? beMax, '#14b8a6'),
+    annotations: buildRegionAnnotations(overlayState.params.norm_x_start ?? beMin, overlayState.params.norm_x_end ?? beMax, '歸一化區間', '#14b8a6'),
   }
 
   const sidebarStyle: CSSProperties = sidebarCollapsed
@@ -2547,16 +2561,17 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
               </div>
             )}
 
-            {overlayStage && (
+            {/* ── overlay: preprocess stage ── */}
+            {overlayPreprocessDatasets.length >= overlayMinCount && (overlayState.params.interpolate || overlayState.params.average || Math.abs(overlayState.params.energy_shift) > 1e-8) && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title={overlayStage.title}
+                  title="多筆疊圖：內插 / 平均 / 校正後"
                   colorValue={chartLineColors.overlay}
                   onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
                 />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">{overlayStage.description}</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料在背景扣除前的前處理結果疊圖。</p>
                 <Plot
-                  data={applyHidden(buildOverlayTraces(overlayStage.datasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
+                  data={applyHidden(buildOverlayTraces(overlayPreprocessDatasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
@@ -2564,10 +2579,76 @@ export default function XPS({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                   onLegendDoubleClick={() => false}
                 />
                 <div className="mt-3 flex justify-start">
-                  <ExportBtn
-                    label="下載此步驟 CSV"
-                    onClick={() => downloadFile(buildStageCsv(overlayStage.datasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_stage.csv', 'text/csv')}
-                  />
+                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayPreprocessDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_preprocess.csv', 'text/csv')} />
+                </div>
+              </div>
+            )}
+
+            {/* ── overlay: background stage ── */}
+            {overlayBackgroundDatasets.length >= overlayMinCount && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <ChartToolbar
+                  title="多筆疊圖：背景扣除後"
+                  colorValue={chartLineColors.overlayBg}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, overlayBg: value }))}
+                />
+                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料背景扣除後的結果疊圖。橘色區塊是目前設定的背景扣除區間。</p>
+                <Plot
+                  data={applyHidden(buildOverlayTraces(overlayBackgroundDatasets, chartLineColors.overlayBg) as Plotly.Data[], overlayBgHidden)}
+                  layout={overlayBgLayout as Plotly.Layout}
+                  config={withPlotFullscreen()}
+                  style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setOverlayBgHidden) as never}
+                  onLegendDoubleClick={() => false}
+                />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayBackgroundDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_bg.csv', 'text/csv')} />
+                </div>
+              </div>
+            )}
+
+            {/* ── overlay: normalization stage ── */}
+            {overlayNormalizationDatasets.length >= overlayMinCount && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <ChartToolbar
+                  title="多筆疊圖：歸一化後"
+                  colorValue={chartLineColors.overlayNorm}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, overlayNorm: value }))}
+                />
+                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料歸一化後的結果疊圖。綠色區塊是目前設定的歸一化區間。</p>
+                <Plot
+                  data={applyHidden(buildOverlayTraces(overlayNormalizationDatasets, chartLineColors.overlayNorm) as Plotly.Data[], overlayNormHidden)}
+                  layout={overlayNormLayout as Plotly.Layout}
+                  config={withPlotFullscreen()}
+                  style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setOverlayNormHidden) as never}
+                  onLegendDoubleClick={() => false}
+                />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayNormalizationDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_norm.csv', 'text/csv')} />
+                </div>
+              </div>
+            )}
+
+            {/* ── overlay: final (shown only when no bg/norm stages active) ── */}
+            {overlayFinalDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length < overlayMinCount && overlayNormalizationDatasets.length < overlayMinCount && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <ChartToolbar
+                  title="多筆疊圖比較：最終結果"
+                  colorValue={chartLineColors.overlay}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
+                />
+                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料目前最新的處理結果疊圖。</p>
+                <Plot
+                  data={applyHidden(buildOverlayTraces(overlayFinalDatasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
+                  layout={chartLayout() as Plotly.Layout}
+                  config={withPlotFullscreen()}
+                  style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setOverlayHidden) as never}
+                  onLegendDoubleClick={() => false}
+                />
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayFinalDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_final.csv', 'text/csv')} />
                 </div>
               </div>
             )}
