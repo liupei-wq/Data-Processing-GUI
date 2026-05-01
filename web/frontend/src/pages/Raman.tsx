@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/PlotlyChart'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import {

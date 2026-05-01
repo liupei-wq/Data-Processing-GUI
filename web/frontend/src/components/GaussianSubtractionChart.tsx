@@ -1,4 +1,4 @@
-import Plot from 'react-plotly.js'
+import Plot from './PlotlyChart'
 import { withPlotFullscreen } from './plotConfig'
 import type { ProcessedDataset, XMode } from '../types/xrd'
 

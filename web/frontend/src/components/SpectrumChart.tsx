@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from './PlotlyChart'
 import { withPlotFullscreen } from './plotConfig'
 import type { DetectedPeak, ProcessResult, RefPeak, XMode } from '../types/xrd'
 

@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/PlotlyChart'
 import type {
   DetectedPeak,
   FinalPeakRow,

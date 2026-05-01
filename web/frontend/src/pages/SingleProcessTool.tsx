@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/PlotlyChart'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { parseFiles, processData } from '../api/xrd'

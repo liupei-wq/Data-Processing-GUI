@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import Plot from 'react-plotly.js'
+import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { ANALYSIS_MODULES } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
