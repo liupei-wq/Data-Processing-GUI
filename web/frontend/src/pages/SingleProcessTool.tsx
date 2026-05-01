@@ -11,6 +11,16 @@ export type SingleToolKind = 'background' | 'normalize' | 'gaussian'
 type BackgroundMethod = 'linear' | 'shirley' | 'polynomial' | 'asls' | 'airpls'
 type NormalizeMethod = 'min_max' | 'max' | 'area'
 type RangeMinimum = { x: number; y: number; index: number }
+type GaussianDraftState = {
+  fwhm: number
+  height: number
+  nonnegativeGuard: boolean
+  searchHalfWidth: number
+  minimumRangeStart: number
+  minimumRangeEnd: number
+  bindCurveToMinimum: boolean
+  centers: GaussianCenter[]
+}
 
 const TOOL_META: Record<SingleToolKind, {
   title: string
@@ -114,6 +124,32 @@ function buildSingleToolCsv(
     ['summary', '', '', '', '', '', '', 'label', 'minimum_x', 'minimum_y'].join(','),
     summary.join(','),
   ].join('\n')
+}
+
+function cloneGaussianCenters(centers: GaussianCenter[]): GaussianCenter[] {
+  return centers.map(center => ({ ...center }))
+}
+
+function createGaussianDraftState(
+  fwhm: number,
+  height: number,
+  nonnegativeGuard: boolean,
+  searchHalfWidth: number,
+  minimumRangeStart: number,
+  minimumRangeEnd: number,
+  bindCurveToMinimum: boolean,
+  centers: GaussianCenter[],
+): GaussianDraftState {
+  return {
+    fwhm,
+    height,
+    nonnegativeGuard,
+    searchHalfWidth,
+    minimumRangeStart,
+    minimumRangeEnd,
+    bindCurveToMinimum,
+    centers: cloneGaussianCenters(centers),
+  }
 }
 
 function buildParams(
@@ -383,6 +419,11 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
   const [gaussianCenters, setGaussianCenters] = useState<GaussianCenter[]>([
     { enabled: true, name: 'Peak 1', center: 30 },
   ])
+  const [gaussianDraft, setGaussianDraft] = useState<GaussianDraftState>(
+    createGaussianDraftState(0.2, 1, true, 0.5, 403, 406, false, [
+      { enabled: true, name: 'Peak 1', center: 30 },
+    ]),
+  )
 
   useEffect(() => {
     setRawFiles([])
@@ -407,6 +448,9 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     setMinimumRangeEnd(406)
     setBindCurveToMinimum(false)
     setGaussianCenters([{ enabled: true, name: 'Peak 1', center: 30 }])
+    setGaussianDraft(createGaussianDraftState(0.2, 1, true, 0.5, 403, 406, false, [
+      { enabled: true, name: 'Peak 1', center: 30 },
+    ]))
   }, [tool])
 
   useEffect(() => {
@@ -430,6 +474,20 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
         : null
     ),
     [tool, activeDataset, minimumRangeStart, minimumRangeEnd],
+  )
+
+  const draftAnchorMinimum = useMemo(
+    () => (
+      tool === 'gaussian' && activeDataset
+        ? findMinimumInRange(
+            activeDataset.x,
+            activeDataset.y_raw,
+            gaussianDraft.minimumRangeStart,
+            gaussianDraft.minimumRangeEnd,
+          )
+        : null
+    ),
+    [tool, activeDataset, gaussianDraft.minimumRangeStart, gaussianDraft.minimumRangeEnd],
   )
 
   const effectiveGaussianHeight = useMemo(() => {
@@ -505,12 +563,15 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
         const xMin = Math.min(...sample.x)
         const xMax = Math.max(...sample.x)
         const yMax = Math.max(...sample.y)
+        const nextCenter = { enabled: true, name: 'Peak 1', center: (xMin + xMax) / 2 }
+        const nextHeight = Math.max(yMax * 0.08, 0.01)
         setBgRangeStart(xMin)
         setBgRangeEnd(xMax)
         setNormStart(xMin)
         setNormEnd(xMax)
-        setGaussianHeight(Math.max(yMax * 0.08, 0.01))
-        setGaussianCenters([{ enabled: true, name: 'Peak 1', center: (xMin + xMax) / 2 }])
+        setGaussianHeight(nextHeight)
+        setGaussianCenters([nextCenter])
+        setGaussianDraft(createGaussianDraftState(0.2, nextHeight, true, 0.5, 403, 406, false, [nextCenter]))
       }
     } catch (e: unknown) {
       setError((e as Error).message)
@@ -518,6 +579,39 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
       setIsLoading(false)
     }
   }, [])
+
+  const applyGaussianDraft = useCallback(() => {
+    setGaussianFwhm(gaussianDraft.fwhm)
+    setGaussianHeight(gaussianDraft.height)
+    setGaussianNonnegativeGuard(gaussianDraft.nonnegativeGuard)
+    setGaussianSearchHalfWidth(gaussianDraft.searchHalfWidth)
+    setMinimumRangeStart(gaussianDraft.minimumRangeStart)
+    setMinimumRangeEnd(gaussianDraft.minimumRangeEnd)
+    setBindCurveToMinimum(gaussianDraft.bindCurveToMinimum)
+    setGaussianCenters(cloneGaussianCenters(gaussianDraft.centers))
+  }, [gaussianDraft])
+
+  const resetGaussianDraft = useCallback(() => {
+    setGaussianDraft(createGaussianDraftState(
+      gaussianFwhm,
+      gaussianHeight,
+      gaussianNonnegativeGuard,
+      gaussianSearchHalfWidth,
+      minimumRangeStart,
+      minimumRangeEnd,
+      bindCurveToMinimum,
+      gaussianCenters,
+    ))
+  }, [
+    gaussianCenters,
+    gaussianFwhm,
+    gaussianHeight,
+    gaussianNonnegativeGuard,
+    gaussianSearchHalfWidth,
+    minimumRangeEnd,
+    minimumRangeStart,
+    bindCurveToMinimum,
+  ])
 
   const gSliderXMin = rawFiles.length > 0 ? Math.min(...rawFiles.flatMap(f => f.x)) : 0
   const gSliderXMax = rawFiles.length > 0 ? Math.max(...rawFiles.flatMap(f => f.x)) : 180
@@ -529,15 +623,15 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
   const searchHwSliderMax = Math.max(gSliderXRange / 2, 5)
   const searchHwSliderStep = 0.01
   const centerSliderStep = 0.01
-  const gaussianSafeHeightMax = useMemo(() => {
-    if (tool !== 'gaussian' || !activeDataset || gaussianFwhm <= 0) return null
+  const gaussianDraftSafeHeightMax = useMemo(() => {
+    if (tool !== 'gaussian' || !activeDataset || gaussianDraft.fwhm <= 0) return null
 
-    const enabledCenters = gaussianCenters.filter(center => center.enabled && Number.isFinite(center.center))
+    const enabledCenters = gaussianDraft.centers.filter(center => center.enabled && Number.isFinite(center.center))
     if (enabledCenters.length === 0) return null
 
     const totalUnitModel = new Array(activeDataset.x.length).fill(0)
     for (const center of enabledCenters) {
-      const unit = gaussianUnitProfile(activeDataset.x, center.center, gaussianFwhm)
+      const unit = gaussianUnitProfile(activeDataset.x, center.center, gaussianDraft.fwhm)
       for (let idx = 0; idx < unit.length; idx += 1) totalUnitModel[idx] += unit[idx]
     }
 
@@ -556,33 +650,53 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
 
     if (!Number.isFinite(minRatio)) return null
     return Math.max(Math.floor(Math.max(minRatio, 0.01) * 100) / 100, 0.01)
-  }, [tool, activeDataset, gaussianCenters, gaussianFwhm])
-  const gaussianHeightSliderMax = gaussianNonnegativeGuard
-    ? Math.max(gaussianSafeHeightMax ?? 0.01, 0.01)
+  }, [tool, activeDataset, gaussianDraft.centers, gaussianDraft.fwhm])
+  const gaussianHeightSliderMax = gaussianDraft.nonnegativeGuard
+    ? Math.max(gaussianDraftSafeHeightMax ?? 0.01, 0.01)
     : Math.max(gSliderYMax, 1)
 
   useEffect(() => {
-    if (tool !== 'gaussian' || !gaussianNonnegativeGuard || bindCurveToMinimum) return
-    if (gaussianSafeHeightMax == null) return
-    if (gaussianHeight > gaussianSafeHeightMax) {
-      setGaussianHeight(gaussianSafeHeightMax)
+    if (tool !== 'gaussian' || !gaussianDraft.nonnegativeGuard || gaussianDraft.bindCurveToMinimum) return
+    if (gaussianDraftSafeHeightMax == null) return
+    if (gaussianDraft.height > gaussianDraftSafeHeightMax) {
+      setGaussianDraft(prev => ({ ...prev, height: gaussianDraftSafeHeightMax }))
     }
-  }, [tool, gaussianNonnegativeGuard, bindCurveToMinimum, gaussianSafeHeightMax, gaussianHeight])
+  }, [tool, gaussianDraft, gaussianDraftSafeHeightMax])
 
   const gaussianMinTargetY = activeDataset?.y_gaussian_subtracted ?? activeDataset?.y_processed ?? null
-  const autoBoundGaussianHeight = useMemo(() => {
-    if (tool !== 'gaussian' || !anchorMinimum || gaussianFwhm <= 0) return null
-    const firstCenter = gaussianCenters[0]?.center
-    if (firstCenter == null || !Number.isFinite(firstCenter)) return null
-    const sigma = gaussianFwhm / (2 * Math.sqrt(2 * Math.log(2)))
-    const attenuation = Math.exp(-0.5 * ((anchorMinimum.x - firstCenter) / sigma) ** 2)
-    if (!Number.isFinite(attenuation) || attenuation <= 1e-9) return null
-    return Math.max(anchorMinimum.y / attenuation, 0)
-  }, [tool, anchorMinimum, gaussianCenters, gaussianFwhm])
   const boundPointResidual = useMemo(
     () => (anchorMinimum && gaussianMinTargetY ? gaussianMinTargetY[anchorMinimum.index] ?? null : null),
     [anchorMinimum, gaussianMinTargetY],
   )
+  const draftAutoBoundGaussianHeight = useMemo(() => {
+    if (tool !== 'gaussian' || !draftAnchorMinimum || gaussianDraft.fwhm <= 0) return null
+    const firstCenter = gaussianDraft.centers[0]?.center
+    if (firstCenter == null || !Number.isFinite(firstCenter)) return null
+    const sigma = gaussianDraft.fwhm / (2 * Math.sqrt(2 * Math.log(2)))
+    const attenuation = Math.exp(-0.5 * ((draftAnchorMinimum.x - firstCenter) / sigma) ** 2)
+    if (!Number.isFinite(attenuation) || attenuation <= 1e-9) return null
+    return Math.max(draftAnchorMinimum.y / attenuation, 0)
+  }, [tool, draftAnchorMinimum, gaussianDraft.centers, gaussianDraft.fwhm])
+  const gaussianDraftDirty = useMemo(() => (
+    gaussianDraft.fwhm !== gaussianFwhm ||
+    gaussianDraft.height !== gaussianHeight ||
+    gaussianDraft.nonnegativeGuard !== gaussianNonnegativeGuard ||
+    gaussianDraft.searchHalfWidth !== gaussianSearchHalfWidth ||
+    gaussianDraft.minimumRangeStart !== minimumRangeStart ||
+    gaussianDraft.minimumRangeEnd !== minimumRangeEnd ||
+    gaussianDraft.bindCurveToMinimum !== bindCurveToMinimum ||
+    JSON.stringify(gaussianDraft.centers) !== JSON.stringify(gaussianCenters)
+  ), [
+    gaussianCenters,
+    gaussianDraft,
+    gaussianFwhm,
+    gaussianHeight,
+    gaussianNonnegativeGuard,
+    gaussianSearchHalfWidth,
+    minimumRangeEnd,
+    minimumRangeStart,
+    bindCurveToMinimum,
+  ])
   const plotTraces = useMemo(
     () => (activeDataset ? buildTraces(tool, activeDataset, anchorMinimum) : []),
     [activeDataset, tool, anchorMinimum],
@@ -642,7 +756,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
         </div>
 
         <div className="grid gap-5 xl:grid-cols-[22rem_minmax(0,1fr)]">
-          <aside className="glass-panel rounded-[30px] p-4 sm:p-5">
+          <aside className="glass-panel rounded-[30px] p-4 sm:p-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:self-start xl:overflow-y-auto">
             <div className="theme-block mb-4 overflow-hidden rounded-[24px]">
               <div className="border-b border-[var(--card-divider)] px-4 py-3">
                 <div className="text-sm font-semibold text-[var(--text-muted)]">上傳檔案</div>
@@ -741,10 +855,243 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
             )}
 
             {tool === 'gaussian' && (
-              <div className="theme-block rounded-[24px] p-4">
-                <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">高斯模板設定</div>
-                <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
-                  高斯模板的主要滑桿已移到右側結果區，滑動距離更長，現在每次調整都是 `0.01`，比較不會一下扣太多。
+              <div className="space-y-4">
+                <div className="theme-block rounded-[24px] p-4">
+                  <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">高斯模板調整</div>
+                  <div className="mb-4 rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+                    左邊先調整參數，按下 `套用到圖表` 後右邊才會重算，這樣就不用每拖一下都等圖刷新。
+                  </div>
+                  <label className="mb-4 flex items-start gap-3 rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm text-[var(--text-main)]">
+                    <input
+                      type="checkbox"
+                      checked={gaussianDraft.nonnegativeGuard}
+                      onChange={e => setGaussianDraft(prev => ({ ...prev, nonnegativeGuard: e.target.checked }))}
+                      className="mt-0.5 h-4 w-4 rounded border-[var(--card-border)]"
+                      style={{ accentColor: 'var(--accent-strong)' }}
+                    />
+                    <span className="leading-6">
+                      啟用避免負值保護
+                      <span className="block text-xs text-[var(--text-soft)]">
+                        扣除量超過原始訊號時，系統會自動縮小高斯模板，避免結果整段掉到 0 以下。
+                      </span>
+                    </span>
+                  </label>
+                  <div className="space-y-4">
+                    <SliderRow
+                      label="固定 FWHM"
+                      value={gaussianDraft.fwhm}
+                      min={0.001}
+                      max={fwhmSliderMax}
+                      step={fwhmSliderStep}
+                      decimals={2}
+                      onChange={value => setGaussianDraft(prev => ({ ...prev, fwhm: value }))}
+                    />
+                    {gaussianDraft.bindCurveToMinimum ? (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-[var(--text-soft)]">固定高度</span>
+                          <span className="font-mono text-xs text-[var(--text-main)]">
+                            {draftAutoBoundGaussianHeight != null ? draftAutoBoundGaussianHeight.toFixed(2) : '無法計算'}
+                          </span>
+                        </div>
+                        <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+                          已綁定最低點。你移動中心或改 `FWHM` 時，系統會自動重算高度，等你按套用後再更新圖表。
+                        </div>
+                      </div>
+                    ) : (
+                      <SliderRow
+                        label="固定高度"
+                        value={gaussianDraft.height}
+                        min={0}
+                        max={gaussianHeightSliderMax}
+                        step={heightSliderStep}
+                        decimals={2}
+                        onChange={value => setGaussianDraft(prev => ({ ...prev, height: value }))}
+                      />
+                    )}
+                    <SliderRow
+                      label="搜尋半寬"
+                      value={gaussianDraft.searchHalfWidth}
+                      min={0.001}
+                      max={searchHwSliderMax}
+                      step={searchHwSliderStep}
+                      decimals={2}
+                      onChange={value => setGaussianDraft(prev => ({ ...prev, searchHalfWidth: value }))}
+                    />
+                  </div>
+                  {gaussianDraft.nonnegativeGuard && gaussianDraftSafeHeightMax != null && !gaussianDraft.bindCurveToMinimum && (
+                    <div className="mt-3 text-xs leading-6 text-[var(--text-soft)]">
+                      目前這筆資料的安全高度上限約為 <span className="font-mono text-[var(--text-main)]">{gaussianDraftSafeHeightMax.toFixed(2)}</span>。
+                    </div>
+                  )}
+                </div>
+
+                <div className="theme-block rounded-[24px] p-4">
+                  <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">403–406 區間綁定最低點</div>
+                  <div className="mb-4 text-xs leading-6 text-[var(--text-soft)]">
+                    先決定最低點搜尋範圍，再決定要不要把高斯曲線鎖定切到那個點。這些都會等你按套用後才更新右邊圖表。
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
+                      <input
+                        type="number"
+                        value={gaussianDraft.minimumRangeStart}
+                        step={0.01}
+                        onChange={e => setGaussianDraft(prev => ({ ...prev, minimumRangeStart: Number(e.target.value) }))}
+                        className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
+                      <input
+                        type="number"
+                        value={gaussianDraft.minimumRangeEnd}
+                        step={0.01}
+                        onChange={e => setGaussianDraft(prev => ({ ...prev, minimumRangeEnd: Number(e.target.value) }))}
+                        className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-3 rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setGaussianDraft(prev => ({ ...prev, bindCurveToMinimum: true }))}
+                      disabled={draftAutoBoundGaussianHeight == null}
+                      className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--accent)]"
+                    >
+                      鎖定到最低點
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGaussianDraft(prev => ({ ...prev, bindCurveToMinimum: false }))}
+                      className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--text-main)]"
+                    >
+                      解除綁定
+                    </button>
+                    <div className="w-full text-xs leading-6 text-[var(--text-soft)]">
+                      {draftAutoBoundGaussianHeight != null
+                        ? `目前建議高度 ${draftAutoBoundGaussianHeight.toFixed(2)}，套用後會讓曲線維持切到這個最低點。`
+                        : '目前無法計算建議高度。'}
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                    <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-4 py-3">
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-soft)]">最低點 X / Y</div>
+                      <div className="mt-2 font-mono text-base text-[var(--text-main)]">
+                        {draftAnchorMinimum ? `${draftAnchorMinimum.x.toFixed(4)} / ${draftAnchorMinimum.y.toFixed(4)}` : '未找到'}
+                      </div>
+                    </div>
+                    <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-4 py-3">
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-soft)]">已套用結果該點 Y</div>
+                      <div className="mt-2 font-mono text-base text-[var(--text-main)]">
+                        {boundPointResidual != null && Number.isFinite(boundPointResidual) ? boundPointResidual.toFixed(4) : '未找到'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="theme-block rounded-[24px] p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-[var(--text-muted)]">高斯中心</div>
+                      <div className="mt-1 text-xs text-[var(--text-soft)]">
+                        中心位置先在左邊調整，按下套用後右邊橘線才會更新。
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setGaussianDraft(prev => ({
+                        ...prev,
+                        centers: [
+                          ...prev.centers,
+                          {
+                            enabled: true,
+                            name: `Peak ${prev.centers.length + 1}`,
+                            center: prev.centers[prev.centers.length - 1]?.center ?? 30,
+                          },
+                        ],
+                      }))}
+                      className="theme-pill pressable rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
+                    >
+                      新增中心
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {gaussianDraft.centers.map((center, idx) => (
+                      <div key={`${center.name}-${idx}`} className="rounded-[20px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <div className="text-xs font-semibold text-[var(--text-main)]">中心 {idx + 1}</div>
+                          {gaussianDraft.centers.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setGaussianDraft(prev => ({
+                                ...prev,
+                                centers: prev.centers.filter((_, itemIdx) => itemIdx !== idx),
+                              }))}
+                              className="text-xs text-[var(--accent-secondary)]"
+                            >
+                              刪除
+                            </button>
+                          )}
+                        </div>
+                        <div className="space-y-3">
+                          <input
+                            type="text"
+                            value={center.name}
+                            onChange={e => setGaussianDraft(prev => ({
+                              ...prev,
+                              centers: prev.centers.map((item, itemIdx) => itemIdx === idx ? { ...item, name: e.target.value } : item),
+                            }))}
+                            className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                          />
+                          <SliderRow
+                            label="中心位置"
+                            value={center.center}
+                            min={gSliderXMin}
+                            max={gSliderXMax}
+                            step={centerSliderStep}
+                            decimals={2}
+                            onChange={value => setGaussianDraft(prev => ({
+                              ...prev,
+                              centers: prev.centers.map((item, itemIdx) => itemIdx === idx ? { ...item, center: value } : item),
+                            }))}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="theme-block rounded-[24px] p-4">
+                  <div className="flex flex-col gap-3">
+                    <div className="text-sm font-semibold text-[var(--text-muted)]">套用設定</div>
+                    <div className="text-xs leading-6 text-[var(--text-soft)]">
+                      現在高斯模板改成手動套用模式，避免每次拉桿時都重新呼叫處理流程。
+                    </div>
+                    <div className="flex flex-col gap-3 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={applyGaussianDraft}
+                        disabled={!gaussianDraftDirty}
+                        className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        套用到圖表
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetGaussianDraft}
+                        disabled={!gaussianDraftDirty}
+                        className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--text-main)] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        還原成已套用
+                      </button>
+                    </div>
+                    <div className="text-xs text-[var(--text-soft)]">
+                      {gaussianDraftDirty ? '有尚未套用的變更。' : '目前左側設定已和圖表同步。'}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -808,233 +1155,6 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
 
             {activeDataset && (
               <>
-                {tool === 'gaussian' && (
-                  <div className="mb-4 space-y-4">
-                    <div className="theme-block-soft rounded-[24px] p-4 sm:p-5">
-                      <div className="mb-4 flex flex-col gap-1">
-                        <div className="text-sm font-semibold text-[var(--text-muted)]">高斯模板調整</div>
-                        <div className="text-xs leading-6 text-[var(--text-soft)]">
-                          滑桿已改成每次 `0.01` 微調，避免模板一口氣扣太深。建議先調 `固定高度`，再微調 `FWHM` 和 `搜尋半寬`。
-                        </div>
-                      </div>
-                      <label className="mb-4 flex items-start gap-3 rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm text-[var(--text-main)]">
-                        <input
-                          type="checkbox"
-                          checked={gaussianNonnegativeGuard}
-                          onChange={e => setGaussianNonnegativeGuard(e.target.checked)}
-                          className="mt-0.5 h-4 w-4 rounded border-[var(--card-border)]"
-                          style={{ accentColor: 'var(--accent-strong)' }}
-                        />
-                        <span className="leading-6">
-                          啟用避免負值保護
-                          <span className="block text-xs text-[var(--text-soft)]">
-                            扣除量超過原始訊號時，系統會自動縮小高斯模板，避免結果整段掉到 0 以下。
-                          </span>
-                        </span>
-                      </label>
-                      <div className="grid gap-4 lg:grid-cols-3">
-                        <SliderRow
-                          label="固定 FWHM"
-                          value={gaussianFwhm}
-                          min={0.001}
-                          max={fwhmSliderMax}
-                          step={fwhmSliderStep}
-                          decimals={2}
-                          onChange={setGaussianFwhm}
-                        />
-                        {bindCurveToMinimum ? (
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-[var(--text-soft)]">固定高度</span>
-                              <span className="font-mono text-xs text-[var(--text-main)]">
-                                {autoBoundGaussianHeight != null ? autoBoundGaussianHeight.toFixed(2) : '無法計算'}
-                              </span>
-                            </div>
-                            <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
-                              已綁定最低點。你移動中心或改 `FWHM` 時，系統會自動重算高度，讓高斯曲線持續切到那個最低點。
-                            </div>
-                          </div>
-                        ) : (
-                          <SliderRow
-                            label="固定高度"
-                            value={gaussianHeight}
-                            min={0}
-                            max={gaussianHeightSliderMax}
-                            step={heightSliderStep}
-                            decimals={2}
-                            onChange={setGaussianHeight}
-                          />
-                        )}
-                        <SliderRow
-                          label="搜尋半寬"
-                          value={gaussianSearchHalfWidth}
-                          min={0.001}
-                          max={searchHwSliderMax}
-                          step={searchHwSliderStep}
-                          decimals={2}
-                          onChange={setGaussianSearchHalfWidth}
-                        />
-                      </div>
-                      {gaussianNonnegativeGuard && gaussianSafeHeightMax != null && !bindCurveToMinimum && (
-                        <div className="mt-3 text-xs leading-6 text-[var(--text-soft)]">
-                          目前這筆資料的安全高度上限約為 <span className="font-mono text-[var(--text-main)]">{gaussianSafeHeightMax.toFixed(2)}</span>，滑桿已自動限制在這個範圍內。
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="theme-block-soft rounded-[24px] p-4 sm:p-5">
-                      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                        <div>
-                          <div className="text-sm font-semibold text-[var(--text-muted)]">403–406 區間綁定最低點</div>
-                          <div className="mt-1 text-xs leading-6 text-[var(--text-soft)]">
-                            會先從原始數據找出指定區間內的最低點。你可以先自由移動高斯中心，確認位置後再按按鈕，讓高斯曲線鎖定切到這個最低點。
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <label className="block">
-                            <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
-                            <input
-                              type="number"
-                              value={minimumRangeStart}
-                              step={0.01}
-                              onChange={e => setMinimumRangeStart(Number(e.target.value))}
-                              className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
-                            <input
-                              type="number"
-                              value={minimumRangeEnd}
-                              step={0.01}
-                              onChange={e => setMinimumRangeEnd(Number(e.target.value))}
-                              className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                            />
-                          </label>
-                        </div>
-                      </div>
-                      <div className="mb-4 flex flex-wrap items-center gap-3 rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setBindCurveToMinimum(true)}
-                          disabled={autoBoundGaussianHeight == null}
-                          className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--accent)]"
-                        >
-                          鎖定到最低點
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setBindCurveToMinimum(false)}
-                          className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--text-main)]"
-                        >
-                          解除綁定
-                        </button>
-                        <div className="text-sm text-[var(--text-main)]">
-                          {autoBoundGaussianHeight != null
-                            ? `建議高度 ${autoBoundGaussianHeight.toFixed(2)}`
-                            : '目前無法計算建議高度'}
-                        </div>
-                        <div className="w-full text-xs leading-6 text-[var(--text-soft)]">
-                          按下「鎖定到最低點」後，高斯中心仍可移動，但系統會持續自動重算高度；按「解除綁定」就會回到手動高度模式。
-                        </div>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-3">
-                        <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-soft)]">最低點 X</div>
-                          <div className="mt-2 font-mono text-lg text-[var(--text-main)]">
-                            {anchorMinimum ? anchorMinimum.x.toFixed(4) : '未找到'}
-                          </div>
-                        </div>
-                        <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-soft)]">最低點 Y</div>
-                          <div className="mt-2 font-mono text-lg text-[var(--text-main)]">
-                            {anchorMinimum ? anchorMinimum.y.toFixed(4) : '未找到'}
-                          </div>
-                        </div>
-                        <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-4 py-3">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-soft)]">區間</div>
-                          <div className="mt-2 font-mono text-lg text-[var(--text-main)]">
-                            {Math.min(minimumRangeStart, minimumRangeEnd).toFixed(2)}–{Math.max(minimumRangeStart, minimumRangeEnd).toFixed(2)}
-                          </div>
-                        </div>
-                        <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-4 py-3 md:col-span-3">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-soft)]">該點扣高斯後目前 Y</div>
-                          <div className="mt-2 font-mono text-lg text-[var(--text-main)]">
-                            {boundPointResidual != null && Number.isFinite(boundPointResidual) ? boundPointResidual.toFixed(4) : '未找到'}
-                          </div>
-                          <div className="mt-2 text-xs leading-6 text-[var(--text-soft)]">
-                            你可以直接看這個值是否接近 `0`，來判斷目前高斯模板是不是已經切到你要的最低點。
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="theme-block-soft rounded-[24px] p-4 sm:p-5">
-                      <div className="mb-4 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-[var(--text-muted)]">高斯中心</div>
-                          <div className="mt-1 text-xs text-[var(--text-soft)]">
-                            每個中心位置也改成 `0.01` 步進，右側橘線就是目前要扣掉的高斯曲線。
-                            {bindCurveToMinimum
-                              ? ' 目前已綁定；你移動中心時，系統會自動調整高度讓曲線維持切到最低點。'
-                              : ' 你可以先移動中心，再按上方按鈕把高斯曲線綁定到最低點。'}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setGaussianCenters([
-                            ...gaussianCenters,
-                            {
-                              enabled: true,
-                              name: `Peak ${gaussianCenters.length + 1}`,
-                              center: gaussianCenters[gaussianCenters.length - 1]?.center ?? 30,
-                            },
-                          ])}
-                          className="theme-pill pressable rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
-                        >
-                          新增中心
-                        </button>
-                      </div>
-
-                      <div className="grid gap-3 xl:grid-cols-2">
-                        {gaussianCenters.map((center, idx) => (
-                          <div key={`${center.name}-${idx}`} className="rounded-[20px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-4">
-                            <div className="mb-3 flex items-center justify-between">
-                              <div className="text-xs font-semibold text-[var(--text-main)]">中心 {idx + 1}</div>
-                              {gaussianCenters.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => setGaussianCenters(gaussianCenters.filter((_, itemIdx) => itemIdx !== idx))}
-                                  className="text-xs text-[var(--accent-secondary)]"
-                                >
-                                  刪除
-                                </button>
-                              )}
-                            </div>
-                            <div className="space-y-3">
-                              <input
-                                type="text"
-                                value={center.name}
-                                onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, name: e.target.value } : item))}
-                                className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                              />
-                              <SliderRow
-                                label="中心位置"
-                                value={center.center}
-                                min={gSliderXMin}
-                                max={gSliderXMax}
-                                step={centerSliderStep}
-                                decimals={2}
-                                onChange={value => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, center: value } : item))}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 <div className="theme-block-soft rounded-[28px] p-3 sm:p-4">
                   {tool === 'gaussian' && activeDataset.gaussian_guard_enabled && (
                     <div className="mb-3 rounded-[18px] border border-[color:color-mix(in_srgb,var(--accent-strong)_24%,var(--card-border))] bg-[color:color-mix(in_srgb,var(--accent-strong)_12%,transparent)] px-4 py-3 text-sm text-[var(--text-main)]">
