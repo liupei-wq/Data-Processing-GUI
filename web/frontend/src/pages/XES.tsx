@@ -33,6 +33,7 @@ const DEFAULT_PARAMS: ProcessParams = {
   norm_method: 'none',
   norm_x_start: null,
   norm_x_end: null,
+  i0_values: {},
   axis_calibration: 'none',
   energy_offset: 0,
   energy_slope: 1,
@@ -207,6 +208,8 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
   const [bandParams, setBandParams] = useState<BandAlignParams>(DEFAULT_BAND)
 
   const [sampleFiles, setSampleFiles] = useState<File[]>([])
+  const [i0CsvText, setI0CsvText] = useState('')
+  const [i0ParseError, setI0ParseError] = useState<string | null>(null)
   const [bg1File, setBg1File] = useState<File | null>(null)
   const [bg2File, setBg2File] = useState<File | null>(null)
 
@@ -273,6 +276,23 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
 
   const p = (k: keyof ProcessParams, v: unknown) => setParams(prev => ({ ...prev, [k]: v }))
   const bp = (k: keyof BandAlignParams, v: unknown) => setBandParams(prev => ({ ...prev, [k]: v }))
+
+  const applyI0Csv = (text: string) => {
+    const result: Record<string, number> = {}
+    const errors: string[] = []
+    text.split('\n').forEach((line, idx) => {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) return
+      const parts = trimmed.split(',')
+      if (parts.length < 2) { errors.push(`第 ${idx + 1} 行格式錯誤`); return }
+      const name = parts[0].trim()
+      const val = parseFloat(parts.slice(1).join(',').trim())
+      if (!name || !Number.isFinite(val) || val <= 0) { errors.push(`第 ${idx + 1} 行數值無效`); return }
+      result[name] = val
+    })
+    setI0ParseError(errors.length > 0 ? errors.join('；') : null)
+    setParams(prev => ({ ...prev, i0_values: result }))
+  }
 
   const useEv = params.axis_calibration === 'linear'
   const xLabel = useEv ? 'Emission Energy (eV)' : 'Input X'
@@ -425,8 +445,50 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 )}
               </SidebarCard>
 
-              {/* Step 6 */}
-              <SidebarCard step={6} title="X 軸校正（pixel → eV）" defaultOpen={false}>
+              {/* Step 6 — I0 正規化 */}
+              <SidebarCard step={6} title="I0 正規化（每筆除以監視訊號）" defaultOpen={false}>
+                <div className="text-xs leading-5 text-[var(--text-soft)]">
+                  每行輸入：<code className="rounded px-1 py-0.5 bg-[var(--card-ghost)]">檔名,I0數值</code>，I0 值須為正數。
+                  套用後各曲線原始強度會先除以對應 I0，再進行背景扣除與歸一化。
+                </div>
+                <textarea
+                  rows={4}
+                  placeholder={'sample1.txt,12345\nsample2.txt,13456'}
+                  value={i0CsvText}
+                  onChange={e => setI0CsvText(e.target.value)}
+                  className="mt-2 w-full rounded-lg border border-[var(--card-border)] bg-[var(--input-bg)] px-3 py-2 font-mono text-xs text-[var(--text-main)] outline-none focus:border-[var(--accent-strong)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => applyI0Csv(i0CsvText)}
+                  className="pressable mt-1 w-full rounded-xl bg-[var(--accent-strong)] py-1.5 text-xs font-semibold text-[var(--bg-canvas)]"
+                >
+                  套用 I0 值
+                </button>
+                {i0ParseError && (
+                  <div className="mt-1 rounded-lg bg-red-900/30 px-3 py-1.5 text-xs text-red-300">{i0ParseError}</div>
+                )}
+                {Object.keys(params.i0_values).length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {Object.entries(params.i0_values).map(([name, val]) => (
+                      <div key={name} className="flex items-center justify-between rounded-lg border border-[var(--card-border)] bg-[var(--card-ghost)] px-2 py-1 text-xs">
+                        <span className="truncate text-[var(--text-main)]">{name}</span>
+                        <span className="ml-2 shrink-0 font-mono text-[var(--accent)]">{val.toExponential(3)}</span>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => { setI0CsvText(''); setParams(prev => ({ ...prev, i0_values: {} })); setI0ParseError(null) }}
+                      className="pressable mt-1 w-full rounded-xl border border-[var(--card-border)] py-1 text-xs text-[var(--text-soft)] hover:text-[var(--accent-secondary)]"
+                    >
+                      清除 I0 設定
+                    </button>
+                  </div>
+                )}
+              </SidebarCard>
+
+              {/* Step 7 */}
+              <SidebarCard step={7} title="X 軸校正（pixel → eV）" defaultOpen={false}>
                 <Label>校正方式</Label>
                 <Select value={params.axis_calibration} onChange={e => p('axis_calibration', e.target.value as ProcessParams['axis_calibration'])}>
                   <option value="none">不校正（保留 pixel / 原始 X）</option>
@@ -448,8 +510,8 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 )}
               </SidebarCard>
 
-              {/* Step 7 */}
-              <SidebarCard step={7} title="參考峰" defaultOpen={false}>
+              {/* Step 8 */}
+              <SidebarCard step={8} title="參考峰" defaultOpen={false}>
                 <Label>選擇材料</Label>
                 <div className="space-y-1">
                   {availableMaterials.map(m => (
@@ -467,8 +529,8 @@ export default function XES({ onModuleSelect }: { onModuleSelect?: (m: AnalysisM
                 </div>
               </SidebarCard>
 
-              {/* Step 8 */}
-              <SidebarCard step={8} title="峰值偵測" defaultOpen={false}>
+              {/* Step 9 */}
+              <SidebarCard step={9} title="峰值偵測" defaultOpen={false}>
                 <label className="flex items-center gap-2 text-sm text-[var(--text-main)]">
                   <input type="checkbox" checked={peakParams.enabled}
                     onChange={e => setPeakParams(p => ({ ...p, enabled: e.target.checked }))} />

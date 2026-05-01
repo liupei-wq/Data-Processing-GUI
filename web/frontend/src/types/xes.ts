@@ -30,6 +30,7 @@ export interface ProcessParams {
   norm_method: 'none' | 'min_max' | 'max' | 'area' | 'reference_region'
   norm_x_start: number | null
   norm_x_end: number | null
+  i0_values: Record<string, number>
   axis_calibration: 'none' | 'linear'
   energy_offset: number
   energy_slope: number

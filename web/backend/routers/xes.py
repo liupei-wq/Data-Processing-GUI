@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -54,6 +54,8 @@ class ProcessParams(BaseModel):
     norm_method: str = "none"     # none | min_max | max | area | reference_region
     norm_x_start: Optional[float] = None
     norm_x_end: Optional[float] = None
+    # I0 normalization (divide raw y by per-dataset monitor value before BG subtraction)
+    i0_values: Dict[str, float] = Field(default_factory=dict)
     # X-axis calibration (pixel → eV)
     axis_calibration: str = "none"  # none | linear
     energy_offset: float = 0.0
@@ -212,6 +214,12 @@ def process_xes(req: ProcessRequest):
             x = x_grid
 
         y_raw = y.copy()
+
+        # I0 normalization (per-dataset monitor signal)
+        i0_val = p.i0_values.get(ds.name)
+        if i0_val and i0_val > 0:
+            y = y / i0_val
+            y_raw = y_raw / i0_val
 
         # BG1/BG2 subtraction
         y_bg: np.ndarray | None = None
