@@ -899,7 +899,7 @@ function createEmptyBundle(signature = ''): DatasetPipelineBundle {
 
 function createDefaultOverlayState(): OverlayProcessState {
   return {
-    params: { ...DEFAULT_PARAMS },
+    params: { ...DEFAULT_PARAMS, average: true, interpolate: true },
     autoInterpPoints: true,
     manualEnergyShiftEnabled: false,
   }
@@ -1047,6 +1047,7 @@ export default function XPS({
   const [bgHidden, setBgHidden] = useState<string[]>([])
   const [normHidden, setNormHidden] = useState<string[]>([])
   const [finalHidden, setFinalHidden] = useState<string[]>([])
+  const [fitHidden, setFitHidden] = useState<string[]>([])
 
   // element selection
   const [elementsList, setElementsList] = useState<ElementListItem[]>([])
@@ -1067,6 +1068,7 @@ export default function XPS({
   const [fitProfile, setFitProfile] = useState<string>('voigt')
   const [peakCandidates, setPeakCandidates] = useState<PeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
+  const [overlayFitResult, setOverlayFitResult] = useState<FitResult | null>(null)
   const [isFitting, setIsFitting] = useState(false)
   const [fitError, setFitError] = useState<string | null>(null)
 
@@ -1098,6 +1100,7 @@ export default function XPS({
 
   // RSF quantification
   const [rsfRows, setRsfRows] = useState<{ peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]>([])
+  const [overlayRsfRows, setOverlayRsfRows] = useState<{ peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]>([])
   const [rsfLoading, setRsfLoading] = useState(false)
   const [rsfError, setRsfError] = useState<string | null>(null)
 
@@ -1121,7 +1124,16 @@ export default function XPS({
   const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, false)
   const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, false)
   const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, false)
-  const overlayPrimaryDataset = getStageDataset(overlayBundle?.final ?? null, 0, false)
+  const overlayPrimaryDataset = getStageDataset(overlayBundle?.final ?? null, 0, overlayState.params.average)
+  const fitTargetDataset = processingViewMode === 'overlay'
+    ? getStageDataset(overlayBundle?.final ?? null, 0, true)
+    : activeDataset
+  const currentFitResult = processingViewMode === 'overlay' ? overlayFitResult : fitResult
+  const currentRsfRows = processingViewMode === 'overlay' ? overlayRsfRows : rsfRows
+  const currentDisplayDataset = processingViewMode === 'overlay' ? fitTargetDataset : activeDataset
+  const currentReportFileName = processingViewMode === 'overlay'
+    ? (overlayFiles.length > 0 ? `overlay_average__${overlayFiles.map(file => file.name).join('__')}` : 'overlay_average')
+    : (activeFile?.name ?? '')
   const beMin = processingViewMode === 'overlay'
     ? (overlayPrimaryDataset ? Math.min(...overlayPrimaryDataset.x) : 0)
     : (activeDataset ? Math.min(...activeDataset.x) : 0)
@@ -1242,9 +1254,15 @@ export default function XPS({
   useEffect(() => {
     if (processingViewMode !== 'single' || !activeDatasetKey) return
     if (restoringSessionRef.current) return
-    if (fitResult) setFitResult(null)
-    if (rsfRows.length > 0) setRsfRows([])
-  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, fitResult, rsfRows])
+    setFitResult(current => (current ? null : current))
+    setRsfRows(current => (current.length > 0 ? [] : current))
+  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints])
+
+  useEffect(() => {
+    if (processingViewMode !== 'overlay') return
+    setOverlayFitResult(current => (current ? null : current))
+    setOverlayRsfRows(current => (current.length > 0 ? [] : current))
+  }, [processingViewMode, overlaySelection, overlayState.params, overlayState.autoInterpPoints])
 
   // process active single dataset
   useEffect(() => {
@@ -1513,6 +1531,17 @@ export default function XPS({
   useEffect(() => { localStorage.setItem('nigiro-xps-sidebar-collapsed', String(sidebarCollapsed)) }, [sidebarCollapsed])
 
   useEffect(() => {
+    if (processingViewMode === 'overlay') {
+      if (!overlayFitResult) { setOverlayRsfRows([]); return }
+      setOverlayRsfRows(prev => {
+        const prevMap = new Map(prev.map(r => [r.peakName, r]))
+        return overlayFitResult.peaks.map(pk => {
+          const existing = prevMap.get(pk.Peak_Name)
+          return existing ?? { peakName: pk.Peak_Name, element: '', orbitalLabel: '', rsf: null, source: '' }
+        })
+      })
+      return
+    }
     if (!fitResult) { setRsfRows([]); return }
     setRsfRows(prev => {
       const prevMap = new Map(prev.map(r => [r.peakName, r]))
@@ -1521,7 +1550,7 @@ export default function XPS({
         return existing ?? { peakName: pk.Peak_Name, element: '', orbitalLabel: '', rsf: null, source: '' }
       })
     })
-  }, [fitResult])
+  }, [processingViewMode, fitResult, overlayFitResult])
 
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -1595,10 +1624,31 @@ export default function XPS({
     setOverlaySelection(selection)
     setOverlayDraftSelection(selection)
     setOverlayBundle(null)
-    setOverlayState(createDefaultOverlayState())
-    setFitResult(null)
-    setPeakCandidates([])
-    setRsfRows([])
+    setOverlayState(current => ({
+      ...createDefaultOverlayState(),
+      params: {
+        ...createDefaultOverlayState().params,
+        bg_enabled: current.params.bg_enabled,
+        bg_method: current.params.bg_method,
+        bg_x_start: current.params.bg_x_start,
+        bg_x_end: current.params.bg_x_end,
+        bg_poly_deg: current.params.bg_poly_deg,
+        bg_baseline_lambda: current.params.bg_baseline_lambda,
+        bg_baseline_p: current.params.bg_baseline_p,
+        bg_baseline_iter: current.params.bg_baseline_iter,
+        bg_tougaard_B: current.params.bg_tougaard_B,
+        bg_tougaard_C: current.params.bg_tougaard_C,
+        smooth_method: current.params.smooth_method,
+        smooth_window: current.params.smooth_window,
+        smooth_poly: current.params.smooth_poly,
+        norm_method: current.params.norm_method,
+        norm_x_start: current.params.norm_x_start,
+        norm_x_end: current.params.norm_x_end,
+        energy_shift: current.params.energy_shift,
+      },
+    }))
+    setOverlayFitResult(null)
+    setOverlayRsfRows([])
   }
 
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) => {
@@ -1695,17 +1745,25 @@ export default function XPS({
   }
 
   const lookupRsfFn = async () => {
-    const validCount = rsfRows.filter(r => r.element.trim() && r.orbitalLabel.trim()).length
+    const validCount = currentRsfRows.filter(r => r.element.trim() && r.orbitalLabel.trim()).length
     if (validCount === 0) { setRsfError('請先填入元素與軌域標籤'); return }
     setRsfLoading(true); setRsfError(null)
     try {
-      const items: RsfRequestItem[] = rsfRows.map(r => ({ element: r.element.trim(), label: r.orbitalLabel.trim() }))
+      const items: RsfRequestItem[] = currentRsfRows.map(r => ({ element: r.element.trim(), label: r.orbitalLabel.trim() }))
       const results: RsfResultRow[] = await lookupRsf(items)
-      setRsfRows(prev => prev.map((row, idx) => ({
-        ...row,
-        rsf: results[idx]?.rsf ?? null,
-        source: results[idx]?.source ?? '',
-      })))
+      if (processingViewMode === 'overlay') {
+        setOverlayRsfRows(prev => prev.map((row, idx) => ({
+          ...row,
+          rsf: results[idx]?.rsf ?? null,
+          source: results[idx]?.source ?? '',
+        })))
+      } else {
+        setRsfRows(prev => prev.map((row, idx) => ({
+          ...row,
+          rsf: results[idx]?.rsf ?? null,
+          source: results[idx]?.source ?? '',
+        })))
+      }
     } catch (e: unknown) { setRsfError((e as Error).message) }
     finally { setRsfLoading(false) }
   }
@@ -1715,7 +1773,7 @@ export default function XPS({
     setElementsLoading(true); setFitError(null)
     try {
       const data = await fetchElementPeaks(selectedElement)
-      const maxY = activeDataset ? Math.max(...activeDataset.y_processed) : 1000
+      const maxY = fitTargetDataset ? Math.max(...fitTargetDataset.y_processed) : 1000
       const newPeaks: PeakCandidate[] = data.peaks.map(pk => ({
         id: createPeakId(),
         label: `${selectedElement} ${pk.label}`,
@@ -1738,15 +1796,23 @@ export default function XPS({
   }
 
   const handleFit = async () => {
-    if (!activeDataset) return
+    if (!fitTargetDataset) return
+    if (processingViewMode === 'overlay' && !overlayState.params.average) {
+      setFitError('疊圖模式的峰擬合只會使用多檔平均後的結果，請先保留多檔平均。')
+      return
+    }
     const activePeaks = peakCandidates.filter(p => p.enabled)
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
     setIsFitting(true); setFitError(null)
     try {
       const initPeaks: InitPeak[] = activePeaks.map(p => ({ center: p.center, fwhm: p.fwhm, amplitude: p.amplitude, label: p.label }))
       const peakLabels = activePeaks.map(p => p.label)
-      const res = await fitPeaks(activeDataset.x, activeDataset.y_processed, initPeaks, fitProfile, peakLabels)
-      setFitResult(res)
+      const res = await fitPeaks(fitTargetDataset.x, fitTargetDataset.y_processed, initPeaks, fitProfile, peakLabels)
+      if (processingViewMode === 'overlay') {
+        setOverlayFitResult(res)
+      } else {
+        setFitResult(res)
+      }
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setIsFitting(false) }
   }
@@ -1767,15 +1833,22 @@ export default function XPS({
   const normalizationStageDatasets = normalizationDataset
     ? [{ name: normalizationDataset.name, x: normalizationDataset.x, y: normalizationDataset.y_processed }]
     : []
-  const finalStageDatasets = processingViewMode === 'single' && activeDataset
-    ? [{ name: activeDataset.name, x: activeDataset.x, y: activeDataset.y_processed }]
+  const finalStageDatasets = currentDisplayDataset
+    ? [{ name: currentDisplayDataset.name, x: currentDisplayDataset.x, y: currentDisplayDataset.y_processed }]
     : []
   const renderFinalChart = (height = 380, bindLegend = true) => {
-    if (!activeDataset) return null
+    if (!currentDisplayDataset) return null
 
     return (
       <Plot
-        data={applyHidden((fitResult ? buildFitTraces(activeDataset, fitResult, chartLineColors.final) : buildMainTraces(activeDataset, showRaw, showBg, chartLineColors.final)) as Plotly.Data[], finalHidden)}
+        data={applyHidden((currentFitResult
+          ? buildFitTraces(currentDisplayDataset, currentFitResult, chartLineColors.final)
+          : buildMainTraces(
+              currentDisplayDataset,
+              processingViewMode === 'single' ? showRaw : false,
+              processingViewMode === 'single' ? showBg : false,
+              chartLineColors.final,
+            )) as Plotly.Data[], finalHidden)}
         layout={chartLayout() as Plotly.Layout}
         config={withPlotFullscreen()}
         style={{ width: '100%', height }}
@@ -1785,10 +1858,10 @@ export default function XPS({
     )
   }
   const openFinalChartPopup = () => {
-    if (!onOpenPlotPopup || !activeDataset) return
+    if (!onOpenPlotPopup || !currentDisplayDataset) return
 
     onOpenPlotPopup({
-      title: `XPS 最終圖表 - ${activeDataset.name}`,
+      title: `XPS 最終圖表 - ${currentDisplayDataset.name}`,
       content: renderFinalChart(440, false),
     })
   }
@@ -1952,7 +2025,20 @@ export default function XPS({
                     </p>
                   </div>
                 }>
-                  <TogglePill label="啟用內插" checked={currentParams.interpolate} onChange={set('interpolate')} />
+                  <TogglePill
+                    label={processingViewMode === 'overlay' ? '疊圖模式固定啟用內插' : '啟用內插'}
+                    checked={processingViewMode === 'overlay' ? true : currentParams.interpolate}
+                    onChange={value => {
+                      if (processingViewMode === 'overlay') {
+                        setOverlayState(current => ({
+                          ...current,
+                          params: { ...current.params, interpolate: true },
+                        }))
+                        return
+                      }
+                      set('interpolate')(value)
+                    }}
+                  />
 
                   {/* 每筆資料統計 */}
                   {rawFiles.length > 0 && (() => {
@@ -2071,18 +2157,11 @@ export default function XPS({
                   ) : overlayFiles.length > 1 ? (
                     <>
                       <TogglePill
-                        label="啟用多檔平均"
-                        checked={currentParams.average}
-                        onChange={value => setOverlayState(current => ({
-                          ...current,
-                          params: {
-                            ...current.params,
-                            average: value,
-                            interpolate: value ? true : current.params.interpolate,
-                          },
-                        }))}
+                        label="疊圖模式固定使用多檔平均"
+                        checked
+                        onChange={() => {}}
                       />
-                      <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下可對目前選取的多筆資料做平均，平均前會先對齊到同一組內插點數。</p>
+                      <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下會固定先把目前選取的多筆資料對齊到同一組內插點數，再用平均後的單一結果做後續背景扣除、歸一化、峰擬合與 RSF 分析。</p>
                     </>
                   ) : (
                     <p className="text-[10px] text-[var(--text-soft)]">請先在多筆疊圖模式選至少 2 筆資料，這一步才可啟用。</p>
@@ -2765,12 +2844,12 @@ export default function XPS({
               </div>
             )}
 
-            {processingViewMode === 'single' && result && activeDataset && (
+            {currentDisplayDataset && (processingViewMode === 'single' ? result : fitTargetDataset) && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <ChartToolbar
-                      title={`最終處理光譜${fitResult ? '（含擬合結果）' : ''}`}
+                      title={`最終處理光譜${currentFitResult ? '（含擬合結果）' : ''}`}
                       colorValue={chartLineColors.final}
                       onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
                       actions={onOpenPlotPopup ? (
@@ -2780,7 +2859,11 @@ export default function XPS({
                       ) : undefined}
                     />
                   </div>
-                  <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
+                  {processingViewMode === 'single' ? (
+                    <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
+                  ) : (
+                    <p className="text-xs text-[var(--text-soft)]">疊圖模式下這張圖固定顯示多檔平均後的單一結果。</p>
+                  )}
                 </div>
                 {renderFinalChart()}
                 <div className="mt-3 flex justify-start">
@@ -2792,7 +2875,26 @@ export default function XPS({
               </div>
             )}
 
-            {processingViewMode === 'single' && fitResult && fitResult.peaks.length > 0 && (
+            {fitTargetDataset && currentFitResult && currentFitResult.peaks.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">5. 峰擬合光譜</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {processingViewMode === 'overlay'
+                    ? '疊圖模式下這裡會直接對「多檔平均後的單一結果」做擬合，避免拿多條未平均光譜一起擬合。'
+                    : '這張圖會獨立顯示擬合輸入、總擬合、各峰組件與殘差，避免只疊在最終圖上不明顯。'}
+                </p>
+                <Plot
+                  data={applyHidden(buildFitTraces(fitTargetDataset, currentFitResult, chartLineColors.final) as Plotly.Data[], fitHidden)}
+                  layout={chartLayout() as Plotly.Layout}
+                  config={withPlotFullscreen()}
+                  style={{ width: '100%', height: 380 }}
+                  onLegendClick={makeLegendClick(setFitHidden) as never}
+                  onLegendDoubleClick={() => false}
+                />
+              </div>
+            )}
+
+            {currentFitResult && currentFitResult.peaks.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">峰擬合結果</p>
                 <table className="w-full text-xs">
@@ -2806,7 +2908,7 @@ export default function XPS({
                     </tr>
                   </thead>
                   <tbody className="text-[var(--text-main)]">
-                    {fitResult.peaks.map(pk => (
+                    {currentFitResult.peaks.map(pk => (
                       <tr key={pk.Peak_Name} className="border-b border-[var(--card-divider)]">
                         <td className="py-1.5 font-medium">{pk.Peak_Name}</td>
                         <td className="py-1.5 text-right">{pk.Center_eV.toFixed(2)}</td>
@@ -2865,7 +2967,7 @@ export default function XPS({
               </div>
             )}
 
-            {processingViewMode === 'single' && fitResult && fitResult.peaks.length > 0 && rsfRows.length > 0 && (
+            {currentFitResult && currentFitResult.peaks.length > 0 && currentRsfRows.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <p className="text-sm font-semibold text-[var(--text-main)]">RSF 定量分析</p>
@@ -2888,10 +2990,10 @@ export default function XPS({
                     </tr>
                   </thead>
                   <tbody className="text-[var(--text-main)]">
-                    {rsfRows.map((row, idx) => {
-                      const pk = fitResult.peaks[idx]
-                      const totalRsfArea = rsfRows.reduce((acc, r, i) => {
-                        const a = fitResult.peaks[i]?.Area ?? 0
+                    {currentRsfRows.map((row, idx) => {
+                      const pk = currentFitResult.peaks[idx]
+                      const totalRsfArea = currentRsfRows.reduce((acc, r, i) => {
+                        const a = currentFitResult.peaks[i]?.Area ?? 0
                         return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
                       }, 0)
                       const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
@@ -2901,13 +3003,17 @@ export default function XPS({
                           <td className="py-1.5 font-medium">{row.peakName}</td>
                           <td className="py-1">
                             <input value={row.element} placeholder="e.g. Ni"
-                              onChange={e => setRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, element: e.target.value } : r))}
+                              onChange={e => (processingViewMode === 'overlay'
+                                ? setOverlayRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, element: e.target.value } : r))
+                                : setRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, element: e.target.value } : r)))}
                               className="w-14 rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1.5 py-0.5 text-xs text-[var(--input-text)]"
                             />
                           </td>
                           <td className="py-1">
                             <input value={row.orbitalLabel} placeholder="2p3/2"
-                              onChange={e => setRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, orbitalLabel: e.target.value } : r))}
+                              onChange={e => (processingViewMode === 'overlay'
+                                ? setOverlayRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, orbitalLabel: e.target.value } : r))
+                                : setRsfRows(prev => prev.map((r, i) => i === idx ? { ...r, orbitalLabel: e.target.value } : r)))}
                               className="w-16 rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1.5 py-0.5 text-xs text-[var(--input-text)]"
                             />
                           </td>
@@ -2923,7 +3029,7 @@ export default function XPS({
                     })}
                   </tbody>
                 </table>
-                {rsfRows.some(r => r.rsf != null) && (
+                {currentRsfRows.some(r => r.rsf != null) && (
                   <p className="mt-2 text-[10px] text-[var(--text-soft)]">
                     RSF 來源：Scofield (1976)，Al Kα。Atomic% = (Area/RSF) / Σ(Area/RSF) × 100。
                   </p>
@@ -2931,12 +3037,13 @@ export default function XPS({
               </div>
             )}
 
-            {processingViewMode === 'single' && activeDataset && (
+            {currentDisplayDataset && (
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-4">
                   <p className="text-sm font-semibold text-[var(--text-main)]">匯出</p>
                   <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">
                     下載各階段光譜、峰擬合結果、RSF 定量表，以及含完整處理參數的 JSON 報告。
+                    {processingViewMode === 'overlay' ? ' 疊圖模式會固定匯出多檔平均後的單一分析結果。' : ''}
                   </p>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3">
@@ -2946,7 +3053,7 @@ export default function XPS({
                     <div className="mt-3 flex flex-col gap-2">
                       <ExportBtnPrimary label="最終處理光譜 CSV" onClick={() => {
                         const headers = ['binding_energy_eV', 'intensity_raw', 'intensity_processed']
-                        const rows = activeDataset.x.map((x, i) => [x, activeDataset.y_raw[i], activeDataset.y_processed[i]])
+                        const rows = currentDisplayDataset.x.map((x, i) => [x, currentDisplayDataset.y_raw[i], currentDisplayDataset.y_processed[i]])
                         downloadFile(toCsv(headers, rows), 'xps_processed.csv', 'text/csv')
                       }} />
                       {backgroundDataset && (
@@ -2968,22 +3075,22 @@ export default function XPS({
                   <div className="rounded-[22px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">分析表格</p>
                     <div className="mt-3 flex flex-col gap-2">
-                      {fitResult && fitResult.peaks.length > 0 ? (
+                      {currentFitResult && currentFitResult.peaks.length > 0 ? (
                         <>
                           <ExportBtnSecondary label="峰擬合結果 CSV" onClick={() => {
                             const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']
-                            const rows: (string | number | null)[][] = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
+                            const rows: (string | number | null)[][] = currentFitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
                             downloadFile(toCsv(headers, rows), 'xps_fit.csv', 'text/csv')
                           }} />
-                          {rsfRows.some(r => r.rsf != null) && (
+                          {currentRsfRows.some(r => r.rsf != null) && (
                             <ExportBtnSecondary label="RSF 定量 CSV" onClick={() => {
-                              const totalRsfArea = rsfRows.reduce((acc, r, i) => {
-                                const a = fitResult.peaks[i]?.Area ?? 0
+                              const totalRsfArea = currentRsfRows.reduce((acc, r, i) => {
+                                const a = currentFitResult.peaks[i]?.Area ?? 0
                                 return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
                               }, 0)
                               const headers = ['Peak', 'Element', 'Orbital', 'Area', 'RSF', 'RSF_Area', 'Atomic_pct']
-                              const rows: (string | number | null)[][] = rsfRows.map((row, idx) => {
-                                const pk = fitResult.peaks[idx]
+                              const rows: (string | number | null)[][] = currentRsfRows.map((row, idx) => {
+                                const pk = currentFitResult.peaks[idx]
                                 const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
                                 const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
                                 return [row.peakName, row.element, row.orbitalLabel, pk?.Area ?? 0, row.rsf, rsfArea, atomicPct]
@@ -3015,14 +3122,16 @@ export default function XPS({
                       <ExportBtnSecondary label="處理報告 JSON" onClick={() => {
                         const report = {
                           generated: new Date().toISOString(),
-                          file: activeFile?.name ?? '',
+                          file: currentReportFileName,
+                          processing_view_mode: processingViewMode,
+                          overlay_selection: processingViewMode === 'overlay' ? overlayFiles.map(file => file.name) : null,
                           mode: xpsMode,
                           params: currentParams,
                           auto_interp_points: currentAutoInterpPoints,
                           effective_n_points: effectiveNPoints,
                           peaks: peakCandidates,
                           fit_profile: fitProfile,
-                          fit_result: fitResult ? { peaks: fitResult.peaks } : null,
+                          fit_result: currentFitResult ? { peaks: currentFitResult.peaks } : null,
                           vbm: vbmResult?.success ? {
                             vbm_ev: vbmResult.vbm_ev,
                             edge_lo: vbmEdgeLo,
@@ -3030,7 +3139,7 @@ export default function XPS({
                             baseline_lo: vbmBaselineLo,
                             baseline_hi: vbmBaselineHi,
                           } : null,
-                          rsf: rsfRows.some(r => r.rsf != null) ? rsfRows : null,
+                          rsf: currentRsfRows.some(r => r.rsf != null) ? currentRsfRows : null,
                         }
                         downloadFile(JSON.stringify(report, null, 2), 'xps_report.json', 'application/json')
                       }} />
