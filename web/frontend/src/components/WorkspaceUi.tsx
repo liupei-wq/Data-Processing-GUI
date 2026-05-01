@@ -163,6 +163,46 @@ export function ChartToolbar({
   )
 }
 
+export function DeferredRender({
+  children,
+  minHeight = 320,
+  rootMargin = '480px 0px',
+}: {
+  children: ReactNode
+  minHeight?: number
+  rootMargin?: string
+}) {
+  const shellRef = useRef<HTMLDivElement | null>(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    if (visible) return
+    const node = shellRef.current
+    if (!node) return
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [visible, rootMargin])
+
+  return (
+    <div ref={shellRef} style={{ minHeight }}>
+      {visible ? children : (
+        <div className="flex h-full min-h-[inherit] items-center justify-center rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-10 text-sm text-[var(--text-soft)]">
+          圖表接近畫面後才會載入，減少初始卡頓。
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ThemeSelect({
   value,
   onChange,

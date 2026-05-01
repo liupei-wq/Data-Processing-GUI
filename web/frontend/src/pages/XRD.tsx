@@ -43,6 +43,7 @@ import {
   ChartToolbar,
   DEFAULT_SERIES_PALETTE_KEYS,
   DatasetSelectionModal,
+  DeferredRender,
   EmptyWorkspaceState,
   InfoCardGrid,
   LINE_COLOR_OPTIONS,
@@ -1420,15 +1421,17 @@ export default function XRD({
                     onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">這裡直接比照 XPS 疊圖模式，顯示多筆 XRD 的最終處理結果，不改動既有後端步驟邏輯。</p>
-                  <Plot
-                    data={applyHidden(overlayChartTraces, overlayHidden)}
-                    layout={chartLayout({ xMode, wavelength })}
-                    config={withPlotFullscreen({ scrollZoom: false })}
-                    style={{ width: '100%', height: 360 }}
-                    onLegendClick={makeLegendClick(setOverlayHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={360}>
+                    <Plot
+                      data={applyHidden(overlayChartTraces, overlayHidden)}
+                      layout={chartLayout({ xMode, wavelength })}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', height: 360 }}
+                      onLegendClick={makeLegendClick(setOverlayHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -1449,15 +1452,17 @@ export default function XRD({
                     onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">把原始 XRD 與目前處理後結果疊在一起，方便對照內插、多檔平均、平滑與歸一化之後的整體變化。</p>
-                  <Plot
-                    data={applyHidden(preprocessChartTraces, preprocessHidden)}
-                    layout={chartLayout({ xMode, wavelength })}
-                    config={withPlotFullscreen({ scrollZoom: false })}
-                    style={{ width: '100%', height: 360 }}
-                    onLegendClick={makeLegendClick(setPreprocessHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={360}>
+                    <Plot
+                      data={applyHidden(preprocessChartTraces, preprocessHidden)}
+                      layout={chartLayout({ xMode, wavelength })}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', height: 360 }}
+                      onLegendClick={makeLegendClick(setPreprocessHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -1480,15 +1485,17 @@ export default function XRD({
                   <p className="mb-3 text-xs text-[var(--text-soft)]">使用固定面積與固定 FWHM 的高斯模板，先扣除已知峰影響；視覺比照 XPS 分階段圖卡，但計算邏輯仍沿用現有 XRD 後端。</p>
                   {gaussianChartTraces.length > 0 ? (
                     <>
-                      <Plot
-                        data={applyHidden(gaussianChartTraces, gaussianHidden)}
-                        layout={chartLayout({ xMode, wavelength })}
-                        config={withPlotFullscreen({ scrollZoom: false })}
-                        style={{ width: '100%', height: 360 }}
-                        onLegendClick={makeLegendClick(setGaussianHidden) as never}
-                        onLegendDoubleClick={() => false}
-                        useResizeHandler
-                      />
+                      <DeferredRender minHeight={360}>
+                        <Plot
+                          data={applyHidden(gaussianChartTraces, gaussianHidden)}
+                          layout={chartLayout({ xMode, wavelength })}
+                          config={withPlotFullscreen({ scrollZoom: false })}
+                          style={{ width: '100%', height: 360 }}
+                          onLegendClick={makeLegendClick(setGaussianHidden) as never}
+                          onLegendDoubleClick={() => false}
+                          useResizeHandler
+                        />
+                      </DeferredRender>
                       <div className="mt-3 flex justify-start">
                         <button
                           type="button"
@@ -1548,15 +1555,17 @@ export default function XRD({
                   <p className="mb-3 text-xs text-[var(--text-soft)]">
                     此顯示模式只改變圖表縮放方式，方便觀察弱峰與寬尾巴。不影響尋峰、Scherrer 或參考峰匹配的計算基礎。
                   </p>
-                  <Plot
-                    data={applyHidden(logChartTraces, logHidden)}
-                    layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} Intensity` })}
-                    config={withPlotFullscreen({ scrollZoom: false })}
-                    style={{ width: '100%', height: 360 }}
-                    onLegendClick={makeLegendClick(setLogHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={360}>
+                    <Plot
+                      data={applyHidden(logChartTraces, logHidden)}
+                      layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} Intensity` })}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', height: 360 }}
+                      onLegendClick={makeLegendClick(setLogHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                 </div>
               )}
 
@@ -1568,15 +1577,17 @@ export default function XRD({
                     onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">把最終處理結果、參考峰與偵測到的峰位放在同一張圖上，顯示方式對齊 XPS 的最終圖卡。</p>
-                  <Plot
-                    data={applyHidden(finalChartTraces, finalHidden)}
-                    layout={chartLayout({ xMode, wavelength, height: 380 })}
-                    config={withPlotFullscreen({ scrollZoom: false })}
-                    style={{ width: '100%', height: 380 }}
-                    onLegendClick={makeLegendClick(setFinalHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={380}>
+                    <Plot
+                      data={applyHidden(finalChartTraces, finalHidden)}
+                      layout={chartLayout({ xMode, wavelength, height: 380 })}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', height: 380 }}
+                      onLegendClick={makeLegendClick(setFinalHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -1609,15 +1620,17 @@ export default function XRD({
                       <p className="mb-3 text-xs text-[var(--text-soft)]">
                         擬合範圍：{fitWindow.lo.toFixed(3)} – {fitWindow.hi.toFixed(3)} deg，使用 {fitSeeds.length} 個 seed，主要峰形為 {fitResult.profile}。
                       </p>
-                      <Plot
-                        data={applyHidden(fitChartTraces, fitHidden)}
-                        layout={chartLayout({ xMode, wavelength, height: 400 })}
-                        config={withPlotFullscreen({ scrollZoom: false })}
-                        style={{ width: '100%', height: 400 }}
-                        onLegendClick={makeLegendClick(setFitHidden) as never}
-                        onLegendDoubleClick={() => false}
-                        useResizeHandler
-                      />
+                      <DeferredRender minHeight={400}>
+                        <Plot
+                          data={applyHidden(fitChartTraces, fitHidden)}
+                          layout={chartLayout({ xMode, wavelength, height: 400 })}
+                          config={withPlotFullscreen({ scrollZoom: false })}
+                          style={{ width: '100%', height: 400 }}
+                          onLegendClick={makeLegendClick(setFitHidden) as never}
+                          onLegendDoubleClick={() => false}
+                          useResizeHandler
+                        />
+                      </DeferredRender>
                       <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-soft)]">
                         <span className="rounded-full border border-[var(--card-border)] px-3 py-1">R² {fitResult.r_squared.toFixed(4)}</span>
                         <span className="rounded-full border border-[var(--card-border)] px-3 py-1">Adj R² {fitResult.adjusted_r_squared.toFixed(4)}</span>

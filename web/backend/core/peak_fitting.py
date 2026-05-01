@@ -447,14 +447,14 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         penalties: list[float] = []
         for spec in specs:
             _, _, fwhm, _, _, _ = peak_values(p, spec)
+            penalty_value = 0.0
             if spec["profile"] == "voigt":
                 if fwhm < spec["fwhm_min"]:
-                    penalties.append((spec["fwhm_min"] - fwhm) / max(spec["fwhm_min"], 1e-6) * y_span * 5)
+                    penalty_value = (spec["fwhm_min"] - fwhm) / max(spec["fwhm_min"], 1e-6) * y_span * 5
                 elif fwhm > spec["fwhm_max"]:
-                    penalties.append((fwhm - spec["fwhm_max"]) / max(spec["fwhm_max"], 1e-6) * y_span * 5)
-        if penalties:
-            return np.concatenate([resid, np.asarray(penalties, dtype=float)])
-        return resid
+                    penalty_value = (fwhm - spec["fwhm_max"]) / max(spec["fwhm_max"], 1e-6) * y_span * 5
+            penalties.append(float(penalty_value))
+        return np.concatenate([resid, np.asarray(penalties, dtype=float)])
 
     p0_arr = np.asarray(p0, dtype=float)
     lo_arr = np.asarray(lo, dtype=float)

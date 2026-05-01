@@ -7,6 +7,7 @@ import {
   ChartToolbar,
   DEFAULT_SERIES_PALETTE_KEYS,
   DatasetSelectionModal,
+  DeferredRender,
   EmptyWorkspaceState,
   GlassSection,
   InfoCardGrid,
@@ -2688,7 +2689,7 @@ export default function Raman({
                   <Plot
                     data={applyHidden(rawChartTraces, rawHidden)}
                     layout={chartLayout()}
-                    config={withPlotFullscreen({ scrollZoom: true })}
+                    config={withPlotFullscreen({ scrollZoom: false })}
                     style={{ width: '100%', minHeight: '340px' }}
                     onLegendClick={makeLegendClick(setRawHidden) as never}
                     onLegendDoubleClick={() => false}
@@ -2714,15 +2715,17 @@ export default function Raman({
                     onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">這裡改成跟 XPS 一樣的疊圖卡片流程，直接比對多筆 Raman 的最終處理結果。</p>
-                  <Plot
-                    data={applyHidden(overlayChartTraces, overlayHidden)}
-                    layout={chartLayout()}
-                    config={withPlotFullscreen({ scrollZoom: true })}
-                    style={{ width: '100%', minHeight: '340px' }}
-                    onLegendClick={makeLegendClick(setOverlayHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={340}>
+                    <Plot
+                      data={applyHidden(overlayChartTraces, overlayHidden)}
+                      layout={chartLayout()}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', minHeight: '340px' }}
+                      onLegendClick={makeLegendClick(setOverlayHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -2743,15 +2746,17 @@ export default function Raman({
                     onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">把原始訊號與去尖峰或前處理後結果疊在一起，方便快速檢查變化量。</p>
-                  <Plot
-                    data={applyHidden(preprocessChartTraces, preprocessHidden)}
-                    layout={chartLayout()}
-                    config={withPlotFullscreen({ scrollZoom: true })}
-                    style={{ width: '100%', minHeight: '340px' }}
-                    onLegendClick={makeLegendClick(setPreprocessHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={340}>
+                    <Plot
+                      data={applyHidden(preprocessChartTraces, preprocessHidden)}
+                      layout={chartLayout()}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', minHeight: '340px' }}
+                      onLegendClick={makeLegendClick(setPreprocessHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -2772,15 +2777,17 @@ export default function Raman({
                     onColorChange={value => setChartLineColors(current => ({ ...current, background: value }))}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">這張圖把背景基準線和扣除後光譜分開標出，顯示方式比照 XPS 背景步驟。</p>
-                  <Plot
-                    data={applyHidden(backgroundChartTraces, backgroundHidden)}
-                    layout={chartLayout()}
-                    config={withPlotFullscreen({ scrollZoom: true })}
-                    style={{ width: '100%', minHeight: '340px' }}
-                    onLegendClick={makeLegendClick(setBackgroundHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={340}>
+                    <Plot
+                      data={applyHidden(backgroundChartTraces, backgroundHidden)}
+                      layout={chartLayout()}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', minHeight: '340px' }}
+                      onLegendClick={makeLegendClick(setBackgroundHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -2801,15 +2808,17 @@ export default function Raman({
                     onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">把最終 Raman、參考峰和偵測峰位收斂到同一張圖卡，互動方式與 XPS 最終圖一致。</p>
-                  <Plot
-                    data={applyHidden(finalChartTraces, finalHidden)}
-                    layout={chartLayout()}
-                    config={withPlotFullscreen({ scrollZoom: true })}
-                    style={{ width: '100%', minHeight: '420px' }}
-                    onLegendClick={makeLegendClick(setFinalHidden) as never}
-                    onLegendDoubleClick={() => false}
-                    useResizeHandler
-                  />
+                  <DeferredRender minHeight={420}>
+                    <Plot
+                      data={applyHidden(finalChartTraces, finalHidden)}
+                      layout={chartLayout()}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', minHeight: '420px' }}
+                      onLegendClick={makeLegendClick(setFinalHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -3028,13 +3037,15 @@ export default function Raman({
                       </div>
                     )}
                     <div className="theme-block-soft rounded-[24px] p-3 sm:p-4">
-                      <Plot
-                        data={fitChartTraces(activeFitDataset, fitResult)}
-                        layout={fitChartLayout()}
-                        config={withPlotFullscreen({ scrollZoom: true })}
-                        style={{ width: '100%', minHeight: '520px' }}
-                        useResizeHandler
-                      />
+                      <DeferredRender minHeight={520}>
+                        <Plot
+                          data={fitChartTraces(activeFitDataset, fitResult)}
+                          layout={fitChartLayout()}
+                          config={withPlotFullscreen({ scrollZoom: false })}
+                          style={{ width: '100%', minHeight: '520px' }}
+                          useResizeHandler
+                        />
+                      </DeferredRender>
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">

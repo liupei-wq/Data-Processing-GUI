@@ -1853,6 +1853,12 @@ summary:active,
   align-items: center;
 }
 
+.step-content {
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: 320px;
+}
+
 .step-number {
   width: 34px;
   height: 34px;
