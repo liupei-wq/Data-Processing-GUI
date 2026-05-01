@@ -11,6 +11,8 @@ import type {
   ProcessResult,
   DetectedPeak,
   RefPeak,
+  XrdFitResult,
+  XrdFitSeed,
 } from '../types/xrd'
 import { readApiError } from './http'
 
@@ -50,14 +52,14 @@ export async function detectPeaks(
   x: number[],
   y: number[],
   options: {
-    prominence?: number
+    sensitivity?: 'high' | 'medium' | 'low'
     min_distance?: number
+    width_min?: number
+    width_max?: number
+    exclude_ranges?: Array<{ start: number; end: number }>
     max_peaks?: number
     wavelength?: number
-    include_weak_peaks?: boolean
-    weak_peak_threshold?: number
     min_snr?: number
-    min_prominence?: number
   },
 ): Promise<DetectedPeak[]> {
   const res = await fetch(`${BASE}/peaks`, {
@@ -91,4 +93,25 @@ export async function fetchReferencePeaks(
   if (!res.ok) throw new Error(await readApiError(res, 'XRD 參考峰載入失敗'))
   const data = await res.json()
   return data.peaks as RefPeak[]
+}
+
+export async function fitXrdPeaks(
+  datasetName: string,
+  x: number[],
+  y: number[],
+  options: {
+    peaks: XrdFitSeed[]
+    profile?: 'pseudo_voigt' | 'voigt' | 'gaussian' | 'lorentzian'
+    fit_lo?: number | null
+    fit_hi?: number | null
+    maxfev?: number
+  },
+): Promise<XrdFitResult> {
+  const res = await fetch(`${BASE}/fit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dataset_name: datasetName, x, y, ...options }),
+  })
+  if (!res.ok) throw new Error(await readApiError(res, 'XRD 峰擬合失敗'))
+  return res.json() as Promise<XrdFitResult>
 }

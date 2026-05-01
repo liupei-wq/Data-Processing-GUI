@@ -76,21 +76,26 @@ export interface DetectedPeak {
   fwhm_deg: number
   snr: number
   prominence: number
-  confidence: 'strong' | 'weak' | 'tentative'
+  confidence: 'high' | 'medium' | 'low'
   note: string
+}
+
+export interface PeakExcludeRange {
+  start: number
+  end: number
 }
 
 /** Peak detection controls used by the frontend */
 export interface PeakDetectionParams {
   enabled: boolean
-  prominence: number
+  sensitivity: 'high' | 'medium' | 'low'
   min_distance: number
+  width_min: number
+  width_max: number
+  exclude_ranges: PeakExcludeRange[]
   max_peaks: number
-  include_weak_peaks: boolean
   show_unmatched_peaks: boolean
-  weak_peak_threshold: number
   min_snr: number
-  min_prominence: number
   export_weak_peaks: boolean
 }
 
@@ -129,6 +134,17 @@ export interface ScherrerParams {
   broadening_correction: 'none' | 'gaussian' | 'lorentzian'
 }
 
+export interface XrdFitParams {
+  enabled: boolean
+  profile: 'pseudo_voigt' | 'voigt' | 'gaussian' | 'lorentzian'
+  seed_source: 'all_detected' | 'matched_only' | 'high_confidence'
+  range_mode: 'auto' | 'manual'
+  auto_padding: number
+  fit_lo: number | null
+  fit_hi: number | null
+  maxfev: number
+}
+
 /** One reference peak from the database */
 export interface RefPeak {
   material: string
@@ -152,7 +168,7 @@ export interface ReferenceMatchRow {
   observed_intensity: number | null
   delta_two_theta: number | null
   matched: boolean
-  confidence: string
+  confidence: 'high' | 'medium' | 'low' | 'unmatched'
   candidates: string
   note: string
 }
@@ -167,8 +183,64 @@ export interface FinalPeakRow {
   hkl: string
   reference_2theta: number | null
   delta_2theta: number | null
-  confidence: string
+  near_reference: boolean
+  candidate_count: number
+  confidence: 'high' | 'medium' | 'low' | 'unmatched'
   note: string
+}
+
+export interface XrdFitSeed {
+  peak_id: string
+  label: string
+  center: number
+  fwhm: number
+  amplitude: number
+  phase: string
+  hkl: string
+  confidence: 'high' | 'medium' | 'low' | 'unmatched'
+  near_reference: boolean
+  center_tolerance: number
+  fwhm_min: number
+  fwhm_max: number
+  note: string
+}
+
+export interface XrdFitPeakRow {
+  Peak_ID: string
+  Peak_Name: string
+  Phase: string
+  HKL: string
+  Profile: string
+  Seed_Center_deg: number
+  Center_deg: number
+  Delta_deg: number
+  FWHM_deg: number
+  Height: number
+  Area: number
+  Area_pct: number
+  Eta: number | null
+  Confidence: 'high' | 'medium' | 'low' | 'unmatched'
+  Near_Reference: boolean
+  Fit_Status: string
+  Note: string
+}
+
+export interface XrdFitResult {
+  success: boolean
+  message: string
+  dataset_name: string
+  profile: string
+  fit_lo: number | null
+  fit_hi: number | null
+  y_fit: number[]
+  residuals: number[]
+  y_individual: number[][]
+  peaks: XrdFitPeakRow[]
+  r_squared: number
+  adjusted_r_squared: number
+  rmse: number
+  aic: number
+  bic: number
 }
 
 /** X-axis display mode */

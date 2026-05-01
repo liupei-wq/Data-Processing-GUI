@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from scipy.signal import find_peaks, peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
+from core.peak_fitting import fit_peaks
 from core.processing import smooth_signal, apply_normalization, apply_background
 from core.spectrum_ops import (
     fit_fixed_gaussian_templates,
@@ -128,14 +129,19 @@ class ProcessResponse(BaseModel):
 class PeakDetectRequest(BaseModel):
     x: List[float]
     y: List[float]
-    prominence: float = 0.05
-    min_distance: float = 0.3
+    sensitivity: str = "medium"
+    min_distance: float = 0.2
+    width_min: float = 0.03
+    width_max: float = 1.5
+    exclude_ranges: List["PeakExcludeRangeInput"] = Field(default_factory=list)
     max_peaks: int = 30
     wavelength: float = 1.5406
-    include_weak_peaks: bool = True
-    weak_peak_threshold: float = 10.0
-    min_snr: float = 1.0
-    min_prominence: float = 0.0
+    min_snr: float = 3.0
+
+
+class PeakExcludeRangeInput(BaseModel):
+    start: float
+    end: float
 
 
 class PeakRow(BaseModel):
@@ -152,6 +158,72 @@ class PeakRow(BaseModel):
 
 class PeakDetectResponse(BaseModel):
     peaks: List[PeakRow]
+
+
+class FitPeakInput(BaseModel):
+    peak_id: str = ""
+    label: str
+    center: float
+    fwhm: float
+    amplitude: float
+    phase: str = ""
+    hkl: str = ""
+    confidence: str = "medium"
+    near_reference: bool = False
+    center_tolerance: float = 0.3
+    fwhm_min: float = 0.03
+    fwhm_max: float = 2.0
+    note: str = ""
+    enabled: bool = True
+
+
+class FitRequest(BaseModel):
+    dataset_name: str = "XRD"
+    x: List[float]
+    y: List[float]
+    peaks: List[FitPeakInput]
+    profile: str = "pseudo_voigt"
+    fit_lo: Optional[float] = None
+    fit_hi: Optional[float] = None
+    maxfev: int = 20000
+
+
+class FitPeakRow(BaseModel):
+    Peak_ID: str
+    Peak_Name: str
+    Phase: str = ""
+    HKL: str = ""
+    Profile: str
+    Seed_Center_deg: float
+    Center_deg: float
+    Delta_deg: float
+    FWHM_deg: float
+    Height: float
+    Area: float
+    Area_pct: float
+    Eta: Optional[float] = None
+    Confidence: str = "medium"
+    Near_Reference: bool = False
+    Fit_Status: str = "Fit OK"
+    Note: str = ""
+
+
+class FitResponse(BaseModel):
+    success: bool
+    message: str = ""
+    dataset_name: str
+    profile: str
+    fit_lo: Optional[float] = None
+    fit_hi: Optional[float] = None
+    y_fit: List[float]
+    residuals: List[float]
+    y_individual: List[List[float]]
+    peaks: List[FitPeakRow]
+    r_squared: float
+    adjusted_r_squared: float = 0.0
+    rmse: float = 0.0
+    aic: float = 0.0
+    bic: float = 0.0
 
 
 class RefPeaksRequest(BaseModel):
@@ -175,6 +247,20 @@ class RefPeaksResponse(BaseModel):
 
 
 ProcessParams.model_rebuild()
+PeakDetectRequest.model_rebuild()
+
+
+def _estimate_noise_mad(values: np.ndarray) -> float:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return 0.0
+    center = float(np.median(values))
+    mad = float(np.median(np.abs(values - center)))
+    noise = 1.4826 * mad
+    if not np.isfinite(noise) or noise <= 0:
+        noise = float(np.std(values))
+    return noise if np.isfinite(noise) and noise > 0 else 0.0
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -317,57 +403,79 @@ def detect_peaks(req: PeakDetectRequest):
     """
     x = np.array(req.x, dtype=float)
     y = np.array(req.y, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(y)
+    x = x[valid]
+    y = y[valid]
+    if len(x) < 3 or len(y) < 3:
+        return PeakDetectResponse(peaks=[])
 
     dx = np.diff(x)
     dx = dx[np.isfinite(dx) & (dx > 0)]
     median_dx = float(np.median(dx)) if len(dx) else 0.0
     distance_pts = max(1, int(round(float(req.min_distance) / median_dx))) if median_dx > 0 else 1
 
-    y_max = float(np.max(y))
-    y_min = float(np.min(y))
-    y_range = y_max - y_min
-    if not np.isfinite(y_range) or y_range <= 0:
-        return PeakDetectResponse(peaks=[])
+    exclude_mask = np.ones(len(x), dtype=bool)
+    normalized_ranges: list[tuple[float, float]] = []
+    for item in req.exclude_ranges:
+        start = float(min(item.start, item.end))
+        end = float(max(item.start, item.end))
+        if not np.isfinite(start) or not np.isfinite(end):
+            continue
+        normalized_ranges.append((start, end))
+        exclude_mask &= ~((x >= start) & (x <= end))
 
-    strong_prominence = max(float(req.prominence), 0.0) * y_range
-    detection_prominence = strong_prominence
-    if req.include_weak_peaks:
-        weak_prominence = max(float(req.min_prominence), strong_prominence * 0.2, y_range * 0.002)
-        detection_prominence = min(strong_prominence, weak_prominence) if strong_prominence > 0 else weak_prominence
+    y_for_noise = y[exclude_mask] if int(np.count_nonzero(exclude_mask)) >= 5 else y
+    baseline = float(np.median(y_for_noise)) if len(y_for_noise) else float(np.median(y))
+    noise = _estimate_noise_mad(y_for_noise)
+    if not np.isfinite(noise) or noise <= 0:
+        noise = 1e-12
 
-    find_kwargs = {"prominence": max(detection_prominence, 0.0)}
+    sensitivity_factors = {
+        "high": 3.0,
+        "medium": 5.0,
+        "low": 8.0,
+    }
+    prominence_factor = sensitivity_factors.get(str(req.sensitivity).lower(), 5.0)
+    height_min = baseline + max(float(req.min_snr), 0.0) * noise
+    prominence_min = prominence_factor * noise
+
+    width_min_pts = None
+    width_max_pts = None
+    if median_dx > 0:
+        width_min_pts = max(1, int(round(max(float(req.width_min), 0.0) / median_dx)))
+        width_max_pts = max(width_min_pts, int(round(max(float(req.width_max), float(req.width_min)) / median_dx)))
+
+    find_kwargs = {
+        "height": height_min,
+        "prominence": prominence_min,
+    }
     if distance_pts > 1:
         find_kwargs["distance"] = distance_pts
+    if width_min_pts is not None and width_max_pts is not None:
+        find_kwargs["width"] = (width_min_pts, width_max_pts)
+
     idx, props = find_peaks(y, **find_kwargs)
-
-    if len(idx) == 0:
-        return PeakDetectResponse(peaks=[])
-
     prominences = np.asarray(props.get("prominences", np.zeros(len(idx))), dtype=float)
-    baseline = np.percentile(y, 10)
-    residual = y - baseline
-    noise = 1.4826 * float(np.median(np.abs(residual - np.median(residual))))
-    if not np.isfinite(noise) or noise <= 0:
-        noise = max(float(np.std(residual)), 1e-12)
-
-    keep_mask = prominences >= max(float(req.min_prominence), 0.0)
-    snr_values = prominences / noise
-    keep_mask &= snr_values >= max(float(req.min_snr), 0.0)
-    if not req.include_weak_peaks:
-        keep_mask &= prominences >= strong_prominence
-    idx = idx[keep_mask]
-    prominences = prominences[keep_mask]
-    snr_values = snr_values[keep_mask]
 
     if len(idx) == 0:
         return PeakDetectResponse(peaks=[])
+
+    if normalized_ranges:
+        keep_mask = np.ones(len(idx), dtype=bool)
+        peak_positions = x[idx]
+        for range_idx, peak_pos in enumerate(peak_positions):
+            if any(start <= peak_pos <= end for start, end in normalized_ranges):
+                keep_mask[range_idx] = False
+        idx = idx[keep_mask]
+        prominences = prominences[keep_mask]
+        if len(idx) == 0:
+            return PeakDetectResponse(peaks=[])
 
     if req.max_peaks > 0 and len(idx) > req.max_peaks:
         order = np.argsort(prominences)[::-1][: req.max_peaks]
         order = np.sort(order)
         idx = idx[order]
         prominences = prominences[order]
-        snr_values = snr_values[order]
 
     widths, _, left_ips, right_ips = peak_widths(y, idx, rel_height=0.5)
     sample_axis = np.arange(len(x), dtype=float)
@@ -382,20 +490,20 @@ def detect_peaks(req: PeakDetectRequest):
         fwhm_deg = abs(float(right_x[pos] - left_x[pos]))
         rel_intensity = float(y[i]) / y_max * 100
         prominence = float(prominences[pos])
-        snr = float(snr_values[pos])
-        weak_by_intensity = rel_intensity < float(req.weak_peak_threshold)
-        weak_by_prominence = strong_prominence > 0 and prominence < strong_prominence
-        if weak_by_intensity or weak_by_prominence:
-            confidence = "weak" if snr >= max(float(req.min_snr), 1.0) * 2 else "tentative"
+        snr = float(max(y[i] - baseline, prominence) / noise)
+        if snr >= max(float(req.min_snr) + 4.0, 8.0):
+            confidence = "high"
+        elif snr >= max(float(req.min_snr) + 1.0, 4.0):
+            confidence = "medium"
         else:
-            confidence = "strong"
+            confidence = "low"
         note_parts = []
-        if confidence != "strong":
-            note_parts.append("weak peak retained")
-        if weak_by_intensity:
-            note_parts.append(f"relative intensity below {req.weak_peak_threshold:g}%")
-        if weak_by_prominence:
-            note_parts.append("below strong-peak prominence threshold")
+        if confidence == "low":
+            note_parts.append("close to noise floor")
+        elif confidence == "medium":
+            note_parts.append("moderate confidence peak")
+        if snr < max(float(req.min_snr) + 1.0, 4.0):
+            note_parts.append("manual confirmation suggested")
         peaks.append(PeakRow(
             two_theta=round(tt, 4),
             d_spacing=round(d, 4),
@@ -409,6 +517,113 @@ def detect_peaks(req: PeakDetectRequest):
         ))
 
     return PeakDetectResponse(peaks=sorted(peaks, key=lambda p: p.two_theta))
+
+
+@router.post("/fit", response_model=FitResponse, summary="Fit XRD peaks")
+def fit_xrd_peaks(req: FitRequest):
+    x = np.asarray(req.x, dtype=float)
+    y = np.asarray(req.y, dtype=float)
+    enabled_rows = [row for row in req.peaks if row.enabled]
+
+    if len(x) < 4 or len(y) < 4 or len(x) != len(y):
+        raise HTTPException(status_code=400, detail="光譜點數不足或 x/y 長度不一致")
+    if not enabled_rows:
+        raise HTTPException(status_code=400, detail="沒有可用的擬合峰 seed")
+
+    fit_range = None
+    fit_lo = None
+    fit_hi = None
+    if req.fit_lo is not None and req.fit_hi is not None:
+        fit_lo = float(min(req.fit_lo, req.fit_hi))
+        fit_hi = float(max(req.fit_lo, req.fit_hi))
+        fit_range = (fit_lo, fit_hi)
+
+    init_peaks = [
+        {
+            "peak_id": row.peak_id,
+            "label": row.label,
+            "center": float(row.center),
+            "fwhm": float(max(row.fwhm, 0.01)),
+            "amplitude": float(max(row.amplitude, 1e-9)),
+            "phase": row.phase,
+            "hkl": row.hkl,
+            "confidence": row.confidence,
+            "near_reference": row.near_reference,
+            "center_tolerance": float(max(row.center_tolerance, 0.01)),
+            "fwhm_min": float(max(row.fwhm_min, 0.01)),
+            "fwhm_max": float(max(row.fwhm_max, row.fwhm_min + 0.01)),
+            "note": row.note,
+            "seed_center": float(row.center),
+            "profile": req.profile,
+            "eta": 0.5,
+        }
+        for row in enabled_rows
+    ]
+
+    try:
+        result = fit_peaks(
+            x,
+            y,
+            init_peaks=init_peaks,
+            profile=req.profile,
+            maxfev=int(req.maxfev),
+            fit_range=fit_range,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"XRD 擬合失敗：{exc}") from exc
+
+    if not result.get("success", False):
+        raise HTTPException(status_code=422, detail=result.get("message", "XRD 擬合失敗"))
+
+    rows: list[FitPeakRow] = []
+    for idx, peak in enumerate(result.get("peaks", []), start=1):
+        flags: list[str] = []
+        if bool(peak.get("center_at_boundary", False)):
+            flags.append("center at boundary")
+        if bool(peak.get("fwhm_at_boundary", False)):
+            flags.append("FWHM at limit")
+        if bool(peak.get("broad_peak", False)):
+            flags.append("broad peak")
+        rows.append(FitPeakRow(
+            Peak_ID=str(peak.get("peak_id", f"peak_{idx}")),
+            Peak_Name=str(peak.get("label", f"Peak {idx}")),
+            Phase=str(peak.get("phase", "")),
+            HKL=str(peak.get("hkl", "")),
+            Profile=str(peak.get("profile", req.profile)),
+            Seed_Center_deg=float(peak.get("seed_center", peak.get("center", 0.0))),
+            Center_deg=float(peak.get("center", 0.0)),
+            Delta_deg=float(peak.get("center", 0.0) - peak.get("seed_center", peak.get("center", 0.0))),
+            FWHM_deg=float(peak.get("fwhm", 0.0)),
+            Height=float(peak.get("amplitude", 0.0)),
+            Area=float(peak.get("area", 0.0)),
+            Area_pct=float(peak.get("area_pct", 0.0)),
+            Eta=float(peak.get("eta")) if peak.get("eta") is not None else None,
+            Confidence=str(peak.get("confidence", "medium")),
+            Near_Reference=bool(peak.get("near_reference", False)),
+            Fit_Status="Fit boundary" if flags else "Fit OK",
+            Note="; ".join(flags + ([str(peak.get("note"))] if peak.get("note") else [])),
+        ))
+
+    def _to_list(arr):
+        return arr.tolist() if hasattr(arr, "tolist") else list(arr)
+
+    return FitResponse(
+        success=True,
+        message="",
+        dataset_name=req.dataset_name,
+        profile=req.profile,
+        fit_lo=fit_lo,
+        fit_hi=fit_hi,
+        y_fit=_to_list(result.get("y_fit", [])),
+        residuals=_to_list(result.get("residuals", [])),
+        y_individual=[_to_list(item) for item in result.get("y_individual", [])],
+        peaks=rows,
+        r_squared=float(result.get("r_squared", 0.0)),
+        adjusted_r_squared=float(result.get("adjusted_r_squared", 0.0)),
+        rmse=float(result.get("rmse", 0.0)),
+        aic=float(result.get("aic", 0.0)),
+        bic=float(result.get("bic", 0.0)),
+    )
 
 
 @router.get("/references", summary="List reference materials")

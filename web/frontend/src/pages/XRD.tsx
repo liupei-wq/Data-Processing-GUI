@@ -23,11 +23,14 @@ import type {
   ReferenceMatchParams,
   ReferenceMatchRow,
   ScherrerParams,
+  XrdFitParams,
+  XrdFitResult,
+  XrdFitSeed,
   XMode,
   XAxisCorrectionParams,
   WavelengthPreset,
 } from '../types/xrd'
-import { detectPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
+import { detectPeaks, fitXrdPeaks, parseFiles, processData, fetchReferences, fetchReferencePeaks } from '../api/xrd'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import GaussianSubtractionChart from '../components/GaussianSubtractionChart'
@@ -201,6 +204,62 @@ function applyXAxisCorrection(values: number[], params: XAxisCorrectionParams) {
   return values.map(value => slope * value + intercept)
 }
 
+const THIN_FILM_SI_PEAK_PRESET: Omit<PeakDetectionParams, 'enabled' | 'show_unmatched_peaks' | 'export_weak_peaks'> = {
+  sensitivity: 'medium',
+  min_distance: 0.2,
+  width_min: 0.03,
+  width_max: 1.5,
+  exclude_ranges: [{ start: 68, end: 70 }],
+  max_peaks: 30,
+  min_snr: 3,
+}
+
+const GENERAL_XRD_PEAK_PRESET: Omit<PeakDetectionParams, 'enabled' | 'show_unmatched_peaks' | 'export_weak_peaks'> = {
+  sensitivity: 'medium',
+  min_distance: 0.12,
+  width_min: 0.02,
+  width_max: 1.2,
+  exclude_ranges: [],
+  max_peaks: 30,
+  min_snr: 3,
+}
+
+function inferPeakWorkflowPreset(params: PeakDetectionParams): 'thin_film_si' | 'general' | 'custom' {
+  const hasThinFilmSiMask = params.exclude_ranges.some(range => {
+    const start = Math.min(range.start, range.end)
+    const end = Math.max(range.start, range.end)
+    return Math.abs(start - 68) <= 0.05 && Math.abs(end - 70) <= 0.05
+  })
+  if (
+    hasThinFilmSiMask
+    && params.sensitivity === THIN_FILM_SI_PEAK_PRESET.sensitivity
+    && Math.abs(params.min_distance - THIN_FILM_SI_PEAK_PRESET.min_distance) <= 1e-6
+    && Math.abs(params.width_min - THIN_FILM_SI_PEAK_PRESET.width_min) <= 1e-6
+    && Math.abs(params.width_max - THIN_FILM_SI_PEAK_PRESET.width_max) <= 1e-6
+    && Math.abs(params.min_snr - THIN_FILM_SI_PEAK_PRESET.min_snr) <= 1e-6
+  ) {
+    return 'thin_film_si'
+  }
+  if (
+    params.exclude_ranges.length === 0
+    && params.sensitivity === GENERAL_XRD_PEAK_PRESET.sensitivity
+    && Math.abs(params.min_distance - GENERAL_XRD_PEAK_PRESET.min_distance) <= 1e-6
+    && Math.abs(params.width_min - GENERAL_XRD_PEAK_PRESET.width_min) <= 1e-6
+    && Math.abs(params.width_max - GENERAL_XRD_PEAK_PRESET.width_max) <= 1e-6
+    && Math.abs(params.min_snr - GENERAL_XRD_PEAK_PRESET.min_snr) <= 1e-6
+  ) {
+    return 'general'
+  }
+  return 'custom'
+}
+
+function clipFitWindow(lo: number, hi: number, domainLo: number, domainHi: number) {
+  const start = Math.max(domainLo, Math.min(lo, hi))
+  const end = Math.min(domainHi, Math.max(lo, hi))
+  if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) return null
+  return { lo: start, hi: end }
+}
+
 function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], xLabel: string, yLabel: string) {
   const rows: CsvCell[][] = []
   datasets.forEach(dataset => {
@@ -319,12 +378,12 @@ function buildReferenceMatches(
         return best
       }, null as { peak: DetectedPeak; delta: number } | null)
       const matched = closest != null && closest.delta <= tolerance
-      const confidence = !matched
+      const confidence: ReferenceMatchRow['confidence'] = !matched
         ? 'unmatched'
-        : closest.peak.confidence === 'strong' && closest.delta <= tolerance * 0.5
+        : closest.peak.confidence === 'high' && closest.delta <= tolerance * 0.5
           ? 'high'
-          : closest.peak.confidence === 'tentative'
-            ? 'tentative'
+          : closest.peak.confidence === 'low'
+            ? 'low'
             : 'medium'
 
       return {
@@ -362,6 +421,9 @@ function buildFinalPeakRows(
       const noteParts = [peak.note].filter(Boolean)
       if (candidates.length > 1) noteParts.push(`multiple candidates: ${candidateText}`)
       if (!best) noteParts.push('unmatched peak')
+      const confidence: FinalPeakRow['confidence'] = best
+        ? (peak.confidence === 'high' && best.delta <= best.tolerance * 0.5 ? 'high' : peak.confidence)
+        : 'unmatched'
       return {
         two_theta: peak.two_theta,
         intensity: peak.intensity,
@@ -372,7 +434,9 @@ function buildFinalPeakRows(
         hkl: best?.ref.hkl ?? '',
         reference_2theta: best?.ref.two_theta ?? null,
         delta_2theta: best?.delta ?? null,
-        confidence: best ? (peak.confidence === 'strong' && best.delta <= best.tolerance * 0.5 ? 'high' : peak.confidence) : 'unmatched',
+        near_reference: Boolean(best),
+        candidate_count: candidates.length,
+        confidence,
         note: noteParts.join('; '),
       }
     })
@@ -430,16 +494,21 @@ export default function XRD({
   const [customWavelength, setCustomWavelength] = useState(1.5406)
   const [peakParams, setPeakParams] = useState<PeakDetectionParams>({
     enabled: false,
-    prominence: 0.05,
-    min_distance: 0.3,
-    max_peaks: 30,
-    include_weak_peaks: true,
+    ...THIN_FILM_SI_PEAK_PRESET,
     show_unmatched_peaks: true,
-    weak_peak_threshold: 10,
-    min_snr: 1,
-    min_prominence: 0,
     export_weak_peaks: true,
   })
+  const [fitParams, setFitParams] = useState<XrdFitParams>({
+    enabled: false,
+    profile: 'pseudo_voigt',
+    seed_source: 'matched_only',
+    range_mode: 'auto',
+    auto_padding: 0.45,
+    fit_lo: null,
+    fit_hi: null,
+    maxfev: 20000,
+  })
+  const [fitResult, setFitResult] = useState<XrdFitResult | null>(null)
   const [scherrerParams, setScherrerParams] = useState<ScherrerParams>({
     enabled: false,
     k: 0.9,
@@ -461,6 +530,7 @@ export default function XRD({
     gaussian: 'orange',
     log: 'violet',
     final: 'blue',
+    fit: 'rose',
   })
   const [rawHidden, setRawHidden] = useState<string[]>([])
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
@@ -468,6 +538,7 @@ export default function XRD({
   const [gaussianHidden, setGaussianHidden] = useState<string[]>([])
   const [logHidden, setLogHidden] = useState<string[]>([])
   const [finalHidden, setFinalHidden] = useState<string[]>([])
+  const [fitHidden, setFitHidden] = useState<string[]>([])
 
   useEffect(() => {
     localStorage.setItem('nigiro-xrd-sidebar-width', String(sidebarWidth))
@@ -763,14 +834,107 @@ export default function XRD({
     () => refMatchParams.only_show_matched ? referenceMatches.filter(row => row.matched) : referenceMatches,
     [referenceMatches, refMatchParams.only_show_matched],
   )
+  const allPeakRows = useMemo(
+    () => buildFinalPeakRows(detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg, true),
+    [detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg],
+  )
   const finalPeakRows = useMemo(
     () => buildFinalPeakRows(detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg, peakParams.show_unmatched_peaks),
     [detectedPeaks, filteredRefPeaks, peakParams.show_unmatched_peaks, refMatchParams.tolerance_deg],
   )
+  const fitSeedRows = useMemo(() => {
+    if (!fitParams.enabled || !activeDataset || isOverlayView) return []
+    let rows = allPeakRows
+    if (fitParams.seed_source === 'matched_only') {
+      rows = rows.filter(row => row.near_reference)
+    } else if (fitParams.seed_source === 'high_confidence') {
+      rows = rows.filter(row => row.confidence === 'high' || row.confidence === 'medium')
+    }
+    if (fitParams.range_mode === 'manual' && fitParams.fit_lo != null && fitParams.fit_hi != null) {
+      const lo = Math.min(fitParams.fit_lo, fitParams.fit_hi)
+      const hi = Math.max(fitParams.fit_lo, fitParams.fit_hi)
+      rows = rows.filter(row => row.two_theta >= lo && row.two_theta <= hi)
+    }
+    return rows.sort((a, b) => a.two_theta - b.two_theta)
+  }, [activeDataset, allPeakRows, fitParams, isOverlayView])
+  const fitWindow = useMemo(() => {
+    if (!activeDataset || fitSeedRows.length === 0 || isOverlayView) return null
+    const domainLo = Math.min(...activeDataset.x)
+    const domainHi = Math.max(...activeDataset.x)
+    if (fitParams.range_mode === 'manual') {
+      return clipFitWindow(
+        fitParams.fit_lo ?? domainLo,
+        fitParams.fit_hi ?? domainHi,
+        domainLo,
+        domainHi,
+      )
+    }
+    const pad = Math.max(fitParams.auto_padding, 0.01)
+    return clipFitWindow(
+      fitSeedRows[0].two_theta - pad,
+      fitSeedRows[fitSeedRows.length - 1].two_theta + pad,
+      domainLo,
+      domainHi,
+    )
+  }, [activeDataset, fitParams.auto_padding, fitParams.fit_hi, fitParams.fit_lo, fitParams.range_mode, fitSeedRows, isOverlayView])
+  const fitSeeds = useMemo<XrdFitSeed[]>(() => fitSeedRows.map((row, index) => ({
+    peak_id: `fit_seed_${index + 1}_${row.two_theta.toFixed(4)}`,
+    label: row.hkl ? `${row.phase} ${row.hkl}` : (row.phase !== 'unmatched' ? row.phase : `Peak ${index + 1}`),
+    center: row.two_theta,
+    fwhm: Math.max(row.fwhm_deg, 0.03),
+    amplitude: Math.max(row.intensity, 1e-6),
+    phase: row.phase,
+    hkl: row.hkl,
+    confidence: row.confidence,
+    near_reference: row.near_reference,
+    center_tolerance: Math.max(0.08, Math.min(0.8, row.fwhm_deg * 1.5)),
+    fwhm_min: Math.max(0.01, row.fwhm_deg * 0.45),
+    fwhm_max: Math.max(row.fwhm_deg * 2.8, row.fwhm_deg + 0.12),
+    note: row.note,
+  })), [fitSeedRows])
   const matchedReferenceCount = useMemo(
     () => referenceMatches.filter(row => row.matched).length,
     [referenceMatches],
   )
+  const fitChartTraces = useMemo(() => {
+    if (!fitResult || !activeDataset || !fitWindow) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.fit] ?? LINE_COLOR_PALETTES.rose
+    const mask = activeDataset.x.map(value => value >= fitWindow.lo && value <= fitWindow.hi)
+    const pick = (values: number[]) => values.filter((_, index) => mask[index])
+    const xValues = convertXValues(activeDataset.x.filter((value) => value >= fitWindow.lo && value <= fitWindow.hi), xMode, wavelength)
+    const traces: Plotly.Data[] = [
+      {
+        x: xValues,
+        y: pick(activeDataset.y_processed),
+        type: 'scatter',
+        mode: 'lines',
+        name: '處理後光譜',
+        line: { color: palette.secondary, width: 1.35, dash: 'dot' },
+      },
+      {
+        x: xValues,
+        y: pick(fitResult.y_fit),
+        type: 'scatter',
+        mode: 'lines',
+        name: '總擬合',
+        line: { color: palette.primary, width: 2.4 },
+      },
+    ]
+    fitResult.y_individual.forEach((component, index) => {
+      traces.push({
+        x: xValues,
+        y: pick(component),
+        type: 'scatter',
+        mode: 'lines',
+        name: fitResult.peaks[index]?.Peak_Name ?? `Peak ${index + 1}`,
+        line: {
+          color: palette.series[index % palette.series.length],
+          width: 1.6,
+        },
+      })
+    })
+    return traces
+  }, [activeDataset, chartLineColors.fit, fitResult, fitWindow, wavelength, xMode])
   const scherrerRows = useMemo(
     () => detectedPeaks.map(peak => ({
       ...peak,
@@ -811,8 +975,16 @@ export default function XRD({
       total_reference_lines: referenceMatches.length,
     },
     peak_detection: {
+      workflow_preset: inferPeakWorkflowPreset(peakParams),
       ...peakParams,
       detected_count: detectedPeaks.length,
+    },
+    peak_fitting: {
+      ...fitParams,
+      fit_window: fitWindow,
+      seed_count: fitSeeds.length,
+      seed_labels: fitSeeds.map(seed => seed.label),
+      result: fitResult,
     },
     scherrer: {
       ...scherrerParams,
@@ -886,13 +1058,13 @@ export default function XRD({
     let cancelled = false
     const timer = setTimeout(() => {
       detectPeaks(activeDataset.x, activeDataset.y_processed, {
-        prominence: peakParams.prominence,
+        sensitivity: peakParams.sensitivity,
         min_distance: peakParams.min_distance,
+        width_min: peakParams.width_min,
+        width_max: peakParams.width_max,
+        exclude_ranges: peakParams.exclude_ranges,
         max_peaks: peakParams.max_peaks,
-        include_weak_peaks: peakParams.include_weak_peaks,
-        weak_peak_threshold: peakParams.weak_peak_threshold,
         min_snr: peakParams.min_snr,
-        min_prominence: peakParams.min_prominence,
         wavelength,
       })
         .then(peaks => {
@@ -906,6 +1078,39 @@ export default function XRD({
     return () => { cancelled = true; clearTimeout(timer) }
   }, [activeDataset, peakParams, wavelength])
 
+  useEffect(() => {
+    if (!fitParams.enabled || !activeDataset || isOverlayView) {
+      setFitResult(null)
+      return
+    }
+    if (!fitWindow || fitSeeds.length === 0) {
+      setFitResult(null)
+      return
+    }
+
+    let cancelled = false
+    const timer = setTimeout(() => {
+      fitXrdPeaks(activeDataset.name, activeDataset.x, activeDataset.y_processed, {
+        peaks: fitSeeds,
+        profile: fitParams.profile,
+        fit_lo: fitWindow.lo,
+        fit_hi: fitWindow.hi,
+        maxfev: fitParams.maxfev,
+      })
+        .then(result => {
+          if (!cancelled) setFitResult(result)
+        })
+        .catch(e => {
+          if (!cancelled) {
+            setFitResult(null)
+            setError(String(e.message))
+          }
+        })
+    }, 300)
+
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [activeDataset, fitParams, fitSeeds, fitWindow, isOverlayView])
+
   const handleFiles = useCallback(async (files: File[]) => {
     setIsLoading(true)
     setError(null)
@@ -913,12 +1118,24 @@ export default function XRD({
       const parsed = await parseFiles(files)
       setRawFiles(parsed)
       setDetectedPeaks([])
+      setFitResult(null)
       setParams(p => ({ ...p, norm_x_start: null, norm_x_end: null }))
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally {
       setIsLoading(false)
     }
+  }, [])
+
+  const applyPeakPreset = useCallback((preset: 'thin_film_si' | 'general') => {
+    const nextPreset = preset === 'thin_film_si' ? THIN_FILM_SI_PEAK_PRESET : GENERAL_XRD_PEAK_PRESET
+    setPeakParams(current => ({
+      enabled: current.enabled,
+      show_unmatched_peaks: current.show_unmatched_peaks,
+      export_weak_peaks: current.export_weak_peaks,
+      ...nextPreset,
+      exclude_ranges: nextPreset.exclude_ranges.map(range => ({ ...range })),
+    }))
   }, [])
 
   const toggleOverlayDraft = useCallback((name: string) => {
@@ -1036,6 +1253,7 @@ export default function XRD({
                           setResult(null)
                           setRefPeaks([])
                           setDetectedPeaks([])
+                          setFitResult(null)
                         }}
                         className="text-xs font-medium text-[var(--accent-secondary)] transition-colors hover:opacity-80"
                       >
@@ -1070,6 +1288,9 @@ export default function XRD({
                 onXAxisCorrectionChange={setXAxisCorrection}
                 peakParams={peakParams}
                 onPeakParamsChange={setPeakParams}
+                onApplyPeakPreset={applyPeakPreset}
+                fitParams={fitParams}
+                onFitParamsChange={setFitParams}
                 scherrerParams={scherrerParams}
                 onScherrerParamsChange={setScherrerParams}
               />
@@ -1368,6 +1589,51 @@ export default function XRD({
                 </div>
               )}
 
+              {fitParams.enabled && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="6. Peak Fitting"
+                    colorValue={chartLineColors.fit}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, fit: value }))}
+                  />
+                  {isOverlayView ? (
+                    <div className="rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-6 text-sm text-[var(--text-soft)]">
+                      峰擬合目前先支援單筆資料模式。請先切回單筆資料，再執行 Pseudo-Voigt / Voigt 擬合。
+                    </div>
+                  ) : fitSeeds.length === 0 || !fitWindow ? (
+                    <div className="rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-6 text-sm text-[var(--text-soft)]">
+                      目前沒有可用的擬合 seed。可以先啟用自動尋峰，或調整擬合的 seed 來源與範圍。
+                    </div>
+                  ) : fitResult && fitChartTraces.length > 0 ? (
+                    <>
+                      <p className="mb-3 text-xs text-[var(--text-soft)]">
+                        擬合範圍：{fitWindow.lo.toFixed(3)} – {fitWindow.hi.toFixed(3)} deg，使用 {fitSeeds.length} 個 seed，主要峰形為 {fitResult.profile}。
+                      </p>
+                      <Plot
+                        data={applyHidden(fitChartTraces, fitHidden)}
+                        layout={chartLayout({ xMode, wavelength, height: 400 })}
+                        config={withPlotFullscreen({ scrollZoom: false })}
+                        style={{ width: '100%', height: 400 }}
+                        onLegendClick={makeLegendClick(setFitHidden) as never}
+                        onLegendDoubleClick={() => false}
+                        useResizeHandler
+                      />
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-soft)]">
+                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">R² {fitResult.r_squared.toFixed(4)}</span>
+                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">Adj R² {fitResult.adjusted_r_squared.toFixed(4)}</span>
+                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">RMSE {fitResult.rmse.toExponential(3)}</span>
+                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">AIC {fitResult.aic.toFixed(2)}</span>
+                        <span className="rounded-full border border-[var(--card-border)] px-3 py-1">BIC {fitResult.bic.toFixed(2)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-6 text-sm text-[var(--text-soft)]">
+                      正在依據目前尋峰結果執行峰擬合。
+                    </div>
+                  )}
+                </div>
+              )}
+
               {peakParams.enabled && (
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -1384,7 +1650,7 @@ export default function XRD({
 
                   {detectedPeaks.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
-                      目前條件下沒有找到可用峰位。可以降低 prominence，或調整平滑與歸一化後再試一次。
+                      目前條件下沒有找到可用峰位。可以提高偵測靈敏度、放寬排除區間，或重新調整峰寬範圍後再試一次。
                     </div>
                   ) : (
                     <div className="mb-4 overflow-x-auto">
@@ -1398,6 +1664,8 @@ export default function XRD({
                             <th className="px-3 py-3 font-medium">prominence</th>
                             <th className="px-3 py-3 font-medium">phase</th>
                             <th className="px-3 py-3 font-medium">hkl</th>
+                            <th className="px-3 py-3 font-medium">near_reference</th>
+                            <th className="px-3 py-3 font-medium">candidates</th>
                             <th className="px-3 py-3 font-medium">reference_2theta</th>
                             <th className="px-3 py-3 font-medium">delta_2theta</th>
                             <th className="px-3 py-3 font-medium">confidence</th>
@@ -1414,6 +1682,19 @@ export default function XRD({
                               <td className="px-3 py-3">{peak.prominence.toFixed(4)}</td>
                               <td className="px-3 py-3">{peak.phase}</td>
                               <td className="px-3 py-3">{peak.hkl || '-'}</td>
+                              <td className="px-3 py-3">
+                                <span
+                                  className={[
+                                    'rounded-full px-2.5 py-1 text-[11px] font-semibold',
+                                    peak.near_reference
+                                      ? 'border border-emerald-300/20 bg-emerald-400/10 text-emerald-200'
+                                      : 'border border-slate-300/10 bg-slate-400/10 text-slate-300',
+                                  ].join(' ')}
+                                >
+                                  {peak.near_reference ? 'yes' : 'no'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3">{peak.candidate_count}</td>
                               <td className="px-3 py-3">{peak.reference_2theta == null ? 'N/A' : peak.reference_2theta.toFixed(4)}</td>
                               <td className="px-3 py-3">{peak.delta_2theta == null ? 'N/A' : peak.delta_2theta.toFixed(4)}</td>
                               <td className="px-3 py-3">{peak.confidence}</td>
@@ -1424,28 +1705,67 @@ export default function XRD({
                       </table>
                     </div>
                   )}
-                  {detectedPeaks.length > 0 && (
+                </div>
+              )}
+
+              {fitParams.enabled && (
+                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-white">峰擬合結果</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">
+                        目前以尋峰結果作為 seed，輸出峰中心、FWHM、面積與峰形參數，方便後續做論文表格整理。
+                      </p>
+                    </div>
+                    <span className="text-xs text-slate-500">
+                      {fitResult?.peaks.length ?? 0} 個擬合峰
+                    </span>
+                  </div>
+
+                  {isOverlayView ? (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                      疊圖模式暫不提供峰擬合結果表。
+                    </div>
+                  ) : !fitResult || fitResult.peaks.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                      啟用峰擬合後，這裡會顯示每個擬合峰的中心、FWHM、面積、η 與位移資訊。
+                    </div>
+                  ) : (
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            <th className="px-3 py-3 font-medium">#</th>
-                            <th className="px-3 py-3 font-medium">2θ (deg)</th>
-                              <th className="px-3 py-3 font-medium">d-spacing (Å)</th>
-                              <th className="px-3 py-3 font-medium">強度</th>
-                              <th className="px-3 py-3 font-medium">相對強度 (%)</th>
-                              <th className="px-3 py-3 font-medium">FWHM (deg)</th>
-                            </tr>
+                            <th className="px-3 py-3 font-medium">peak</th>
+                            <th className="px-3 py-3 font-medium">phase</th>
+                            <th className="px-3 py-3 font-medium">hkl</th>
+                            <th className="px-3 py-3 font-medium">profile</th>
+                            <th className="px-3 py-3 font-medium">seed</th>
+                            <th className="px-3 py-3 font-medium">center</th>
+                            <th className="px-3 py-3 font-medium">delta</th>
+                            <th className="px-3 py-3 font-medium">FWHM</th>
+                            <th className="px-3 py-3 font-medium">height</th>
+                            <th className="px-3 py-3 font-medium">area</th>
+                            <th className="px-3 py-3 font-medium">area %</th>
+                            <th className="px-3 py-3 font-medium">eta</th>
+                            <th className="px-3 py-3 font-medium">status</th>
+                          </tr>
                         </thead>
                         <tbody>
-                          {detectedPeaks.map((peak, idx) => (
-                            <tr key={`${peak.two_theta}-${idx}`} className="border-b border-white/5 text-slate-200 last:border-b-0">
-                              <td className="px-3 py-3 text-slate-500">{idx + 1}</td>
-                              <td className="px-3 py-3 font-medium">{peak.two_theta.toFixed(4)}</td>
-                              <td className="px-3 py-3">{peak.d_spacing.toFixed(4)}</td>
-                              <td className="px-3 py-3">{peak.intensity.toFixed(2)}</td>
-                              <td className="px-3 py-3">{peak.rel_intensity.toFixed(1)}</td>
-                              <td className="px-3 py-3">{peak.fwhm_deg.toFixed(4)}</td>
+                          {fitResult.peaks.map(row => (
+                            <tr key={row.Peak_ID} className="border-b border-white/5 text-slate-200 last:border-b-0">
+                              <td className="px-3 py-3 font-medium">{row.Peak_Name}</td>
+                              <td className="px-3 py-3">{row.Phase || '-'}</td>
+                              <td className="px-3 py-3">{row.HKL || '-'}</td>
+                              <td className="px-3 py-3">{row.Profile}</td>
+                              <td className="px-3 py-3">{row.Seed_Center_deg.toFixed(4)}</td>
+                              <td className="px-3 py-3">{row.Center_deg.toFixed(4)}</td>
+                              <td className="px-3 py-3">{row.Delta_deg.toFixed(4)}</td>
+                              <td className="px-3 py-3">{row.FWHM_deg.toFixed(4)}</td>
+                              <td className="px-3 py-3">{row.Height.toFixed(2)}</td>
+                              <td className="px-3 py-3">{row.Area.toFixed(4)}</td>
+                              <td className="px-3 py-3">{row.Area_pct.toFixed(2)}</td>
+                              <td className="px-3 py-3">{row.Eta == null ? 'N/A' : row.Eta.toFixed(3)}</td>
+                              <td className="px-3 py-3">{row.Fit_Status}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1546,6 +1866,7 @@ export default function XRD({
                             <th className="px-3 py-3 font-medium">Obs d</th>
                             <th className="px-3 py-3 font-medium">Obs 強度</th>
                             <th className="px-3 py-3 font-medium">Δ2θ</th>
+                            <th className="px-3 py-3 font-medium">confidence</th>
                             <th className="px-3 py-3 font-medium">匹配</th>
                           </tr>
                         </thead>
@@ -1572,6 +1893,7 @@ export default function XRD({
                               <td className="px-3 py-3">
                                 {row.delta_two_theta == null ? 'N/A' : row.delta_two_theta.toFixed(4)}
                               </td>
+                              <td className="px-3 py-3">{row.confidence}</td>
                               <td className="px-3 py-3">
                                 <span
                                   className={[
@@ -1688,9 +2010,9 @@ export default function XRD({
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'reference_2theta', 'delta_2theta', 'confidence', 'note'],
+                                ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'near_reference', 'candidate_count', 'reference_2theta', 'delta_2theta', 'confidence', 'note'],
                                 finalPeakRows
-                                  .filter(row => peakParams.export_weak_peaks || !['weak', 'tentative'].includes(row.confidence))
+                                  .filter(row => peakParams.export_weak_peaks || row.confidence !== 'low')
                                   .map(row => [
                                   row.two_theta.toFixed(4),
                                   row.intensity.toFixed(2),
@@ -1699,6 +2021,8 @@ export default function XRD({
                                   row.prominence.toFixed(4),
                                   row.phase,
                                   row.hkl,
+                                  row.near_reference ? 'true' : 'false',
+                                  row.candidate_count,
                                   row.reference_2theta == null ? '' : row.reference_2theta.toFixed(4),
                                   row.delta_2theta == null ? '' : row.delta_2theta.toFixed(4),
                                   row.confidence,
@@ -1717,9 +2041,9 @@ export default function XRD({
                       {peakParams.enabled && finalPeakRows.length > 0 && (
                         <button
                           onClick={() => {
-                            const headers = ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'reference_2theta', 'delta_2theta', 'confidence', 'note']
+                            const headers = ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'near_reference', 'candidate_count', 'reference_2theta', 'delta_2theta', 'confidence', 'note']
                             const rows = finalPeakRows
-                              .filter(row => peakParams.export_weak_peaks || !['weak', 'tentative'].includes(row.confidence))
+                              .filter(row => peakParams.export_weak_peaks || row.confidence !== 'low')
                               .map(row => [
                                 row.two_theta.toFixed(4),
                                 row.intensity.toFixed(2),
@@ -1728,6 +2052,8 @@ export default function XRD({
                                 row.prominence.toFixed(4),
                                 row.phase,
                                 row.hkl,
+                                row.near_reference ? 'true' : 'false',
+                                row.candidate_count,
                                 row.reference_2theta == null ? '' : row.reference_2theta.toFixed(4),
                                 row.delta_2theta == null ? '' : row.delta_2theta.toFixed(4),
                                 row.confidence,
@@ -1738,6 +2064,41 @@ export default function XRD({
                           className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
                         >
                           Export final peaks Excel
+                        </button>
+                      )}
+                      {fitParams.enabled && fitResult && fitResult.peaks.length > 0 && (
+                        <button
+                          onClick={() => {
+                            downloadFile(
+                              toCsv(
+                                ['peak_id', 'peak_name', 'phase', 'hkl', 'profile', 'seed_center_deg', 'center_deg', 'delta_deg', 'fwhm_deg', 'height', 'area', 'area_pct', 'eta', 'confidence', 'near_reference', 'fit_status', 'note'],
+                                fitResult.peaks.map(row => [
+                                  row.Peak_ID,
+                                  row.Peak_Name,
+                                  row.Phase,
+                                  row.HKL,
+                                  row.Profile,
+                                  row.Seed_Center_deg.toFixed(4),
+                                  row.Center_deg.toFixed(4),
+                                  row.Delta_deg.toFixed(4),
+                                  row.FWHM_deg.toFixed(4),
+                                  row.Height.toFixed(4),
+                                  row.Area.toFixed(6),
+                                  row.Area_pct.toFixed(4),
+                                  row.Eta == null ? '' : row.Eta.toFixed(4),
+                                  row.Confidence,
+                                  row.Near_Reference ? 'true' : 'false',
+                                  row.Fit_Status,
+                                  row.Note,
+                                ]),
+                              ),
+                              'xrd_peak_fit.csv',
+                              'text/csv',
+                            )
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          下載峰擬合 CSV
                         </button>
                       )}
                       {filteredRefPeaks.length > 0 && (

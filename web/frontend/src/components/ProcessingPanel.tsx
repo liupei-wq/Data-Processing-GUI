@@ -5,6 +5,7 @@ import type {
   ProcessParams,
   ReferenceMatchParams,
   ScherrerParams,
+  XrdFitParams,
   XMode,
   XAxisCorrectionParams,
   WavelengthPreset,
@@ -173,6 +174,9 @@ interface Props {
   onXAxisCorrectionChange: (p: XAxisCorrectionParams) => void
   peakParams: PeakDetectionParams
   onPeakParamsChange: (p: PeakDetectionParams) => void
+  onApplyPeakPreset?: (preset: 'thin_film_si' | 'general') => void
+  fitParams: XrdFitParams
+  onFitParamsChange: (p: XrdFitParams) => void
   scherrerParams: ScherrerParams
   onScherrerParamsChange: (p: ScherrerParams) => void
 }
@@ -198,6 +202,9 @@ export default function ProcessingPanel({
   onXAxisCorrectionChange,
   peakParams,
   onPeakParamsChange,
+  onApplyPeakPreset,
+  fitParams,
+  onFitParamsChange,
   scherrerParams,
   onScherrerParamsChange,
 }: Props) {
@@ -215,6 +222,8 @@ export default function ProcessingPanel({
   ) => onXAxisCorrectionChange({ ...xAxisCorrection, [key]: value })
   const setPeak = <K extends keyof PeakDetectionParams>(key: K, value: PeakDetectionParams[K]) =>
     onPeakParamsChange({ ...peakParams, [key]: value })
+  const setFit = <K extends keyof XrdFitParams>(key: K, value: XrdFitParams[K]) =>
+    onFitParamsChange({ ...fitParams, [key]: value })
   const setScherrer = <K extends keyof ScherrerParams>(key: K, value: ScherrerParams[K]) =>
     onScherrerParamsChange({ ...scherrerParams, [key]: value })
 
@@ -695,14 +704,42 @@ export default function ProcessingPanel({
         />
         {peakParams.enabled && (
           <>
-            <NumberInput
-              label="顯著性 prominence"
-              value={peakParams.prominence}
-              min={0.001}
-              max={1}
-              step={0.01}
-              onChange={value => setPeak('prominence', value)}
-            />
+            {onApplyPeakPreset && (
+              <div className="space-y-2">
+                <Label>快速模式</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onApplyPeakPreset('thin_film_si')}
+                    className="theme-pill rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)] transition-colors hover:opacity-90"
+                  >
+                    Thin film on Si
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onApplyPeakPreset('general')}
+                    className="theme-input rounded-xl px-3 py-2 text-sm font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)]"
+                  >
+                    一般掃描
+                  </button>
+                </div>
+                <p className="text-xs leading-5 text-[var(--text-soft)]">
+                  `Thin film on Si` 會預設保留 `68–70°` 排除區，較適合 Ga₂O₃ / NiO / Si 這類薄膜樣品。
+                </p>
+              </div>
+            )}
+            <div>
+              <Label>偵測靈敏度</Label>
+              <Select
+                value={peakParams.sensitivity}
+                onChange={value => setPeak('sensitivity', value as PeakDetectionParams['sensitivity'])}
+                options={[
+                  { value: 'high', label: '高靈敏度：較容易抓到弱峰' },
+                  { value: 'medium', label: '中靈敏度：一般薄膜預設' },
+                  { value: 'low', label: '低靈敏度：較保守，避免假峰' },
+                ]}
+              />
+            </div>
             <NumberInput
               label="最小峰距 (deg)"
               value={peakParams.min_distance}
@@ -711,6 +748,78 @@ export default function ProcessingPanel({
               step={0.05}
               onChange={value => setPeak('min_distance', value)}
             />
+            <div className="grid grid-cols-2 gap-2">
+              <NumberInput
+                label="最小峰寬 (deg)"
+                value={peakParams.width_min}
+                min={0.005}
+                max={5}
+                step={0.01}
+                onChange={value => setPeak('width_min', value)}
+              />
+              <NumberInput
+                label="最大峰寬 (deg)"
+                value={peakParams.width_max}
+                min={0.01}
+                max={8}
+                step={0.01}
+                onChange={value => setPeak('width_max', value)}
+              />
+            </div>
+            <NumberInput
+              label="最小 S/N"
+              value={peakParams.min_snr}
+              min={1}
+              max={20}
+              step={0.1}
+              onChange={value => setPeak('min_snr', value)}
+            />
+            <div className="space-y-2">
+              <Label>排除區間 (deg)</Label>
+              <p className="text-xs leading-5 text-[var(--text-soft)]">
+                尋峰前會先排除這些 2θ 區段，不讓它們影響雜訊估算與峰值判斷。薄膜 on Si 常用 `68–70`。
+              </p>
+              {peakParams.exclude_ranges.length === 0 ? (
+                <div className="theme-block-soft rounded-xl px-3 py-2 text-xs text-[var(--text-soft)]">
+                  目前沒有排除區間。
+                </div>
+              ) : (
+                peakParams.exclude_ranges.map((range, idx) => (
+                  <div key={`xrd-exclude-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                    <input
+                      type="number"
+                      value={range.start}
+                      step={0.01}
+                      onChange={event => setPeak('exclude_ranges', peakParams.exclude_ranges.map((item, itemIdx) => itemIdx === idx ? { ...item, start: Number(event.target.value) } : item))}
+                      className="theme-input min-w-0 rounded-xl px-3 py-2 text-sm"
+                      title="排除起點"
+                    />
+                    <input
+                      type="number"
+                      value={range.end}
+                      step={0.01}
+                      onChange={event => setPeak('exclude_ranges', peakParams.exclude_ranges.map((item, itemIdx) => itemIdx === idx ? { ...item, end: Number(event.target.value) } : item))}
+                      className="theme-input min-w-0 rounded-xl px-3 py-2 text-sm"
+                      title="排除終點"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPeak('exclude_ranges', peakParams.exclude_ranges.filter((_, itemIdx) => itemIdx !== idx))}
+                      className="rounded-xl border border-[var(--card-border)] px-3 text-xs text-[var(--text-main)]"
+                    >
+                      移除
+                    </button>
+                  </div>
+                ))
+              )}
+              <button
+                type="button"
+                onClick={() => setPeak('exclude_ranges', [...peakParams.exclude_ranges, { start: 68, end: 70 }])}
+                className="w-full rounded-xl border border-dashed border-[var(--pill-border)] bg-[var(--pill-bg)] px-3 py-2 text-sm font-medium text-[var(--accent)]"
+              >
+                新增排除區間
+              </button>
+            </div>
             <NumberInput
               label="最多峰數"
               value={peakParams.max_peaks}
@@ -720,49 +829,113 @@ export default function ProcessingPanel({
               onChange={value => setPeak('max_peaks', value)}
             />
             <Checkbox
-              checked={peakParams.include_weak_peaks}
-              onChange={value => setPeak('include_weak_peaks', value)}
-              label="Include weak peaks in final result"
-            />
-            <Checkbox
               checked={peakParams.show_unmatched_peaks}
               onChange={value => setPeak('show_unmatched_peaks', value)}
-              label="Show unmatched peaks"
-            />
-            <NumberInput
-              label="Weak peak threshold (% relative intensity)"
-              value={peakParams.weak_peak_threshold}
-              min={0}
-              max={100}
-              step={1}
-              onChange={value => setPeak('weak_peak_threshold', value)}
-            />
-            <NumberInput
-              label="Minimum S/N ratio"
-              value={peakParams.min_snr}
-              min={0}
-              max={100}
-              step={0.1}
-              onChange={value => setPeak('min_snr', value)}
-            />
-            <NumberInput
-              label="Minimum prominence"
-              value={peakParams.min_prominence}
-              min={0}
-              max={1000000000}
-              step={0.001}
-              onChange={value => setPeak('min_prominence', value)}
+              label="結果表保留未匹配峰"
             />
             <Checkbox
               checked={peakParams.export_weak_peaks}
               onChange={value => setPeak('export_weak_peaks', value)}
-              label="Export weak peaks"
+              label="匯出時包含低信心峰"
             />
           </>
         )}
       </Section>
 
-      <Section step={11} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
+      <Section step={11} title="峰擬合" hint="Pseudo-Voigt / Voigt" defaultOpen={false} infoContent={
+        <div className="space-y-3">
+          <p className="font-semibold text-[var(--text-main)]">峰擬合說明</p>
+          <p>這一步會直接使用目前尋峰結果作為 seed，對選定範圍做峰形擬合。建議先完成背景扣除與尋峰，再啟用擬合。</p>
+        </div>
+      }>
+        <TogglePill
+          checked={fitParams.enabled}
+          onChange={value => setFit('enabled', value)}
+          label="啟用峰擬合"
+        />
+        {fitParams.enabled && (
+          <>
+            <div>
+              <Label>擬合峰形</Label>
+              <Select
+                value={fitParams.profile}
+                onChange={value => setFit('profile', value as XrdFitParams['profile'])}
+                options={[
+                  { value: 'pseudo_voigt', label: 'Pseudo-Voigt' },
+                  { value: 'voigt', label: 'Voigt' },
+                  { value: 'gaussian', label: 'Gaussian' },
+                  { value: 'lorentzian', label: 'Lorentzian' },
+                ]}
+              />
+            </div>
+            <div>
+              <Label>Seed 來源</Label>
+              <Select
+                value={fitParams.seed_source}
+                onChange={value => setFit('seed_source', value as XrdFitParams['seed_source'])}
+                options={[
+                  { value: 'matched_only', label: '僅近參考峰' },
+                  { value: 'high_confidence', label: '高 / 中信心峰' },
+                  { value: 'all_detected', label: '全部偵測峰' },
+                ]}
+              />
+            </div>
+            <div>
+              <Label>擬合範圍</Label>
+              <Select
+                value={fitParams.range_mode}
+                onChange={value => setFit('range_mode', value as XrdFitParams['range_mode'])}
+                options={[
+                  { value: 'auto', label: '自動包住選定峰' },
+                  { value: 'manual', label: '手動輸入範圍' },
+                ]}
+              />
+            </div>
+            {fitParams.range_mode === 'auto' ? (
+              <NumberInput
+                label="自動延伸 padding (deg)"
+                value={fitParams.auto_padding}
+                min={0.05}
+                max={5}
+                step={0.01}
+                onChange={value => setFit('auto_padding', value)}
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <NumberInput
+                  label="Fit 起點 (deg)"
+                  value={fitParams.fit_lo ?? 20}
+                  min={-360}
+                  max={360}
+                  step={0.01}
+                  onChange={value => setFit('fit_lo', value)}
+                />
+                <NumberInput
+                  label="Fit 終點 (deg)"
+                  value={fitParams.fit_hi ?? 80}
+                  min={-360}
+                  max={360}
+                  step={0.01}
+                  onChange={value => setFit('fit_hi', value)}
+                />
+              </div>
+            )}
+            <NumberInput
+              label="最大迭代次數"
+              value={fitParams.maxfev}
+              min={1000}
+              max={100000}
+              step={1000}
+              onChange={value => setFit('maxfev', value)}
+            />
+            <p className="text-xs leading-5 text-[var(--text-soft)]">
+              目前先支援單筆資料模式；疊圖模式下不會自動執行峰擬合。
+            </p>
+          </>
+        )}
+      </Section>
+
+      <Section step={12} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">Scherrer 說明</p>
           <p>使用尋峰得到的 FWHM 估算晶粒尺寸，適合快速比較，不代表完整結構分析。</p>
