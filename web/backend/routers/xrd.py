@@ -79,6 +79,7 @@ class ProcessParams(BaseModel):
     gaussian_enabled: bool = False
     gaussian_fwhm: float = 0.2
     gaussian_height: float = 100.0
+    gaussian_nonnegative_guard: bool = False
     gaussian_search_half_width: float = 0.5
     gaussian_centers: List["GaussianCenterInput"] = Field(default_factory=list)
     smooth_method: str = "none"       # none | moving_average | savitzky_golay
@@ -117,6 +118,9 @@ class DatasetOutput(BaseModel):
     y_background: Optional[List[float]] = None
     y_gaussian_model: Optional[List[float]] = None
     y_gaussian_subtracted: Optional[List[float]] = None
+    gaussian_guard_enabled: bool = False
+    gaussian_guard_applied: bool = False
+    gaussian_guard_scale: Optional[float] = None
     y_processed: List[float]
     gaussian_fits: List[GaussianFitRow] = Field(default_factory=list)
 
@@ -347,6 +351,8 @@ def _build_dataset_output(name: str, x: np.ndarray, y: np.ndarray, params: Proce
     background_curve: Optional[np.ndarray] = None
     gaussian_model: Optional[np.ndarray] = None
     gaussian_subtracted: Optional[np.ndarray] = None
+    gaussian_guard_applied = False
+    gaussian_guard_scale: Optional[float] = None
     gaussian_fits: list[GaussianFitRow] = []
     smooth_input = y
 
@@ -369,16 +375,19 @@ def _build_dataset_output(name: str, x: np.ndarray, y: np.ndarray, params: Proce
     if params.gaussian_enabled:
         fixed_area = float(params.gaussian_height) * float(params.gaussian_fwhm) * 1.0645
         centers = [center.model_dump() for center in params.gaussian_centers]
-        model_arr, subtracted_arr, fit_rows = fit_fixed_gaussian_templates(
+        model_arr, subtracted_arr, fit_rows, guard_scale = fit_fixed_gaussian_templates(
             x,
             y,
             centers,
             fixed_fwhm=float(params.gaussian_fwhm),
             fixed_area=fixed_area,
             search_half_width=float(params.gaussian_search_half_width),
+            prevent_negative=bool(params.gaussian_nonnegative_guard),
         )
         gaussian_model = model_arr
         gaussian_subtracted = subtracted_arr
+        gaussian_guard_scale = guard_scale
+        gaussian_guard_applied = bool(params.gaussian_nonnegative_guard) and guard_scale is not None and guard_scale < 0.999999
         smooth_input = subtracted_arr
         gaussian_fits = [GaussianFitRow(**row) for row in fit_rows]
 
@@ -390,6 +399,9 @@ def _build_dataset_output(name: str, x: np.ndarray, y: np.ndarray, params: Proce
         y_background=None if background_curve is None else background_curve.tolist(),
         y_gaussian_model=None if gaussian_model is None else gaussian_model.tolist(),
         y_gaussian_subtracted=None if gaussian_subtracted is None else gaussian_subtracted.tolist(),
+        gaussian_guard_enabled=bool(params.gaussian_nonnegative_guard),
+        gaussian_guard_applied=gaussian_guard_applied,
+        gaussian_guard_scale=gaussian_guard_scale,
         y_processed=y_proc.tolist(),
         gaussian_fits=gaussian_fits,
     )

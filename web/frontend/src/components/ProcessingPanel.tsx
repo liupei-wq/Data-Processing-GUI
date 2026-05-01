@@ -29,6 +29,7 @@ export const DEFAULT_PARAMS: ProcessParams = {
   gaussian_enabled: false,
   gaussian_fwhm: 0.2,
   gaussian_height: 100,
+  gaussian_nonnegative_guard: false,
   gaussian_search_half_width: 0.5,
   gaussian_centers: [
     { enabled: true, name: 'Peak 1', center: 30 },

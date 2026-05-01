@@ -103,12 +103,13 @@ def fit_fixed_gaussian_templates(
     fixed_fwhm: float,
     fixed_area: float,
     search_half_width: float,
-) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    prevent_negative: bool = False,
+) -> tuple[np.ndarray, np.ndarray, list[dict], float]:
     """Subtract fixed-area/FWHM Gaussian templates while searching only center positions."""
     x = np.asarray(x, dtype=float)
     signal = np.asarray(signal, dtype=float)
     if len(x) == 0 or len(signal) == 0:
-        return np.array([]), np.array([]), []
+        return np.array([]), np.array([]), [], 1.0
 
     valid_centers: list[dict] = []
     for idx, row in enumerate(centers):
@@ -129,12 +130,13 @@ def fit_fixed_gaussian_templates(
 
     empty_rows: list[dict] = []
     if not valid_centers:
-        return np.zeros_like(signal, dtype=float), signal.copy(), empty_rows
+        return np.zeros_like(signal, dtype=float), signal.copy(), empty_rows, 1.0
 
     valid_centers.sort(key=lambda item: item["center"])
     residual = signal.copy()
     total_model = np.zeros_like(residual, dtype=float)
     fit_rows: list[dict] = []
+    overall_guard_scale = 1.0
     local_half_window = float(max(search_half_width, fixed_fwhm * 3.0))
 
     for row in valid_centers:
@@ -161,16 +163,37 @@ def fit_fixed_gaussian_templates(
                 best_center = float(center)
 
         best_model = gaussian_template_from_area(x, best_center, fixed_fwhm, fixed_area)
-        residual = residual - best_model
-        total_model += best_model
+        applied_model = best_model
+        guard_scale = 1.0
+        if prevent_negative:
+            available_signal = np.clip(residual, a_min=0.0, a_max=None)
+            support_mask = (
+                (x >= best_center - local_half_window)
+                & (x <= best_center + local_half_window)
+                & (best_model >= float(np.max(best_model)) * 1e-4)
+            )
+            if np.any(support_mask):
+                safe_ratios = available_signal[support_mask] / np.maximum(best_model[support_mask], 1e-12)
+                safe_ratios = safe_ratios[np.isfinite(safe_ratios)]
+                if safe_ratios.size > 0:
+                    guard_scale = float(np.clip(np.min(safe_ratios), 0.0, 1.0))
+                    applied_model = best_model * guard_scale
+            overall_guard_scale = min(overall_guard_scale, guard_scale)
+
+        residual = residual - applied_model
+        if prevent_negative:
+            residual = np.maximum(residual, 0.0)
+        total_model += applied_model
         fit_rows.append({
             "Peak_Name": row["name"],
             "Seed_Center": seed_center,
             "Fitted_Center": best_center,
             "Shift": best_center - seed_center,
             "Fixed_FWHM": float(fixed_fwhm),
-            "Fixed_Area": float(fixed_area),
-            "Template_Height": float(np.max(best_model)) if len(best_model) else 0.0,
+            "Fixed_Area": float(fixed_area * guard_scale),
+            "Template_Height": float(np.max(applied_model)) if len(applied_model) else 0.0,
+            "Guard_Scale": float(guard_scale),
+            "Guard_Applied": bool(guard_scale < 0.999999),
         })
 
-    return total_model, residual, fit_rows
+    return total_model, residual, fit_rows, float(overall_guard_scale)

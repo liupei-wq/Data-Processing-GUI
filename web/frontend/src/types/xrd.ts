@@ -23,6 +23,7 @@ export interface ProcessParams {
   gaussian_enabled: boolean
   gaussian_fwhm: number
   gaussian_height: number
+  gaussian_nonnegative_guard: boolean
   gaussian_search_half_width: number
   gaussian_centers: GaussianCenter[]
   smooth_method: 'none' | 'moving_average' | 'savitzky_golay'
@@ -57,6 +58,9 @@ export interface ProcessedDataset {
   y_background: number[] | null
   y_gaussian_model: number[] | null
   y_gaussian_subtracted: number[] | null
+  gaussian_guard_enabled?: boolean
+  gaussian_guard_applied?: boolean
+  gaussian_guard_scale?: number | null
   y_processed: number[]
   gaussian_fits: GaussianFitRow[]
 }
