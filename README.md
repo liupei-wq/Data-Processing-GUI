@@ -1,39 +1,11 @@
 # Data-Processing-GUI
 
-這個專案目前有兩種啟動方式：
+這個 repo 目前提供的是 `FastAPI + React` 網站版，程式主要位於 `web/`：
 
-1. Streamlit 桌面版
-2. FastAPI + React 網站版（目前先完成 XRD）
+- `web/backend`：FastAPI API 與光譜資料處理邏輯
+- `web/frontend`：React + Vite 前端介面
 
-## Streamlit 桌面版
-
-### Windows
-
-1. 安裝 Python，並勾選 `Add Python to PATH`
-2. 在專案根目錄執行：
-
-```bash
-pip install -r requirements.txt
-```
-
-3. 之後每次啟動可用：
-
-```bash
-streamlit run app.py
-```
-
-或直接使用現有啟動批次檔（如果本機保留該檔）。
-
-### Mac
-
-1. 安裝 Python 3
-2. 在專案根目錄執行：
-
-```bash
-pip3 install -r requirements.txt
-chmod +x 啟動_Mac.command
-./啟動_Mac.command
-```
+目前 API 已包含 `XRD / Raman / XAS / XPS / XES` 模組。
 
 ## 網站版本機開發
 
