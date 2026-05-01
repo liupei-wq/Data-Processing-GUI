@@ -115,8 +115,8 @@ function buildTraces(tool: SingleToolKind, dataset: ProcessedDataset): Plotly.Da
       y: dataset.y_gaussian_model,
       type: 'scatter',
       mode: 'lines',
-      name: '高斯模型',
-      line: { color: '#f97316', width: 1.6, dash: 'dot' },
+      name: '被扣掉的高斯曲線',
+      line: { color: '#f97316', width: 2.4, dash: 'dash' },
     })
     traces.push({
       x: dataset.x,
@@ -245,7 +245,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
   const [normEnd, setNormEnd] = useState<number | null>(null)
 
   const [gaussianFwhm, setGaussianFwhm] = useState(0.2)
-  const [gaussianHeight, setGaussianHeight] = useState(100)
+  const [gaussianHeight, setGaussianHeight] = useState(1)
   const [gaussianSearchHalfWidth, setGaussianSearchHalfWidth] = useState(0.5)
   const [gaussianCenters, setGaussianCenters] = useState<GaussianCenter[]>([
     { enabled: true, name: 'Peak 1', center: 30 },
@@ -267,7 +267,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
     setNormStart(null)
     setNormEnd(null)
     setGaussianFwhm(0.2)
-    setGaussianHeight(100)
+    setGaussianHeight(1)
     setGaussianSearchHalfWidth(0.5)
     setGaussianCenters([{ enabled: true, name: 'Peak 1', center: 30 }])
   }, [tool])
@@ -335,10 +335,12 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
       if (sample) {
         const xMin = Math.min(...sample.x)
         const xMax = Math.max(...sample.x)
+        const yMax = Math.max(...sample.y)
         setBgRangeStart(xMin)
         setBgRangeEnd(xMax)
         setNormStart(xMin)
         setNormEnd(xMax)
+        setGaussianHeight(Math.max(yMax * 0.08, 0.01))
         setGaussianCenters([{ enabled: true, name: 'Peak 1', center: (xMin + xMax) / 2 }])
       }
     } catch (e: unknown) {
@@ -353,11 +355,11 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
   const gSliderXRange = Math.max(gSliderXMax - gSliderXMin, 1)
   const gSliderYMax = rawFiles.length > 0 ? Math.max(...rawFiles.flatMap(f => f.y)) : 10000
   const fwhmSliderMax = Math.max(gSliderXRange / 4, 2)
-  const fwhmSliderStep = Math.max(gSliderXRange / 5000, 0.001)
-  const heightSliderStep = Math.max(gSliderYMax / 2000, 1)
+  const fwhmSliderStep = 0.01
+  const heightSliderStep = 0.01
   const searchHwSliderMax = Math.max(gSliderXRange / 2, 5)
-  const searchHwSliderStep = Math.max(gSliderXRange / 5000, 0.001)
-  const centerSliderStep = Math.max(gSliderXRange / 2000, 0.001)
+  const searchHwSliderStep = 0.01
+  const centerSliderStep = 0.01
 
   return (
     <div className="px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
@@ -478,97 +480,8 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
             {tool === 'gaussian' && (
               <div className="theme-block rounded-[24px] p-4">
                 <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">高斯模板設定</div>
-                <div className="space-y-4">
-                  <SliderRow
-                    label="固定 FWHM"
-                    value={gaussianFwhm}
-                    min={0.001}
-                    max={fwhmSliderMax}
-                    step={fwhmSliderStep}
-                    decimals={3}
-                    onChange={setGaussianFwhm}
-                  />
-                  <SliderRow
-                    label="固定高度"
-                    value={gaussianHeight}
-                    min={0}
-                    max={Math.max(gSliderYMax * 1.5, 200)}
-                    step={heightSliderStep}
-                    decimals={0}
-                    onChange={setGaussianHeight}
-                  />
-                  <SliderRow
-                    label="搜尋半寬"
-                    value={gaussianSearchHalfWidth}
-                    min={0.001}
-                    max={searchHwSliderMax}
-                    step={searchHwSliderStep}
-                    decimals={3}
-                    onChange={setGaussianSearchHalfWidth}
-                  />
-                  <div className="space-y-2">
-                    {gaussianCenters.map((center, idx) => (
-                      <div key={`${center.name}-${idx}`} className="theme-block-soft rounded-[16px] p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="text-xs font-semibold text-[var(--text-main)]">中心 {idx + 1}</div>
-                          {gaussianCenters.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => setGaussianCenters(gaussianCenters.filter((_, itemIdx) => itemIdx !== idx))}
-                              className="text-xs text-[var(--accent-secondary)]"
-                            >
-                              刪除
-                            </button>
-                          )}
-                        </div>
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            value={center.name}
-                            onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, name: e.target.value } : item))}
-                            className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                          />
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] text-[var(--text-soft)]">中心位置</span>
-                              <span className="font-mono text-[10px] text-[var(--text-main)]">{center.center.toFixed(3)}</span>
-                            </div>
-                            <input
-                              type="number"
-                              value={center.center}
-                              step={centerSliderStep}
-                              onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, center: Number(e.target.value) } : item))}
-                              className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                            />
-                            <input
-                              type="range"
-                              value={center.center}
-                              min={gSliderXMin}
-                              max={gSliderXMax}
-                              step={centerSliderStep}
-                              onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, center: Number(e.target.value) } : item))}
-                              className="w-full cursor-pointer"
-                              style={{ accentColor: 'var(--accent-strong)' }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => setGaussianCenters([
-                        ...gaussianCenters,
-                        {
-                          enabled: true,
-                          name: `Peak ${gaussianCenters.length + 1}`,
-                          center: gaussianCenters[gaussianCenters.length - 1]?.center ?? 30,
-                        },
-                      ])}
-                      className="theme-pill pressable w-full rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
-                    >
-                      新增中心
-                    </button>
-                  </div>
+                <div className="rounded-[18px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
+                  高斯模板的主要滑桿已移到右側結果區，滑動距離更長，現在每次調整都是 `0.01`，比較不會一下扣太多。
                 </div>
               </div>
             )}
@@ -581,7 +494,7 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
                 <div className="mt-1 text-xs text-[var(--text-soft)]">
                   {tool === 'background' && '顯示原始訊號、背景基準線與扣背景後結果。'}
                   {tool === 'normalize' && '顯示原始訊號與歸一化後曲線，快速確認尺度變化。'}
-                  {tool === 'gaussian' && '顯示原始訊號、高斯模型與扣除後曲線。'}
+                  {tool === 'gaussian' && '顯示原始訊號、被扣掉的高斯曲線與扣除後曲線。'}
                 </div>
               </div>
               {result.length > 1 && (
@@ -621,6 +534,109 @@ export default function SingleProcessTool({ tool }: { tool: SingleToolKind }) {
 
             {activeDataset && (
               <>
+                {tool === 'gaussian' && (
+                  <div className="mb-4 space-y-4">
+                    <div className="theme-block-soft rounded-[24px] p-4 sm:p-5">
+                      <div className="mb-4 flex flex-col gap-1">
+                        <div className="text-sm font-semibold text-[var(--text-muted)]">高斯模板調整</div>
+                        <div className="text-xs leading-6 text-[var(--text-soft)]">
+                          滑桿已改成每次 `0.01` 微調，避免模板一口氣扣太深。建議先調 `固定高度`，再微調 `FWHM` 和 `搜尋半寬`。
+                        </div>
+                      </div>
+                      <div className="grid gap-4 lg:grid-cols-3">
+                        <SliderRow
+                          label="固定 FWHM"
+                          value={gaussianFwhm}
+                          min={0.001}
+                          max={fwhmSliderMax}
+                          step={fwhmSliderStep}
+                          decimals={2}
+                          onChange={setGaussianFwhm}
+                        />
+                        <SliderRow
+                          label="固定高度"
+                          value={gaussianHeight}
+                          min={0}
+                          max={Math.max(gSliderYMax, 1)}
+                          step={heightSliderStep}
+                          decimals={2}
+                          onChange={setGaussianHeight}
+                        />
+                        <SliderRow
+                          label="搜尋半寬"
+                          value={gaussianSearchHalfWidth}
+                          min={0.001}
+                          max={searchHwSliderMax}
+                          step={searchHwSliderStep}
+                          decimals={2}
+                          onChange={setGaussianSearchHalfWidth}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="theme-block-soft rounded-[24px] p-4 sm:p-5">
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-[var(--text-muted)]">高斯中心</div>
+                          <div className="mt-1 text-xs text-[var(--text-soft)]">
+                            每個中心位置也改成 `0.01` 步進，右側橘線就是目前要扣掉的高斯曲線。
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setGaussianCenters([
+                            ...gaussianCenters,
+                            {
+                              enabled: true,
+                              name: `Peak ${gaussianCenters.length + 1}`,
+                              center: gaussianCenters[gaussianCenters.length - 1]?.center ?? 30,
+                            },
+                          ])}
+                          className="theme-pill pressable rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
+                        >
+                          新增中心
+                        </button>
+                      </div>
+
+                      <div className="grid gap-3 xl:grid-cols-2">
+                        {gaussianCenters.map((center, idx) => (
+                          <div key={`${center.name}-${idx}`} className="rounded-[20px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-4">
+                            <div className="mb-3 flex items-center justify-between">
+                              <div className="text-xs font-semibold text-[var(--text-main)]">中心 {idx + 1}</div>
+                              {gaussianCenters.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setGaussianCenters(gaussianCenters.filter((_, itemIdx) => itemIdx !== idx))}
+                                  className="text-xs text-[var(--accent-secondary)]"
+                                >
+                                  刪除
+                                </button>
+                              )}
+                            </div>
+                            <div className="space-y-3">
+                              <input
+                                type="text"
+                                value={center.name}
+                                onChange={e => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, name: e.target.value } : item))}
+                                className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                              />
+                              <SliderRow
+                                label="中心位置"
+                                value={center.center}
+                                min={gSliderXMin}
+                                max={gSliderXMax}
+                                step={centerSliderStep}
+                                decimals={2}
+                                onChange={value => setGaussianCenters(gaussianCenters.map((item, itemIdx) => itemIdx === idx ? { ...item, center: value } : item))}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="theme-block-soft rounded-[28px] p-3 sm:p-4">
                   <Plot
                     data={buildTraces(tool, activeDataset)}
