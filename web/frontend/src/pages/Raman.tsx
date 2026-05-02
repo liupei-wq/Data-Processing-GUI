@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react'
 import Plot from '../components/PlotlyChart'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
@@ -53,14 +53,6 @@ const SIDEBAR_DEFAULT_WIDTH = 368
 const SIDEBAR_COLLAPSED_PEEK = 28
 
 const DEFAULT_PARAMS: ProcessParams = {
-  despike_enabled: false,
-  despike_method: 'median',
-  despike_threshold: 8,
-  despike_window: 7,
-  despike_passes: 1,
-  interpolate: false,
-  n_points: 1000,
-  average: false,
   bg_enabled: false,
   bg_method: 'none',
   bg_x_start: null,
@@ -71,9 +63,6 @@ const DEFAULT_PARAMS: ProcessParams = {
   bg_baseline_iter: 20,
   bg_anchor_x: [],
   bg_anchor_y: [],
-  smooth_method: 'none',
-  smooth_window: 11,
-  smooth_poly: 3,
   norm_method: 'none',
   norm_x_start: null,
   norm_x_end: null,
@@ -97,6 +86,11 @@ const DEFAULT_FIT_PARAMS: FitParams = {
   residual_target_enabled: false,
   residual_target: 0.05,
   residual_target_rounds: 4,
+  baseline_method: 'arpls',
+  baseline_lambda: 1e5,
+  baseline_p: 0.01,
+  baseline_iter: 20,
+  bootstrap_rounds: 8,
 }
 
 const BACKGROUND_METHOD_HELP: Record<ProcessParams['bg_method'], string> = {
@@ -114,21 +108,21 @@ const BACKGROUND_METHOD_HELP: Record<ProcessParams['bg_method'], string> = {
 type ReviewRule = 'area_zero' | 'low_area' | 'large_delta' | 'boundary' | 'broad' | 'low_confidence'
 
 const REVIEW_RULE_OPTIONS: { id: ReviewRule; label: string }[] = [
-  { id: 'area_zero', label: 'Area = 0' },
-  { id: 'low_area', label: 'Area% 過低' },
-  { id: 'large_delta', label: '|Δ| 過大' },
-  { id: 'boundary', label: '中心撞邊界' },
-  { id: 'broad', label: 'FWHM 過寬' },
-  { id: 'low_confidence', label: 'Low confidence' },
+  { id: 'area_zero', label: '面積為 0' },
+  { id: 'low_area', label: '面積占比過低' },
+  { id: 'large_delta', label: '峰位偏移過大' },
+  { id: 'boundary', label: '中心撞到邊界' },
+  { id: 'broad', label: '峰形過寬或像背景' },
+  { id: 'low_confidence', label: '信心度低' },
 ]
 
 const PROFILE_OPTIONS: { value: RamanProfile; label: string }[] = [
-  { value: 'voigt', label: 'Voigt' },
-  { value: 'pseudo_voigt', label: 'pseudo-Voigt' },
-  { value: 'super_gaussian', label: 'flat-top / super-Gaussian (model component)' },
-  { value: 'split_pseudo_voigt', label: 'asymmetric / split pseudo-Voigt' },
-  { value: 'gaussian', label: 'Gaussian' },
-  { value: 'lorentzian', label: 'Lorentzian' },
+  { value: 'voigt', label: 'Voigt（高斯與洛倫茲混合）' },
+  { value: 'pseudo_voigt', label: 'pseudo-Voigt（近似混合峰）' },
+  { value: 'super_gaussian', label: '平頂 / super-Gaussian' },
+  { value: 'split_pseudo_voigt', label: '非對稱 / split pseudo-Voigt' },
+  { value: 'gaussian', label: 'Gaussian（高斯）' },
+  { value: 'lorentzian', label: 'Lorentzian（洛倫茲）' },
 ]
 
 const BACKGROUND_METHOD_OPTIONS: { value: ProcessParams['bg_method']; label: string }[] = [
@@ -143,12 +137,6 @@ const BACKGROUND_METHOD_OPTIONS: { value: ProcessParams['bg_method']; label: str
   { value: 'manual_anchor', label: 'Manual anchor baseline' },
 ]
 
-const SMOOTH_METHOD_OPTIONS: { value: ProcessParams['smooth_method']; label: string }[] = [
-  { value: 'none', label: '不平滑' },
-  { value: 'moving_average', label: 'Moving Average' },
-  { value: 'savitzky_golay', label: 'Savitzky-Golay' },
-]
-
 const NORMALIZATION_OPTIONS: { value: ProcessParams['norm_method']; label: string }[] = [
   { value: 'none', label: '不歸一化' },
   { value: 'min_max', label: 'Min-Max' },
@@ -157,23 +145,23 @@ const NORMALIZATION_OPTIONS: { value: ProcessParams['norm_method']; label: strin
 ]
 
 const ROBUST_LOSS_OPTIONS: { value: FitParams['robust_loss']; label: string }[] = [
-  { value: 'linear', label: 'Linear' },
-  { value: 'soft_l1', label: 'soft_l1' },
-  { value: 'huber', label: 'Huber' },
-  { value: 'cauchy', label: 'Cauchy' },
-  { value: 'arctan', label: 'Arctan' },
+  { value: 'linear', label: 'Linear（一般最小平方法）' },
+  { value: 'soft_l1', label: 'soft_l1（溫和抑制離群值）' },
+  { value: 'huber', label: 'Huber（中度抑制離群值）' },
+  { value: 'cauchy', label: 'Cauchy（強抑制離群值）' },
+  { value: 'arctan', label: 'Arctan（更保守抑制離群值）' },
 ]
 
 const BATCH_NORMALIZE_OPTIONS = [
-  { value: 'si_520', label: 'Normalize to Si 520' },
-  { value: 'total_area', label: 'Normalize to total area' },
-  { value: 'none', label: 'No normalize' },
+  { value: 'si_520', label: '以 Si 520 峰正規化' },
+  { value: 'total_area', label: '以總面積正規化' },
+  { value: 'none', label: '不正規化' },
 ]
 
 const OXIDATION_INFERENCE_OPTIONS: { value: FitPeakCandidate['oxidation_state_inference']; label: string }[] = [
-  { value: 'Direct', label: 'Direct' },
-  { value: 'Inferred', label: 'Inferred' },
-  { value: 'Not applicable', label: 'Not applicable' },
+  { value: 'Direct', label: '直接判定' },
+  { value: 'Inferred', label: '推定' },
+  { value: 'Not applicable', label: '不適用' },
 ]
 
 function createPeakCandidateId() {
@@ -213,8 +201,15 @@ function refPeakToCandidate(peak: RefPeak, defaultFwhm: number): FitPeakCandidat
     theoretical_center: peak.theoretical_center ?? peak.position_cm,
     related_technique: peak.related_technique || 'Raman',
     reference: peak.reference || '',
+    reference_source: peak.reference_source || peak.reference || '',
+    symmetry: peak.symmetry || '',
     oxidation_state: peak.oxidation_state || 'N/A',
     oxidation_state_inference: peak.oxidation_state_inference || 'Not applicable',
+    enabled_by_default: peak.enabled_by_default ?? true,
+    candidate_only: peak.candidate_only ?? false,
+    artifact: peak.artifact ?? false,
+    substrate: peak.substrate ?? false,
+    disabled_until_user_selects: peak.disabled_until_user_selects ?? false,
     role,
     mode_label: peak.mode || peak.label || '',
     note: peak.note || '',
@@ -255,8 +250,15 @@ function normalizeCandidate(candidate: Partial<FitPeakCandidate>): FitPeakCandid
     theoretical_center: candidate.theoretical_center ?? candidate.ref_position_cm ?? position,
     related_technique: candidate.related_technique || 'Raman',
     reference: candidate.reference || '',
+    reference_source: candidate.reference_source || candidate.reference || '',
+    symmetry: candidate.symmetry || '',
     oxidation_state: candidate.oxidation_state || 'N/A',
     oxidation_state_inference: candidate.oxidation_state_inference || 'Not applicable',
+    enabled_by_default: candidate.enabled_by_default ?? true,
+    candidate_only: candidate.candidate_only ?? false,
+    artifact: candidate.artifact ?? false,
+    substrate: candidate.substrate ?? false,
+    disabled_until_user_selects: candidate.disabled_until_user_selects ?? false,
     role: candidate.role || '',
     mode_label: candidate.mode_label || '',
     note: candidate.note || '',
@@ -269,41 +271,28 @@ function normalizeCandidate(candidate: Partial<FitPeakCandidate>): FitPeakCandid
 }
 
 function fitChartTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly.Data[] {
+  const x = fitResult.x_calibrated?.length === dataset.x.length ? fitResult.x_calibrated : dataset.x
+  const baselineHasSignal = (fitResult.y_baseline ?? []).some(value => Math.abs(value) > 1e-9)
+  const correctedFitHasSignal = (fitResult.y_fit_corrected ?? []).some(value => Number.isFinite(value))
   const traces: Plotly.Data[] = [
     {
-      x: dataset.x,
+      x,
       y: dataset.y_processed,
       type: 'scatter',
       mode: 'lines',
-      name: '實驗曲線',
-      line: { color: '#e5e7eb', width: 1.35, dash: 'dot' },
+      name: '處理後光譜',
+      line: { color: '#e5e7eb', width: 1.45 },
     },
-  ]
-
-  fitResult.y_individual.forEach((yLine, idx) => {
-    const row = fitResult.peaks[idx]
-    traces.push({
-      x: dataset.x,
-      y: yLine,
-      type: 'scatter',
-      mode: 'lines',
-      name: row ? fitPeakLabel(row) : `Peak ${idx + 1}`,
-      line: { width: 1.75, dash: 'dash' },
-      opacity: 0.95,
-    })
-  })
-
-  traces.push(
     {
-      x: dataset.x,
+      x,
       y: fitResult.y_fit,
       type: 'scatter',
       mode: 'lines',
-      name: '擬合包絡',
+      name: '總擬合',
       line: { color: '#f8c65a', width: 2.7 },
     },
     {
-      x: dataset.x,
+      x,
       y: fitResult.residuals,
       type: 'scatter',
       mode: 'lines',
@@ -311,16 +300,153 @@ function fitChartTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly
       yaxis: 'y2',
       line: { color: '#8b949e', width: 1.05 },
     },
-  )
+  ]
+
+  if (baselineHasSignal) {
+    traces.splice(1, 0, {
+      x,
+      y: fitResult.y_baseline,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Baseline',
+      line: { color: '#f59e0b', width: 1.3, dash: 'dot' },
+    })
+  }
+
+  if (correctedFitHasSignal && baselineHasSignal) {
+    traces.splice(traces.length - 1, 0, {
+      x,
+      y: fitResult.y_fit_corrected,
+      type: 'scatter',
+      mode: 'lines',
+      name: '擬合（baseline-corrected）',
+      line: { color: '#7dd3fc', width: 1.25, dash: 'dash' },
+    })
+  }
 
   return traces
+}
+
+function groupStageChartTraces(stage: FitResult['group_fit_stages'][number]): Plotly.Data[] {
+  const traces: Plotly.Data[] = [
+    {
+      x: stage.x,
+      y: stage.y_current_spectrum,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Current spectrum',
+      line: { color: '#cbd5e1', width: 1.2 },
+    },
+    {
+      x: stage.x,
+      y: stage.y_locked_previous,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Locked previous groups',
+      line: { color: '#f59e0b', width: 1.2, dash: 'dot' },
+    },
+    {
+      x: stage.x,
+      y: stage.y_group_fit,
+      type: 'scatter',
+      mode: 'lines',
+      name: `${stage.group_name} fit`,
+      line: { color: '#38bdf8', width: 1.6 },
+    },
+    {
+      x: stage.x,
+      y: stage.y_combined_fit,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Combined locked fit',
+      line: { color: '#f8c65a', width: 2.4 },
+    },
+    {
+      x: stage.x,
+      y: stage.residuals,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Residual',
+      yaxis: 'y2',
+      line: { color: '#94a3b8', width: 1.0 },
+    },
+  ]
+  const probeRows = stage.probe_rows ?? []
+  traces.push({
+    x: probeRows.map(row => row.fitted_cm1 ?? row.reference_cm1),
+    y: probeRows.map(row => {
+      const idx = stage.x.findIndex(value => Math.abs(value - (row.fitted_cm1 ?? row.reference_cm1)) <= 0.5)
+      return idx >= 0 ? stage.y_current_spectrum[idx] : null
+    }),
+    type: 'scatter',
+    mode: 'text+markers',
+    name: 'Theoretical probing',
+    marker: {
+      color: probeRows.map(row => alignmentStatusColor(row.status)),
+      symbol: probeRows.map(row => alignmentStatusSymbol(row.status)),
+      size: 10,
+      line: { color: '#f8fafc', width: 1 },
+    },
+    text: probeRows.map(row => row.status),
+    textposition: 'top center',
+    hovertemplate: probeRows.map(row => `${row.peak_label}<br>ref ${row.reference_cm1.toFixed(1)} → fit ${row.fitted_cm1 == null ? '—' : row.fitted_cm1.toFixed(1)}<br>SNR ${row.SNR.toFixed(2)}<br>${row.rejection_reason}<extra></extra>`),
+  } as Plotly.Data)
+  return traces
+}
+
+function groupDiagnosticLayout(stage: FitResult['group_fit_stages'][number]): Partial<Plotly.Layout> {
+  const base = fitChartLayout()
+  const shapes: Partial<Plotly.Shape>[] = []
+  ;(stage.probe_rows ?? []).forEach(row => {
+    const color = alignmentStatusColor(row.status)
+    shapes.push({
+      type: 'rect',
+      xref: 'x',
+      yref: 'paper',
+      x0: row.search_window_lo,
+      x1: row.search_window_hi,
+      y0: 0,
+      y1: 1,
+      fillcolor: color,
+      opacity: row.status === 'accepted' ? 0.12 : 0.05,
+      line: { width: 0 },
+      layer: 'below',
+    })
+    shapes.push({
+      type: 'line',
+      xref: 'x',
+      yref: 'paper',
+      x0: row.reference_cm1,
+      x1: row.reference_cm1,
+      y0: 0,
+      y1: 1,
+      line: {
+        color,
+        width: row.status === 'accepted' ? 1.5 : 1,
+        dash: row.status === 'candidate' || row.status === 'uncertain' || row.status === 'ambiguous' ? 'dash' : 'solid',
+      },
+    })
+  })
+  return {
+    ...base,
+    margin: { l: 68, r: 76, t: 42, b: 70 },
+    shapes,
+  }
 }
 
 function fitPeakLabel(row: FitResult['peaks'][number]) {
   return `${row.Peak_Name} ${row.Center_cm.toFixed(1)} cm⁻¹`
 }
 
-function fitChartLayout(): Partial<Plotly.Layout> {
+function fmtFixed(value: number | null | undefined, digits: number, fallback = '—') {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : fallback
+}
+
+function fmtExp(value: number | null | undefined, digits: number, fallback = '—') {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toExponential(digits) : fallback
+}
+
+function fitChartLayout(dataset?: ProcessedDataset, fitResult?: FitResult): Partial<Plotly.Layout> {
   const base = chartLayout()
   const legendColor =
     base.font && typeof base.font === 'object' && 'color' in base.font
@@ -330,6 +456,14 @@ function fitChartLayout(): Partial<Plotly.Layout> {
     base.font && typeof base.font === 'object' && 'family' in base.font
       ? base.font.family
       : 'Times New Roman, Noto Sans TC, serif'
+  const processedSeries = dataset?.y_processed ?? []
+  const normalizedWindow = processedSeries.length > 0
+    ? processedSeries.filter(value => Number.isFinite(value))
+    : []
+  const isNormalizedScale = normalizedWindow.length > 0 &&
+    Math.min(...normalizedWindow) >= -0.02 &&
+    Math.max(...normalizedWindow) <= 1.05 &&
+    ((fitResult?.y_baseline ?? []).every(value => Math.abs(value) <= 1e-9))
   return {
     ...base,
     margin: { l: 68, r: 76, t: 126, b: 70 },
@@ -344,16 +478,279 @@ function fitChartLayout(): Partial<Plotly.Layout> {
       font: { color: legendColor, family: legendFamily, size: 12 },
       traceorder: 'normal',
     },
+    yaxis: {
+      ...base.yaxis,
+      title: { text: isNormalizedScale ? 'Normalized intensity' : 'Intensity' },
+      range: isNormalizedScale ? [0, 1.05] : undefined,
+    },
     yaxis2: {
       title: { text: '殘差' },
       overlaying: 'y',
       side: 'right',
       showgrid: false,
       zeroline: true,
+      rangemode: 'normal',
       zerolinecolor: 'rgba(148, 163, 184, 0.35)',
       color: base.yaxis && 'color' in base.yaxis ? base.yaxis.color : '#d9e4f0',
     },
   }
+}
+
+function alignmentStatusColor(status: string) {
+  if (status === 'accepted' || status === 'matched') return '#22c55e'
+  if (status === 'candidate' || status === 'shifted') return '#facc15'
+  if (status === 'uncertain' || status === 'ambiguous') return '#f97316'
+  if (status === 'overlapped') return '#38bdf8'
+  if (status === 'rejected') return '#ef4444'
+  return '#94a3b8'
+}
+
+function alignmentStatusSymbol(status: string) {
+  if (status === 'accepted' || status === 'matched') return 'circle'
+  if (status === 'candidate' || status === 'shifted') return 'circle-open'
+  if (status === 'uncertain' || status === 'ambiguous') return 'triangle-up'
+  if (status === 'overlapped') return 'diamond'
+  if (status === 'rejected') return 'x'
+  return 'x-thin'
+}
+
+function materialColor(material: string) {
+  if (material.includes('Si')) return '#38bdf8'
+  if (material.includes('Ga')) return '#22c55e'
+  if (material.includes('NiO')) return '#f97316'
+  return '#c084fc'
+}
+
+function alignmentMapTraces(rows: FitResult['alignment_rows']): Plotly.Data[] {
+  const orderedMaterials = ['Si (基板)', 'β-Ga₂O₃', 'NiO']
+  const orderedPresent = Array.from(new Set(rows.map(row => row.material))).sort((a, b) => {
+    const ai = orderedMaterials.indexOf(a)
+    const bi = orderedMaterials.indexOf(b)
+    if (ai === -1 && bi === -1) return a.localeCompare(b)
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
+  const yLevels = new Map<string, number>()
+  orderedPresent.forEach((material, idx) => yLevels.set(material, idx))
+  const lineX: Array<number | null> = []
+  const lineY: Array<number | null> = []
+  const theoryX: number[] = []
+  const theoryY: number[] = []
+  const fitX: number[] = []
+  const fitY: number[] = []
+  const fitText: string[] = []
+  const fitColors: string[] = []
+  const fitSymbols: string[] = []
+  const missingX: number[] = []
+  const missingY: number[] = []
+  const missingText: string[] = []
+
+  rows.forEach(row => {
+    const y = yLevels.get(row.material) ?? 0
+    theoryX.push(row.reference_cm1)
+    theoryY.push(y)
+    if (row.fitted_cm1 != null) {
+      lineX.push(row.reference_cm1, row.fitted_cm1, null)
+      lineY.push(y, y, null)
+      fitX.push(row.fitted_cm1)
+      fitY.push(y)
+      fitColors.push(alignmentStatusColor(row.status))
+      fitSymbols.push(alignmentStatusSymbol(row.status))
+      fitText.push(`${row.mode}<br>ref ${row.reference_cm1.toFixed(1)} → fit ${row.fitted_cm1.toFixed(1)}<br>Δ ${row.delta_cm1 == null ? '—' : row.delta_cm1.toFixed(2)}<br>${row.note}<br>${row.status}`)
+    } else {
+      missingX.push(row.reference_cm1)
+      missingY.push(y)
+      missingText.push(`${row.mode}<br>ref ${row.reference_cm1.toFixed(1)}<br>fit —<br>${row.note}<br>${row.status}`)
+    }
+  })
+
+  return [
+    {
+      x: theoryX,
+      y: theoryY,
+      type: 'scatter',
+      mode: 'markers',
+      name: 'Theoretical peaks',
+      marker: { color: '#94a3b8', size: 10, symbol: 'line-ns-open', line: { color: '#cbd5e1', width: 2 } },
+      hovertemplate: 'ref %{x:.2f} cm⁻¹<extra></extra>',
+    },
+    {
+      x: lineX,
+      y: lineY,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Delta connector',
+      line: { color: 'rgba(203, 213, 225, 0.55)', width: 1.2 },
+      hoverinfo: 'skip',
+    },
+    {
+      x: fitX,
+      y: fitY,
+      type: 'scatter',
+      mode: 'markers',
+      name: 'Measured / fitted peaks',
+      marker: { color: fitColors, size: 11, symbol: fitSymbols, line: { color: '#f8fafc', width: 1.3 } },
+      text: fitText,
+      hovertemplate: '%{text}<extra></extra>',
+    },
+    {
+      x: missingX,
+      y: missingY,
+      type: 'scatter',
+      mode: 'markers',
+      name: 'Not observed',
+      marker: { color: '#94a3b8', size: 11, symbol: 'x-thin', line: { color: '#cbd5e1', width: 1.2 } },
+      text: missingText,
+      hovertemplate: '%{text}<extra></extra>',
+    },
+  ]
+}
+
+function alignmentMapLayout(rows: FitResult['alignment_rows']): Partial<Plotly.Layout> {
+  const base = chartLayout()
+  const orderedMaterials = ['Si (基板)', 'β-Ga₂O₃', 'NiO']
+  const materials = Array.from(new Set(rows.map(row => row.material))).sort((a, b) => {
+    const ai = orderedMaterials.indexOf(a)
+    const bi = orderedMaterials.indexOf(b)
+    if (ai === -1 && bi === -1) return a.localeCompare(b)
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
+  return {
+    ...base,
+    yaxis: {
+      ...(base.yaxis ?? {}),
+      title: { text: 'Material / group' },
+      tickmode: 'array',
+      tickvals: materials.map((_, idx) => idx),
+      ticktext: materials,
+    },
+    margin: { l: 110, r: 24, t: 36, b: 62 },
+  }
+}
+
+function deltaPlotTraces(rows: FitResult['peaks']): Plotly.Data[] {
+  const filtered = rows.filter(row => row.Ref_cm != null)
+  const groups = Array.from(new Set(filtered.map(row => row.Material)))
+  const traces = groups.map(group => {
+    const groupRows = filtered.filter(row => row.Material === group)
+    return {
+      x: groupRows.map(row => `${row.Mode_Label || row.Peak_Name}\n${row.Ref_cm?.toFixed(1) ?? '—'}`),
+      y: groupRows.map(row => row.Status === 'not_observed' || row.Status === 'rejected' ? null : row.Delta_cm),
+      type: 'scatter',
+      mode: 'markers',
+      name: group,
+      marker: {
+        color: groupRows.map(row => alignmentStatusColor(row.Status)),
+        size: 10,
+        symbol: groupRows.map(row => alignmentStatusSymbol(row.Status)),
+        line: { color: '#f8fafc', width: 1.1 },
+      },
+      error_y: {
+        type: 'data',
+        array: groupRows.map(row => row.Bootstrap_Center_STD ?? 0),
+        visible: true,
+        color: materialColor(group),
+      },
+      text: groupRows.map(row => `${row.Peak_Name}<br>ref ${row.Ref_cm?.toFixed(1) ?? '—'}<br>fit ${fmtFixed(row.Center_cm, 2)}<br>Δ ${row.Delta_cm == null ? '—' : row.Delta_cm.toFixed(2)}<br>SNR ${fmtFixed(row.SNR, 2)}<br>${row.Status}`),
+      hovertemplate: '%{text}<extra></extra>',
+    } as Plotly.Data
+  })
+  const notObserved = filtered.filter(row => row.Status === 'not_observed' || row.Status === 'rejected')
+  if (notObserved.length > 0) {
+    traces.push({
+      x: notObserved.map(row => `${row.Mode_Label || row.Peak_Name}\n${row.Ref_cm?.toFixed(1) ?? '—'}`),
+      y: notObserved.map(() => -0.5),
+      type: 'scatter',
+      mode: 'markers',
+      name: 'not observed / rejected',
+      marker: {
+        color: notObserved.map(row => alignmentStatusColor(row.Status)),
+        size: 9,
+        symbol: notObserved.map(row => alignmentStatusSymbol(row.Status)),
+        line: { color: '#cbd5e1', width: 1 },
+      },
+      text: notObserved.map(row => `${row.Peak_Name}<br>ref ${row.Ref_cm?.toFixed(1) ?? '—'}<br>${row.Note}<br>${row.Status}`),
+      hovertemplate: '%{text}<extra></extra>',
+    } as Plotly.Data)
+  }
+  return traces
+}
+
+function deltaPlotLayout(): Partial<Plotly.Layout> {
+  const base = chartLayout()
+  return {
+    ...base,
+    shapes: [
+      {
+        type: 'line',
+        xref: 'paper',
+        x0: 0,
+        x1: 1,
+        y0: 0,
+        y1: 0,
+        line: { color: 'rgba(203, 213, 225, 0.45)', dash: 'dash', width: 1.2 },
+      },
+    ],
+    yaxis: {
+      ...(base.yaxis ?? {}),
+      title: { text: 'Δ = fitted - reference (cm⁻¹)' },
+      zeroline: true,
+    },
+    margin: { l: 68, r: 20, t: 28, b: 110 },
+  }
+}
+
+function groupConfidenceBarTraces(groups: FitResult['group_summaries']): Plotly.Data[] {
+  return [
+    {
+      x: groups.map(group => group.Group_Consistency_Score),
+      y: groups.map(group => group.Material || group.Phase_Group),
+      type: 'bar',
+      orientation: 'h',
+      marker: {
+        color: groups.map(group => materialColor(group.Material || group.Phase_Group)),
+      },
+      text: groups.map(group => `${group.Matched_Count}/${group.Candidate_Count}`),
+      textposition: 'inside',
+      hovertemplate: '%{y}<br>score %{x:.0f}<br>matched %{text}<extra></extra>',
+    },
+  ]
+}
+
+function batchDeltaComparisonTraces(batchResults: FitResult[]): Plotly.Data[] {
+  const symbols: Record<string, string> = {
+    'Si (基板)': 'circle',
+    'β-Ga₂O₃': 'diamond',
+    'NiO': 'square',
+  }
+  const traces: Plotly.Data[] = []
+  batchResults.forEach((result, index) => {
+    const sampleName = result.report?.sample_id || result.dataset_name
+    const sampleColor = LINE_COLOR_PALETTES.blue.series[index % LINE_COLOR_PALETTES.blue.series.length]
+    const materials = Array.from(new Set(result.alignment_rows.map(row => row.material)))
+    materials.forEach(material => {
+      const rows = result.alignment_rows.filter(row => row.material === material)
+      traces.push({
+        x: rows.map(row => `${row.mode}\n${row.reference_cm1.toFixed(1)}`),
+        y: rows.map(row => row.delta_cm1),
+        type: 'scatter',
+        mode: 'markers',
+        name: `${sampleName} · ${material}`,
+        marker: {
+          size: 10,
+          color: sampleColor,
+          symbol: symbols[material] ?? 'circle',
+          line: { color: '#f8fafc', width: 1.2 },
+        },
+        text: rows.map(row => `${material}<br>${row.mode}<br>Δ ${row.delta_cm1 == null ? '—' : row.delta_cm1.toFixed(2)}`),
+        hovertemplate: '%{text}<extra>%{fullData.name}</extra>',
+      } as Plotly.Data)
+    })
+  })
+  return traces
 }
 
 function getFitQualityFlags(
@@ -370,13 +767,43 @@ function getFitQualityFlags(
   return Array.from(new Set(flags))
 }
 
+function translateQualityFlag(flag: string) {
+  if (flag === 'boundary peak') return '中心撞邊界'
+  if (flag === 'broad/background-like peak') return '峰形過寬或接近背景'
+  if (flag === 'center outside tolerance') return '中心超出容許範圍'
+  if (flag === 'FWHM at limit') return 'FWHM 碰到限制'
+  if (flag === 'Area=0') return '面積為 0'
+  if (flag.startsWith('Area%<')) return flag.replace('Area%<', '面積占比 < ')
+  if (flag.startsWith('|Δ|>')) return flag.replace('|Δ|>', '峰位偏移 > ')
+  return flag
+}
+
+function translateConfidenceLevel(value: string | undefined) {
+  if (value === 'High') return '高'
+  if (value === 'Medium') return '中'
+  if (value === 'Low') return '低'
+  return value || '—'
+}
+
+function translateOxidationInference(value: string | undefined) {
+  if (value === 'Direct') return '直接判定'
+  if (value === 'Inferred') return '推定'
+  if (value === 'Not applicable') return '不適用'
+  return value || '—'
+}
+
+function translateFitStatus(value: string | undefined) {
+  if (value === 'Fit OK') return '擬合正常'
+  return value || '—'
+}
+
 function peakStatusLabel(row: FitResult['peaks'][number] | undefined, maxAbsDelta: number) {
   if (!row) return '待擬合'
   const flags = row.Quality_Flags ?? []
-  if (flags.includes('boundary peak')) return 'Boundary'
-  if (flags.includes('broad/background-like peak')) return 'Broad'
+  if (flags.includes('boundary peak')) return '中心撞邊界'
+  if (flags.includes('broad/background-like peak')) return '峰形過寬'
   if (row.Delta_cm != null && Math.abs(row.Delta_cm) > maxAbsDelta) return `|Δ|>${maxAbsDelta}`
-  if (row.Confidence === 'Low') return 'Low confidence'
+  if (row.Confidence === 'Low') return '信心度低'
   return 'OK'
 }
 
@@ -440,6 +867,13 @@ function parseAnchorText(text: string): { x: number[]; y: number[] } {
   return { x, y }
 }
 
+function describeProcessedView(params: ProcessParams) {
+  if (params.bg_method !== 'none' && params.norm_method !== 'none') return '背景扣除與歸一化後'
+  if (params.bg_method !== 'none') return '背景扣除後'
+  if (params.norm_method !== 'none') return '歸一化後'
+  return '處理後'
+}
+
 function chartLayout(): Partial<Plotly.Layout> {
   const cssVars = typeof window !== 'undefined'
     ? getComputedStyle(document.documentElement)
@@ -488,102 +922,6 @@ function chartLayout(): Partial<Plotly.Layout> {
     },
     autosize: true,
   }
-}
-
-function buildTraces(dataset: ProcessedDataset | null, params: ProcessParams, refPeaks: RefPeak[]): Plotly.Data[] {
-  if (!dataset) return []
-  const normalizedView = params.norm_method !== 'none'
-  const comparisonTraceVisibility: boolean | 'legendonly' = normalizedView ? 'legendonly' : true
-
-  const traces: Plotly.Data[] = [
-    {
-      x: dataset.x,
-      y: dataset.y_raw,
-      type: 'scatter',
-      mode: 'lines',
-      name: '原始',
-      line: { color: '#94a3b8', width: 1.5 },
-      visible: comparisonTraceVisibility,
-    },
-  ]
-
-  const despikedAvailable =
-    params.despike_enabled &&
-    dataset.y_despiked != null &&
-    dataset.y_despiked.some((value, idx) => Math.abs(value - dataset.y_raw[idx]) > 1e-9)
-
-  if (despikedAvailable) {
-    traces.push({
-      x: dataset.x,
-      y: dataset.y_despiked ?? [],
-      type: 'scatter',
-      mode: 'lines',
-      name: '去尖峰後',
-      line: { color: '#f97316', width: 1.7 },
-      visible: comparisonTraceVisibility,
-    })
-  }
-
-  if (params.bg_enabled && dataset.y_background) {
-    traces.push({
-      x: dataset.x,
-      y: dataset.y_background,
-      type: 'scatter',
-      mode: 'lines',
-      name: '背景基準線',
-      line: { color: '#eab308', width: 1.4, dash: 'dot' },
-      visible: comparisonTraceVisibility,
-    })
-  }
-
-  traces.push({
-    x: dataset.x,
-    y: dataset.y_processed,
-    type: 'scatter',
-    mode: 'lines',
-    name: '處理後',
-    line: { color: '#38bdf8', width: 2.2 },
-  })
-
-  if (refPeaks.length > 0) {
-    const yValues = dataset.y_processed
-    const yMin = Math.min(...yValues)
-    const yMax = Math.max(...yValues)
-    const span = Math.max(yMax - yMin, 1)
-    const base = yMin - span * 0.12
-    const xs: Array<number | null> = []
-    const ys: Array<number | null> = []
-
-    refPeaks.forEach(peak => {
-      const height = span * 0.18 * (peak.strength / 100)
-      xs.push(peak.position_cm, peak.position_cm, null)
-      ys.push(base, base + height, null)
-    })
-
-    traces.push({
-      x: xs,
-      y: ys,
-      type: 'scatter',
-      mode: 'lines',
-      name: '參考峰',
-      line: { color: '#22c55e', width: 1.4 },
-      hoverinfo: 'skip',
-    })
-  }
-
-  return traces
-}
-
-function buildOverlayTraces(datasets: ProcessedDataset[]): Plotly.Data[] {
-  const palette = ['#38bdf8', '#f97316', '#a855f7', '#22c55e', '#ef4444', '#14b8a6']
-  return datasets.map((dataset, index) => ({
-    x: dataset.x,
-    y: dataset.y_processed,
-    type: 'scatter',
-    mode: 'lines',
-    name: dataset.name,
-    line: { color: palette[index % palette.length], width: 2.1 },
-  }))
 }
 
 function SidebarCard({
@@ -651,12 +989,11 @@ export default function Raman({
   const [manualPeakFwhmMin, setManualPeakFwhmMin] = useState(1)
   const [manualPeakFwhmMax, setManualPeakFwhmMax] = useState(80)
   const [manualPeakProfile, setManualPeakProfile] = useState<RamanProfile>('pseudo_voigt')
-  const [segmentWeightLo, setSegmentWeightLo] = useState(480)
-  const [segmentWeightHi, setSegmentWeightHi] = useState(570)
-  const [segmentWeightValue, setSegmentWeightValue] = useState(0.35)
   const [batchResults, setBatchResults] = useState<FitResult[]>([])
   const [batchNormalize, setBatchNormalize] = useState<'none' | 'si_520' | 'total_area'>('si_520')
   const [editingPeakId, setEditingPeakId] = useState<string | null>(null)
+  const [draggingPeakId, setDraggingPeakId] = useState<string | null>(null)
+  const [dragOverPeakId, setDragOverPeakId] = useState<string | null>(null)
   const [reviewMinAreaPct, setReviewMinAreaPct] = useState(1)
   const [reviewMaxAbsDelta, setReviewMaxAbsDelta] = useState(10)
   const [selectedReviewRules, setSelectedReviewRules] = useState<ReviewRule[]>(['area_zero', 'low_area', 'large_delta'])
@@ -675,6 +1012,11 @@ export default function Raman({
     afterMaxResidual: number | null
     stopReason: string
   } | null>(null)
+  const [peakGroupFilter, setPeakGroupFilter] = useState<string>('all')
+  const [peakStatusFilter, setPeakStatusFilter] = useState<string>('all')
+  const [peakMaterialFilter, setPeakMaterialFilter] = useState<string>('all')
+  const [peakSortKey, setPeakSortKey] = useState<'ref' | 'fit' | 'delta' | 'confidence'>('ref')
+  const [activeProbeGroup, setActiveProbeGroup] = useState<string>('Si group')
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [fitTargetName, setFitTargetName] = useState<string>('')
   const [isFitting, setIsFitting] = useState(false)
@@ -788,7 +1130,7 @@ export default function Raman({
 
   const activeDataset = useMemo(() => {
     if (!result) return null
-    return result.datasets.find(dataset => dataset.name === selectedSeries) ?? result.datasets[0] ?? result.average ?? null
+    return result.datasets.find(dataset => dataset.name === selectedSeries) ?? result.datasets[0] ?? null
   }, [result, selectedSeries])
   const datasetTabItems = useMemo(
     () => (result?.datasets ?? []).map(dataset => ({ key: dataset.name, label: dataset.name })),
@@ -817,7 +1159,8 @@ export default function Raman({
   const ramanRangeLabel = activeDataset
     ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} cm⁻¹`
     : '—'
-  const interpolationLabel = params.interpolate ? `${params.n_points} 點` : '未啟用'
+  const backgroundMethodLabel = BACKGROUND_METHOD_OPTIONS.find(option => option.value === params.bg_method)?.label ?? '不扣背景'
+  const normalizationLabel = NORMALIZATION_OPTIONS.find(option => option.value === params.norm_method)?.label ?? '不歸一化'
   const rawChartSourceFiles = useMemo(
     () => (isOverlayView ? rawFiles.filter(file => overlaySelection.includes(file.name)) : rawFiles),
     [isOverlayView, overlaySelection, rawFiles],
@@ -859,13 +1202,12 @@ export default function Raman({
   }, [chartLineColors.overlay, overlayStageDatasets])
   const preprocessStageDatasets = useMemo(() => {
     if (!activeDataset) return []
-    const comparison = activeDataset.y_despiked ?? activeDataset.y_processed
-    const comparisonLabel = activeDataset.y_despiked ? '去尖峰後' : '前處理後'
+    const comparisonLabel = describeProcessedView(params)
     return [
       { name: '原始', x: activeDataset.x, y: activeDataset.y_raw },
-      { name: comparisonLabel, x: activeDataset.x, y: comparison },
+      { name: comparisonLabel, x: activeDataset.x, y: activeDataset.y_processed },
     ]
-  }, [activeDataset])
+  }, [activeDataset, params])
   const preprocessChartTraces = useMemo(() => {
     if (preprocessStageDatasets.length === 0) return []
     const palette = LINE_COLOR_PALETTES[chartLineColors.preprocess] ?? LINE_COLOR_PALETTES.teal
@@ -1115,8 +1457,15 @@ export default function Raman({
         theoretical_center: manualPeakPosition,
         related_technique: 'Raman',
         reference: 'User custom peak',
+        reference_source: 'User custom peak',
+        symmetry: '',
         oxidation_state: 'N/A',
         oxidation_state_inference: 'Not applicable',
+        enabled_by_default: true,
+        candidate_only: false,
+        artifact: false,
+        substrate: false,
+        disabled_until_user_selects: false,
         role: manualPeakMaterial.trim() ? '自訂' : '',
         mode_label: '',
         note: '',
@@ -1143,14 +1492,54 @@ export default function Raman({
     if (!result) return null
     return result.datasets.find(dataset => dataset.name === fitTargetName) ?? null
   }, [fitTargetName, result])
-
   const updateFitCandidate = useCallback((peakId: string, patch: Partial<FitPeakCandidate>) => {
     setFitCandidates(current => current.map(item => item.peak_id === peakId ? { ...item, ...patch } : item))
+  }, [])
+
+  const moveFitCandidate = useCallback((sourcePeakId: string, targetPeakId: string) => {
+    if (!sourcePeakId || !targetPeakId || sourcePeakId === targetPeakId) return
+    setFitCandidates(current => {
+      const sourceIndex = current.findIndex(item => item.peak_id === sourcePeakId)
+      const targetIndex = current.findIndex(item => item.peak_id === targetPeakId)
+      if (sourceIndex < 0 || targetIndex < 0) return current
+      const next = [...current]
+      const [moved] = next.splice(sourceIndex, 1)
+      next.splice(targetIndex, 0, moved)
+      return next
+    })
   }, [])
 
   const removeFitCandidate = useCallback((peakId: string) => {
     setFitCandidates(current => current.filter(item => item.peak_id !== peakId))
     setEditingPeakId(current => current === peakId ? null : current)
+  }, [])
+
+  const handlePeakDragStart = useCallback((event: DragEvent<HTMLButtonElement>, peakId: string) => {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', peakId)
+    setDraggingPeakId(peakId)
+    setDragOverPeakId(peakId)
+  }, [])
+
+  const handlePeakDragOver = useCallback((event: DragEvent<HTMLTableRowElement>, peakId: string) => {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    if (draggingPeakId && draggingPeakId !== peakId) {
+      setDragOverPeakId(peakId)
+    }
+  }, [draggingPeakId])
+
+  const handlePeakDrop = useCallback((event: DragEvent<HTMLTableRowElement>, peakId: string) => {
+    event.preventDefault()
+    const sourcePeakId = event.dataTransfer.getData('text/plain') || draggingPeakId
+    if (sourcePeakId) moveFitCandidate(sourcePeakId, peakId)
+    setDraggingPeakId(null)
+    setDragOverPeakId(null)
+  }, [draggingPeakId, moveFitCandidate])
+
+  const handlePeakDragEnd = useCallback(() => {
+    setDraggingPeakId(null)
+    setDragOverPeakId(null)
   }, [])
 
   const fitRowsById = useMemo(() => {
@@ -1208,7 +1597,7 @@ export default function Raman({
 
   const fitPeakFlags = useMemo(() => {
     if (!fitResult?.success) return []
-    return fitResult.peaks.map(row => ({
+    return (fitResult.peaks ?? []).map(row => ({
       row,
       flags: getFitQualityFlags(row, reviewMinAreaPct, reviewMaxAbsDelta),
     }))
@@ -1226,8 +1615,58 @@ export default function Raman({
 
   const siPeak = useMemo(() => {
     if (!fitResult?.success) return null
-    return fitResult.peaks.find(pk => pk.Center_cm >= 480 && pk.Center_cm <= 570) ?? null
+    return (fitResult.peaks ?? []).find(pk => pk.Center_cm >= 480 && pk.Center_cm <= 570) ?? null
   }, [fitResult])
+  const peakTableFilterOptions = useMemo(() => ({
+    groups: ['all', ...Array.from(new Set((fitResult?.peaks ?? []).map(row => row.Phase_Group))).filter(Boolean)],
+    statuses: ['all', ...Array.from(new Set((fitResult?.peaks ?? []).map(row => row.Status))).filter(Boolean)],
+    materials: ['all', ...Array.from(new Set((fitResult?.peaks ?? []).map(row => row.Material))).filter(Boolean)],
+  }), [fitResult])
+  const filteredFitRows = useMemo(() => {
+    const source = fitResult?.peaks ?? []
+    const filtered = source.filter(row => (
+      (peakGroupFilter === 'all' || row.Phase_Group === peakGroupFilter) &&
+      (peakStatusFilter === 'all' || row.Status === peakStatusFilter) &&
+      (peakMaterialFilter === 'all' || row.Material === peakMaterialFilter)
+    ))
+    const sorted = [...filtered]
+    sorted.sort((a, b) => {
+      if (peakSortKey === 'fit') return a.Center_cm - b.Center_cm
+      if (peakSortKey === 'delta') return Math.abs(b.Delta_cm ?? 0) - Math.abs(a.Delta_cm ?? 0)
+      if (peakSortKey === 'confidence') return (b.Confidence_Score ?? 0) - (a.Confidence_Score ?? 0)
+      return (a.Ref_cm ?? a.Center_cm) - (b.Ref_cm ?? b.Center_cm)
+    })
+    return sorted
+  }, [fitResult, peakGroupFilter, peakMaterialFilter, peakSortKey, peakStatusFilter])
+  const probeGroups = useMemo(() => {
+    const preferred = ['Si group', 'β-Ga₂O₃ group', 'NiO group']
+    const available = Array.from(new Set((fitResult?.group_probe_rows ?? []).map(row => row.material_group)))
+    const ordered = preferred.filter(group => available.includes(group))
+    const ambiguous = (fitResult?.group_probe_rows ?? []).some(row => row.status === 'ambiguous' || row.status === 'overlapped')
+    return [...ordered, ...available.filter(group => !ordered.includes(group)), ...(ambiguous ? ['Ambiguous'] : [])]
+  }, [fitResult])
+  const activeProbeRows = useMemo(() => {
+    const rows = fitResult?.group_probe_rows ?? []
+    if (activeProbeGroup === 'Ambiguous') return rows.filter(row => row.status === 'ambiguous' || row.status === 'overlapped')
+    return rows.filter(row => row.material_group === activeProbeGroup)
+  }, [activeProbeGroup, fitResult])
+  const activeProbeStage = useMemo(() => {
+    if (!fitResult) return null
+    if (activeProbeGroup === 'Ambiguous') return (fitResult.group_fit_stages ?? []).find(stage => (stage.probe_rows ?? []).some(row => row.status === 'ambiguous' || row.status === 'overlapped')) ?? null
+    return (fitResult.group_fit_stages ?? []).find(stage => stage.group_name === activeProbeGroup) ?? null
+  }, [activeProbeGroup, fitResult])
+  const activeProbeCounts = useMemo(() => {
+    return activeProbeRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = (acc[row.status] ?? 0) + 1
+      return acc
+    }, {})
+  }, [activeProbeRows])
+
+  useEffect(() => {
+    if (probeGroups.length > 0 && !probeGroups.includes(activeProbeGroup)) {
+      setActiveProbeGroup(probeGroups[0])
+    }
+  }, [activeProbeGroup, probeGroups])
 
   const runPeakFit = useCallback(async () => {
     if (!activeFitDataset) {
@@ -1549,8 +1988,15 @@ export default function Raman({
                   theoretical_center: residualCenter,
                   related_technique: 'Model',
                   reference: 'Auto debug mode',
+                  reference_source: 'Auto debug mode',
+                  symmetry: '',
                   oxidation_state: 'N/A',
                   oxidation_state_inference: 'Not applicable',
+                  enabled_by_default: true,
+                  candidate_only: false,
+                  artifact: true,
+                  substrate: false,
+                  disabled_until_user_selects: false,
                   role: 'model correction',
                   mode_label: 'residual assist',
                   note: 'Automatically added by auto debug mode; treat as possible overfit, not a physical assignment.',
@@ -1669,8 +2115,15 @@ export default function Raman({
           can_be_quantified: item.can_be_quantified !== false,
           related_technique: String(item.related_technique ?? 'Raman'),
           reference: String(item.reference ?? 'User imported library'),
+          reference_source: String(item.reference_source ?? item.reference ?? 'User imported library'),
+          symmetry: String(item.symmetry ?? ''),
           oxidation_state: String(item.oxidation_state ?? 'N/A'),
           oxidation_state_inference: item.oxidation_state_inference ?? 'Not applicable',
+          enabled_by_default: item.enabled_by_default !== false,
+          candidate_only: Boolean(item.candidate_only),
+          artifact: Boolean(item.artifact),
+          substrate: Boolean(item.substrate),
+          disabled_until_user_selects: Boolean(item.disabled_until_user_selects),
           strength: Number(item.strength ?? 50),
           note: String(item.note ?? ''),
         })))
@@ -1682,38 +2135,42 @@ export default function Raman({
 
   const exportFitCsv = useCallback(() => {
     if (!fitResult?.success) return
-    const headers = [
-      'Dataset', 'Peak', 'Phase', 'Mode', 'Species', 'Oxidation_State', 'Oxidation_Inference',
-      'Profile', 'Ref_cm', 'Center_cm', 'Delta_cm', 'FWHM_cm', 'Area', 'Area_pct',
-      'SNR', 'Fit_Status', 'Physical_Confidence', 'Flags', 'Group_Status',
-    ]
-    const rows = fitResult.peaks.map(row => [
-      fitResult.dataset_name,
-      row.Peak_Name,
-      row.Phase,
-      row.Mode_Label,
-      row.Species,
-      row.Oxidation_State,
-      row.Oxidation_State_Inference,
-      row.Profile,
-      row.Ref_cm,
-      row.Center_cm,
-      row.Delta_cm,
-      row.FWHM_cm,
-      row.Area,
-      row.Area_pct,
-      row.SNR,
-      row.Fit_Status,
-      row.Physical_Confidence || row.Confidence,
-      row.Quality_Flags.join(' / '),
-      row.Group_Status,
-    ])
-    downloadFile(toCsv(headers, rows), 'raman_fit_results.csv', 'text/csv')
+    const sampleId = fitResult.report?.sample_id || fitResult.dataset_name
+    const content = fitResult.report?.peak_table_csv || toCsv(
+      ['Dataset', 'Peak', 'Phase', 'Center_cm'],
+      fitResult.peaks.map(row => [fitResult.dataset_name, row.Peak_Name, row.Phase, row.Center_cm]),
+    )
+    downloadFile(content, `report_${sampleId}.csv`, 'text/csv')
   }, [fitResult])
 
   const exportFitJson = useCallback(() => {
     if (!fitResult?.success) return
-    downloadFile(JSON.stringify(fitResult, null, 2), 'raman_fit_report.json', 'application/json')
+    const sampleId = fitResult.report?.sample_id || fitResult.dataset_name
+    downloadFile(fitResult.report?.report_json || JSON.stringify(fitResult, null, 2), `report_${sampleId}.json`, 'application/json')
+  }, [fitResult])
+
+  const exportAlignmentCsv = useCallback(() => {
+    if (!fitResult?.report?.alignment_csv) return
+    const sampleId = fitResult.report.sample_id || fitResult.dataset_name
+    downloadFile(fitResult.report.alignment_csv, `peak_alignment_${sampleId}.csv`, 'text/csv')
+  }, [fitResult])
+
+  const exportProbeCsv = useCallback(() => {
+    if (!fitResult?.report?.group_probe_table_csv) return
+    const sampleId = fitResult.report.sample_id || fitResult.dataset_name
+    downloadFile(fitResult.report.group_probe_table_csv, `group_probe_table_${sampleId}.csv`, 'text/csv')
+  }, [fitResult])
+
+  const exportReportText = useCallback(() => {
+    if (!fitResult?.report?.report_markdown) return
+    const sampleId = fitResult.report.sample_id || fitResult.dataset_name
+    downloadFile(fitResult.report.report_markdown, `report_${sampleId}.md`, 'text/markdown')
+  }, [fitResult])
+
+  const exportReportHtml = useCallback(() => {
+    if (!fitResult?.report?.report_html) return
+    const sampleId = fitResult.report.sample_id || fitResult.dataset_name
+    downloadFile(fitResult.report.report_html, `report_${sampleId}.html`, 'text/html')
   }, [fitResult])
 
   const exportFitExcel = useCallback(() => {
@@ -1817,9 +2274,9 @@ export default function Raman({
   } as CSSProperties
 
   return (
-    <div className="min-h-screen xl:flex">
+    <div className={`flex h-screen flex-col overflow-hidden xl:flex-row${sidebarResizing ? ' select-none' : ''}`}>
       <aside
-        className="module-sidebar glass-panel relative z-20 flex min-h-screen w-full flex-col overflow-hidden xl:w-[var(--sidebar-width)] xl:transform-gpu xl:[transform:translateX(var(--sidebar-shift))] xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0"
+        className="module-sidebar glass-panel relative z-20 flex h-[45vh] min-h-0 w-full shrink-0 flex-col overflow-hidden xl:h-full xl:w-[var(--sidebar-width)] xl:transform-gpu xl:[transform:translateX(var(--sidebar-shift))] xl:rounded-none xl:border-l-0 xl:border-t-0 xl:border-b-0"
         style={sidebarStyle}
       >
         <button
@@ -1847,7 +2304,7 @@ export default function Raman({
           'module-sidebar__content flex h-full flex-col',
           sidebarCollapsed ? 'module-sidebar__content--collapsed xl:pointer-events-none xl:opacity-0' : 'opacity-100',
         ].join(' ')}>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="sidebar-scroll min-h-0 flex-1 overflow-y-auto">
             <StickySidebarHeader
               activeModule="raman"
               subtitle="Material Intelligence Engine"
@@ -1872,11 +2329,11 @@ export default function Raman({
               </div>
             </div>
 
-            <div className="sidebar-scroll px-4 py-5">
+            <div className="px-4 py-5">
             <SidebarCard step={1} title="載入檔案" hint="支援 TXT / CSV / ASC / DAT" infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">載入檔案說明</p>
-                <p>可同時上傳多筆 Raman 光譜，後續是否平均或個別處理，仍由下方步驟控制。</p>
+                <p>可同時上傳多筆 Raman 光譜；後續可切換單檔查看或做疊圖比較，處理流程則會逐筆獨立執行。</p>
               </div>
             }>
               <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}（可多選）</div>
@@ -1897,73 +2354,10 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={2} title="去尖峰" hint="先處理極端尖刺" defaultOpen={false} infoContent={
-              <div className="space-y-3">
-                <p className="font-semibold text-[var(--text-main)]">去尖峰說明</p>
-                <p>先把 Raman 光譜中明顯偏離鄰近點的尖刺壓掉，避免後續背景與擬合被單點異常值主導。</p>
-              </div>
-            }>
-              <TogglePill
-                checked={params.despike_enabled}
-                onChange={value => setParams(current => ({ ...current, despike_enabled: value }))}
-                label="啟用去尖峰"
-              />
-              {params.despike_enabled && (
-                <div className="mb-3 grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">門檻</span>
-                    <input type="number" value={params.despike_threshold} step={0.5} min={2} max={20} onChange={e => setParams(current => ({ ...current, despike_threshold: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">視窗點數</span>
-                    <input type="number" value={params.despike_window} step={2} min={3} max={31} onChange={e => setParams(current => ({ ...current, despike_window: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                </div>
-              )}
-            </SidebarCard>
-
-            <SidebarCard step={3} title="內插" hint="統一點數網格" defaultOpen={false} infoContent={
-              <div className="space-y-3">
-                <p className="font-semibold text-[var(--text-main)]">內插說明</p>
-                <p>把每筆 Raman 光譜重取樣到固定點數，方便切換資料時維持一致解析度，也方便後續多筆比較。</p>
-              </div>
-            }>
-              <TogglePill
-                checked={params.interpolate}
-                onChange={value => setParams(current => ({ ...current, interpolate: value }))}
-                label="先內插到固定點數"
-              />
-              {params.interpolate && (
-                <label className="mt-3 block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">內插點數</span>
-                  <input type="number" value={params.n_points} min={200} max={5000} step={50} onChange={e => setParams(current => ({ ...current, n_points: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                </label>
-              )}
-            </SidebarCard>
-
-            <SidebarCard step={4} title="多檔平均" hint="共用同一網格平均" defaultOpen={false} infoContent={
-              <div className="space-y-3">
-                <p className="font-semibold text-[var(--text-main)]">多檔平均說明</p>
-                <p>把已載入的多筆 Raman 光譜對齊後做平均，適合重複量測的穩定化比較。</p>
-              </div>
-            }>
-              <TogglePill
-                checked={params.average}
-                onChange={value => setParams(current => ({ ...current, average: value }))}
-                label="對所有檔案做平均"
-              />
-              {(params.interpolate || params.average) && (
-                <label className="mt-3 block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">內插點數</span>
-                  <input type="number" value={params.n_points} min={200} max={5000} step={50} onChange={e => setParams(current => ({ ...current, n_points: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                </label>
-              )}
-            </SidebarCard>
-
-            <SidebarCard step={5} title="背景扣除" hint="baseline 修正" defaultOpen={false} infoContent={
+            <SidebarCard step={2} title="背景扣除" hint="baseline 修正" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">背景扣除說明</p>
-                <p>背景扣除用來去除基線漂移，讓主峰輪廓更清楚；這一步只影響光譜形狀呈現，不改你的步驟邏輯。</p>
+                <p>Raman 現在保留最核心的前處理鏈，只做背景扣除與歸一化。這一步負責移除基線漂移，讓真正的峰形比較清楚。</p>
                 <div className="space-y-2 text-sm">
                   <div><span className="font-medium text-[var(--text-main)]">Constant / Linear</span>：適合簡單平移或傾斜基線。</div>
                   <div><span className="font-medium text-[var(--text-main)]">Shirley</span>：用累積訊號估背景，常見於有台階或長尾的光譜。</div>
@@ -2040,38 +2434,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={6} title="平滑" hint="降低高頻雜訊" defaultOpen={false} infoContent={
-              <div className="space-y-3">
-                <p className="font-semibold text-[var(--text-main)]">平滑說明</p>
-                <p>平滑用來降低高頻雜訊，但視窗過大可能會把弱峰洗平；建議把它當作視覺輔助而不是過度依賴。</p>
-              </div>
-            }>
-              <label className="mt-4 block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">平滑方法</span>
-                <ThemeSelect
-                  value={params.smooth_method}
-                  onChange={value => setParams(current => ({ ...current, smooth_method: value as ProcessParams['smooth_method'] }))}
-                  options={SMOOTH_METHOD_OPTIONS}
-                  buttonClassName="text-sm"
-                />
-              </label>
-              {params.smooth_method !== 'none' && (
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">視窗</span>
-                    <input type="number" value={params.smooth_window} min={3} max={301} step={2} onChange={e => setParams(current => ({ ...current, smooth_window: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  {params.smooth_method === 'savitzky_golay' && (
-                    <label className="block">
-                      <span className="mb-1 block text-xs text-[var(--text-soft)]">多項式</span>
-                      <input type="number" value={params.smooth_poly} min={2} max={5} onChange={e => setParams(current => ({ ...current, smooth_poly: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                    </label>
-                  )}
-                </div>
-              )}
-            </SidebarCard>
-
-            <SidebarCard step={7} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
+            <SidebarCard step={3} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
                 <p>歸一化方便比較不同 Raman 光譜的峰型與相對強度，但不適合用來保留絕對訊號高低。</p>
@@ -2101,10 +2464,17 @@ export default function Raman({
 
             </SidebarCard>
 
-            <SidebarCard step={8} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
+            <SidebarCard step={4} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰偵測與參考峰說明</p>
-                <p>先找出可能峰位，再用參考材料或 peak library 輔助建立後續擬合模型。</p>
+                <p>峰偵測會直接在目前的處理後光譜上找局部極大值。它適合拿來快速建立候選峰，不代表每一個點都一定是物理上成立的 Raman band。</p>
+                <div className="space-y-2 text-sm leading-6 text-[var(--text-soft)]">
+                  <div><span className="font-medium text-[var(--text-main)]">Prominence</span>：峰頂相對左右谷底要突出多少才算峰。值越大，越偏向留下真正明顯的峰。</div>
+                  <div><span className="font-medium text-[var(--text-main)]">Height ratio</span>：峰高至少要達到整條光譜最大強度的多少比例，適合把很低的小起伏排掉。</div>
+                  <div><span className="font-medium text-[var(--text-main)]">最小峰距</span>：兩個峰至少要相隔幾個 cm⁻¹，避免同一個寬峰被切成很多假峰。</div>
+                  <div><span className="font-medium text-[var(--text-main)]">最大峰數</span>：最後只保留最有代表性的前幾個峰，避免候選峰表過度膨脹。</div>
+                </div>
+                <p className="text-sm text-[var(--text-soft)]">實務上建議先把背景扣好，再慢慢調高 `Prominence` 與 `最小峰距`，讓演算法先穩定抓到主峰，再補找弱峰。</p>
               </div>
             }>
               <TogglePill
@@ -2113,23 +2483,28 @@ export default function Raman({
                 label="啟用峰偵測"
               />
               {peakParams.enabled && (
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">Prominence</span>
-                    <input type="number" value={peakParams.prominence} min={0.001} max={1} step={0.01} onChange={e => setPeakParams(current => ({ ...current, prominence: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">Height ratio</span>
-                    <input type="number" value={peakParams.height_ratio} min={0} max={1} step={0.01} onChange={e => setPeakParams(current => ({ ...current, height_ratio: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">最小峰距</span>
-                    <input type="number" value={peakParams.min_distance} min={1} max={200} step={1} onChange={e => setPeakParams(current => ({ ...current, min_distance: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">最大峰數</span>
-                    <input type="number" value={peakParams.max_peaks} min={1} max={100} step={1} onChange={e => setPeakParams(current => ({ ...current, max_peaks: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">峰顯著度 Prominence</span>
+                      <input type="number" value={peakParams.prominence} min={0.001} max={1} step={0.01} onChange={e => setPeakParams(current => ({ ...current, prominence: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">高度比例 Height ratio</span>
+                      <input type="number" value={peakParams.height_ratio} min={0} max={1} step={0.01} onChange={e => setPeakParams(current => ({ ...current, height_ratio: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">最小峰距</span>
+                      <input type="number" value={peakParams.min_distance} min={1} max={200} step={1} onChange={e => setPeakParams(current => ({ ...current, min_distance: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">最大峰數</span>
+                      <input type="number" value={peakParams.max_peaks} min={1} max={100} step={1} onChange={e => setPeakParams(current => ({ ...current, max_peaks: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
+                  </div>
+                  <div className="rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3 text-xs leading-6 text-[var(--text-soft)]">
+                    <div>判讀方向：`Prominence ↑` 會更嚴格，`Height ratio ↑` 會濾掉低峰，`最小峰距 ↑` 會合併太近的峰，`最大峰數 ↓` 會只留下最主要的候選峰。</div>
+                  </div>
                 </div>
               )}
 
@@ -2161,13 +2536,13 @@ export default function Raman({
                   onClick={loadPeakLibraryToCandidates}
                   className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]"
                 >
-                  載入 library
+                  載入峰資料庫
                 </button>
               </div>
 
               <div className="mt-4 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
                 <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-soft)]">
-                  Peak library
+                  峰資料庫
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -2175,10 +2550,10 @@ export default function Raman({
                     onClick={exportPeakLibrary}
                     className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]"
                   >
-                    匯出 library JSON
+                    匯出資料庫 JSON
                   </button>
                   <label className="theme-pill pressable cursor-pointer rounded-xl px-3 py-2 text-center text-xs font-semibold text-[var(--accent)]">
-                    匯入 library JSON
+                    匯入資料庫 JSON
                     <input
                       type="file"
                       accept=".json"
@@ -2191,14 +2566,14 @@ export default function Raman({
                     />
                   </label>
                 </div>
-                <div className="mt-2 text-[11px] text-[var(--text-soft)]">{peakLibrary.length} peaks loaded</div>
+                <div className="mt-2 text-[11px] text-[var(--text-soft)]">已載入 {peakLibrary.length} 筆峰資料</div>
               </div>
             </SidebarCard>
 
-            <SidebarCard step={9} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
+            <SidebarCard step={5} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰位管理與擬合說明</p>
-                <p>這一步負責整理峰位表、加入手動峰與執行擬合；我這次只改外觀與資訊層，不改擬合流程。</p>
+                <p>這一步負責整理峰位表、加入手動峰並執行 sequential grouped fitting。</p>
               </div>
             }>
               <label className="block">
@@ -2281,7 +2656,7 @@ export default function Raman({
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Profile</span>
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">峰形模型 Profile</span>
                   <ThemeSelect
                     value={manualPeakProfile}
                     onChange={value => setManualPeakProfile(value as RamanProfile)}
@@ -2290,7 +2665,7 @@ export default function Raman({
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM min</span>
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM 下限</span>
                   <input
                     type="number"
                     value={manualPeakFwhmMin}
@@ -2302,7 +2677,7 @@ export default function Raman({
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM max</span>
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM 上限</span>
                   <input
                     type="number"
                     value={manualPeakFwhmMax}
@@ -2356,7 +2731,7 @@ export default function Raman({
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Robust loss</span>
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">穩健損失函數 Robust loss</span>
                   <ThemeSelect
                     value={fitParams.robust_loss}
                     onChange={value => setFitParams(current => ({ ...current, robust_loss: value as FitParams['robust_loss'] }))}
@@ -2370,14 +2745,14 @@ export default function Raman({
                   disabled={peakTableRows.every(row => !row.suggested)}
                   className="theme-pill pressable self-end rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  建議峰用 asymmetric
+                  建議峰改用非對稱峰形
                 </button>
                 <button
                   type="button"
                   onClick={applyFlexibleProfileToLowShiftPeaks}
                   className="theme-pill pressable self-end rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)]"
                 >
-                  ≤500 cm⁻¹ 用 asymmetric
+                  500 cm⁻¹ 以下改用非對稱峰形
                 </button>
                 <label className="block">
                   <span className="mb-1 block text-xs text-[var(--text-soft)]">自動二次擬合最多回合</span>
@@ -2398,10 +2773,10 @@ export default function Raman({
                     onChange={e => setFitParams(current => ({ ...current, residual_target_enabled: e.target.checked }))}
                     className="h-4 w-4 accent-[var(--accent-strong)]"
                   />
-                  <span>強制 residual 目標</span>
+                  <span>強制殘差目標</span>
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Max |residual| 目標</span>
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">最大殘差 |residual| 目標</span>
                   <input
                     type="number"
                     value={fitParams.residual_target}
@@ -2413,7 +2788,7 @@ export default function Raman({
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Residual 強制回合</span>
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">殘差強制回合數</span>
                   <input
                     type="number"
                     value={fitParams.residual_target_rounds}
@@ -2426,66 +2801,8 @@ export default function Raman({
                 </label>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">局部擬合起點</span>
-                  <input
-                    type="number"
-                    value={fitParams.fit_lo ?? ''}
-                    onChange={e => setFitParams(current => ({ ...current, fit_lo: e.target.value === '' ? null : Number(e.target.value) }))}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                    placeholder="全域"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">局部擬合終點</span>
-                  <input
-                    type="number"
-                    value={fitParams.fit_hi ?? ''}
-                    onChange={e => setFitParams(current => ({ ...current, fit_hi: e.target.value === '' ? null : Number(e.target.value) }))}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                    placeholder="全域"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-3 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-soft)]">
-                  區段權重
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <input
-                    type="number"
-                    value={segmentWeightLo}
-                    onChange={e => setSegmentWeightLo(Number(e.target.value))}
-                    className="theme-input rounded-xl px-3 py-2 text-sm"
-                  />
-                  <input
-                    type="number"
-                    value={segmentWeightHi}
-                    onChange={e => setSegmentWeightHi(Number(e.target.value))}
-                    className="theme-input rounded-xl px-3 py-2 text-sm"
-                  />
-                  <input
-                    type="number"
-                    value={segmentWeightValue}
-                    min={0}
-                    max={10}
-                    step={0.05}
-                    onChange={e => setSegmentWeightValue(Number(e.target.value))}
-                    className="theme-input rounded-xl px-3 py-2 text-sm"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const segment: SegmentWeight = { lo: segmentWeightLo, hi: segmentWeightHi, weight: segmentWeightValue }
-                    setFitParams(current => ({ ...current, segment_weights: [segment] }))
-                  }}
-                  className="theme-pill pressable mt-2 w-full rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]"
-                >
-                  套用區段權重（可降低 Si 520 權重）
-                </button>
+              <div className="mt-3 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3 text-xs leading-6 text-[var(--text-soft)]">
+                目前固定使用 sequential grouped fitting：Si 校正 → β-Ga₂O₃ → NiO → small global refinement。
               </div>
 
               <button
@@ -2503,7 +2820,7 @@ export default function Raman({
                 disabled={isFitting || !result}
                 className="theme-block-soft pressable mt-2 w-full rounded-xl px-3 py-2 text-sm font-semibold text-[var(--text-main)] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                批次套用同一套 peak model
+                批次套用同一套峰模型
               </button>
 
               <div className="mt-4 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
@@ -2620,23 +2937,24 @@ export default function Raman({
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+      <main className="workspace-main-scroll min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
-          <ModuleTopBar
-            title={moduleContent.title}
-            subtitle={moduleContent.subtitle}
-            description={moduleContent.description}
-            chips={[
-              { label: `資料量 ${rawFiles.length}` },
-              { label: `平均 ${params.average ? '開啟' : '關閉'}` },
-              { label: `參考峰 ${refPeaks.length}` },
-            ]}
-          />
+            <ModuleTopBar
+              title={moduleContent.title}
+              subtitle={moduleContent.subtitle}
+              description={moduleContent.description}
+              chips={[
+                { label: `資料量 ${rawFiles.length}` },
+                { label: `背景 ${backgroundMethodLabel}` },
+                { label: `參考峰 ${refPeaks.length}` },
+              ]}
+            />
 
           <InfoCardGrid
             items={[
               { label: '資料集', value: activeDataset?.name ?? '未載入' },
-              { label: '平均模式', value: params.average ? '開啟' : '關閉' },
+              { label: '背景扣除', value: backgroundMethodLabel },
+              { label: '歸一化', value: normalizationLabel },
               { label: '參考峰', value: `${refPeaks.length}` },
             ]}
           />
@@ -2651,7 +2969,7 @@ export default function Raman({
             <EmptyWorkspaceState
               module="raman"
               title={moduleContent.uploadTitle}
-              description="左側已提供去尖峰、多檔平均、背景扣除、平滑、歸一化、參考峰與峰值偵測。上傳之後會在這裡顯示 Raman 圖譜與分析結果。"
+              description="左側提供背景扣除、歸一化、峰偵測、參考峰與峰擬合設定。上傳之後會在這裡顯示 Raman 圖譜與分析結果。"
               formats={moduleContent.formats}
             />
           )}
@@ -2672,7 +2990,8 @@ export default function Raman({
                 stats={[
                   { label: '資料集', value: `${rawFiles.length} 個` },
                   { label: 'Raman 範圍', value: ramanRangeLabel },
-                  { label: '內插點數', value: interpolationLabel },
+                  { label: '背景方法', value: backgroundMethodLabel },
+                  { label: '歸一化', value: normalizationLabel },
                 ]}
               />
 
@@ -2767,7 +3086,7 @@ export default function Raman({
                     colorValue={chartLineColors.preprocess}
                     onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
                   />
-                  <p className="mb-3 text-xs text-[var(--text-soft)]">把原始訊號與去尖峰或前處理後結果疊在一起，方便快速檢查變化量。</p>
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">把原始訊號與目前處理後結果疊在一起，方便快速檢查背景扣除與歸一化帶來的變化量。</p>
                   <DeferredRender minHeight={340}>
                     <Plot
                       data={applyHidden(preprocessChartTraces, preprocessHidden)}
@@ -2854,7 +3173,7 @@ export default function Raman({
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                   <div>
                     <div className="text-sm font-semibold text-[var(--text-muted)]">峰位表</div>
-                    <div className="mt-1 text-xs text-[var(--text-soft)]">點擊峰名稱可修改詳細設定；建議修改項會在狀態欄標記。</div>
+                    <div className="mt-1 text-xs text-[var(--text-soft)]">可拖曳最左側排序拉桿重排峰順序；點擊峰名稱可修改詳細設定，建議修改項會在狀態欄標記。</div>
                   </div>
                   <div className="flex flex-wrap gap-2 text-xs">
                     <span className="theme-pill rounded-full px-3 py-1.5 text-[var(--text-main)]">總峰數 {fitCandidates.length}</span>
@@ -2866,8 +3185,9 @@ export default function Raman({
                     <table className="min-w-0 w-full table-fixed border-collapse text-left text-xs sm:text-sm">
                       <colgroup>
                         <col style={{ width: '4%' }} />
+                        <col style={{ width: '4%' }} />
                         <col style={{ width: '8%' }} />
-                        <col style={{ width: '19%' }} />
+                        <col style={{ width: '18%' }} />
                         <col style={{ width: '9%' }} />
                         <col style={{ width: '12%' }} />
                         <col style={{ width: '9%' }} />
@@ -2878,11 +3198,12 @@ export default function Raman({
                       </colgroup>
                       <thead className="bg-[color:color-mix(in_srgb,var(--card-bg-strong)_72%,transparent)]">
                         <tr className="border-b border-white/10 text-[11px] uppercase tracking-[0.06em] text-slate-400">
+                          <th className="px-2 py-3 text-center font-medium">排序</th>
                           <th className="px-2 py-3 text-center font-medium">啟用</th>
                           <th className="px-2 py-3 font-medium">ID</th>
                           <th className="px-2 py-3 font-medium">峰名稱</th>
                           <th className="px-2 py-3 text-right font-medium">位置 cm⁻¹</th>
-                          <th className="px-2 py-3 font-medium">Profile</th>
+                          <th className="px-2 py-3 font-medium">峰形模型</th>
                           <th className="px-2 py-3 text-right font-medium">理論 cm⁻¹</th>
                           <th className="px-2 py-3 text-right font-medium">Δ cm⁻¹</th>
                           <th className="px-2 py-3 text-right font-medium">FWHM</th>
@@ -2894,11 +3215,28 @@ export default function Raman({
                         {peakTableRows.map(({ candidate, row, status, suggested, position, profile, theoretical, delta, fwhm, areaPct }) => (
                           <tr
                             key={candidate.peak_id}
+                            onDragOver={event => handlePeakDragOver(event, candidate.peak_id)}
+                            onDrop={event => handlePeakDrop(event, candidate.peak_id)}
                             className={[
                               'border-b border-white/5 text-[var(--text-main)] last:border-b-0',
                               suggested ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_10%,transparent)]' : '',
+                              draggingPeakId === candidate.peak_id ? 'opacity-60' : '',
+                              dragOverPeakId === candidate.peak_id && draggingPeakId !== candidate.peak_id ? 'outline outline-1 outline-[var(--accent-strong)] outline-offset-[-1px]' : '',
                             ].join(' ')}
                           >
+                            <td className="px-2 py-3 text-center">
+                              <button
+                                type="button"
+                                draggable
+                                onDragStart={event => handlePeakDragStart(event, candidate.peak_id)}
+                                onDragEnd={handlePeakDragEnd}
+                                className="theme-block-soft inline-flex h-8 w-8 cursor-grab items-center justify-center rounded-lg text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--accent)] active:cursor-grabbing"
+                                aria-label={`拖曳排序 ${candidate.display_name || candidate.label}`}
+                                title="拖曳排序"
+                              >
+                                ⋮⋮
+                              </button>
+                            </td>
                             <td className="px-2 py-3 text-center">
                               <input
                                 type="checkbox"
@@ -2917,7 +3255,7 @@ export default function Raman({
                                 {candidate.display_name || candidate.label}
                               </button>
                               <div className="mt-1 break-words text-[11px] leading-snug text-[var(--text-soft)]">
-                                {candidate.phase || candidate.material || '未指定 phase'} · {candidate.species || 'species 未設定'}
+                                {candidate.phase || candidate.material || '未指定相別'} · {candidate.species || '物種未設定'}
                               </div>
                             </td>
                             <td className="px-2 py-3 text-right tabular-nums">{position.toFixed(1)}</td>
@@ -2939,7 +3277,7 @@ export default function Raman({
                                 {status}
                               </span>
                               {row?.Quality_Flags?.length ? (
-                                <div className="mt-1 break-words text-[11px] leading-relaxed text-[var(--text-soft)]">{row.Quality_Flags.join(' / ')}</div>
+                                <div className="mt-1 break-words text-[11px] leading-relaxed text-[var(--text-soft)]">{row.Quality_Flags.map(translateQualityFlag).join(' / ')}</div>
                               ) : null}
                             </td>
                           </tr>
@@ -2949,7 +3287,7 @@ export default function Raman({
                   </div>
                 ) : (
                   <div className="px-4 py-6 text-sm text-[var(--text-soft)]">
-                    先在左側「峰偵測與參考峰」載入 reference/library，或在「峰位管理與擬合」新增手動峰。
+                    先在左側「峰偵測與參考峰」載入參考峰或峰資料庫，或在「峰位管理與擬合」新增手動峰。
                   </div>
                 )}
               </div>
@@ -3007,7 +3345,7 @@ export default function Raman({
                       </table>
                     </div>
                   ) : (
-                    <div className="text-sm text-[var(--text-soft)]">左側選擇參考材料後，這裡會列出對應 Raman reference peaks。</div>
+                    <div className="text-sm text-[var(--text-soft)]">左側選擇參考材料後，這裡會列出對應的 Raman 參考峰。</div>
                   )}
                 </div>
               </div>
@@ -3059,7 +3397,7 @@ export default function Raman({
                       <DeferredRender minHeight={520}>
                         <Plot
                           data={fitChartTraces(activeFitDataset, fitResult)}
-                          layout={fitChartLayout()}
+                          layout={fitChartLayout(activeFitDataset, fitResult)}
                           config={withPlotFullscreen({ scrollZoom: false })}
                           style={{ width: '100%', minHeight: '520px' }}
                           useResizeHandler
@@ -3070,45 +3408,104 @@ export default function Raman({
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button type="button" onClick={exportFitCsv} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出 CSV</button>
                       <button type="button" onClick={exportFitExcel} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出 Excel</button>
-                      <button type="button" onClick={exportFitJson} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出 JSON summary</button>
+                      <button type="button" onClick={exportAlignmentCsv} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出 Alignment CSV</button>
+                      <button type="button" onClick={exportProbeCsv} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出 Probing CSV</button>
+                      <button type="button" onClick={exportReportText} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出報告 Markdown</button>
+                      <button type="button" onClick={exportReportHtml} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出報告 HTML</button>
+                      <button type="button" onClick={exportFitJson} className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]">匯出 JSON 報告</button>
                     </div>
 
-                    <div className="mt-4 overflow-x-auto">
+                    {fitResult.calibration && (
+                      <div className="mt-4 grid gap-4 xl:grid-cols-4">
+                        <div className="theme-block-soft rounded-[22px] p-4">
+                          <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">校正方法</div>
+                          <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fitResult.calibration.method || 'none'}</div>
+                        </div>
+                        <div className="theme-block-soft rounded-[22px] p-4">
+                          <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Offset</div>
+                          <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fmtFixed(fitResult.calibration.offset_cm, 3)} cm⁻¹</div>
+                        </div>
+                        <div className="theme-block-soft rounded-[22px] p-4">
+                          <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Si 校正前</div>
+                          <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fitResult.calibration.si_peak_before_cm == null ? '—' : `${fitResult.calibration.si_peak_before_cm.toFixed(3)} cm⁻¹`}</div>
+                        </div>
+                        <div className="theme-block-soft rounded-[22px] p-4">
+                          <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Si 校正後</div>
+                          <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fitResult.calibration.si_peak_after_cm == null ? '—' : `${fitResult.calibration.si_peak_after_cm.toFixed(3)} cm⁻¹`}</div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <ThemeSelect
+                        value={peakGroupFilter}
+                        onChange={value => setPeakGroupFilter(value)}
+                        options={peakTableFilterOptions.groups.map(value => ({ value, label: value === 'all' ? '全部 group' : value }))}
+                        className="min-w-[11rem]"
+                        buttonClassName="text-xs"
+                      />
+                      <ThemeSelect
+                        value={peakStatusFilter}
+                        onChange={value => setPeakStatusFilter(value)}
+                        options={peakTableFilterOptions.statuses.map(value => ({ value, label: value === 'all' ? '全部狀態' : value }))}
+                        className="min-w-[10rem]"
+                        buttonClassName="text-xs"
+                      />
+                      <ThemeSelect
+                        value={peakMaterialFilter}
+                        onChange={value => setPeakMaterialFilter(value)}
+                        options={peakTableFilterOptions.materials.map(value => ({ value, label: value === 'all' ? '全部材料' : value }))}
+                        className="min-w-[10rem]"
+                        buttonClassName="text-xs"
+                      />
+                      <ThemeSelect
+                        value={peakSortKey}
+                        onChange={value => setPeakSortKey(value as typeof peakSortKey)}
+                        options={[
+                          { value: 'ref', label: '按理論峰位' },
+                          { value: 'fit', label: '按實測峰位' },
+                          { value: 'delta', label: '按 |Δ|' },
+                          { value: 'confidence', label: '按信心分數' },
+                        ]}
+                        className="min-w-[10rem]"
+                        buttonClassName="text-xs"
+                      />
+                    </div>
+
+                    <div className="mt-3 overflow-x-auto">
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
                             <th className="px-3 py-3 font-medium">峰名稱</th>
-                            <th className="px-3 py-3 font-medium">Phase / Mode</th>
-                            <th className="px-3 py-3 font-medium">Species</th>
-                            <th className="px-3 py-3 font-medium">Oxidation</th>
-                            <th className="px-3 py-3 font-medium">Profile</th>
-                            <th className="px-3 py-3 font-medium">中心 cm⁻¹</th>
+                            <th className="px-3 py-3 font-medium">group / material</th>
+                            <th className="px-3 py-3 font-medium">理論 cm⁻¹</th>
+                            <th className="px-3 py-3 font-medium">實測 cm⁻¹</th>
                             <th className="px-3 py-3 font-medium">Δ cm⁻¹</th>
                             <th className="px-3 py-3 font-medium">FWHM</th>
-                            <th className="px-3 py-3 font-medium">Area %</th>
-                            <th className="px-3 py-3 font-medium">Fit status</th>
-                            <th className="px-3 py-3 font-medium">Physical confidence</th>
-                            <th className="px-3 py-3 font-medium">Flags</th>
+                            <th className="px-3 py-3 font-medium">SNR</th>
+                            <th className="px-3 py-3 font-medium">anchor-related Δ</th>
+                            <th className="px-3 py-3 font-medium">status</th>
+                            <th className="px-3 py-3 font-medium">confidence</th>
+                            <th className="px-3 py-3 font-medium">note</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {fitResult.peaks.map(row => (
+                          {filteredFitRows.map(row => (
                             <tr key={row.Peak_ID || `${row.Peak_Name}-${row.Center_cm}`} className="border-b border-white/5 text-[var(--text-main)] last:border-b-0">
                               <td className="px-3 py-3">
                                 <div>{row.Peak_Name}</div>
-                                <div className="text-[11px] text-[var(--text-soft)]">{row.Center_cm.toFixed(1)} cm⁻¹</div>
+                                <div className="text-[11px] text-[var(--text-soft)]">{row.Mode_Label || '—'}</div>
                               </td>
-                              <td className="px-3 py-3">{row.Phase || row.Material}<div className="text-[11px] text-[var(--text-soft)]">{row.Mode_Label || '—'}</div></td>
-                              <td className="px-3 py-3">{row.Species || '—'}</td>
-                              <td className="px-3 py-3">{row.Oxidation_State}<div className="text-[11px] text-[var(--text-soft)]">{row.Oxidation_State_Inference}</div></td>
-                              <td className="px-3 py-3">{row.Profile}</td>
-                              <td className="px-3 py-3">{row.Center_cm.toFixed(3)}</td>
-                              <td className="px-3 py-3">{row.Delta_cm == null ? '—' : row.Delta_cm.toFixed(3)}</td>
-                              <td className="px-3 py-3">{row.FWHM_cm.toFixed(3)}</td>
-                              <td className="px-3 py-3">{row.Area_pct.toFixed(2)}</td>
-                              <td className="px-3 py-3">{row.Fit_Status}</td>
-                              <td className="px-3 py-3">{row.Physical_Confidence || row.Confidence}</td>
-                              <td className="px-3 py-3">{row.Quality_Flags.length ? row.Quality_Flags.join(' / ') : '—'}</td>
+                              <td className="px-3 py-3">{row.Phase_Group}<div className="text-[11px] text-[var(--text-soft)]">{row.Material}</div></td>
+                              <td className="px-3 py-3">{fmtFixed(row.Ref_cm, 3)}</td>
+                              <td className="px-3 py-3">{row.Status === 'not_observed' || row.Status === 'rejected' ? '—' : fmtFixed(row.Center_cm, 3)}</td>
+                              <td className="px-3 py-3">{fmtFixed(row.Delta_cm, 3)}</td>
+                              <td className="px-3 py-3">{fmtFixed(row.FWHM_cm, 3)}</td>
+                              <td className="px-3 py-3">{fmtFixed(row.SNR, 2)}</td>
+                              <td className="px-3 py-3">{fmtFixed(row.Anchor_Related_Delta_cm, 3)}</td>
+                              <td className="px-3 py-3">{row.Status}</td>
+                              <td className="px-3 py-3">{fmtFixed(row.Confidence_Score, 0)}<div className="text-[11px] text-[var(--text-soft)]">{translateConfidenceLevel(row.Physical_Confidence || row.Confidence)}</div></td>
+                              <td className="px-3 py-3 text-xs text-[var(--text-soft)]">{row.Note || '—'}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -3117,57 +3514,242 @@ export default function Raman({
 
                     <div className="mt-4 grid gap-4 xl:grid-cols-2">
                       <div className="theme-block-soft rounded-[22px] p-4">
-                        <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">Residual diagnostics</div>
+                        <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">Final Fit Overview</div>
                         <div className="grid grid-cols-2 gap-2 text-sm text-[var(--text-main)]">
-                          <div>Global RMSE</div>
-                          <div>{fitResult.residual_diagnostics.Global_RMSE.toExponential(2)}</div>
-                          <div>Max |residual|</div>
-                          <div>{fitResult.residual_diagnostics.Global_MaxAbs.toExponential(2)}</div>
-                          <div>Max region</div>
+                          <div>全域 RMSE</div>
+                          <div>{fmtExp(fitResult.residual_diagnostics.Global_RMSE, 2)}</div>
+                          <div>最大殘差 |residual|</div>
+                          <div>{fmtExp(fitResult.residual_diagnostics.Global_MaxAbs, 2)}</div>
+                          <div>最大殘差區段</div>
                           <div>{fitResult.residual_diagnostics.Max_Residual_Range || '—'}</div>
-                          <div>480–570 RMSE</div>
-                          <div>{fitResult.residual_diagnostics.Segment_480_570_RMSE == null ? '—' : fitResult.residual_diagnostics.Segment_480_570_RMSE.toExponential(2)}</div>
+                          <div>480–570 區段 RMSE</div>
+                          <div>{fmtExp(fitResult.residual_diagnostics.Segment_480_570_RMSE, 2)}</div>
                         </div>
-                        {fitResult.residual_diagnostics.Suggestions.length > 0 && (
+                        {(fitResult.residual_diagnostics.Suggestions ?? []).length > 0 && (
                           <div className="mt-3 space-y-1 text-xs text-[var(--text-soft)]">
-                            {fitResult.residual_diagnostics.Suggestions.map(item => (
+                            {(fitResult.residual_diagnostics.Suggestions ?? []).map(item => (
                               <div key={item}>{item}</div>
-                            ))}
-                          </div>
-                        )}
-                        {fitResult.residual_diagnostics.Local_Ranges?.length > 0 && (
-                          <div className="mt-3 grid gap-2">
-                            {fitResult.residual_diagnostics.Local_Ranges.map(item => (
-                              <div key={item.Range} className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-xs text-[var(--text-main)]">
-                                <span className="font-semibold">{item.Range}</span>
-                                <span className="ml-2 text-[var(--text-soft)]">
-                                  RMSE {item.RMSE == null ? '—' : item.RMSE.toExponential(2)} · Max {item.MaxAbs == null ? '—' : item.MaxAbs.toExponential(2)}
-                                </span>
-                                {item.Warning && <span className="ml-2 text-[var(--accent-secondary)]">{item.Warning}</span>}
-                              </div>
                             ))}
                           </div>
                         )}
                       </div>
 
                       <div className="theme-block-soft rounded-[22px] p-4">
-                        <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">Phase group consistency</div>
-                        {fitResult.group_summaries.length > 0 ? (
-                          <div className="space-y-2">
-                            {fitResult.group_summaries.map(group => (
-                              <div key={group.Phase_Group} className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-sm text-[var(--text-main)]">
-                                <div className="font-medium">{group.Phase_Group}</div>
-                                <div className="mt-1 text-xs text-[var(--text-soft)]">
-                                  shift {group.Group_Shift_cm.toFixed(2)} cm⁻¹ · spacing error {group.Mean_Spacing_Error_cm.toFixed(2)} · score {group.Group_Consistency_Score.toFixed(0)} · {group.Status}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
+                        <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">Group Confidence Summary</div>
+                        {(fitResult.group_summaries ?? []).length > 0 ? (
+                          <>
+                            <DeferredRender minHeight={240}>
+                              <Plot
+                                data={groupConfidenceBarTraces(fitResult.group_summaries ?? [])}
+                                layout={{ ...chartLayout(), margin: { l: 110, r: 20, t: 20, b: 40 } }}
+                                config={withPlotFullscreen({ scrollZoom: false })}
+                                style={{ width: '100%', minHeight: '240px' }}
+                                useResizeHandler
+                              />
+                            </DeferredRender>
+                            <div className="mt-3 max-h-72 overflow-auto">
+                              <table className="min-w-full text-left text-xs">
+                                <thead>
+                                  <tr className="border-b border-white/10 uppercase tracking-[0.18em] text-slate-500">
+                                    <th className="px-3 py-3 font-medium">material</th>
+                                    <th className="px-3 py-3 font-medium">anchor</th>
+                                    <th className="px-3 py-3 font-medium">shift</th>
+                                    <th className="px-3 py-3 font-medium">stretch</th>
+                                    <th className="px-3 py-3 font-medium">matched</th>
+                                    <th className="px-3 py-3 font-medium">mean |Δ|</th>
+                                    <th className="px-3 py-3 font-medium">score</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(fitResult.group_summaries ?? []).map(group => (
+                                    <tr key={group.Phase_Group} className="border-b border-white/5 text-[var(--text-main)] last:border-b-0">
+                                      <td className="px-3 py-3">{group.Material || group.Phase_Group}</td>
+                                      <td className="px-3 py-3">{group.Anchor_Peak || '—'}</td>
+                                      <td className="px-3 py-3">{fmtFixed(group.Group_Shift_cm, 2)}</td>
+                                      <td className="px-3 py-3">{fmtFixed(group.Stretch, 4)}</td>
+                                      <td className="px-3 py-3">{group.Matched_Count}/{group.Candidate_Count}</td>
+                                      <td className="px-3 py-3">{fmtFixed(group.Mean_Abs_Delta_cm, 2)}</td>
+                                      <td className="px-3 py-3">{fmtFixed(group.Group_Consistency_Score, 0)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
                         ) : (
-                          <div className="text-sm text-[var(--text-soft)]">同一 phase 至少需要兩個參考峰才會計算 spacing consistency。</div>
+                          <div className="text-sm text-[var(--text-soft)]">目前沒有群組摘要。</div>
                         )}
                       </div>
                     </div>
+
+                    {(fitResult.group_fit_stages ?? []).length > 0 && (
+                      <div className="mt-5 space-y-4">
+                        <div className="text-sm font-semibold text-[var(--text-muted)]">Sequential Group Fitting</div>
+                        {(fitResult.group_fit_stages ?? []).map(stage => (
+                          <div key={stage.group_name} className="theme-block-soft rounded-[22px] p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-[var(--text-main)]">{stage.group_name}</div>
+                                <div className="mt-1 text-xs text-[var(--text-soft)]">
+                                  anchor {stage.anchor_peak_label || '—'} · ref {fmtFixed(stage.anchor_ref_cm, 2)} · fit {fmtFixed(stage.anchor_fitted_cm, 2)} · shift {fmtFixed(stage.group_shift_cm, 2)} · stretch {fmtFixed(stage.stretch, 4)}
+                                </div>
+                              </div>
+                              <div className="text-xs text-[var(--text-soft)]">stage R² {fmtFixed(stage.r_squared, 4)}</div>
+                            </div>
+                            <DeferredRender minHeight={360}>
+                              <Plot
+                                data={groupStageChartTraces(stage)}
+                                layout={fitChartLayout()}
+                                config={withPlotFullscreen({ scrollZoom: false })}
+                                style={{ width: '100%', minHeight: '360px' }}
+                                useResizeHandler
+                              />
+                            </DeferredRender>
+                            {(stage.warnings ?? []).length > 0 && (
+                              <div className="mt-3 space-y-1 text-xs text-[var(--accent-secondary)]">
+                                {(stage.warnings ?? []).map(warning => (
+                                  <div key={warning}>{warning}</div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {(fitResult.group_probe_rows ?? []).length > 0 && (
+                      <div className="mt-5 theme-block-soft rounded-[22px] p-4">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-[var(--text-muted)]">Material Group Diagnostics</div>
+                          <div className="flex flex-wrap gap-2">
+                            {probeGroups.map(group => (
+                              <button
+                                key={group}
+                                type="button"
+                                onClick={() => setActiveProbeGroup(group)}
+                                className={`theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold ${activeProbeGroup === group ? 'text-[var(--accent)]' : 'text-[var(--text-soft)]'}`}
+                              >
+                                {group === 'Ambiguous' ? 'Ambiguous' : group.replace(' group', '')}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="mb-3 flex flex-wrap gap-2 text-xs text-[var(--text-soft)]">
+                          {['accepted', 'candidate', 'ambiguous', 'overlapped', 'uncertain', 'rejected', 'not_observed'].map(status => (
+                            <span key={status} className="rounded-lg border border-white/10 px-2 py-1">
+                              {status}: {activeProbeCounts[status] ?? 0}
+                            </span>
+                          ))}
+                        </div>
+                        {activeProbeStage ? (
+                          <DeferredRender minHeight={380}>
+                            <Plot
+                              data={groupStageChartTraces(activeProbeStage)}
+                              layout={groupDiagnosticLayout(activeProbeStage)}
+                              config={withPlotFullscreen({ scrollZoom: false })}
+                              style={{ width: '100%', minHeight: '380px' }}
+                              useResizeHandler
+                            />
+                          </DeferredRender>
+                        ) : (
+                          <div className="rounded-xl border border-white/10 px-3 py-3 text-sm text-[var(--text-soft)]">
+                            此群組沒有 stage curve，但 probing table 仍保留了理論峰檢查結果。
+                          </div>
+                        )}
+                        <div className="mt-4 max-h-96 overflow-auto">
+                          <table className="min-w-full text-left text-xs">
+                            <thead>
+                              <tr className="border-b border-white/10 uppercase tracking-[0.16em] text-slate-500">
+                                <th className="px-3 py-3 font-medium">peak</th>
+                                <th className="px-3 py-3 font-medium">ref</th>
+                                <th className="px-3 py-3 font-medium">window</th>
+                                <th className="px-3 py-3 font-medium">local max</th>
+                                <th className="px-3 py-3 font-medium">fit</th>
+                                <th className="px-3 py-3 font-medium">Δ</th>
+                                <th className="px-3 py-3 font-medium">FWHM</th>
+                                <th className="px-3 py-3 font-medium">SNR</th>
+                                <th className="px-3 py-3 font-medium">AIC Δ</th>
+                                <th className="px-3 py-3 font-medium">status</th>
+                                <th className="px-3 py-3 font-medium">reason</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {activeProbeRows.map(row => (
+                                <tr key={`${row.material_group}-${row.peak_id}-${row.reference_cm1}`} className="border-b border-white/5 text-[var(--text-main)] last:border-b-0">
+                                  <td className="px-3 py-3">{row.peak_label || row.mode}</td>
+                                  <td className="px-3 py-3">{fmtFixed(row.reference_cm1, 1)}</td>
+                                  <td className="px-3 py-3">{row.search_window}</td>
+                                  <td className="px-3 py-3">{fmtFixed(row.local_max_position, 1)}</td>
+                                  <td className="px-3 py-3">{fmtFixed(row.fitted_cm1, 2)}</td>
+                                  <td className="px-3 py-3">{fmtFixed(row.delta_cm1, 2)}</td>
+                                  <td className="px-3 py-3">{fmtFixed(row.FWHM, 2)}</td>
+                                  <td className="px-3 py-3">{fmtFixed(row.SNR, 2)}</td>
+                                  <td className="px-3 py-3">{fmtFixed(row.AIC_improvement, 2)}</td>
+                                  <td className="px-3 py-3">
+                                    <span style={{ color: alignmentStatusColor(row.status) }}>{row.status}</span>
+                                  </td>
+                                  <td className="max-w-[360px] px-3 py-3 text-[var(--text-soft)]">{row.rejection_reason || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-5 grid gap-4 xl:grid-cols-2">
+                      <div className="theme-block-soft rounded-[22px] p-4">
+                        <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Peak Alignment Map</div>
+                        {(fitResult.alignment_rows ?? []).length > 0 ? (
+                          <DeferredRender minHeight={320}>
+                            <Plot
+                              data={alignmentMapTraces(fitResult.alignment_rows ?? [])}
+                              layout={alignmentMapLayout(fitResult.alignment_rows ?? [])}
+                              config={withPlotFullscreen({ scrollZoom: false })}
+                              style={{ width: '100%', minHeight: '320px' }}
+                              useResizeHandler
+                            />
+                          </DeferredRender>
+                        ) : (
+                          <div className="text-sm text-[var(--text-soft)]">目前沒有可輸出的 peak alignment 資料。</div>
+                        )}
+                      </div>
+                      <div className="theme-block-soft rounded-[22px] p-4">
+                        <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Peak Delta Plot</div>
+                        {(fitResult.peaks ?? []).length > 0 ? (
+                          <DeferredRender minHeight={320}>
+                            <Plot
+                              data={deltaPlotTraces(fitResult.peaks ?? [])}
+                              layout={deltaPlotLayout()}
+                              config={withPlotFullscreen({ scrollZoom: false })}
+                              style={{ width: '100%', minHeight: '320px' }}
+                              useResizeHandler
+                            />
+                          </DeferredRender>
+                        ) : (
+                          <div className="text-sm text-[var(--text-soft)]">目前沒有可繪製的 delta 資料。</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {fitResult.report && (
+                      <div className="mt-5 theme-block-soft rounded-[22px] p-4">
+                        <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Report Summary</div>
+                        <div className="grid gap-2 text-sm text-[var(--text-main)] sm:grid-cols-2 xl:grid-cols-4">
+                          <div>樣品 ID：{fitResult.report.sample_id}</div>
+                          <div>Ar:O₂ 通量：{fitResult.report.ar_o2_flux}</div>
+                          <div>Baseline：{fitResult.report.baseline_method}</div>
+                          <div>Reduced χ²：{fmtExp(fitResult.report.global_reduced_chi2, 2)}</div>
+                        </div>
+                        {(fitResult.report.credibility_summary ?? []).length > 0 && (
+                          <div className="mt-3 space-y-1 text-xs text-[var(--text-soft)]">
+                            {(fitResult.report.credibility_summary ?? []).map(item => (
+                              <div key={item}>{item}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Si stress card */}
                     {siPeak && (
@@ -3251,7 +3833,7 @@ export default function Raman({
                             {suspiciousFitPeaks.map(item => (
                               <div key={item.row.Peak_ID || item.row.Peak_Name} className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-sm text-[var(--text-main)]">
                                 <span className="font-medium">{fitPeakLabel(item.row)}</span>
-                                <span className="ml-2 text-[var(--text-soft)]">{item.flags.join(' / ')}</span>
+                                <span className="ml-2 text-[var(--text-soft)]">{item.flags.map(translateQualityFlag).join(' / ')}</span>
                               </div>
                             ))}
                           </div>
@@ -3309,8 +3891,8 @@ export default function Raman({
                       <div className="mt-4 theme-block-soft rounded-[22px] p-4">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div>
-                            <div className="text-sm font-semibold text-[var(--text-muted)]">Batch comparison</div>
-                            <div className="mt-1 text-xs text-[var(--text-soft)]">同一套 peak model 套用到所有資料集的 position / FWHM / Area 趨勢。</div>
+                            <div className="text-sm font-semibold text-[var(--text-muted)]">Cross-sample Comparison</div>
+                            <div className="mt-1 text-xs text-[var(--text-soft)]">比較 1013 / 1020-1 / 1014 等樣品的 peak delta 趨勢。marker 顏色代表 sample，形狀代表 material group。</div>
                           </div>
                           <div className="flex gap-2">
                             <ThemeSelect
@@ -3325,21 +3907,30 @@ export default function Raman({
                               onClick={exportBatchCsv}
                               className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)]"
                             >
-                              匯出 trend CSV
+                              匯出趨勢 CSV
                             </button>
                           </div>
                         </div>
+                        <DeferredRender minHeight={320}>
+                          <Plot
+                            data={batchDeltaComparisonTraces(batchResults)}
+                            layout={deltaPlotLayout()}
+                            config={withPlotFullscreen({ scrollZoom: false })}
+                            style={{ width: '100%', minHeight: '320px' }}
+                            useResizeHandler
+                          />
+                        </DeferredRender>
                         <div className="max-h-80 overflow-auto">
                           <table className="min-w-full text-left text-sm">
                             <thead>
                               <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                                <th className="px-3 py-3 font-medium">Dataset</th>
-                                <th className="px-3 py-3 font-medium">Peak</th>
-                                <th className="px-3 py-3 font-medium">Center</th>
+                                <th className="px-3 py-3 font-medium">資料集</th>
+                                <th className="px-3 py-3 font-medium">峰名稱</th>
+                                <th className="px-3 py-3 font-medium">中心</th>
                                 <th className="px-3 py-3 font-medium">FWHM</th>
-                                <th className="px-3 py-3 font-medium">Area</th>
-                                <th className="px-3 py-3 font-medium">Norm area</th>
-                                <th className="px-3 py-3 font-medium">Confidence</th>
+                                <th className="px-3 py-3 font-medium">面積</th>
+                                <th className="px-3 py-3 font-medium">正規化面積</th>
+                                <th className="px-3 py-3 font-medium">信心度</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -3351,7 +3942,7 @@ export default function Raman({
                                   <td className="px-3 py-3">{row.fwhm.toFixed(3)}</td>
                                   <td className="px-3 py-3">{row.area.toExponential(3)}</td>
                                   <td className="px-3 py-3">{row.normalizedArea == null ? '—' : row.normalizedArea.toFixed(4)}</td>
-                                  <td className="px-3 py-3">{row.confidence}</td>
+                                  <td className="px-3 py-3">{translateConfidenceLevel(row.confidence)}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -3369,14 +3960,14 @@ export default function Raman({
             </>
           )}
         </div>
-      </div>
+      </main>
       {editingCandidate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm">
           <div className="theme-block max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-5 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <div className="text-lg font-semibold text-[var(--text-muted)]">{editingCandidate.display_name || editingCandidate.label}</div>
-                <div className="mt-1 text-xs text-[var(--text-soft)]">{editingCandidate.peak_id} · {editingCandidate.phase || editingCandidate.material || '未指定 phase'}</div>
+                <div className="mt-1 text-xs text-[var(--text-soft)]">{editingCandidate.peak_id} · {editingCandidate.phase || editingCandidate.material || '未指定相別'}</div>
               </div>
               <button
                 type="button"
@@ -3399,7 +3990,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">Phase</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">相別 Phase</span>
                 <input
                   type="text"
                   value={editingCandidate.phase || editingCandidate.material}
@@ -3408,7 +3999,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">Phase group</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">相別群組 Phase group</span>
                 <input
                   type="text"
                   value={editingCandidate.phase_group}
@@ -3417,7 +4008,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">Species</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">物種 Species</span>
                 <input
                   type="text"
                   value={editingCandidate.species}
@@ -3449,7 +4040,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM init</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">初始 FWHM</span>
                 <input
                   type="number"
                   value={editingCandidate.fwhm_cm}
@@ -3460,7 +4051,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">Profile</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">峰形模型 Profile</span>
                 <ThemeSelect
                   value={editingCandidate.profile || fitParams.profile}
                   onChange={value => updateFitCandidate(editingCandidate.peak_id, { profile: value as RamanProfile })}
@@ -3469,7 +4060,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM min</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM 下限</span>
                 <input
                   type="number"
                   value={editingCandidate.fwhm_min}
@@ -3480,7 +4071,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM max</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM 上限</span>
                 <input
                   type="number"
                   value={editingCandidate.fwhm_max}
@@ -3496,8 +4087,8 @@ export default function Raman({
               {[
                 ['lock_center', '鎖中心'],
                 ['lock_fwhm', '鎖 FWHM'],
-                ['lock_area', '鎖 Area'],
-                ['lock_profile', '鎖 profile mix'],
+                ['lock_area', '鎖面積'],
+                ['lock_profile', '鎖峰形混合'],
               ].map(([key, label]) => (
                 <label key={key} className="theme-block-soft flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-[var(--text-main)]">
                   <input
@@ -3513,7 +4104,7 @@ export default function Raman({
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">Oxidation inference</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">氧化態判定方式</span>
                 <ThemeSelect
                   value={editingCandidate.oxidation_state_inference}
                   onChange={value => updateFitCandidate(editingCandidate.peak_id, { oxidation_state_inference: value as FitPeakCandidate['oxidation_state_inference'] })}
@@ -3522,7 +4113,7 @@ export default function Raman({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-[var(--text-soft)]">Oxidation state</span>
+                <span className="mb-1 block text-xs text-[var(--text-soft)]">氧化態</span>
                 <input
                   type="text"
                   value={editingCandidate.oxidation_state}

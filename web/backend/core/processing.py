@@ -114,7 +114,7 @@ def _baseline_system_matrix(n_points: int):
     return diff.T @ diff
 
 
-def asls_background(y, lam=1e5, p=0.01, max_iter=20):
+def asls_background(y, lam=1e5, p=0.01, max_iter=20, weights=None):
     """
     Asymmetric least squares baseline for fluorescence-heavy Raman spectra.
 
@@ -138,18 +138,19 @@ def asls_background(y, lam=1e5, p=0.01, max_iter=20):
 
     lam = float(max(lam, 1.0))
     p = float(np.clip(p, 1e-4, 0.4999))
-    weights = np.ones(n, dtype=float)
+    base_weights = np.clip(np.asarray(weights, dtype=float), 1e-6, 1e6) if weights is not None else np.ones(n, dtype=float)
+    weights = base_weights.copy()
     baseline = y.copy()
 
     for _ in range(max(1, int(max_iter))):
         system = sparse.spdiags(weights, 0, n, n, format="csc") + lam * penalty
         baseline = spsolve(system, weights * y)
-        weights = np.where(y > baseline, p, 1.0 - p)
+        weights = base_weights * np.where(y > baseline, p, 1.0 - p)
 
     return np.asarray(baseline, dtype=float)
 
 
-def airpls_background(y, lam=1e5, max_iter=15):
+def airpls_background(y, lam=1e5, max_iter=15, weights=None):
     """
     Adaptive iteratively reweighted penalized least squares baseline.
 
@@ -166,7 +167,8 @@ def airpls_background(y, lam=1e5, max_iter=15):
         return np.zeros_like(y)
 
     lam = float(max(lam, 1.0))
-    weights = np.ones(n, dtype=float)
+    base_weights = np.clip(np.asarray(weights, dtype=float), 1e-6, 1e6) if weights is not None else np.ones(n, dtype=float)
+    weights = base_weights.copy()
     baseline = y.copy()
     scale_ref = max(float(np.sum(np.abs(y))), 1.0)
 
@@ -188,8 +190,84 @@ def airpls_background(y, lam=1e5, max_iter=15):
             edge_weight = float(np.max(weights[neg_mask]))
             weights[0] = edge_weight
             weights[-1] = edge_weight
+        weights = np.maximum(weights * base_weights, 1e-6)
 
     return np.asarray(baseline, dtype=float)
+
+
+def arpls_background(y, lam=1e5, max_iter=20, ratio=1e-6, weights=None):
+    """
+    Asymmetrically reweighted penalized least squares baseline.
+
+    Compared with AsLS, arPLS updates weights using a smooth logistic rule,
+    which generally avoids pinning the baseline too aggressively under weak
+    Raman peaks.
+    """
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    if n < 3:
+        return np.zeros_like(y)
+
+    penalty = _baseline_system_matrix(n)
+    if penalty is None:
+        return np.zeros_like(y)
+
+    lam = float(max(lam, 1.0))
+    ratio = float(np.clip(ratio, 1e-9, 0.1))
+    base_weights = np.clip(np.asarray(weights, dtype=float), 1e-6, 1e6) if weights is not None else np.ones(n, dtype=float)
+    weights = base_weights.copy()
+    baseline = y.copy()
+
+    for _ in range(max(1, int(max_iter))):
+        system = sparse.spdiags(weights, 0, n, n, format="csc") + lam * penalty
+        baseline = np.asarray(spsolve(system, weights * y), dtype=float)
+        residual = y - baseline
+        negative = residual[residual < 0]
+        if len(negative) == 0:
+            break
+        mean_neg = float(np.mean(negative))
+        std_neg = float(np.std(negative))
+        std_neg = max(std_neg, 1e-12)
+        shifted = 2.0 * (residual - (2.0 * std_neg - mean_neg)) / std_neg
+        new_weights = base_weights * (1.0 / (1.0 + np.exp(np.clip(shifted, -60.0, 60.0))))
+        if np.linalg.norm(new_weights - weights) / max(np.linalg.norm(weights), 1e-12) < ratio:
+            weights = new_weights
+            break
+        weights = new_weights
+
+    return np.asarray(baseline, dtype=float)
+
+
+def masked_weight_profile(x, centers=None, widths=None, extra_mask=None, notch_depth=0.02):
+    """
+    Build baseline weights that down-weight candidate peak regions.
+
+    Returns weights in [notch_depth, 1]. Small values tell Whittaker-style
+    baselines to largely ignore those x regions.
+    """
+    x = np.asarray(x, dtype=float)
+    weights = np.ones(len(x), dtype=float)
+    notch_depth = float(np.clip(notch_depth, 1e-4, 1.0))
+
+    centers = centers or []
+    widths = widths or []
+    for idx, center in enumerate(centers):
+        try:
+            c = float(center)
+        except (TypeError, ValueError):
+            continue
+        width = float(widths[idx]) if idx < len(widths) and widths[idx] is not None else 12.0
+        width = max(abs(width), 1.0)
+        sigma = max(width / 2.3548, 1e-6)
+        notch = 1.0 - (1.0 - notch_depth) * np.exp(-((x - c) ** 2) / (2.0 * sigma ** 2))
+        weights *= notch
+
+    if extra_mask is not None:
+        extra_mask_arr = np.asarray(extra_mask, dtype=bool)
+        if len(extra_mask_arr) == len(weights):
+            weights[extra_mask_arr] = np.minimum(weights[extra_mask_arr], notch_depth)
+
+    return np.clip(weights, notch_depth, 1.0)
 
 
 def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20):
@@ -259,6 +337,10 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
     elif method == "asls":
         bg_seg = asls_background(
             ys, lam=baseline_lambda, p=baseline_p, max_iter=baseline_iter,
+        )
+    elif method == "arpls":
+        bg_seg = arpls_background(
+            ys, lam=baseline_lambda, max_iter=baseline_iter,
         )
     elif method == "airpls":
         bg_seg = airpls_background(

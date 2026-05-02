@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { Component, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './components/AnalysisModuleNav'
 import CursorParticles from './components/CursorParticles'
@@ -61,6 +61,59 @@ const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
   { id: 'tool-normalize', label: '歸一化', detail: '單一處理' },
   { id: 'tool-gaussian', label: '高斯模板扣除', detail: '單一處理' },
 ]
+
+class WorkspaceErrorBoundary extends Component<
+  { workspace: WorkspaceId; children: ReactNode },
+  { hasError: boolean; errorMessage: string; errorStack: string }
+> {
+  constructor(props: { workspace: WorkspaceId; children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false, errorMessage: '', errorStack: '' }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return {
+      hasError: true,
+      errorMessage: error?.message || 'Unknown runtime error',
+      errorStack: error?.stack || '',
+    }
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('Workspace runtime error:', error)
+  }
+
+  componentDidUpdate(prevProps: { workspace: WorkspaceId }) {
+    if (prevProps.workspace !== this.props.workspace && this.state.hasError) {
+      this.setState({ hasError: false, errorMessage: '', errorStack: '' })
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="mx-auto max-w-4xl px-6 py-12">
+          <div className="rounded-[28px] border border-[color:color-mix(in_srgb,var(--accent-secondary)_28%,var(--card-border))] bg-[color:color-mix(in_srgb,var(--accent-secondary)_10%,transparent)] p-6 text-[var(--text-main)] shadow-[var(--card-shadow)]">
+            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-soft)]">Runtime Error</div>
+            <div className="mt-2 text-lg font-semibold">目前不是網址錯誤，頁面在前端執行時發生錯誤。</div>
+            <div className="mt-3 text-sm leading-7 text-[var(--text-main)]">
+              workspace: <span className="font-semibold">{this.props.workspace}</span>
+            </div>
+            <div className="mt-2 text-sm leading-7 text-[var(--text-main)]">
+              error: <span className="font-semibold">{this.state.errorMessage}</span>
+            </div>
+            {this.state.errorStack ? (
+              <pre className="mt-4 max-h-[22rem] overflow-auto rounded-[20px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4 text-xs leading-6 text-[var(--text-soft)] whitespace-pre-wrap">
+                {this.state.errorStack}
+              </pre>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>('workflow-raman')
@@ -361,14 +414,16 @@ export default function App() {
       </div>
 
       <main className="relative z-10 min-h-screen">
-        {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-        {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-        {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-        {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-        {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-        {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} />}
-        {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" onOpenPlotPopup={openPlotPopup} />}
-        {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" onOpenPlotPopup={openPlotPopup} />}
+        <WorkspaceErrorBoundary workspace={workspace}>
+          {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" onOpenPlotPopup={openPlotPopup} />}
+        </WorkspaceErrorBoundary>
       </main>
       <PlotPopupHost popupPlots={popupPlots} onClose={closePlotPopup} />
     </div>
