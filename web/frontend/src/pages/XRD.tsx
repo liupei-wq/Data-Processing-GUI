@@ -1440,6 +1440,8 @@ export default function XRD({
                 onApplyPeakPreset={applyPeakPreset}
                 scherrerParams={scherrerParams}
                 onScherrerParamsChange={setScherrerParams}
+                onExportWeakPeakSeries={handleExportTransformedWeakPeakSeriesTxt}
+                canExportWeakPeak={weakPeakTransformedSeries.x.length > 0}
               />
             </div>
           </div>

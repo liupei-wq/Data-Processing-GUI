@@ -177,6 +177,8 @@ interface Props {
   onApplyPeakPreset?: (preset: 'thin_film_si' | 'general') => void
   scherrerParams: ScherrerParams
   onScherrerParamsChange: (p: ScherrerParams) => void
+  onExportWeakPeakSeries?: () => void
+  canExportWeakPeak?: boolean
 }
 
 export default function ProcessingPanel({
@@ -203,6 +205,8 @@ export default function ProcessingPanel({
   onApplyPeakPreset,
   scherrerParams,
   onScherrerParamsChange,
+  onExportWeakPeakSeries,
+  canExportWeakPeak = false,
 }: Props) {
   const set = <K extends keyof ProcessParams>(key: K, value: ProcessParams[K]) =>
     onChange({ ...params, [key]: value })
@@ -363,6 +367,21 @@ export default function ProcessingPanel({
               onChange={value => setLogView('floor_value', value)}
             />
           </>
+        )}
+        {onExportWeakPeakSeries && (
+          <button
+            type="button"
+            onClick={onExportWeakPeakSeries}
+            disabled={!canExportWeakPeak}
+            className={[
+              'mt-1 w-full rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+              canExportWeakPeak
+                ? 'border-white/10 bg-white/5 text-slate-100 hover:border-cyan-300/40 hover:text-cyan-100'
+                : 'cursor-not-allowed border-white/5 bg-white/5 text-slate-500',
+            ].join(' ')}
+          >
+            匯出弱峰轉換圖譜 .txt
+          </button>
         )}
       </Section>
 
