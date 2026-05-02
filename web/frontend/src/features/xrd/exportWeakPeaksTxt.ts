@@ -1,68 +1,103 @@
-import type { DetectedPeak, FinalPeakRow, RefPeak } from '../../types/xrd'
+export type WeakPeakExportRow = Record<string, unknown>
 
 export interface BuildWeakPeaksTxtOptions {
+  rows: WeakPeakExportRow[]
   datasetName?: string | null
   wavelength?: number | null
   generatedAt?: Date
-  detectedPeaks: DetectedPeak[]
-  finalPeakRows?: FinalPeakRow[]
-  referencePeaks?: RefPeak[]
 }
 
-function formatNumber(value: number | null | undefined, digits: number) {
-  return Number.isFinite(value) ? Number(value).toFixed(digits) : ''
+function pick(row: WeakPeakExportRow, keys: string[]) {
+  for (const key of keys) {
+    if (row[key] != null && row[key] !== '') return row[key]
+  }
+  return undefined
 }
 
-function findFinalRow(peak: DetectedPeak, finalPeakRows: FinalPeakRow[]) {
-  return finalPeakRows.find(row => Math.abs(row.two_theta - peak.two_theta) <= 0.0001)
+function toNumber(value: unknown) {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
 }
 
-function findReferencePeak(row: FinalPeakRow | undefined, referencePeaks: RefPeak[]) {
-  if (!row || row.reference_2theta == null) return null
-  return referencePeaks.find(ref =>
-    Math.abs(ref.two_theta - row.reference_2theta!) <= 0.0001
-    && (!row.hkl || ref.hkl === row.hkl)
-  ) ?? null
+function toText(value: unknown) {
+  return value == null ? '' : String(value)
+}
+
+function formatNumber(value: unknown, digits: number) {
+  const numberValue = toNumber(value)
+  return numberValue == null ? '' : numberValue.toFixed(digits)
+}
+
+function confidenceText(value: unknown) {
+  const text = toText(value)
+  if (text === 'high') return '高'
+  if (text === 'medium') return '中'
+  if (text === 'low') return '低'
+  if (text === 'unmatched') return '未匹配'
+  return text
+}
+
+function normalizeRow(row: WeakPeakExportRow) {
+  return {
+    twoTheta: pick(row, ['two_theta', 'twoTheta', 'x', 'position', 'peak_position']),
+    dSpacing: pick(row, ['d_spacing', 'dSpacing', 'd']),
+    intensity: pick(row, ['intensity', 'height', 'y', 'peak_intensity']),
+    relIntensity: pick(row, ['rel_intensity', 'relative_intensity', 'relI', 'rel_i']),
+    fwhm: pick(row, ['fwhm_deg', 'fwhm', 'FWHM']),
+    snr: pick(row, ['snr', 'SNR']),
+    confidence: pick(row, ['confidence', 'Confidence']),
+    material: pick(row, ['material', 'matched_material', 'reference_material', 'phase_name']),
+    phase: pick(row, ['phase', 'matched_phase']),
+    hkl: pick(row, ['hkl', 'HKL', 'plane', 'miller_index']),
+    source: pick(row, ['source', 'reference_source']),
+    note: pick(row, ['note', '備註']),
+  }
 }
 
 export function buildWeakPeaksTxt({
+  rows,
   datasetName,
   wavelength,
   generatedAt = new Date(),
-  detectedPeaks,
-  finalPeakRows = [],
-  referencePeaks = [],
 }: BuildWeakPeaksTxtOptions) {
-  const lines = [
-    'XRD Weak Peak Analysis Export',
-    `Generated At: ${generatedAt.toISOString()}`,
-    `Dataset: ${datasetName || 'xrd'}`,
-    `Wavelength: ${wavelength == null ? '' : `${formatNumber(wavelength, 4)} Å`}`,
+  const header = [
+    'XRD 弱峰分析資料匯出',
+    `產生時間：${generatedAt.toISOString()}`,
+    `資料集：${datasetName || 'xrd'}`,
+    `波長：${wavelength == null ? '' : `${formatNumber(wavelength, 4)} Å`}`,
     '',
-    '# Columns:',
-    '# index\ttwo_theta_deg\td_spacing_A\tintensity\trel_intensity_pct\tfwhm_deg\tsnr\tconfidence\tmatched_material\tphase\thkl\treference_two_theta_deg\treference_d_spacing_A\treference_rel_i_pct\ttolerance_deg\tnote',
   ]
 
-  detectedPeaks.forEach((peak, index) => {
-    const row = findFinalRow(peak, finalPeakRows)
-    const refPeak = findReferencePeak(row, referencePeaks)
+  if (rows.length === 0) {
+    return `${[
+      ...header,
+      '沒有可匯出的弱峰資料。',
+    ].join('\n')}\n`
+  }
+
+  const lines = [
+    ...header,
+    '欄位說明：',
+    '序號\t2θ(度)\td-spacing(Å)\t強度\t相對強度(%)\tFWHM(度)\tSNR\t信心等級\t匹配物質\t相\t晶面HKL\t來源\t備註',
+    '',
+  ]
+
+  rows.forEach((row, index) => {
+    const normalized = normalizeRow(row)
     lines.push([
       index + 1,
-      formatNumber(peak.two_theta, 4),
-      formatNumber(peak.d_spacing, 4),
-      formatNumber(peak.intensity, 2),
-      formatNumber(peak.rel_intensity, 1),
-      formatNumber(peak.fwhm_deg, 4),
-      formatNumber(peak.snr, 2),
-      row?.confidence ?? peak.confidence,
-      refPeak?.material ?? '',
-      row?.phase ?? refPeak?.phase ?? '',
-      row?.hkl ?? refPeak?.hkl ?? '',
-      formatNumber(refPeak?.two_theta ?? row?.reference_2theta, 4),
-      formatNumber(refPeak?.d_spacing, 4),
-      formatNumber(refPeak?.rel_i, 1),
-      formatNumber(refPeak?.tolerance, 4),
-      row?.note ?? peak.note ?? '',
+      formatNumber(normalized.twoTheta, 4),
+      formatNumber(normalized.dSpacing, 4),
+      formatNumber(normalized.intensity, 2),
+      formatNumber(normalized.relIntensity, 1),
+      formatNumber(normalized.fwhm, 4),
+      formatNumber(normalized.snr, 2),
+      confidenceText(normalized.confidence),
+      toText(normalized.material),
+      toText(normalized.phase),
+      toText(normalized.hkl),
+      toText(normalized.source),
+      toText(normalized.note),
     ].join('\t'))
   })
 
@@ -70,10 +105,13 @@ export function buildWeakPeaksTxt({
 }
 
 export function downloadTextFile(filename: string, content: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }))
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  URL.revokeObjectURL(url)
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }

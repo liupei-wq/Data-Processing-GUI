@@ -53,7 +53,7 @@ import {
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import type { ProcessParams } from '../types/xrd'
-import { buildWeakPeaksTxt, downloadTextFile } from '../features/xrd/exportWeakPeaksTxt'
+import { buildWeakPeaksTxt, downloadTextFile, type WeakPeakExportRow } from '../features/xrd/exportWeakPeaksTxt'
 
 type CsvCell = string | number | null | undefined
 
@@ -820,10 +820,15 @@ export default function XRD({
       y: logStageDatasets[0].y,
       type: 'scatter',
       mode: 'lines',
-      name: logStageDatasets[0].name,
+      name: '弱峰',
       line: { color: palette.primary, width: 2.1 },
+      hovertemplate: [
+        xMode === 'dspacing' ? '晶面間距 d：%{x:.4f} Å' : '2θ：%{x:.4f}°',
+        '強度：%{y:.4f}',
+        '<extra></extra>',
+      ].join('<br>'),
     }] as Plotly.Data[]
-  }, [chartLineColors.log, logStageDatasets])
+  }, [chartLineColors.log, logStageDatasets, xMode])
   const finalChartTraces = useMemo(() => {
     if (!activeDataset) return []
     const palette = LINE_COLOR_PALETTES[chartLineColors.final] ?? LINE_COLOR_PALETTES.blue
@@ -869,12 +874,12 @@ export default function XRD({
         line: { color: palette.accent, width: 1.4, dash: 'dot' },
         customdata: refCustomData as unknown as Plotly.Datum[],
         hovertemplate: [
-          'Material: %{customdata[0]}',
-          'Phase: %{customdata[1]}',
-          'HKL: %{customdata[2]}',
-          '2θ: %{customdata[3]:.4f}°',
-          'd: %{customdata[4]:.4f} Å',
-          'Rel. I: %{customdata[5]:.1f}%',
+          '物質：%{customdata[0]}',
+          '相：%{customdata[1]}',
+          '晶面 HKL：%{customdata[2]}',
+          '2θ：%{customdata[3]:.4f}°',
+          '晶面間距 d：%{customdata[4]:.4f} Å',
+          '相對強度：%{customdata[5]:.1f}%',
           '<extra></extra>',
         ].join('<br>'),
       })
@@ -894,12 +899,12 @@ export default function XRD({
           line: { color: palette.accent, width: 1.5 },
         },
         hovertemplate: [
-          'Material: %{customdata[0]}',
-          'Phase: %{customdata[1]}',
-          'HKL: %{customdata[2]}',
-          '2θ: %{customdata[3]:.4f}°',
-          'd: %{customdata[4]:.4f} Å',
-          'Rel. I: %{customdata[5]:.1f}%',
+          '物質：%{customdata[0]}',
+          '相：%{customdata[1]}',
+          '晶面 HKL：%{customdata[2]}',
+          '2θ：%{customdata[3]:.4f}°',
+          '晶面間距 d：%{customdata[4]:.4f} Å',
+          '相對強度：%{customdata[5]:.1f}%',
           '<extra></extra>',
         ].join('<br>'),
       })
@@ -982,7 +987,22 @@ export default function XRD({
     [logChartTraces, logHidden],
   )
   const weakPeakPlotLayout = useMemo(
-    () => chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` }),
+    () => ({
+      ...chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` }),
+      title: { text: 'XRD 弱峰分析圖' },
+      xaxis: {
+        ...chartLayout({ xMode, wavelength }).xaxis,
+        title: { text: xMode === 'dspacing' ? '晶面間距 d（Å）' : '2θ（度）' },
+      },
+      yaxis: {
+        ...chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` }).yaxis,
+        title: { text: `${logViewParams.method} 強度` },
+      },
+      legend: {
+        ...chartLayout({ xMode, wavelength }).legend,
+        title: { text: '圖例' },
+      },
+    }),
     [logViewParams.method, wavelength, xMode],
   )
   const weakPeakPlotConfig = useMemo(
@@ -1042,18 +1062,45 @@ export default function XRD({
     () => buildFinalPeakRows(detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg, peakParams.show_unmatched_peaks),
     [detectedPeaks, filteredRefPeaks, peakParams.show_unmatched_peaks, refMatchParams.tolerance_deg],
   )
+  const weakPeakExportRows = useMemo<WeakPeakExportRow[]>(() => (
+    finalPeakRows.map(row => {
+      const detectedPeak = detectedPeaks.find(peak => Math.abs(peak.two_theta - row.two_theta) <= 0.0001)
+      const refPeak = filteredRefPeaks.find(ref =>
+        row.reference_2theta != null
+        && Math.abs(ref.two_theta - row.reference_2theta) <= 0.0001
+        && (!row.hkl || ref.hkl === row.hkl)
+      )
+      return {
+        two_theta: row.two_theta,
+        d_spacing: detectedPeak?.d_spacing ?? refPeak?.d_spacing,
+        intensity: row.intensity,
+        rel_intensity: detectedPeak?.rel_intensity,
+        fwhm_deg: row.fwhm_deg,
+        snr: row.snr,
+        confidence: row.confidence,
+        matched_material: refPeak?.material ?? '',
+        phase: row.phase,
+        hkl: row.hkl,
+        source: refPeak?.source ?? '',
+        note: localizePeakNote(row.note),
+      }
+    })
+  ), [detectedPeaks, filteredRefPeaks, finalPeakRows])
   const handleExportWeakPeaksTxt = useCallback(() => {
+    if (weakPeakExportRows.length === 0) {
+      window.alert('目前沒有可匯出的弱峰資料。')
+      return
+    }
     const datasetName = activeDataset?.name ?? 'xrd'
     const content = buildWeakPeaksTxt({
+      rows: weakPeakExportRows,
       datasetName,
       wavelength,
-      detectedPeaks,
-      finalPeakRows,
-      referencePeaks: filteredRefPeaks,
+      generatedAt: new Date(),
     })
-    const filename = `xrd_weak_peaks_${safeFilenamePart(datasetName)}_${timestampForFilename()}.txt`
+    const filename = `xrd_弱峰分析_${safeFilenamePart(datasetName)}_${timestampForFilename()}.txt`
     downloadTextFile(filename, content)
-  }, [activeDataset?.name, detectedPeaks, filteredRefPeaks, finalPeakRows, wavelength])
+  }, [activeDataset?.name, wavelength, weakPeakExportRows])
   const matchedReferenceCount = useMemo(
     () => referenceMatches.filter(row => row.matched).length,
     [referenceMatches],
@@ -1606,7 +1653,7 @@ export default function XRD({
                         <p>相：{selectedRefPeak.phase}</p>
                         <p>晶面 HKL：{selectedRefPeak.hkl || '-'}</p>
                         <p>2θ：{formatNumber(selectedRefPeak.two_theta, 4)}°</p>
-                        <p>d-spacing：{formatNumber(selectedRefPeak.d_spacing, 4)} Å</p>
+                        <p>晶面間距 d：{formatNumber(selectedRefPeak.d_spacing, 4)} Å</p>
                         <p>相對強度：{formatNumber(selectedRefPeak.rel_i, 1)}%</p>
                         <p>容許誤差：{formatNumber(selectedRefPeak.tolerance, 4)}°</p>
                         <p className="sm:col-span-2">來源：{selectedRefPeak.source}</p>
@@ -1641,16 +1688,16 @@ export default function XRD({
                   <div className="mb-4 flex justify-start">
                     <button
                       type="button"
-                      disabled={detectedPeaks.length === 0}
+                      disabled={weakPeakExportRows.length === 0}
                       onClick={handleExportWeakPeaksTxt}
                       className={[
                         'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
-                        detectedPeaks.length === 0
+                        weakPeakExportRows.length === 0
                           ? 'cursor-not-allowed border-white/5 bg-white/5 text-slate-500'
                           : 'border-white/10 bg-white/5 text-slate-100 hover:border-cyan-300/40 hover:text-cyan-100',
                       ].join(' ')}
                     >
-                      匯出弱峰 .txt
+                      匯出弱峰資料 .txt
                     </button>
                   </div>
 
