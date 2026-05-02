@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react'
-import Plot from '../components/PlotlyChart'
+import Plot, { type PlotClickEvent } from '../components/PlotlyChart'
 import type {
   DetectedPeak,
   FinalPeakRow,
@@ -118,6 +118,10 @@ function timestampForFilename(date = new Date()) {
   ].join('')
 }
 
+function formatNumber(value: number | null | undefined, digits = 4) {
+  return Number.isFinite(value) ? Number(value).toFixed(digits) : '-'
+}
+
 function refPeakToCustomData(peak: RefPeak): RefPeakCustomData {
   return [
     peak.material,
@@ -131,7 +135,7 @@ function refPeakToCustomData(peak: RefPeak): RefPeakCustomData {
   ]
 }
 
-function customDataToRefPeak(customdata: unknown): RefPeak | null {
+function customDataToRefPeak(customdata: unknown, fallbackX?: number | string | null): RefPeak | null {
   if (!Array.isArray(customdata) || customdata.length < 8) return null
   const [material, phase, hkl, twoTheta, dSpacing, relI, source, tolerance] = customdata
   if (
@@ -139,22 +143,19 @@ function customDataToRefPeak(customdata: unknown): RefPeak | null {
     || typeof phase !== 'string'
     || typeof hkl !== 'string'
     || typeof source !== 'string'
-    || !Number.isFinite(Number(twoTheta))
-    || !Number.isFinite(Number(dSpacing))
-    || !Number.isFinite(Number(relI))
-    || !Number.isFinite(Number(tolerance))
   ) {
     return null
   }
+  if (!material && !phase && !hkl) return null
   return {
-    material,
-    phase,
-    hkl,
-    two_theta: Number(twoTheta),
-    d_spacing: Number(dSpacing),
-    rel_i: Number(relI),
-    source,
-    tolerance: Number(tolerance),
+    material: String(material ?? ''),
+    phase: String(phase ?? ''),
+    hkl: String(hkl ?? ''),
+    two_theta: Number(twoTheta ?? fallbackX ?? 0),
+    d_spacing: Number(dSpacing ?? 0),
+    rel_i: Number(relI ?? 0),
+    source: String(source ?? ''),
+    tolerance: Number(tolerance ?? 0),
   }
 }
 
@@ -877,6 +878,31 @@ export default function XRD({
           '<extra></extra>',
         ].join('<br>'),
       })
+      traces.push({
+        x: filteredRefPeaks.map(peak => (xMode === 'dspacing' ? peak.d_spacing : peak.two_theta)),
+        y: filteredRefPeaks.map(peak => yMax * (peak.rel_i / 100) * 0.8),
+        type: 'scatter',
+        mode: 'markers',
+        name: '參考峰點擊區',
+        showlegend: false,
+        customdata: filteredRefPeaks.map(refPeakToCustomData) as unknown as Plotly.Datum[],
+        marker: {
+          color: palette.accent,
+          size: 9,
+          symbol: 'line-ns-open',
+          opacity: 0.85,
+          line: { color: palette.accent, width: 1.5 },
+        },
+        hovertemplate: [
+          'Material: %{customdata[0]}',
+          'Phase: %{customdata[1]}',
+          'HKL: %{customdata[2]}',
+          '2θ: %{customdata[3]:.4f}°',
+          'd: %{customdata[4]:.4f} Å',
+          'Rel. I: %{customdata[5]:.1f}%',
+          '<extra></extra>',
+        ].join('<br>'),
+      })
     }
     if (detectedPeaks.length > 0 && peakParams.enabled) {
       const regularPeaks = detectedPeaks.filter(peak => peak.confidence !== 'low' && (filteredRefPeaks.length === 0 || isNearReference(peak, filteredRefPeaks, refMatchParams.tolerance_deg)))
@@ -936,11 +962,52 @@ export default function XRD({
     () => activeDataset ? [{ name: activeDataset.name, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_processed }] : [],
     [activeDataset, wavelength, xMode],
   )
-  const handleFinalPlotClick = useCallback((event: Readonly<Plotly.PlotMouseEvent>) => {
-    const point = event.points?.[0] as (Plotly.PlotDatum & { customdata?: unknown }) | undefined
-    const refPeak = customDataToRefPeak(point?.customdata)
+  const handlePlotClick = useCallback((event: PlotClickEvent) => {
+    const point = event.points?.[0] as (Plotly.PlotDatum & {
+      customdata?: unknown
+      data?: { customdata?: unknown[] }
+      pointIndex?: number
+      pointNumber?: number
+    }) | undefined
+    const pointIndex = point?.pointIndex ?? point?.pointNumber
+    const traceCustomData = typeof pointIndex === 'number' && Array.isArray(point?.data?.customdata)
+      ? point.data.customdata[pointIndex]
+      : undefined
+    const fallbackX = typeof point?.x === 'number' || typeof point?.x === 'string' ? point.x : undefined
+    const refPeak = customDataToRefPeak(point?.customdata ?? traceCustomData, fallbackX)
     if (refPeak) setSelectedRefPeak(refPeak)
   }, [])
+  const weakPeakPlotData = useMemo(
+    () => applyHidden(logChartTraces, logHidden),
+    [logChartTraces, logHidden],
+  )
+  const weakPeakPlotLayout = useMemo(
+    () => chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` }),
+    [logViewParams.method, wavelength, xMode],
+  )
+  const weakPeakPlotConfig = useMemo(
+    () => withPlotFullscreen({ scrollZoom: false }),
+    [],
+  )
+  const renderWeakPeakChart = useCallback((height: number, bindLegend = true) => (
+    <Plot
+      data={weakPeakPlotData}
+      layout={{ ...weakPeakPlotLayout, height }}
+      config={weakPeakPlotConfig}
+      style={{ width: '100%', height }}
+      onLegendClick={bindLegend ? (makeLegendClick(setLogHidden) as never) : undefined}
+      onLegendDoubleClick={bindLegend ? (() => false) : undefined}
+      onClick={handlePlotClick}
+      useResizeHandler
+    />
+  ), [handlePlotClick, weakPeakPlotConfig, weakPeakPlotData, weakPeakPlotLayout])
+  const openWeakPeakChartPopup = useCallback(() => {
+    if (!onOpenPlotPopup || logChartTraces.length === 0) return
+    onOpenPlotPopup({
+      title: 'XRD 弱峰分析圖',
+      content: renderWeakPeakChart(650, false),
+    })
+  }, [logChartTraces.length, onOpenPlotPopup, renderWeakPeakChart])
   const renderFinalChart = useCallback((height: number, bindLegend = true) => {
     return (
       <Plot
@@ -950,11 +1017,11 @@ export default function XRD({
         style={{ width: '100%', height }}
         onLegendClick={bindLegend ? (makeLegendClick(setFinalHidden) as never) : undefined}
         onLegendDoubleClick={bindLegend ? (() => false) : undefined}
-        onClick={handleFinalPlotClick}
+        onClick={handlePlotClick}
         useResizeHandler
       />
     )
-  }, [finalChartTraces, finalHidden, handleFinalPlotClick, wavelength, xMode])
+  }, [finalChartTraces, finalHidden, handlePlotClick, wavelength, xMode])
   const openFinalChartPopup = useCallback(() => {
     if (!onOpenPlotPopup || finalChartTraces.length === 0) return
 
@@ -1491,20 +1558,17 @@ export default function XRD({
                     title="3. 對數弱峰檢視"
                     colorValue={chartLineColors.log}
                     onColorChange={value => setChartLineColors(current => ({ ...current, log: value }))}
+                    actions={onOpenPlotPopup ? (
+                      <button type="button" className="chart-popup-button" onClick={openWeakPeakChartPopup}>
+                        彈出圖表
+                      </button>
+                    ) : undefined}
                   />
                   <p className="mb-3 text-xs text-[var(--text-soft)]">
                     此顯示模式只改變圖表縮放方式，方便觀察弱峰與寬尾巴。不影響尋峰、Scherrer 或參考峰匹配的計算基礎。
                   </p>
                   <DeferredRender minHeight={360}>
-                    <Plot
-                      data={applyHidden(logChartTraces, logHidden)}
-                      layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` })}
-                      config={withPlotFullscreen({ scrollZoom: false })}
-                      style={{ width: '100%', height: 360 }}
-                      onLegendClick={makeLegendClick(setLogHidden) as never}
-                      onLegendDoubleClick={() => false}
-                      useResizeHandler
-                    />
+                    {renderWeakPeakChart(360)}
                   </DeferredRender>
                 </div>
               )}
@@ -1541,10 +1605,10 @@ export default function XRD({
                         <p>物質：{selectedRefPeak.material}</p>
                         <p>相：{selectedRefPeak.phase}</p>
                         <p>晶面 HKL：{selectedRefPeak.hkl || '-'}</p>
-                        <p>2θ：{selectedRefPeak.two_theta.toFixed(4)}°</p>
-                        <p>d-spacing：{selectedRefPeak.d_spacing.toFixed(4)} Å</p>
-                        <p>相對強度：{selectedRefPeak.rel_i.toFixed(1)}%</p>
-                        <p>容許誤差：{selectedRefPeak.tolerance.toFixed(4)}°</p>
+                        <p>2θ：{formatNumber(selectedRefPeak.two_theta, 4)}°</p>
+                        <p>d-spacing：{formatNumber(selectedRefPeak.d_spacing, 4)} Å</p>
+                        <p>相對強度：{formatNumber(selectedRefPeak.rel_i, 1)}%</p>
+                        <p>容許誤差：{formatNumber(selectedRefPeak.tolerance, 4)}°</p>
                         <p className="sm:col-span-2">來源：{selectedRefPeak.source}</p>
                       </div>
                     </div>
