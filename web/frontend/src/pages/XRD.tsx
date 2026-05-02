@@ -53,8 +53,20 @@ import {
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import type { ProcessParams } from '../types/xrd'
+import { buildWeakPeaksTxt, downloadTextFile } from '../features/xrd/exportWeakPeaksTxt'
 
 type CsvCell = string | number | null | undefined
+
+type RefPeakCustomData = [
+  material: string,
+  phase: string,
+  hkl: string,
+  twoTheta: number,
+  dSpacing: number,
+  relI: number,
+  source: string,
+  tolerance: number,
+]
 
 function csvEscape(value: CsvCell): string {
   if (value == null) return ''
@@ -87,6 +99,63 @@ function downloadFile(content: string, filename: string, mime: string) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+function safeFilenamePart(value: string | null | undefined) {
+  return (value || 'xrd').replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '') || 'xrd'
+}
+
+function timestampForFilename(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    '_',
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join('')
+}
+
+function refPeakToCustomData(peak: RefPeak): RefPeakCustomData {
+  return [
+    peak.material,
+    peak.phase,
+    peak.hkl,
+    peak.two_theta,
+    peak.d_spacing,
+    peak.rel_i,
+    peak.source,
+    peak.tolerance,
+  ]
+}
+
+function customDataToRefPeak(customdata: unknown): RefPeak | null {
+  if (!Array.isArray(customdata) || customdata.length < 8) return null
+  const [material, phase, hkl, twoTheta, dSpacing, relI, source, tolerance] = customdata
+  if (
+    typeof material !== 'string'
+    || typeof phase !== 'string'
+    || typeof hkl !== 'string'
+    || typeof source !== 'string'
+    || !Number.isFinite(Number(twoTheta))
+    || !Number.isFinite(Number(dSpacing))
+    || !Number.isFinite(Number(relI))
+    || !Number.isFinite(Number(tolerance))
+  ) {
+    return null
+  }
+  return {
+    material,
+    phase,
+    hkl,
+    two_theta: Number(twoTheta),
+    d_spacing: Number(dSpacing),
+    rel_i: Number(relI),
+    source,
+    tolerance: Number(tolerance),
+  }
 }
 
 function twoThetaToD(twoThetaDeg: number, wavelengthAngstrom: number): number | null {
@@ -494,6 +563,7 @@ export default function XRD({
   const [result, setResult] = useState<ProcessResult | null>(null)
   const [refMaterials, setRefMaterials] = useState<string[]>([])
   const [selectedRefs, setSelectedRefs] = useState<string[]>([])
+  const [selectedRefPeak, setSelectedRefPeak] = useState<RefPeak | null>(null)
   const [refPeaks, setRefPeaks] = useState<RefPeak[]>([])
   const [logViewParams, setLogViewParams] = useState<LogViewParams>({
     enabled: false,
@@ -782,9 +852,12 @@ export default function XRD({
       const yMax = activeDataset.y_processed.reduce((max, value) => Math.max(max, value), Number.NEGATIVE_INFINITY)
       const xPoints: Array<number | null> = []
       const yPoints: Array<number | null> = []
+      const refCustomData: Array<RefPeakCustomData | null> = []
       filteredRefPeaks.forEach(peak => {
         xPoints.push(xMode === 'dspacing' ? peak.d_spacing : peak.two_theta, xMode === 'dspacing' ? peak.d_spacing : peak.two_theta, null)
         yPoints.push(0, yMax * (peak.rel_i / 100) * 0.8, null)
+        const customData = refPeakToCustomData(peak)
+        refCustomData.push(customData, customData, null)
       })
       traces.push({
         x: xPoints,
@@ -793,7 +866,16 @@ export default function XRD({
         mode: 'lines',
         name: '參考峰',
         line: { color: palette.accent, width: 1.4, dash: 'dot' },
-        hoverinfo: 'skip',
+        customdata: refCustomData as unknown as Plotly.Datum[],
+        hovertemplate: [
+          'Material: %{customdata[0]}',
+          'Phase: %{customdata[1]}',
+          'HKL: %{customdata[2]}',
+          '2θ: %{customdata[3]:.4f}°',
+          'd: %{customdata[4]:.4f} Å',
+          'Rel. I: %{customdata[5]:.1f}%',
+          '<extra></extra>',
+        ].join('<br>'),
       })
     }
     if (detectedPeaks.length > 0 && peakParams.enabled) {
@@ -854,6 +936,11 @@ export default function XRD({
     () => activeDataset ? [{ name: activeDataset.name, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_processed }] : [],
     [activeDataset, wavelength, xMode],
   )
+  const handleFinalPlotClick = useCallback((event: Readonly<Plotly.PlotMouseEvent>) => {
+    const point = event.points?.[0] as (Plotly.PlotDatum & { customdata?: unknown }) | undefined
+    const refPeak = customDataToRefPeak(point?.customdata)
+    if (refPeak) setSelectedRefPeak(refPeak)
+  }, [])
   const renderFinalChart = useCallback((height: number, bindLegend = true) => {
     return (
       <Plot
@@ -863,10 +950,11 @@ export default function XRD({
         style={{ width: '100%', height }}
         onLegendClick={bindLegend ? (makeLegendClick(setFinalHidden) as never) : undefined}
         onLegendDoubleClick={bindLegend ? (() => false) : undefined}
+        onClick={handleFinalPlotClick}
         useResizeHandler
       />
     )
-  }, [finalChartTraces, finalHidden, wavelength, xMode])
+  }, [finalChartTraces, finalHidden, handleFinalPlotClick, wavelength, xMode])
   const openFinalChartPopup = useCallback(() => {
     if (!onOpenPlotPopup || finalChartTraces.length === 0) return
 
@@ -887,6 +975,18 @@ export default function XRD({
     () => buildFinalPeakRows(detectedPeaks, filteredRefPeaks, refMatchParams.tolerance_deg, peakParams.show_unmatched_peaks),
     [detectedPeaks, filteredRefPeaks, peakParams.show_unmatched_peaks, refMatchParams.tolerance_deg],
   )
+  const handleExportWeakPeaksTxt = useCallback(() => {
+    const datasetName = activeDataset?.name ?? 'xrd'
+    const content = buildWeakPeaksTxt({
+      datasetName,
+      wavelength,
+      detectedPeaks,
+      finalPeakRows,
+      referencePeaks: filteredRefPeaks,
+    })
+    const filename = `xrd_weak_peaks_${safeFilenamePart(datasetName)}_${timestampForFilename()}.txt`
+    downloadTextFile(filename, content)
+  }, [activeDataset?.name, detectedPeaks, filteredRefPeaks, finalPeakRows, wavelength])
   const matchedReferenceCount = useMemo(
     () => referenceMatches.filter(row => row.matched).length,
     [referenceMatches],
@@ -1425,6 +1525,30 @@ export default function XRD({
                   <DeferredRender minHeight={380}>
                     {renderFinalChart(380)}
                   </DeferredRender>
+                  {selectedRefPeak && (
+                    <div className="mt-3 rounded-2xl border border-cyan-300/20 bg-slate-950/35 px-4 py-3 text-sm text-slate-200">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="font-semibold text-white">參考峰資訊</p>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRefPeak(null)}
+                          className="rounded-full border border-white/10 px-3 py-1 text-xs font-medium text-slate-200 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
+                        >
+                          關閉
+                        </button>
+                      </div>
+                      <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                        <p>物質：{selectedRefPeak.material}</p>
+                        <p>相：{selectedRefPeak.phase}</p>
+                        <p>晶面 HKL：{selectedRefPeak.hkl || '-'}</p>
+                        <p>2θ：{selectedRefPeak.two_theta.toFixed(4)}°</p>
+                        <p>d-spacing：{selectedRefPeak.d_spacing.toFixed(4)} Å</p>
+                        <p>相對強度：{selectedRefPeak.rel_i.toFixed(1)}%</p>
+                        <p>容許誤差：{selectedRefPeak.tolerance.toFixed(4)}°</p>
+                        <p className="sm:col-span-2">來源：{selectedRefPeak.source}</p>
+                      </div>
+                    </div>
+                  )}
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -1449,6 +1573,21 @@ export default function XRD({
                     <span className="text-xs text-slate-500">
                       {detectedPeaks.length} 個峰
                     </span>
+                  </div>
+                  <div className="mb-4 flex justify-start">
+                    <button
+                      type="button"
+                      disabled={detectedPeaks.length === 0}
+                      onClick={handleExportWeakPeaksTxt}
+                      className={[
+                        'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                        detectedPeaks.length === 0
+                          ? 'cursor-not-allowed border-white/5 bg-white/5 text-slate-500'
+                          : 'border-white/10 bg-white/5 text-slate-100 hover:border-cyan-300/40 hover:text-cyan-100',
+                      ].join(' ')}
+                    >
+                      匯出弱峰 .txt
+                    </button>
                   </div>
 
                   {detectedPeaks.length === 0 ? (
