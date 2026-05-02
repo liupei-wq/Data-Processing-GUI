@@ -54,6 +54,11 @@ import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import type { ProcessParams } from '../types/xrd'
 import { buildWeakPeaksTxt, downloadTextFile, type WeakPeakExportRow } from '../features/xrd/exportWeakPeaksTxt'
+import {
+  buildTransformedWeakPeakSeriesTxt,
+  transformWeakPeakIntensity,
+  type WeakPeakIntensityTransform,
+} from '../features/xrd/weakPeakIntensityTransform'
 
 type CsvCell = string | number | null | undefined
 
@@ -571,6 +576,7 @@ export default function XRD({
     method: 'log10',
     floor_value: 0.000001,
   })
+  const [weakPeakIntensityTransform, setWeakPeakIntensityTransform] = useState<WeakPeakIntensityTransform>('raw')
   const [refMatchParams, setRefMatchParams] = useState<ReferenceMatchParams>({
     min_rel_intensity: 10,
     tolerance_deg: 0.3,
@@ -802,16 +808,22 @@ export default function XRD({
       },
     ] as Plotly.Data[]
   }, [activeDataset, chartLineColors.preprocess, wavelength, xMode])
+  const weakPeakTransformedSeries = useMemo(
+    () => transformWeakPeakIntensity(
+      activeDataset ? convertXValues(activeDataset.x, xMode, wavelength) : [],
+      activeDataset?.y_processed ?? [],
+      weakPeakIntensityTransform,
+    ),
+    [activeDataset, wavelength, weakPeakIntensityTransform, xMode],
+  )
   const logStageDatasets = useMemo(() => {
     if (!activeDataset || !logViewParams.enabled) return []
-    const minValue = activeDataset.y_processed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
-    const shift = minValue <= 0 ? Math.abs(minValue) + logViewParams.floor_value : logViewParams.floor_value
     return [{
-      name: '弱峰',
-      x: convertXValues(activeDataset.x, xMode, wavelength),
-      y: activeDataset.y_processed.map(value => safeLogValue(value, shift, logViewParams.method, logViewParams.floor_value)),
+      name: weakPeakTransformedSeries.label,
+      x: weakPeakTransformedSeries.x,
+      y: weakPeakTransformedSeries.y,
     }]
-  }, [activeDataset, logViewParams, wavelength, xMode])
+  }, [activeDataset, logViewParams.enabled, weakPeakTransformedSeries])
   const logChartTraces = useMemo(() => {
     if (logStageDatasets.length === 0) return []
     const palette = LINE_COLOR_PALETTES[chartLineColors.log] ?? LINE_COLOR_PALETTES.violet
@@ -820,15 +832,15 @@ export default function XRD({
       y: logStageDatasets[0].y,
       type: 'scatter',
       mode: 'lines',
-      name: '弱峰',
+      name: weakPeakTransformedSeries.label,
       line: { color: palette.primary, width: 2.1 },
       hovertemplate: [
         xMode === 'dspacing' ? '晶面間距 d：%{x:.4f} Å' : '2θ：%{x:.4f}°',
-        '強度：%{y:.4f}',
+        `${weakPeakTransformedSeries.yAxisTitle}：%{y:.4f}`,
         '<extra></extra>',
       ].join('<br>'),
     }] as Plotly.Data[]
-  }, [chartLineColors.log, logStageDatasets, xMode])
+  }, [chartLineColors.log, logStageDatasets, weakPeakTransformedSeries.label, weakPeakTransformedSeries.yAxisTitle, xMode])
   const finalChartTraces = useMemo(() => {
     if (!activeDataset) return []
     const palette = LINE_COLOR_PALETTES[chartLineColors.final] ?? LINE_COLOR_PALETTES.blue
@@ -988,22 +1000,22 @@ export default function XRD({
   )
   const weakPeakPlotLayout = useMemo(
     () => ({
-      ...chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` }),
-      title: { text: 'XRD 弱峰分析圖' },
+      ...chartLayout({ xMode, wavelength, yTitle: weakPeakTransformedSeries.yAxisTitle }),
+      title: { text: `XRD 弱峰檢視圖（${weakPeakTransformedSeries.label}）` },
       xaxis: {
         ...chartLayout({ xMode, wavelength }).xaxis,
         title: { text: xMode === 'dspacing' ? '晶面間距 d（Å）' : '2θ（度）' },
       },
       yaxis: {
-        ...chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` }).yaxis,
-        title: { text: `${logViewParams.method} 強度` },
+        ...chartLayout({ xMode, wavelength, yTitle: weakPeakTransformedSeries.yAxisTitle }).yaxis,
+        title: { text: weakPeakTransformedSeries.yAxisTitle },
       },
       legend: {
         ...chartLayout({ xMode, wavelength }).legend,
         title: { text: '圖例' },
       },
     }),
-    [logViewParams.method, wavelength, xMode],
+    [weakPeakTransformedSeries.label, weakPeakTransformedSeries.yAxisTitle, wavelength, xMode],
   )
   const weakPeakPlotConfig = useMemo(
     () => withPlotFullscreen({ scrollZoom: false }),
@@ -1024,10 +1036,10 @@ export default function XRD({
   const openWeakPeakChartPopup = useCallback(() => {
     if (!onOpenPlotPopup || logChartTraces.length === 0) return
     onOpenPlotPopup({
-      title: 'XRD 弱峰分析圖',
+      title: `XRD 弱峰分析圖（${weakPeakTransformedSeries.label}）`,
       content: renderWeakPeakChart(650, false),
     })
-  }, [logChartTraces.length, onOpenPlotPopup, renderWeakPeakChart])
+  }, [logChartTraces.length, onOpenPlotPopup, renderWeakPeakChart, weakPeakTransformedSeries.label])
   const renderFinalChart = useCallback((height: number, bindLegend = true) => {
     return (
       <Plot
@@ -1101,6 +1113,16 @@ export default function XRD({
     const filename = `xrd_弱峰分析_${safeFilenamePart(datasetName)}_${timestampForFilename()}.txt`
     downloadTextFile(filename, content)
   }, [activeDataset?.name, wavelength, weakPeakExportRows])
+  const handleExportTransformedWeakPeakSeriesTxt = useCallback(() => {
+    if (weakPeakTransformedSeries.x.length === 0) {
+      window.alert('目前沒有可匯出的弱峰檢視圖譜資料。')
+      return
+    }
+    const datasetName = activeDataset?.name ?? 'xrd'
+    const content = buildTransformedWeakPeakSeriesTxt(weakPeakTransformedSeries, datasetName, new Date())
+    const filename = `xrd_弱峰檢視_${safeFilenamePart(datasetName)}_${weakPeakIntensityTransform}_${timestampForFilename()}.txt`
+    downloadTextFile(filename, content)
+  }, [activeDataset?.name, weakPeakIntensityTransform, weakPeakTransformedSeries])
   const matchedReferenceCount = useMemo(
     () => referenceMatches.filter(row => row.matched).length,
     [referenceMatches],
@@ -1611,6 +1633,39 @@ export default function XRD({
                       </button>
                     ) : undefined}
                   />
+                  <div className="mb-3 grid gap-3 rounded-2xl border border-white/10 bg-slate-950/20 p-3 md:grid-cols-[220px_1fr_auto] md:items-end">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-[var(--text-main)]">強度轉換方式</label>
+                      <select
+                        value={weakPeakIntensityTransform}
+                        onChange={event => setWeakPeakIntensityTransform(event.target.value as WeakPeakIntensityTransform)}
+                        className="theme-input w-full rounded-xl px-3 py-2 text-sm"
+                      >
+                        <option value="raw">原始強度</option>
+                        <option value="log10">log10 強度</option>
+                        <option value="log1p">log1p 強度</option>
+                        <option value="sqrt">平方根強度</option>
+                        <option value="normalized">正規化強度</option>
+                      </select>
+                    </div>
+                    <div className="text-xs leading-5 text-[var(--text-soft)]">
+                      <p className="font-medium text-[var(--text-main)]">目前轉換方式：{weakPeakTransformedSeries.label}</p>
+                      <p>說明：{weakPeakTransformedSeries.description}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleExportTransformedWeakPeakSeriesTxt}
+                      disabled={weakPeakTransformedSeries.x.length === 0}
+                      className={[
+                        'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                        weakPeakTransformedSeries.x.length === 0
+                          ? 'cursor-not-allowed border-white/5 bg-white/5 text-slate-500'
+                          : 'border-white/10 bg-white/5 text-slate-100 hover:border-cyan-300/40 hover:text-cyan-100',
+                      ].join(' ')}
+                    >
+                      匯出轉換後圖譜 .txt
+                    </button>
+                  </div>
                   <p className="mb-3 text-xs text-[var(--text-soft)]">
                     此顯示模式只改變圖表縮放方式，方便觀察弱峰與寬尾巴。不影響尋峰、Scherrer 或參考峰匹配的計算基礎。
                   </p>
