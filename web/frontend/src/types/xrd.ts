@@ -257,4 +257,4 @@ export type WavelengthPreset =
   | 'Mo Kα (0.7093 Å)'
   | 'Cr Kα (2.2909 Å)'
   | 'Fe Kα (1.9373 Å)'
-  | 'Custom'
+  | '自訂'

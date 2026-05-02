@@ -47,7 +47,7 @@ export const WAVELENGTH_MAP: Record<WavelengthPreset, number> = {
   'Mo Kα (0.7093 Å)': 0.7093,
   'Cr Kα (2.2909 Å)': 2.2909,
   'Fe Kα (1.9373 Å)': 1.9373,
-  Custom: 1.5406,
+  自訂: 1.5406,
 }
 
 function Section({
@@ -282,8 +282,8 @@ export default function ProcessingPanel({
             onChange={value => set('smooth_method', value as ProcessParams['smooth_method'])}
             options={[
               { value: 'none', label: '不平滑' },
-              { value: 'moving_average', label: 'Moving Average' },
-              { value: 'savitzky_golay', label: 'Savitzky-Golay' },
+              { value: 'moving_average', label: '移動平均' },
+              { value: 'savitzky_golay', label: '薩維茨基－戈雷濾波' },
             ]}
           />
         </div>
@@ -366,10 +366,10 @@ export default function ProcessingPanel({
         )}
       </Section>
 
-      <Section step={7} title="波長與 X 軸" hint="控制 2θ / d-spacing 顯示" defaultOpen={false} infoContent={
+      <Section step={7} title="波長與 X 軸" hint="控制 2θ / 晶面間距顯示" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">波長與 X 軸說明</p>
-          <p>這一步控制顯示與換算基準，方便在 2θ 與 d-spacing 間切換比對。</p>
+          <p>這一步控制顯示與換算基準，方便在 2θ 與晶面間距間切換比對。</p>
         </div>
       }>
         <div>
@@ -380,9 +380,9 @@ export default function ProcessingPanel({
             options={Object.keys(WAVELENGTH_MAP).map(key => ({ value: key, label: key }))}
           />
         </div>
-        {wavelengthPreset === 'Custom' && (
+        {wavelengthPreset === '自訂' && (
           <NumberInput
-            label="自訂波長 (Å)"
+            label="自訂波長（Å）"
             value={customWavelength}
             min={0.05}
             max={3}
@@ -405,7 +405,7 @@ export default function ProcessingPanel({
                     : 'theme-input text-[var(--text-main)]',
                 ].join(' ')}
               >
-                {mode === 'twotheta' ? '2θ' : 'd-spacing'}
+                {mode === 'twotheta' ? '2θ' : '晶面間距 d'}
               </button>
             ))}
           </div>
@@ -414,24 +414,24 @@ export default function ProcessingPanel({
           <TogglePill
             checked={xAxisCorrection.enabled}
             onChange={value => setXAxisCorrection('enabled', value)}
-            label="Enable X-axis correction"
+            label="啟用 X 軸 / 2θ 校正"
           />
           {xAxisCorrection.enabled && (
             <>
               <div>
-                <Label>Correction mode</Label>
+                <Label>校正模式</Label>
                 <Select
                   value={xAxisCorrection.mode}
                   onChange={value => setXAxisCorrection('mode', value as XAxisCorrectionParams['mode'])}
                   options={[
-                    { value: 'manual', label: 'Manual offset' },
-                    { value: 'calibration', label: 'Expected vs measured peaks' },
+                    { value: 'manual', label: '手動偏移' },
+                    { value: 'calibration', label: '標準峰與量測峰校正' },
                   ]}
                 />
               </div>
               {xAxisCorrection.mode === 'manual' ? (
                 <NumberInput
-                  label="Offset added to 2theta (deg)"
+                  label="加到 2θ 的偏移量（degree）"
                   value={xAxisCorrection.manual_offset}
                   min={-5}
                   max={5}
@@ -441,18 +441,18 @@ export default function ProcessingPanel({
               ) : (
                 <>
                   <div>
-                    <Label>Fit type</Label>
+                    <Label>擬合方式</Label>
                     <Select
                       value={xAxisCorrection.correction_type}
                       onChange={value => setXAxisCorrection('correction_type', value as XAxisCorrectionParams['correction_type'])}
                       options={[
-                        { value: 'constant', label: 'Constant offset' },
-                        { value: 'linear', label: 'Linear correction' },
+                        { value: 'constant', label: '固定偏移' },
+                        { value: 'linear', label: '線性校正' },
                       ]}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Calibration peaks: expected / measured</Label>
+                    <Label>校正峰：標準值 / 量測值</Label>
                     {xAxisCorrection.calibration_points.map((point, idx) => (
                       <div key={`xcal-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2">
                         <input
@@ -461,7 +461,7 @@ export default function ProcessingPanel({
                           step={0.001}
                           onChange={event => setXAxisCorrection('calibration_points', xAxisCorrection.calibration_points.map((item, itemIdx) => itemIdx === idx ? { ...item, expected: Number(event.target.value) } : item))}
                           className="theme-input min-w-0 rounded-xl px-3 py-2 text-sm"
-                          title="Expected 2theta"
+                          title="標準 2θ"
                         />
                         <input
                           type="number"
@@ -469,14 +469,14 @@ export default function ProcessingPanel({
                           step={0.001}
                           onChange={event => setXAxisCorrection('calibration_points', xAxisCorrection.calibration_points.map((item, itemIdx) => itemIdx === idx ? { ...item, measured: Number(event.target.value) } : item))}
                           className="theme-input min-w-0 rounded-xl px-3 py-2 text-sm"
-                          title="Measured 2theta"
+                          title="量測 2θ"
                         />
                         <button
                           type="button"
                           onClick={() => setXAxisCorrection('calibration_points', xAxisCorrection.calibration_points.filter((_, itemIdx) => itemIdx !== idx))}
                           className="rounded-xl border border-[var(--card-border)] px-3 text-xs text-[var(--text-main)]"
                         >
-                          Remove
+                          移除
                         </button>
                       </div>
                     ))}
@@ -485,14 +485,14 @@ export default function ProcessingPanel({
                       onClick={() => setXAxisCorrection('calibration_points', [...xAxisCorrection.calibration_points, { expected: 0, measured: 0 }])}
                       className="w-full rounded-xl border border-dashed border-[var(--pill-border)] bg-[var(--pill-bg)] px-3 py-2 text-sm font-medium text-[var(--accent)]"
                     >
-                      Add calibration peak
+                      新增校正峰
                     </button>
                   </div>
                 </>
               )}
-              <Checkbox checked={xAxisCorrection.show_raw_curve} onChange={value => setXAxisCorrection('show_raw_curve', value)} label="Show raw curve" />
-              <Checkbox checked={xAxisCorrection.show_corrected_curve} onChange={value => setXAxisCorrection('show_corrected_curve', value)} label="Show corrected curve" />
-              <Checkbox checked={xAxisCorrection.show_reference_markers} onChange={value => setXAxisCorrection('show_reference_markers', value)} label="Show reference peak markers" />
+              <Checkbox checked={xAxisCorrection.show_raw_curve} onChange={value => setXAxisCorrection('show_raw_curve', value)} label="顯示原始曲線" />
+              <Checkbox checked={xAxisCorrection.show_corrected_curve} onChange={value => setXAxisCorrection('show_corrected_curve', value)} label="顯示校正後曲線" />
+              <Checkbox checked={xAxisCorrection.show_reference_markers} onChange={value => setXAxisCorrection('show_reference_markers', value)} label="顯示參考峰標記" />
             </>
           )}
         </div>
@@ -513,7 +513,7 @@ export default function ProcessingPanel({
           onChange={value => setRefMatch('min_rel_intensity', value)}
         />
         <NumberInput
-          label="匹配容差 (deg)"
+          label="匹配容差（degree）"
           value={refMatchParams.tolerance_deg}
           min={0.01}
           max={2}
@@ -575,7 +575,7 @@ export default function ProcessingPanel({
                     onClick={() => onApplyPeakPreset('thin_film_si')}
                     className="theme-pill rounded-xl px-3 py-2 text-sm font-medium text-[var(--accent)] transition-colors hover:opacity-90"
                   >
-                    Thin film on Si
+                    Si 薄膜樣品
                   </button>
                   <button
                     type="button"
@@ -586,7 +586,7 @@ export default function ProcessingPanel({
                   </button>
                 </div>
                 <p className="text-xs leading-5 text-[var(--text-soft)]">
-                  `Thin film on Si` 會預設保留 `68–70°` 排除區，較適合 Ga₂O₃ / NiO / Si 這類薄膜樣品。
+                  `Si 薄膜樣品` 會預設保留 `68–70°` 排除區，較適合 Ga₂O₃ / NiO / Si 這類薄膜樣品。
                 </p>
               </div>
             )}
@@ -603,7 +603,7 @@ export default function ProcessingPanel({
               />
             </div>
             <NumberInput
-              label="最小峰距 (deg)"
+              label="最小峰距（degree）"
               value={peakParams.min_distance}
               min={0.05}
               max={10}
@@ -612,7 +612,7 @@ export default function ProcessingPanel({
             />
             <div className="grid grid-cols-2 gap-2">
               <NumberInput
-                label="最小峰寬 (deg)"
+                label="最小峰寬（degree）"
                 value={peakParams.width_min}
                 min={0.005}
                 max={5}
@@ -620,7 +620,7 @@ export default function ProcessingPanel({
                 onChange={value => setPeak('width_min', value)}
               />
               <NumberInput
-                label="最大峰寬 (deg)"
+                label="最大峰寬（degree）"
                 value={peakParams.width_max}
                 min={0.01}
                 max={8}
@@ -629,7 +629,7 @@ export default function ProcessingPanel({
               />
             </div>
             <NumberInput
-              label="最小 S/N"
+              label="最小訊雜比"
               value={peakParams.min_snr}
               min={1}
               max={20}
@@ -637,7 +637,7 @@ export default function ProcessingPanel({
               onChange={value => setPeak('min_snr', value)}
             />
             <div className="space-y-2">
-              <Label>排除區間 (deg)</Label>
+              <Label>排除區間（degree）</Label>
               <p className="text-xs leading-5 text-[var(--text-soft)]">
                 尋峰前會先排除這些 2θ 區段，不讓它們影響雜訊估算與峰值判斷。薄膜 on Si 常用 `68–70`。
               </p>
@@ -707,7 +707,7 @@ export default function ProcessingPanel({
       <Section step={10} title="Scherrer" hint="晶粒尺寸估算" defaultOpen={false} infoContent={
         <div className="space-y-3">
           <p className="font-semibold text-[var(--text-main)]">Scherrer 說明</p>
-          <p>使用尋峰得到的 FWHM 估算晶粒尺寸，適合快速比較，不代表完整結構分析。</p>
+          <p>使用尋峰得到的半高寬估算晶粒尺寸，適合快速比較，不代表完整結構分析。</p>
         </div>
       }>
         <TogglePill
@@ -726,7 +726,7 @@ export default function ProcessingPanel({
               onChange={value => setScherrer('k', value)}
             />
             <NumberInput
-              label="儀器展寬 (deg)"
+              label="儀器展寬（degree）"
               value={scherrerParams.instrument_broadening_deg}
               min={0}
               max={5}
@@ -745,13 +745,13 @@ export default function ProcessingPanel({
                 }
                 options={[
                   { value: 'none', label: '不修正' },
-                  { value: 'gaussian', label: 'Gaussian' },
-                  { value: 'lorentzian', label: 'Lorentzian' },
+                  { value: 'gaussian', label: '高斯' },
+                  { value: 'lorentzian', label: '洛倫茲' },
                 ]}
               />
             </div>
             <p className="text-xs leading-5 text-[var(--text-soft)]">
-              這一步直接使用尋峰得到的 FWHM。結果對峰寬與儀器展寬設定很敏感，只適合快速比較。
+              這一步直接使用尋峰得到的半高寬。結果對峰寬與儀器展寬設定很敏感，只適合快速比較。
             </p>
           </>
         )}

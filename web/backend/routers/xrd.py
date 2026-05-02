@@ -242,7 +242,7 @@ class RefPeak(BaseModel):
     two_theta: float
     d_spacing: float
     rel_i: float
-    source: str = "Built-in XRD reference library"
+    source: str = "內建 XRD 參考峰資料庫"
     tolerance: float = 0.3
 
 
@@ -294,7 +294,7 @@ def process_data(req: ProcessRequest):
     Processing order: interpolate → average → background subtraction → Gaussian subtraction → smooth → normalize
     """
     if not req.datasets:
-        raise HTTPException(status_code=400, detail="No datasets provided")
+        raise HTTPException(status_code=400, detail="沒有提供資料集")
 
     params = req.params
     datasets = req.datasets
@@ -317,7 +317,7 @@ def process_data(req: ProcessRequest):
         x_min = max(p[1].min() for p in processed_pairs)
         x_max = min(p[1].max() for p in processed_pairs)
         if x_min >= x_max:
-            raise HTTPException(status_code=400, detail="Files have no overlapping x range")
+            raise HTTPException(status_code=400, detail="檔案之間沒有重疊的 X 軸範圍")
         x_grid = np.linspace(
             x_min,
             x_max,
@@ -325,7 +325,7 @@ def process_data(req: ProcessRequest):
         )
         interped = [interpolate_spectrum_to_grid(x, y, x_grid) for _, x, y in processed_pairs]
         y_avg = mean_spectrum_arrays(interped)
-        average_output = _build_dataset_output("Average", x_grid, y_avg, params)
+        average_output = _build_dataset_output("平均", x_grid, y_avg, params)
 
     # ── 3. Smooth + normalize each dataset ───────────────────────────────────
     output_datasets: list[DatasetOutput] = []
@@ -511,11 +511,11 @@ def detect_peaks(req: PeakDetectRequest):
             confidence = "low"
         note_parts = []
         if confidence == "low":
-            note_parts.append("close to noise floor")
+            note_parts.append("接近雜訊底線")
         elif confidence == "medium":
-            note_parts.append("moderate confidence peak")
+            note_parts.append("中等信心峰")
         if snr < max(float(req.min_snr) + 1.0, 4.0):
-            note_parts.append("manual confirmation suggested")
+            note_parts.append("建議人工確認")
         peaks.append(PeakRow(
             two_theta=round(tt, 4),
             d_spacing=round(d, 4),
@@ -591,14 +591,14 @@ def fit_xrd_peaks(req: FitRequest):
     for idx, peak in enumerate(result.get("peaks", []), start=1):
         flags: list[str] = []
         if bool(peak.get("center_at_boundary", False)):
-            flags.append("center at boundary")
+            flags.append("中心位置碰到邊界")
         if bool(peak.get("fwhm_at_boundary", False)):
-            flags.append("FWHM at limit")
+            flags.append("半高寬達到限制")
         if bool(peak.get("broad_peak", False)):
-            flags.append("broad peak")
+            flags.append("寬峰")
         rows.append(FitPeakRow(
             Peak_ID=str(peak.get("peak_id", f"peak_{idx}")),
-            Peak_Name=str(peak.get("label", f"Peak {idx}")),
+            Peak_Name=str(peak.get("label", f"峰 {idx}")),
             Phase=str(peak.get("phase", "")),
             HKL=str(peak.get("hkl", "")),
             Profile=str(peak.get("profile", req.profile)),
@@ -612,7 +612,7 @@ def fit_xrd_peaks(req: FitRequest):
             Eta=float(peak.get("eta")) if peak.get("eta") is not None else None,
             Confidence=str(peak.get("confidence", "medium")),
             Near_Reference=bool(peak.get("near_reference", False)),
-            Fit_Status="Fit boundary" if flags else "Fit OK",
+            Fit_Status="擬合碰到邊界" if flags else "擬合成功",
             Note="; ".join(flags + ([str(peak.get("note"))] if peak.get("note") else [])),
         ))
 
@@ -667,7 +667,7 @@ def get_reference_peaks(req: RefPeaksRequest):
                 two_theta=round(tt, 4),
                 d_spacing=round(p["d"], 4),
                 rel_i=float(p["rel_i"]),
-                source=str(p.get("source", ref.get("source", "Built-in XRD reference library"))),
+                source=str(p.get("source", ref.get("source", "內建 XRD 參考峰資料庫"))),
                 tolerance=float(p.get("tolerance", ref.get("tolerance", 0.3))),
             ))
 

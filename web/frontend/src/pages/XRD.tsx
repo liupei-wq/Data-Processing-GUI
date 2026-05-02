@@ -111,7 +111,7 @@ function chartLayout({
   xMode,
   wavelength,
   height = 360,
-  yTitle = 'Intensity (a.u.)',
+  yTitle = '強度（a.u.）',
   reversed = false,
 }: {
   xMode: XMode
@@ -128,8 +128,12 @@ function chartLayout({
   const chartHoverBorder = cssVar('--chart-hover-border', 'rgba(148, 163, 184, 0.22)')
 
   return {
+    title: {
+      text: 'XRD 繞射圖譜分析',
+      font: { color: chartText, size: 16 },
+    },
     xaxis: {
-      title: { text: xMode === 'dspacing' ? 'd-spacing (Å)' : '2θ (degrees)' },
+      title: { text: xMode === 'dspacing' ? '晶面間距 d（Å）' : '2θ（degree）' },
       showgrid: true,
       gridcolor: chartGrid,
       zeroline: false,
@@ -152,7 +156,7 @@ function chartLayout({
       borderwidth: 1,
       font: { color: chartText },
     },
-    margin: { l: 60, r: 20, t: 24, b: 60 },
+    margin: { l: 60, r: 20, t: 52, b: 60 },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: chartBg,
     font: { color: chartText },
@@ -172,15 +176,15 @@ function convertXValues(values: number[], xMode: XMode, wavelength: number) {
 }
 
 function xAxisCorrectionCoefficients(params: XAxisCorrectionParams) {
-  if (!params.enabled) return { slope: 1, intercept: 0, description: 'none' }
+  if (!params.enabled) return { slope: 1, intercept: 0, description: '未啟用' }
   if (params.mode === 'manual') {
-    return { slope: 1, intercept: params.manual_offset, description: `offset ${params.manual_offset.toFixed(4)} deg` }
+    return { slope: 1, intercept: params.manual_offset, description: `偏移 ${params.manual_offset.toFixed(4)} degree` }
   }
 
   const points = params.calibration_points.filter(point =>
     Number.isFinite(point.expected) && Number.isFinite(point.measured) && point.measured > 0 && point.expected > 0,
   )
-  if (points.length === 0) return { slope: 1, intercept: 0, description: 'no valid calibration peaks' }
+  if (points.length === 0) return { slope: 1, intercept: 0, description: '沒有有效校正峰' }
 
   if (params.correction_type === 'linear' && points.length >= 2) {
     const meanMeasured = points.reduce((sum, point) => sum + point.measured, 0) / points.length
@@ -189,17 +193,48 @@ function xAxisCorrectionCoefficients(params: XAxisCorrectionParams) {
     if (denom > 0) {
       const slope = points.reduce((sum, point) => sum + (point.measured - meanMeasured) * (point.expected - meanExpected), 0) / denom
       const intercept = meanExpected - slope * meanMeasured
-      return { slope, intercept, description: `linear ${slope.toFixed(6)}x + ${intercept.toFixed(4)}` }
+      return { slope, intercept, description: `線性校正 ${slope.toFixed(6)}x + ${intercept.toFixed(4)}` }
     }
   }
 
   const offset = points.reduce((sum, point) => sum + (point.expected - point.measured), 0) / points.length
-  return { slope: 1, intercept: offset, description: `offset ${offset.toFixed(4)} deg` }
+  return { slope: 1, intercept: offset, description: `偏移 ${offset.toFixed(4)} degree` }
 }
 
 function applyXAxisCorrection(values: number[], params: XAxisCorrectionParams) {
   const { slope, intercept } = xAxisCorrectionCoefficients(params)
   return values.map(value => slope * value + intercept)
+}
+
+function isNearReference(peak: DetectedPeak, referencePeaks: RefPeak[], toleranceDeg: number) {
+  return referencePeaks.some(ref => Math.abs(peak.two_theta - ref.two_theta) <= (ref.tolerance || toleranceDeg))
+}
+
+function confidenceLabel(value: FinalPeakRow['confidence'] | ReferenceMatchRow['confidence'] | DetectedPeak['confidence']) {
+  switch (value) {
+    case 'high':
+      return '高'
+    case 'medium':
+      return '中'
+    case 'low':
+      return '低'
+    case 'unmatched':
+      return '未匹配'
+    default:
+      return value
+  }
+}
+
+function localizePeakNote(note: string) {
+  return note
+    .replace(/multiple candidates/g, '多個候選峰')
+    .replace(/unmatched reference peak/g, '未匹配參考峰')
+    .replace(/unmatched peak/g, '未匹配峰')
+    .replace(/close to noise floor/g, '接近雜訊底線')
+    .replace(/moderate confidence peak/g, '中等信心峰')
+    .replace(/manual confirmation suggested/g, '建議人工確認')
+    .replace(/true/g, '是')
+    .replace(/false/g, '否')
 }
 
 const THIN_FILM_SI_PEAK_PRESET: Omit<PeakDetectionParams, 'enabled' | 'show_unmatched_peaks' | 'export_weak_peaks'> = {
@@ -258,13 +293,13 @@ function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], x
       rows.push([dataset.name, x.toFixed(6), dataset.y[index]?.toFixed(6) ?? ''])
     })
   })
-  return toCsv(['dataset', xLabel, yLabel], rows)
+  return toCsv(['資料集', xLabel, yLabel], rows)
 }
 
 function processedSpectrumCsv(result: ProcessResult): string {
   const ds = result.average ?? result.datasets[0]
   if (!ds) return ''
-  const headers = ['2theta_deg', ...result.datasets.map(d => `${d.name}_processed`)]
+  const headers = ['2θ（degree）', ...result.datasets.map(d => `${d.name}_處理後強度`)]
   const rows = ds.x.map((x, i) => [
     x.toFixed(4),
     ...result.datasets.map(d => d.y_processed[i]?.toFixed(4) ?? ''),
@@ -277,12 +312,12 @@ function detailedDatasetCsv(
   wavelength: number,
   logViewParams: LogViewParams,
 ): string {
-  const headers = ['2theta_deg', 'd_spacing_A', 'raw', 'processed']
+  const headers = ['2θ（degree）', '晶面間距 d（Å）', '原始強度', '處理後強度']
   const processedMin = dataset.y_processed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
   const logShift = logViewParams.enabled && processedMin <= 0
     ? Math.abs(processedMin) + logViewParams.floor_value
     : logViewParams.floor_value
-  if (logViewParams.enabled) headers.push(`${logViewParams.method}_processed`)
+  if (logViewParams.enabled) headers.push(`${logViewParams.method} 處理後強度`)
   const rows = dataset.x.map((x, idx) => {
     const processed = dataset.y_processed[idx]
     const dSpacing = twoThetaToD(x, wavelength)
@@ -352,7 +387,7 @@ function buildReferenceMatches(
           matched: false,
           confidence: 'unmatched',
           candidates: '',
-          note: 'unmatched reference peak',
+          note: '未匹配參考峰',
         }
       }
 
@@ -387,8 +422,8 @@ function buildReferenceMatches(
         delta_two_theta: closest?.delta ?? null,
         matched,
         confidence,
-        candidates: candidates.map(item => `${item.peak.two_theta.toFixed(4)} (${item.peak.confidence}, d=${item.delta.toFixed(4)})`).join('; '),
-        note: candidates.length > 1 ? 'multiple candidates' : matched ? closest.peak.note : 'unmatched reference peak',
+        candidates: candidates.map(item => `${item.peak.two_theta.toFixed(4)}（${confidenceLabel(item.peak.confidence)}，Δ=${item.delta.toFixed(4)}）`).join('；'),
+        note: candidates.length > 1 ? '多個候選峰' : matched ? localizePeakNote(closest.peak.note) : '未匹配參考峰',
       }
     })
 }
@@ -406,10 +441,10 @@ function buildFinalPeakRows(
         .filter(item => item.delta <= item.tolerance)
         .sort((a, b) => a.delta - b.delta)
       const best = candidates[0]
-      const candidateText = candidates.map(item => `${item.ref.phase || item.ref.material} ${item.ref.hkl} d=${item.delta.toFixed(4)}`).join('; ')
-      const noteParts = [peak.note].filter(Boolean)
-      if (candidates.length > 1) noteParts.push(`multiple candidates: ${candidateText}`)
-      if (!best) noteParts.push('unmatched peak')
+      const candidateText = candidates.map(item => `${item.ref.phase || item.ref.material} ${item.ref.hkl} Δ=${item.delta.toFixed(4)}`).join('；')
+      const noteParts = [localizePeakNote(peak.note)].filter(Boolean)
+      if (candidates.length > 1) noteParts.push(`多個候選峰：${candidateText}`)
+      if (!best) noteParts.push('未匹配峰')
       const confidence: FinalPeakRow['confidence'] = best
         ? (peak.confidence === 'high' && best.delta <= best.tolerance * 0.5 ? 'high' : peak.confidence)
         : 'unmatched'
@@ -419,17 +454,17 @@ function buildFinalPeakRows(
         fwhm_deg: peak.fwhm_deg,
         snr: peak.snr,
         prominence: peak.prominence,
-        phase: best ? (best.ref.phase || best.ref.material) : 'unmatched',
+        phase: best ? (best.ref.phase || best.ref.material) : '未匹配峰',
         hkl: best?.ref.hkl ?? '',
         reference_2theta: best?.ref.two_theta ?? null,
         delta_2theta: best?.delta ?? null,
         near_reference: Boolean(best),
         candidate_count: candidates.length,
         confidence,
-        note: noteParts.join('; '),
+        note: noteParts.join('；'),
       }
     })
-    .filter(row => showUnmatched || row.phase !== 'unmatched')
+    .filter(row => showUnmatched || row.phase !== '未匹配峰')
 }
 
 const SIDEBAR_MIN_WIDTH = 320
@@ -560,7 +595,7 @@ export default function XRD({
   }, [sidebarCollapsed, sidebarResizing])
 
   const wavelength =
-    wavelengthPreset === 'Custom' ? customWavelength : WAVELENGTH_MAP[wavelengthPreset]
+    wavelengthPreset === '自訂' ? customWavelength : WAVELENGTH_MAP[wavelengthPreset]
   const xAxisCorrectionInfo = useMemo(
     () => xAxisCorrectionCoefficients(xAxisCorrection),
     [xAxisCorrection],
@@ -600,7 +635,7 @@ export default function XRD({
     [rawFiles],
   )
   const xRangeLabel = activeDataset
-    ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} ${xMode === 'dspacing' ? 'Å' : 'deg'}`
+    ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} ${xMode === 'dspacing' ? 'Å' : 'degree'}`
     : '—'
   const interpolationLabel = params.interpolate ? `${params.n_points} 點` : '未啟用'
   const filteredRefPeaks = useMemo(
@@ -630,7 +665,7 @@ export default function XRD({
         y: file.y,
         type: 'scatter',
         mode: 'lines',
-        name: xAxisCorrection.enabled ? `${file.name} raw` : file.name,
+        name: '原始資料',
         line: { color: palette.secondary, width: 1.5, dash: xAxisCorrection.enabled ? 'dot' : 'solid' },
       })
       if (xAxisCorrection.enabled && xAxisCorrection.show_corrected_curve) traces.push({
@@ -638,7 +673,7 @@ export default function XRD({
         y: file.y,
         type: 'scatter',
         mode: 'lines',
-        name: `${file.name} corrected`,
+        name: '校正後資料',
         line: { color: palette.primary, width: 2 },
       })
       return traces
@@ -701,7 +736,7 @@ export default function XRD({
     const minValue = activeDataset.y_processed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY)
     const shift = minValue <= 0 ? Math.abs(minValue) + logViewParams.floor_value : logViewParams.floor_value
     return [{
-      name: `${logViewParams.method} 處理後`,
+      name: '弱峰',
       x: convertXValues(activeDataset.x, xMode, wavelength),
       y: activeDataset.y_processed.map(value => safeLogValue(value, shift, logViewParams.method, logViewParams.floor_value)),
     }]
@@ -729,7 +764,7 @@ export default function XRD({
         y: activeDataset.y_processed,
         type: 'scatter',
         mode: 'lines',
-        name: activeDataset.name,
+        name: '校正後資料',
         line: { color: palette.primary, width: 2.3 },
       },
     ]
@@ -739,7 +774,7 @@ export default function XRD({
         y: activeRawFile.y,
         type: 'scatter',
         mode: 'lines',
-        name: `${activeRawFile.name} raw`,
+        name: '原始資料',
         line: { color: palette.secondary, width: 1.25, dash: 'dot' },
       })
     }
@@ -762,22 +797,59 @@ export default function XRD({
       })
     }
     if (detectedPeaks.length > 0 && peakParams.enabled) {
-      traces.push({
-        x: detectedPeaks.map(peak => (xMode === 'dspacing' ? peak.d_spacing : peak.two_theta)),
-        y: detectedPeaks.map(peak => peak.intensity),
-        type: 'scatter',
-        mode: 'markers',
-        name: 'Detected peaks',
-        marker: {
-          color: '#f8fafc',
-          size: 8,
-          symbol: 'diamond-open',
-          line: { color: palette.primary, width: 1.5 },
-        },
-      })
+      const regularPeaks = detectedPeaks.filter(peak => peak.confidence !== 'low' && (filteredRefPeaks.length === 0 || isNearReference(peak, filteredRefPeaks, refMatchParams.tolerance_deg)))
+      const weakPeaks = detectedPeaks.filter(peak => peak.confidence === 'low')
+      const unmatchedPeaks = filteredRefPeaks.length > 0
+        ? detectedPeaks.filter(peak => peak.confidence !== 'low' && !isNearReference(peak, filteredRefPeaks, refMatchParams.tolerance_deg))
+        : []
+      if (regularPeaks.length > 0) {
+        traces.push({
+          x: regularPeaks.map(peak => (xMode === 'dspacing' ? peak.d_spacing : peak.two_theta)),
+          y: regularPeaks.map(peak => peak.intensity),
+          type: 'scatter',
+          mode: 'markers',
+          name: '偵測峰',
+          marker: {
+            color: '#f8fafc',
+            size: 8,
+            symbol: 'diamond-open',
+            line: { color: palette.primary, width: 1.5 },
+          },
+        })
+      }
+      if (weakPeaks.length > 0) {
+        traces.push({
+          x: weakPeaks.map(peak => (xMode === 'dspacing' ? peak.d_spacing : peak.two_theta)),
+          y: weakPeaks.map(peak => peak.intensity),
+          type: 'scatter',
+          mode: 'markers',
+          name: '弱峰',
+          marker: {
+            color: '#fde68a',
+            size: 8,
+            symbol: 'circle-open',
+            line: { color: '#f59e0b', width: 1.5 },
+          },
+        })
+      }
+      if (unmatchedPeaks.length > 0) {
+        traces.push({
+          x: unmatchedPeaks.map(peak => (xMode === 'dspacing' ? peak.d_spacing : peak.two_theta)),
+          y: unmatchedPeaks.map(peak => peak.intensity),
+          type: 'scatter',
+          mode: 'markers',
+          name: '未匹配峰',
+          marker: {
+            color: '#fecaca',
+            size: 8,
+            symbol: 'x',
+            line: { color: '#fb7185', width: 1.5 },
+          },
+        })
+      }
     }
     return traces
-  }, [activeDataset, chartLineColors.final, detectedPeaks, filteredRefPeaks, peakParams.enabled, rawFiles, wavelength, xAxisCorrection.enabled, xAxisCorrection.show_raw_curve, xAxisCorrection.show_reference_markers, xMode])
+  }, [activeDataset, chartLineColors.final, detectedPeaks, filteredRefPeaks, peakParams.enabled, rawFiles, refMatchParams.tolerance_deg, wavelength, xAxisCorrection.enabled, xAxisCorrection.show_raw_curve, xAxisCorrection.show_reference_markers, xMode])
   const finalStageDatasets = useMemo(
     () => activeDataset ? [{ name: activeDataset.name, x: convertXValues(activeDataset.x, xMode, wavelength), y: activeDataset.y_processed }] : [],
     [activeDataset, wavelength, xMode],
@@ -799,7 +871,7 @@ export default function XRD({
     if (!onOpenPlotPopup || finalChartTraces.length === 0) return
 
     onOpenPlotPopup({
-      title: `XRD 最終圖表 - ${activeDataset?.name ?? 'dataset'}`,
+      title: `XRD 繞射圖譜分析 - ${activeDataset?.name ?? '資料集'}`,
       content: renderFinalChart(460, false),
     })
   }, [activeDataset?.name, finalChartTraces.length, onOpenPlotPopup, renderFinalChart])
@@ -877,7 +949,7 @@ export default function XRD({
       .then(materials => {
         setRefMaterials(materials)
         setSelectedRefs(current => current.length > 0 ? current : materials.filter(material =>
-          material.includes('beta-Ga2O3') || material.includes('NiO') || material.includes('Si substrate'),
+          material.includes('β-Ga₂O₃') || material.includes('NiO') || material.includes('Si 基板'),
         ))
       })
       .catch(console.error)
@@ -1114,7 +1186,7 @@ export default function XRD({
                 wavelengthPreset={wavelengthPreset}
                 onWavelengthPresetChange={p => {
                   setWavelengthPreset(p)
-                  if (p !== 'Custom') setCustomWavelength(WAVELENGTH_MAP[p])
+                  if (p !== '自訂') setCustomWavelength(WAVELENGTH_MAP[p])
                 }}
                 customWavelength={customWavelength}
                 onCustomWavelengthChange={setCustomWavelength}
@@ -1242,7 +1314,7 @@ export default function XRD({
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
-                      onClick={() => downloadFile(buildStageCsv(rawStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_raw'), 'xrd_raw_stage.csv', 'text/csv')}
+                      onClick={() => downloadFile(buildStageCsv(rawStageDatasets, xMode === 'dspacing' ? '晶面間距 d（Å）' : '2θ（degree）', '原始強度'), 'xrd_raw_stage.csv', 'text/csv')}
                       className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                     >
                       下載此步驟 CSV
@@ -1273,7 +1345,7 @@ export default function XRD({
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
-                      onClick={() => downloadFile(buildStageCsv(overlayStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_overlay_stage.csv', 'text/csv')}
+                      onClick={() => downloadFile(buildStageCsv(overlayStageDatasets, xMode === 'dspacing' ? '晶面間距 d（Å）' : '2θ（degree）', '處理後強度'), 'xrd_overlay_stage.csv', 'text/csv')}
                       className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                     >
                       下載此步驟 CSV
@@ -1304,7 +1376,7 @@ export default function XRD({
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
-                      onClick={() => downloadFile(buildStageCsv(preprocessStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_preprocess_stage.csv', 'text/csv')}
+                      onClick={() => downloadFile(buildStageCsv(preprocessStageDatasets, xMode === 'dspacing' ? '晶面間距 d（Å）' : '2θ（degree）', '強度'), 'xrd_preprocess_stage.csv', 'text/csv')}
                       className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                     >
                       下載此步驟 CSV
@@ -1326,7 +1398,7 @@ export default function XRD({
                   <DeferredRender minHeight={360}>
                     <Plot
                       data={applyHidden(logChartTraces, logHidden)}
-                      layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} Intensity` })}
+                      layout={chartLayout({ xMode, wavelength, yTitle: `${logViewParams.method} 強度` })}
                       config={withPlotFullscreen({ scrollZoom: false })}
                       style={{ width: '100%', height: 360 }}
                       onLegendClick={makeLegendClick(setLogHidden) as never}
@@ -1356,7 +1428,7 @@ export default function XRD({
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
-                      onClick={() => downloadFile(buildStageCsv(finalStageDatasets, xMode === 'dspacing' ? 'd_spacing_A' : 'two_theta_deg', 'intensity_processed'), 'xrd_final_stage.csv', 'text/csv')}
+                      onClick={() => downloadFile(buildStageCsv(finalStageDatasets, xMode === 'dspacing' ? '晶面間距 d（Å）' : '2θ（degree）', '處理後強度'), 'xrd_final_stage.csv', 'text/csv')}
                       className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                     >
                       下載此步驟 CSV
@@ -1389,19 +1461,19 @@ export default function XRD({
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            <th className="px-3 py-3 font-medium">2theta</th>
-                            <th className="px-3 py-3 font-medium">intensity</th>
-                            <th className="px-3 py-3 font-medium">FWHM</th>
-                            <th className="px-3 py-3 font-medium">SNR</th>
-                            <th className="px-3 py-3 font-medium">prominence</th>
-                            <th className="px-3 py-3 font-medium">phase</th>
-                            <th className="px-3 py-3 font-medium">hkl</th>
-                            <th className="px-3 py-3 font-medium">near_reference</th>
-                            <th className="px-3 py-3 font-medium">candidates</th>
-                            <th className="px-3 py-3 font-medium">reference_2theta</th>
-                            <th className="px-3 py-3 font-medium">delta_2theta</th>
-                            <th className="px-3 py-3 font-medium">confidence</th>
-                            <th className="px-3 py-3 font-medium">note</th>
+                            <th className="px-3 py-3 font-medium">2θ（degree）</th>
+                            <th className="px-3 py-3 font-medium">強度</th>
+                            <th className="px-3 py-3 font-medium">半高寬</th>
+                            <th className="px-3 py-3 font-medium">訊雜比</th>
+                            <th className="px-3 py-3 font-medium">峰突出度</th>
+                            <th className="px-3 py-3 font-medium">相位</th>
+                            <th className="px-3 py-3 font-medium">晶面指數</th>
+                            <th className="px-3 py-3 font-medium">接近參考峰</th>
+                            <th className="px-3 py-3 font-medium">候選數</th>
+                            <th className="px-3 py-3 font-medium">參考 2θ</th>
+                            <th className="px-3 py-3 font-medium">Δ2θ</th>
+                            <th className="px-3 py-3 font-medium">信心等級</th>
+                            <th className="px-3 py-3 font-medium">備註</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1423,13 +1495,13 @@ export default function XRD({
                                       : 'border border-slate-300/10 bg-slate-400/10 text-slate-300',
                                   ].join(' ')}
                                 >
-                                  {peak.near_reference ? 'yes' : 'no'}
+                                  {peak.near_reference ? '是' : '否'}
                                 </span>
                               </td>
                               <td className="px-3 py-3">{peak.candidate_count}</td>
-                              <td className="px-3 py-3">{peak.reference_2theta == null ? 'N/A' : peak.reference_2theta.toFixed(4)}</td>
-                              <td className="px-3 py-3">{peak.delta_2theta == null ? 'N/A' : peak.delta_2theta.toFixed(4)}</td>
-                              <td className="px-3 py-3">{peak.confidence}</td>
+                              <td className="px-3 py-3">{peak.reference_2theta == null ? '無' : peak.reference_2theta.toFixed(4)}</td>
+                              <td className="px-3 py-3">{peak.delta_2theta == null ? '無' : peak.delta_2theta.toFixed(4)}</td>
+                              <td className="px-3 py-3">{confidenceLabel(peak.confidence)}</td>
                               <td className="px-3 py-3">{peak.note || '-'}</td>
                             </tr>
                           ))}
@@ -1447,7 +1519,7 @@ export default function XRD({
                     <div>
                       <p className="text-sm font-semibold text-white">Scherrer 晶粒尺寸</p>
                       <p className="mt-1 text-xs leading-5 text-slate-400">
-                        使用目前偵測峰的 FWHM 與 Scherrer 公式估算晶粒尺寸。結果對展寬假設非常敏感，僅供快速篩選。
+                        使用目前偵測峰的半高寬與 Scherrer 公式估算晶粒尺寸。結果對展寬假設非常敏感，僅供快速篩選。
                       </p>
                     </div>
                     <span className="text-xs text-slate-500">
@@ -1465,11 +1537,11 @@ export default function XRD({
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            <th className="px-3 py-3 font-medium">#</th>
-                            <th className="px-3 py-3 font-medium">2θ (deg)</th>
-                            <th className="px-3 py-3 font-medium">FWHM (deg)</th>
-                            <th className="px-3 py-3 font-medium">D (nm)</th>
-                            <th className="px-3 py-3 font-medium">D (Å)</th>
+                            <th className="px-3 py-3 font-medium">序號</th>
+                            <th className="px-3 py-3 font-medium">2θ（degree）</th>
+                            <th className="px-3 py-3 font-medium">半高寬（degree）</th>
+                            <th className="px-3 py-3 font-medium">晶粒尺寸（nm）</th>
+                            <th className="px-3 py-3 font-medium">晶粒尺寸（Å）</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1479,10 +1551,10 @@ export default function XRD({
                               <td className="px-3 py-3 font-medium">{peak.two_theta.toFixed(4)}</td>
                               <td className="px-3 py-3">{peak.fwhm_deg.toFixed(4)}</td>
                               <td className="px-3 py-3">
-                                {peak.crystallite_nm == null ? 'N/A' : peak.crystallite_nm.toFixed(3)}
+                                {peak.crystallite_nm == null ? '無' : peak.crystallite_nm.toFixed(3)}
                               </td>
                               <td className="px-3 py-3">
-                                {peak.crystallite_nm == null ? 'N/A' : (peak.crystallite_nm * 10).toFixed(2)}
+                                {peak.crystallite_nm == null ? '無' : (peak.crystallite_nm * 10).toFixed(2)}
                               </td>
                             </tr>
                           ))}
@@ -1527,15 +1599,15 @@ export default function XRD({
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
                             <th className="px-3 py-3 font-medium">相位</th>
-                            <th className="px-3 py-3 font-medium">hkl</th>
-                            <th className="px-3 py-3 font-medium">Ref 2θ</th>
-                            <th className="px-3 py-3 font-medium">Ref d</th>
-                            <th className="px-3 py-3 font-medium">Ref I (%)</th>
-                            <th className="px-3 py-3 font-medium">Obs 2θ</th>
-                            <th className="px-3 py-3 font-medium">Obs d</th>
-                            <th className="px-3 py-3 font-medium">Obs 強度</th>
+                            <th className="px-3 py-3 font-medium">晶面指數</th>
+                            <th className="px-3 py-3 font-medium">參考 2θ</th>
+                            <th className="px-3 py-3 font-medium">參考 d</th>
+                            <th className="px-3 py-3 font-medium">參考相對強度 (%)</th>
+                            <th className="px-3 py-3 font-medium">觀測 2θ</th>
+                            <th className="px-3 py-3 font-medium">觀測 d</th>
+                            <th className="px-3 py-3 font-medium">觀測強度</th>
                             <th className="px-3 py-3 font-medium">Δ2θ</th>
-                            <th className="px-3 py-3 font-medium">confidence</th>
+                            <th className="px-3 py-3 font-medium">信心等級</th>
                             <th className="px-3 py-3 font-medium">匹配</th>
                           </tr>
                         </thead>
@@ -1551,18 +1623,18 @@ export default function XRD({
                               <td className="px-3 py-3">{row.ref_d_spacing.toFixed(4)}</td>
                               <td className="px-3 py-3">{row.ref_rel_i.toFixed(1)}</td>
                               <td className="px-3 py-3">
-                                {row.observed_two_theta == null ? 'N/A' : row.observed_two_theta.toFixed(4)}
+                                {row.observed_two_theta == null ? '無' : row.observed_two_theta.toFixed(4)}
                               </td>
                               <td className="px-3 py-3">
-                                {row.observed_d_spacing == null ? 'N/A' : row.observed_d_spacing.toFixed(4)}
+                                {row.observed_d_spacing == null ? '無' : row.observed_d_spacing.toFixed(4)}
                               </td>
                               <td className="px-3 py-3">
-                                {row.observed_intensity == null ? 'N/A' : row.observed_intensity.toFixed(2)}
+                                {row.observed_intensity == null ? '無' : row.observed_intensity.toFixed(2)}
                               </td>
                               <td className="px-3 py-3">
-                                {row.delta_two_theta == null ? 'N/A' : row.delta_two_theta.toFixed(4)}
+                                {row.delta_two_theta == null ? '無' : row.delta_two_theta.toFixed(4)}
                               </td>
-                              <td className="px-3 py-3">{row.confidence}</td>
+                              <td className="px-3 py-3">{confidenceLabel(row.confidence)}</td>
                               <td className="px-3 py-3">
                                 <span
                                   className={[
@@ -1572,7 +1644,7 @@ export default function XRD({
                                       : 'border border-rose-300/20 bg-rose-400/10 text-rose-200',
                                   ].join(' ')}
                                 >
-                                  {row.matched ? '✓ 匹配' : '✗ 不匹配'}
+                                  {row.matched ? '匹配' : '不匹配'}
                                 </span>
                               </td>
                             </tr>
@@ -1625,7 +1697,7 @@ export default function XRD({
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['two_theta_deg', 'd_spacing_A', 'intensity', 'relative_intensity_pct', 'fwhm_deg', 'D_nm', 'D_A'],
+                                ['2θ（degree）', '晶面間距 d（Å）', '強度', '相對強度（%）', '半高寬（degree）', '晶粒尺寸（nm）', '晶粒尺寸（Å）'],
                                 scherrerRows.map(row => [
                                   row.two_theta.toFixed(4),
                                   row.d_spacing.toFixed(4),
@@ -1656,7 +1728,7 @@ export default function XRD({
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'near_reference', 'candidate_count', 'reference_2theta', 'delta_2theta', 'confidence', 'note'],
+                                ['2θ（degree）', '強度', '半高寬', '訊雜比', '峰突出度', '相位', '晶面指數', '接近參考峰', '候選數', '參考 2θ', 'Δ2θ', '信心等級', '備註'],
                                 finalPeakRows
                                   .filter(row => peakParams.export_weak_peaks || row.confidence !== 'low')
                                   .map(row => [
@@ -1667,12 +1739,12 @@ export default function XRD({
                                   row.prominence.toFixed(4),
                                   row.phase,
                                   row.hkl,
-                                  row.near_reference ? 'true' : 'false',
+                                  row.near_reference ? '是' : '否',
                                   row.candidate_count,
                                   row.reference_2theta == null ? '' : row.reference_2theta.toFixed(4),
                                   row.delta_2theta == null ? '' : row.delta_2theta.toFixed(4),
-                                  row.confidence,
-                                  row.note,
+                                  confidenceLabel(row.confidence),
+                                  localizePeakNote(row.note),
                                 ]),
                               ),
                               'xrd_final_peaks.csv',
@@ -1687,7 +1759,7 @@ export default function XRD({
                       {peakParams.enabled && finalPeakRows.length > 0 && (
                         <button
                           onClick={() => {
-                            const headers = ['2theta', 'intensity', 'FWHM', 'SNR', 'prominence', 'phase', 'hkl', 'near_reference', 'candidate_count', 'reference_2theta', 'delta_2theta', 'confidence', 'note']
+                            const headers = ['2θ（degree）', '強度', '半高寬', '訊雜比', '峰突出度', '相位', '晶面指數', '接近參考峰', '候選數', '參考 2θ', 'Δ2θ', '信心等級', '備註']
                             const rows = finalPeakRows
                               .filter(row => peakParams.export_weak_peaks || row.confidence !== 'low')
                               .map(row => [
@@ -1698,18 +1770,18 @@ export default function XRD({
                                 row.prominence.toFixed(4),
                                 row.phase,
                                 row.hkl,
-                                row.near_reference ? 'true' : 'false',
+                                row.near_reference ? '是' : '否',
                                 row.candidate_count,
                                 row.reference_2theta == null ? '' : row.reference_2theta.toFixed(4),
                                 row.delta_2theta == null ? '' : row.delta_2theta.toFixed(4),
-                                row.confidence,
-                                row.note,
+                                confidenceLabel(row.confidence),
+                                localizePeakNote(row.note),
                               ])
                             downloadFile(toExcelHtml(headers, rows), 'xrd_final_peaks.xls', 'application/vnd.ms-excel')
                           }}
                           className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:border-cyan-300/40 hover:text-cyan-100"
                         >
-                          Export final peaks Excel
+                          下載最終峰表 Excel
                         </button>
                       )}
                       {filteredRefPeaks.length > 0 && (
@@ -1717,7 +1789,7 @@ export default function XRD({
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['phase', 'hkl', 'reference_2theta', 'relative_intensity', 'source', 'tolerance'],
+                                ['相位', '晶面指數', '參考 2θ', '相對強度', '來源', '容差'],
                                 filteredRefPeaks.map(row => [
                                   row.phase || row.material,
                                   row.hkl,
@@ -1741,7 +1813,7 @@ export default function XRD({
                           onClick={() => {
                             downloadFile(
                               toCsv(
-                                ['material', 'hkl', 'ref_two_theta_deg', 'ref_d_spacing_A', 'ref_relative_intensity_pct', 'obs_two_theta_deg', 'obs_d_spacing_A', 'obs_intensity', 'delta_two_theta_deg', 'matched', 'confidence', 'candidates', 'note'],
+                                ['相位', '晶面指數', '參考 2θ（degree）', '參考 d（Å）', '參考相對強度（%）', '觀測 2θ（degree）', '觀測 d（Å）', '觀測強度', 'Δ2θ（degree）', '是否匹配', '信心等級', '候選峰', '備註'],
                                 referenceMatches.map(row => [
                                   row.material,
                                   row.hkl,
@@ -1752,10 +1824,10 @@ export default function XRD({
                                   row.observed_d_spacing == null ? '' : row.observed_d_spacing.toFixed(4),
                                   row.observed_intensity == null ? '' : row.observed_intensity.toFixed(2),
                                   row.delta_two_theta == null ? '' : row.delta_two_theta.toFixed(4),
-                                  row.matched ? 'true' : 'false',
-                                  row.confidence,
+                                  row.matched ? '是' : '否',
+                                  confidenceLabel(row.confidence),
                                   row.candidates,
-                                  row.note,
+                                  localizePeakNote(row.note),
                                 ]),
                               ),
                               'xrd_reference_matches.csv',

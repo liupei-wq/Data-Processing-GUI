@@ -7,10 +7,10 @@ reference only.
 """
 
 XRD_REFERENCES = {
-    "beta-Ga2O3 | Monoclinic": {
-        "formula": "Ga2O3",
-        "phase": "beta-Ga2O3",
-        "source": "Representative Cu K-alpha powder/thin-film reference peaks",
+    "β-Ga₂O₃ | 單斜晶系": {
+        "formula": "Ga₂O₃",
+        "phase": "β-Ga₂O₃",
+        "source": "內建 Cu Kα 粉末/薄膜代表性參考峰",
         "tolerance": 0.3,
         "peaks": [
             {"hkl": "-201", "d": 4.69, "rel_i": 32},
@@ -23,10 +23,10 @@ XRD_REFERENCES = {
             {"hkl": "800", "d": 1.44, "rel_i": 12},
         ],
     },
-    "alpha-Ga2O3 | Corundum": {
-        "formula": "Ga2O3",
-        "phase": "alpha-Ga2O3",
-        "source": "Representative Cu K-alpha corundum Ga2O3 reference peaks",
+    "α-Ga₂O₃ | 剛玉結構": {
+        "formula": "Ga₂O₃",
+        "phase": "α-Ga₂O₃",
+        "source": "內建 Cu Kα 剛玉結構 Ga₂O₃ 代表性參考峰",
         "tolerance": 0.3,
         "peaks": [
             {"hkl": "012", "d": 3.63, "rel_i": 45},
@@ -38,10 +38,10 @@ XRD_REFERENCES = {
             {"hkl": "214", "d": 1.46, "rel_i": 18},
         ],
     },
-    "kappa-Ga2O3 | Orthorhombic": {
-        "formula": "Ga2O3",
-        "phase": "kappa-Ga2O3",
-        "source": "Representative Cu K-alpha orthorhombic Ga2O3 reference peaks",
+    "κ-Ga₂O₃ | 正交晶系": {
+        "formula": "Ga₂O₃",
+        "phase": "κ-Ga₂O₃",
+        "source": "內建 Cu Kα 正交晶系 Ga₂O₃ 代表性參考峰",
         "tolerance": 0.35,
         "peaks": [
             {"hkl": "020", "d": 4.64, "rel_i": 28},
@@ -52,10 +52,10 @@ XRD_REFERENCES = {
             {"hkl": "241", "d": 1.56, "rel_i": 18},
         ],
     },
-    "gamma-Ga2O3 | Defect spinel": {
-        "formula": "Ga2O3",
-        "phase": "gamma-Ga2O3",
-        "source": "Representative Cu K-alpha defect-spinel Ga2O3 reference peaks",
+    "γ-Ga₂O₃ | 缺陷尖晶石": {
+        "formula": "Ga₂O₃",
+        "phase": "γ-Ga₂O₃",
+        "source": "內建 Cu Kα 缺陷尖晶石 Ga₂O₃ 代表性參考峰",
         "tolerance": 0.35,
         "peaks": [
             {"hkl": "220", "d": 2.82, "rel_i": 48},
@@ -66,10 +66,10 @@ XRD_REFERENCES = {
             {"hkl": "440", "d": 1.41, "rel_i": 42},
         ],
     },
-    "NiO | Cubic": {
+    "NiO | 立方晶系": {
         "formula": "NiO",
-        "phase": "cubic NiO",
-        "source": "Representative Cu K-alpha rock-salt NiO reference peaks",
+        "phase": "立方 NiO",
+        "source": "內建 Cu Kα 岩鹽結構 NiO 代表性參考峰",
         "tolerance": 0.3,
         "peaks": [
             {"hkl": "111", "d": 2.413, "rel_i": 72},
@@ -79,10 +79,10 @@ XRD_REFERENCES = {
             {"hkl": "222", "d": 1.205, "rel_i": 18},
         ],
     },
-    "Si substrate | Silicon": {
+    "Si 基板 | 矽": {
         "formula": "Si",
-        "phase": "Si substrate",
-        "source": "Representative Cu K-alpha silicon substrate peaks",
+        "phase": "Si 基板",
+        "source": "內建 Cu Kα 矽基板代表性參考峰",
         "tolerance": 0.2,
         "peaks": [
             {"hkl": "111", "d": 3.1355, "rel_i": 100},
@@ -91,9 +91,9 @@ XRD_REFERENCES = {
             {"hkl": "400", "d": 1.3578, "rel_i": 20},
         ],
     },
-    "Si | Silicon": {
+    "Si | 矽": {
         "formula": "Si",
-        "phase": "diamond cubic",
+        "phase": "鑽石立方",
         "peaks": [
             {"hkl": "111", "d": 3.1355, "rel_i": 100},
             {"hkl": "220", "d": 1.9201, "rel_i": 55},
@@ -103,9 +103,9 @@ XRD_REFERENCES = {
             {"hkl": "422", "d": 1.1086, "rel_i": 9},
         ],
     },
-    "SiO2 | alpha-Quartz": {
-        "formula": "SiO2",
-        "phase": "alpha-quartz",
+    "SiO₂ | α-石英": {
+        "formula": "SiO₂",
+        "phase": "α-石英",
         "peaks": [
             {"hkl": "100", "d": 4.255, "rel_i": 34},
             {"hkl": "101", "d": 3.343, "rel_i": 100},
@@ -117,9 +117,9 @@ XRD_REFERENCES = {
             {"hkl": "112", "d": 1.817, "rel_i": 10},
         ],
     },
-    "TiO2 | Anatase": {
-        "formula": "TiO2",
-        "phase": "anatase",
+    "TiO₂ | 銳鈦礦": {
+        "formula": "TiO₂",
+        "phase": "銳鈦礦",
         "peaks": [
             {"hkl": "101", "d": 3.514, "rel_i": 100},
             {"hkl": "004", "d": 2.378, "rel_i": 20},
@@ -131,9 +131,9 @@ XRD_REFERENCES = {
             {"hkl": "220", "d": 1.338, "rel_i": 10},
         ],
     },
-    "TiO2 | Rutile": {
-        "formula": "TiO2",
-        "phase": "rutile",
+    "TiO₂ | 金紅石": {
+        "formula": "TiO₂",
+        "phase": "金紅石",
         "peaks": [
             {"hkl": "110", "d": 3.248, "rel_i": 100},
             {"hkl": "101", "d": 2.487, "rel_i": 49},
@@ -145,9 +145,9 @@ XRD_REFERENCES = {
             {"hkl": "310", "d": 1.479, "rel_i": 18},
         ],
     },
-    "ZnO | Wurtzite": {
+    "ZnO | 纖鋅礦": {
         "formula": "ZnO",
-        "phase": "wurtzite",
+        "phase": "纖鋅礦",
         "peaks": [
             {"hkl": "100", "d": 2.814, "rel_i": 57},
             {"hkl": "002", "d": 2.603, "rel_i": 44},
@@ -160,9 +160,9 @@ XRD_REFERENCES = {
             {"hkl": "201", "d": 1.359, "rel_i": 9},
         ],
     },
-    "Al2O3 | alpha-Alumina": {
-        "formula": "Al2O3",
-        "phase": "alpha-alumina",
+    "Al₂O₃ | α-氧化鋁": {
+        "formula": "Al₂O₃",
+        "phase": "α-氧化鋁",
         "peaks": [
             {"hkl": "012", "d": 3.479, "rel_i": 76},
             {"hkl": "104", "d": 2.551, "rel_i": 100},
@@ -175,9 +175,9 @@ XRD_REFERENCES = {
             {"hkl": "10 10", "d": 1.236, "rel_i": 16},
         ],
     },
-    "Cu | fcc": {
+    "Cu | 面心立方": {
         "formula": "Cu",
-        "phase": "face-centered cubic",
+        "phase": "面心立方",
         "peaks": [
             {"hkl": "111", "d": 2.087, "rel_i": 100},
             {"hkl": "200", "d": 1.808, "rel_i": 46},
@@ -185,9 +185,9 @@ XRD_REFERENCES = {
             {"hkl": "311", "d": 1.090, "rel_i": 12},
         ],
     },
-    "Ni | fcc": {
+    "Ni | 面心立方": {
         "formula": "Ni",
-        "phase": "face-centered cubic",
+        "phase": "面心立方",
         "peaks": [
             {"hkl": "111", "d": 2.034, "rel_i": 100},
             {"hkl": "200", "d": 1.762, "rel_i": 42},
