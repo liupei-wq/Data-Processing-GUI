@@ -53,7 +53,7 @@ railway.toml                 # Railway 設定
 
 | 模組 | 狀態 | 後端 Prefix | 前端 Page |
 |---|---|---|---|
-| XRD | ✅ 完整 | `/api/xrd` | `pages/XRD.tsx` |
+| XRD | ✅ 完整 | `/api/xrd` | `pages/XRD.tsx`（含弱峰轉換圖譜匯出） |
 | Raman | ✅ 完整 | `/api/raman` | `pages/Raman.tsx` |
 | XAS | ✅ 完整 | `/api/xas` | `pages/XAS.tsx` |
 | XPS | ✅ 最完整 | `/api/xps` | `pages/XPS.tsx` |
