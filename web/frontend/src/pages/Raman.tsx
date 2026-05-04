@@ -142,6 +142,7 @@ const NORMALIZATION_OPTIONS: { value: ProcessParams['norm_method']; label: strin
   { value: 'min_max', label: 'Min-Max' },
   { value: 'max', label: 'Divide by max' },
   { value: 'area', label: 'Divide by area' },
+  { value: 'mean_region', label: '除以算術平均（選區間）' },
 ]
 
 const ROBUST_LOSS_OPTIONS: { value: FitParams['robust_loss']; label: string }[] = [
@@ -1159,6 +1160,8 @@ export default function Raman({
   const ramanRangeLabel = activeDataset
     ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} cm⁻¹`
     : '—'
+  const xDataMin = activeDataset ? Math.min(...activeDataset.x) : 0
+  const xDataMax = activeDataset ? Math.max(...activeDataset.x) : 4000
   const backgroundMethodLabel = BACKGROUND_METHOD_OPTIONS.find(option => option.value === params.bg_method)?.label ?? '不扣背景'
   const normalizationLabel = NORMALIZATION_OPTIONS.find(option => option.value === params.norm_method)?.label ?? '不歸一化'
   const rawChartSourceFiles = useMemo(
@@ -2449,7 +2452,7 @@ export default function Raman({
                   buttonClassName="text-sm"
                 />
               </label>
-              {params.norm_method !== 'none' && (
+              {params.norm_method !== 'none' && params.norm_method !== 'mean_region' && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <label className="block">
                     <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
@@ -2459,6 +2462,50 @@ export default function Raman({
                     <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
                     <input type="number" value={params.norm_x_end ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_end: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
                   </label>
+                </div>
+              )}
+              {params.norm_method === 'mean_region' && (
+                <div className="mt-3 space-y-3">
+                  <p className="text-xs text-[var(--text-soft)]">
+                    計算所選區間內所有點的平均強度，再以此值除整條光譜。
+                  </p>
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-xs text-[var(--text-soft)]">區間起點</span>
+                      <span className="font-mono text-xs text-[var(--accent)]">
+                        {(params.norm_x_start ?? xDataMin).toFixed(0)} cm⁻¹
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={xDataMin}
+                      max={xDataMax}
+                      step={1}
+                      value={params.norm_x_start ?? xDataMin}
+                      onChange={e => setParams(current => ({ ...current, norm_x_start: Number(e.target.value) }))}
+                      className="w-full accent-[var(--accent)]"
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-xs text-[var(--text-soft)]">區間終點</span>
+                      <span className="font-mono text-xs text-[var(--accent)]">
+                        {(params.norm_x_end ?? xDataMax).toFixed(0)} cm⁻¹
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={xDataMin}
+                      max={xDataMax}
+                      step={1}
+                      value={params.norm_x_end ?? xDataMax}
+                      onChange={e => setParams(current => ({ ...current, norm_x_end: Number(e.target.value) }))}
+                      className="w-full accent-[var(--accent)]"
+                    />
+                  </div>
+                  <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-soft)]">
+                    平均區間：{(params.norm_x_start ?? xDataMin).toFixed(0)} – {(params.norm_x_end ?? xDataMax).toFixed(0)} cm⁻¹
+                  </div>
                 </div>
               )}
 

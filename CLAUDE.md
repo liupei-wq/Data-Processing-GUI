@@ -281,6 +281,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 ### 2026-05-05
 
+- 2026-05-05 CST：Raman 歸一化新增「除以算術平均（mean_region）」方法，含雙拉桿選取區間；影響檔案：`web/frontend/src/types/raman.ts`（擴充 `norm_method` union type）、`web/frontend/src/pages/Raman.tsx`（新增選項、range slider UI）、`web/backend/routers/raman.py`（更新 `ProcessParams` 註解）；後端語法檢查通過（backend `normalize_mean_region` 原已支援）。
 - 2026-05-05 CST：修正 XPS 能量校正 bug：`search_window` 從 4 改為 10（後端 `CalibrationRequest` 預設值同步），讓搜尋範圍擴大至 ±10 eV，避免真實偏移量 ≥4 eV 時峰落在窗口外而抓到錯誤特徵；同步將校正結果顯示改為小數點後兩位（`toFixed(2)`），energy_shift 累積值也改用 `toFixed(2)` 儲存。影響檔案：`web/frontend/src/pages/XPS.tsx`、`web/backend/routers/xps.py`；後端語法檢查通過。
 
 ### 2026-05-03

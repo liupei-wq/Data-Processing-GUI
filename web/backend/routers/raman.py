@@ -37,7 +37,7 @@ class ProcessParams(BaseModel):
     bg_baseline_iter: int = 20
     bg_anchor_x: List[float] = []
     bg_anchor_y: List[float] = []
-    norm_method: str = "none"         # none | min_max | max | area
+    norm_method: str = "none"         # none | min_max | max | area | mean_region
     norm_x_start: Optional[float] = None
     norm_x_end: Optional[float] = None
 

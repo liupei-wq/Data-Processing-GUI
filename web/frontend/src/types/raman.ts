@@ -15,7 +15,7 @@ export interface ProcessParams {
   bg_baseline_iter: number
   bg_anchor_x: number[]
   bg_anchor_y: number[]
-  norm_method: 'none' | 'min_max' | 'max' | 'area'
+  norm_method: 'none' | 'min_max' | 'max' | 'area' | 'mean_region'
   norm_x_start: number | null
   norm_x_end: number | null
 }
