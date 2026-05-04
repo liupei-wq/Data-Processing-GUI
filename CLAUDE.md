@@ -342,3 +342,49 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-04-30 19:08 CST：Raman sidebar 拆成獨立步驟（去尖峰/內插/多檔平均/背景/平滑/歸一化/峰偵測/擬合）；前端建置通過。
 - 2026-04-30 19:14 CST：XRD/Raman 多張分階段圖卡 + ChartToolbar + legend hide + stage CSV 匯出；前端建置通過。
 - 2026-04-30 20:42 CST：審閱 XRD 自動找峰推薦方案，整理分階段導入建議。
+- 2026-05-05 CST：讀取 `CLAUDE.md`，確認本次 Raman 背景扣除與歸一化 UI 調整需求。
+- 2026-05-05 CST：搜尋 `Raman.tsx`、`XPS.tsx` 與相關型別，定位 XPS 的雙端拉桿、背景/歸一化階段圖與 Raman 現有差異。
+- 2026-05-05 CST：讀取 XPS 雙端拉桿、區間標示與 Raman sidebar/圖表片段，確認需要新增 Raman 共用 DualRangeInput、區間標示與獨立歸一化階段圖。
+- 2026-05-05 CST：在 `web/frontend/src/pages/Raman.tsx` 新增 XPS 風格 `DualRangeInput`、前後對照 trace 建立器與背景/歸一化區間陰影標註 helper。
+
+- 2026-05-05：讀取 CLAUDE.md 後檢查 Raman.tsx 目前的背景扣除、歸一化與 DualRangeInput 變更位置，確認仍需補上背景/歸一化階段圖與側欄拉桿。
+
+- 2026-05-05：讀取 CLAUDE.md 後並行檢視 Raman.tsx 的階段圖資料、側欄控制區與圖表渲染區，定位需要替換的背景/歸一化區塊。
+
+- 2026-05-05：讀取 CLAUDE.md 後搜尋 Raman 背景與歸一化參數欄位，確認側欄目前背景只有數字欄位、mean_region 仍是兩條獨立 range。
+
+- 2026-05-05：讀取 CLAUDE.md 後嘗試用 node 以 JSON 字串檢視 Raman.tsx 相關行，但目前 shell 找不到 node 指令，改用 PowerShell/patch 處理。
+
+- 2026-05-05：讀取 CLAUDE.md 後更新 Raman.tsx 階段資料：背景圖改用背景-only 處理結果，新增歸一化輸入、歸一化階段資料與 XPS 風格前後 overlay traces。
+
+- 2026-05-05：讀取 CLAUDE.md 後檢查 Raman.tsx 最終圖、區間標註 helper 與 return 前位置，準備加入背景/歸一化區間 layout。
+
+- 2026-05-05：讀取 CLAUDE.md 後在 Raman.tsx 新增背景區間與歸一化區間的 Plotly layout，包含與 XPS 相同概念的區間陰影與標註。
+
+- 2026-05-05：讀取 CLAUDE.md 後更新 Raman 側欄控制：背景扣除新增雙把手區間拉桿，歸一化新增單軸雙把手區間拉桿與區間摘要，並停用原本 mean_region 兩條獨立 range。
+
+- 2026-05-05：讀取 CLAUDE.md 後檢視 Raman 主圖渲染區，定位 preprocess、background、final 三個卡片以插入歸一化卡片與區間 layout。
+
+- 2026-05-05：讀取 CLAUDE.md 後更新 Raman 主圖渲染：背景圖套用背景區間陰影，新增歸一化前/後對照圖與歸一化區間陰影及 CSV 匯出。
+
+- 2026-05-05：讀取 CLAUDE.md 後執行 git diff --check 與 diff stat，確認 Raman.tsx/CLAUDE.md 變更無 diff-check 錯誤，僅有 Git 換行提示。
+
+- 2026-05-05：讀取 CLAUDE.md 後在 web/frontend 嘗試執行 npm run build，但目前 shell 找不到 npm 指令，暫時無法完成前端建置驗證。
+
+- 2026-05-05：讀取 CLAUDE.md 後移除 Raman 歸一化側欄中已停用的舊式雙 range 區塊，保留新的單軸雙把手拉桿版本。
+
+- 2026-05-05：讀取 CLAUDE.md 後再次執行 git diff --check，仍僅有 Git 換行提示；同時嘗試用 Select-String 搜尋 Raman 拉桿/圖表關鍵字，但 pattern quoting 錯誤需重跑。
+
+- 2026-05-05：讀取 CLAUDE.md 後重跑 Raman 關鍵字搜尋，確認舊 false 條件已移除，現有 range 僅在 DualRangeInput 內，背景/歸一化卡片皆套用新 layout。
+
+- 2026-05-05：讀取 CLAUDE.md 後檢查 node/npm 是否可用，where.exe 與 C:\Program Files\nodejs 皆未找到，因此無法在此環境執行 npm build。
+
+- 2026-05-05：讀取 CLAUDE.md 後檢查 Raman 型別與顏色/legend 狀態，確認 y_processed 為必填陣列、歸一化顏色與 hidden legend state 已存在。
+
+- 2026-05-05：讀取 CLAUDE.md 後以 Unicode escape 精確檢查 Raman 背景拉桿 JSX，確認 label/unit/onChange 等新增屬性語法完整。
+
+### 2026-05-05（下午）
+
+- 2026-05-05 CST：XPS 新增 `.asc` 檔案類型支援；修改 `web/frontend/src/pages/XPS.tsx` 兩處 FileUpload 的 accept 屬性加入 `.asc`，同時更新 Section hint 從 "XY / VMS / TXT / CSV" 改為 "XY / VMS / TXT / CSV / ASC"；後端 parser 已支援，無需修改；驗證 grep 確認修改已生效。
+
+- 2026-05-05：讀取 CLAUDE.md 後完成最終檢查：git diff --check 無錯誤（僅換行提示），status 顯示 CLAUDE.md 與 web/frontend/src/pages/Raman.tsx 已修改。

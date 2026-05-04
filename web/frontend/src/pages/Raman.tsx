@@ -875,6 +875,159 @@ function describeProcessedView(params: ProcessParams) {
   return '處理後'
 }
 
+function buildPipelineOverlayTraces(
+  inputDataset: { x: number[]; y: number[]; name: string },
+  outputDataset: { x: number[]; y: number[]; name: string },
+  outputLabel: string,
+  paletteKey: string,
+): Plotly.Data[] {
+  const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+  return [
+    {
+      x: inputDataset.x,
+      y: inputDataset.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: inputDataset.name,
+      line: { color: palette.secondary, width: 1.4 },
+      opacity: 0.8,
+    },
+    {
+      x: outputDataset.x,
+      y: outputDataset.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: outputLabel,
+      line: { color: palette.primary, width: 2.1 },
+    },
+  ]
+}
+
+function buildRegionShapes(start: number | null | undefined, end: number | null | undefined, color: string) {
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end) || start === end) return []
+  const x0 = Math.min(start, end)
+  const x1 = Math.max(start, end)
+  return [
+    {
+      type: 'rect' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0,
+      x1,
+      y0: 0,
+      y1: 1,
+      fillcolor: color,
+      opacity: 0.28,
+      line: { width: 0 },
+      layer: 'below' as const,
+    },
+    {
+      type: 'line' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0,
+      x1: x0,
+      y0: 0,
+      y1: 1,
+      line: { color, width: 1.6, dash: 'dot' },
+    },
+    {
+      type: 'line' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0: x1,
+      x1,
+      y0: 0,
+      y1: 1,
+      line: { color, width: 1.6, dash: 'dot' },
+    },
+  ]
+}
+
+function buildRegionAnnotations(start: number | null | undefined, end: number | null | undefined, label: string, color: string) {
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end) || start === end) return []
+  return [{
+    x: (start + end) / 2,
+    y: 1.03,
+    xref: 'x' as const,
+    yref: 'paper' as const,
+    text: label,
+    showarrow: false,
+    font: { size: 11, color },
+  }]
+}
+
+function DualRangeInput({
+  label,
+  min,
+  max,
+  start,
+  end,
+  step = 1,
+  unit = '',
+  onChange,
+  disabled = false,
+}: {
+  label: string
+  min: number
+  max: number
+  start: number
+  end: number
+  step?: number
+  unit?: string
+  onChange: (next: { start: number; end: number }) => void
+  disabled?: boolean
+}) {
+  const low = Math.min(start, end)
+  const high = Math.max(start, end)
+  const boundedMin = Number.isFinite(min) ? min : 0
+  const boundedMax = Number.isFinite(max) && max > boundedMin ? max : boundedMin + 1
+  const span = Math.max(boundedMax - boundedMin, 1e-9)
+  const startPct = ((low - boundedMin) / span) * 100
+  const endPct = ((high - boundedMin) / span) * 100
+
+  return (
+    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
+        <span className="text-[11px] font-medium text-[var(--text-main)]">
+          {low.toFixed(0)} - {high.toFixed(0)}{unit ? ` ${unit}` : ''}
+        </span>
+      </div>
+      <div className="relative h-9">
+        <div className="xps-range-track" />
+        <div
+          className="xps-range-selection"
+          style={{
+            left: `${startPct}%`,
+            width: `${Math.max(endPct - startPct, 0)}%`,
+          }}
+        />
+        <input
+          type="range"
+          min={boundedMin}
+          max={boundedMax}
+          step={step}
+          value={low}
+          disabled={disabled}
+          onChange={e => onChange({ start: Math.min(Number(e.target.value), high), end: high })}
+          className="xps-range-slider xps-range-slider--primary"
+        />
+        <input
+          type="range"
+          min={boundedMin}
+          max={boundedMax}
+          step={step}
+          value={high}
+          disabled={disabled}
+          onChange={e => onChange({ start: low, end: Math.max(Number(e.target.value), low) })}
+          className="xps-range-slider xps-range-slider--secondary"
+        />
+      </div>
+    </div>
+  )
+}
+
 function chartLayout(): Partial<Plotly.Layout> {
   const cssVars = typeof window !== 'undefined'
     ? getComputedStyle(document.documentElement)
@@ -968,6 +1121,8 @@ export default function Raman({
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
   const [peakParams, setPeakParams] = useState<PeakDetectionParams>(DEFAULT_PEAK_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
+  const [backgroundResult, setBackgroundResult] = useState<ProcessResult | null>(null)
+  const [normalizationResult, setNormalizationResult] = useState<ProcessResult | null>(null)
   const [selectedSeries, setSelectedSeries] = useState<string>('')
   const [processingViewMode, setProcessingViewMode] = useState<'single' | 'overlay'>('single')
   const [overlaySelection, setOverlaySelection] = useState<string[]>([])
@@ -1030,12 +1185,14 @@ export default function Raman({
     overlay: 'blue',
     preprocess: 'teal',
     background: 'orange',
+    normalization: 'teal',
     final: 'blue',
   })
   const [rawHidden, setRawHidden] = useState<string[]>([])
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
   const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
   const [backgroundHidden, setBackgroundHidden] = useState<string[]>([])
+  const [normalizationHidden, setNormalizationHidden] = useState<string[]>([])
   const [finalHidden, setFinalHidden] = useState<string[]>([])
 
   useEffect(() => {
@@ -1084,13 +1241,33 @@ export default function Raman({
   }, [])
 
   useEffect(() => {
-    if (rawFiles.length === 0) return
+    if (rawFiles.length === 0) {
+      setResult(null)
+      setBackgroundResult(null)
+      setNormalizationResult(null)
+      return
+    }
     let cancelled = false
     setIsLoading(true)
     setError(null)
-    processData(rawFiles, params)
-      .then(response => {
-        if (!cancelled) setResult(response)
+    const hasBackgroundStage = params.bg_enabled && params.bg_method !== 'none'
+    const hasNormalizationStage = params.norm_method !== 'none'
+    const backgroundParams: ProcessParams = {
+      ...params,
+      norm_method: 'none',
+      norm_x_start: null,
+      norm_x_end: null,
+    }
+    Promise.all([
+      processData(rawFiles, params),
+      hasBackgroundStage ? processData(rawFiles, backgroundParams) : Promise.resolve(null),
+    ])
+      .then(([finalResponse, backgroundResponse]) => {
+        if (!cancelled) {
+          setResult(finalResponse)
+          setBackgroundResult(backgroundResponse)
+          setNormalizationResult(hasNormalizationStage ? finalResponse : null)
+        }
       })
       .catch(e => {
         if (!cancelled) setError(String((e as Error).message))
@@ -1133,6 +1310,20 @@ export default function Raman({
     if (!result) return null
     return result.datasets.find(dataset => dataset.name === selectedSeries) ?? result.datasets[0] ?? null
   }, [result, selectedSeries])
+  const activeRawDataset = useMemo(
+    () => rawFiles.find(file => file.name === selectedSeries) ?? rawFiles[0] ?? null,
+    [rawFiles, selectedSeries],
+  )
+  const backgroundDataset = useMemo(() => {
+    if (!backgroundResult) return null
+    return backgroundResult.datasets.find(dataset => dataset.name === selectedSeries) ?? backgroundResult.datasets[0] ?? null
+  }, [backgroundResult, selectedSeries])
+  const normalizationDataset = useMemo(() => {
+    if (!normalizationResult) return null
+    return normalizationResult.datasets.find(dataset => dataset.name === selectedSeries) ?? normalizationResult.datasets[0] ?? null
+  }, [normalizationResult, selectedSeries])
+  const hasBackgroundStage = params.bg_enabled && params.bg_method !== 'none'
+  const hasNormalizationStage = params.norm_method !== 'none'
   const datasetTabItems = useMemo(
     () => (result?.datasets ?? []).map(dataset => ({ key: dataset.name, label: dataset.name })),
     [result],
@@ -1160,8 +1351,9 @@ export default function Raman({
   const ramanRangeLabel = activeDataset
     ? `${Math.min(...activeDataset.x).toFixed(1)} – ${Math.max(...activeDataset.x).toFixed(1)} cm⁻¹`
     : '—'
-  const xDataMin = activeDataset ? Math.min(...activeDataset.x) : 0
-  const xDataMax = activeDataset ? Math.max(...activeDataset.x) : 4000
+  const xDataSource = activeRawDataset ?? activeDataset
+  const xDataMin = xDataSource ? Math.min(...xDataSource.x) : 0
+  const xDataMax = xDataSource ? Math.max(...xDataSource.x) : 4000
   const backgroundMethodLabel = BACKGROUND_METHOD_OPTIONS.find(option => option.value === params.bg_method)?.label ?? '不扣背景'
   const normalizationLabel = NORMALIZATION_OPTIONS.find(option => option.value === params.norm_method)?.label ?? '不歸一化'
   const rawChartSourceFiles = useMemo(
@@ -1220,22 +1412,45 @@ export default function Raman({
     ] as Plotly.Data[]
   }, [chartLineColors.preprocess, preprocessStageDatasets])
   const backgroundStageDatasets = useMemo(() => {
-    if (!activeDataset || !params.bg_enabled || !activeDataset.y_background) return []
+    if (!hasBackgroundStage || !backgroundDataset || !backgroundDataset.y_background) return []
     return [
-      { name: '原始', x: activeDataset.x, y: activeDataset.y_raw },
-      { name: '背景基準線', x: activeDataset.x, y: activeDataset.y_background },
-      { name: '背景扣除後', x: activeDataset.x, y: activeDataset.y_processed },
+      { name: '背景扣除前', x: backgroundDataset.x, y: backgroundDataset.y_raw },
+      { name: '背景線', x: backgroundDataset.x, y: backgroundDataset.y_background },
+      { name: '背景扣除後', x: backgroundDataset.x, y: backgroundDataset.y_processed },
     ]
-  }, [activeDataset, params.bg_enabled])
+  }, [backgroundDataset, hasBackgroundStage])
   const backgroundChartTraces = useMemo(() => {
     if (backgroundStageDatasets.length === 0) return []
     const palette = LINE_COLOR_PALETTES[chartLineColors.background] ?? LINE_COLOR_PALETTES.orange
     return [
-      { x: backgroundStageDatasets[0].x, y: backgroundStageDatasets[0].y, type: 'scatter', mode: 'lines', name: '原始', line: { color: palette.secondary, width: 1.25, dash: 'dot' } },
-      { x: backgroundStageDatasets[1].x, y: backgroundStageDatasets[1].y, type: 'scatter', mode: 'lines', name: '背景基準線', line: { color: palette.tertiary, width: 1.45, dash: 'dot' } },
+      { x: backgroundStageDatasets[0].x, y: backgroundStageDatasets[0].y, type: 'scatter', mode: 'lines', name: '背景扣除前', line: { color: palette.secondary, width: 1.25, dash: 'dot' } },
+      { x: backgroundStageDatasets[1].x, y: backgroundStageDatasets[1].y, type: 'scatter', mode: 'lines', name: '背景線', line: { color: palette.tertiary, width: 1.45, dash: 'dot' } },
       { x: backgroundStageDatasets[2].x, y: backgroundStageDatasets[2].y, type: 'scatter', mode: 'lines', name: '背景扣除後', line: { color: palette.primary, width: 2.2 } },
     ] as Plotly.Data[]
   }, [backgroundStageDatasets, chartLineColors.background])
+  const normalizationInput = useMemo(() => {
+    if (hasBackgroundStage && backgroundDataset) {
+      return { x: backgroundDataset.x, y: backgroundDataset.y_processed }
+    }
+    if (activeRawDataset) {
+      return { x: activeRawDataset.x, y: activeRawDataset.y }
+    }
+    return null
+  }, [activeRawDataset, backgroundDataset, hasBackgroundStage])
+  const normalizationStageDatasets = useMemo(
+    () => normalizationDataset ? [{ name: normalizationDataset.name, x: normalizationDataset.x, y: normalizationDataset.y_processed }] : [],
+    [normalizationDataset],
+  )
+  const normalizationChartTraces = useMemo(() => (
+    normalizationDataset && normalizationInput
+      ? buildPipelineOverlayTraces(
+          { x: normalizationInput.x, y: normalizationInput.y, name: '歸一化前' },
+          { x: normalizationDataset.x, y: normalizationDataset.y_processed, name: '歸一化後' },
+          '歸一化後',
+          chartLineColors.normalization,
+        )
+      : []
+  ), [chartLineColors.normalization, normalizationDataset, normalizationInput])
   const finalStageDatasets = useMemo(
     () => activeDataset ? [{ name: activeDataset.name, x: activeDataset.x, y: activeDataset.y_processed }] : [],
     [activeDataset],
@@ -1292,6 +1507,20 @@ export default function Raman({
     }
     return traces
   }, [activeDataset, chartLineColors.final, detectedPeaks, peakParams.enabled, refPeaks])
+  const bgDataXMin = backgroundDataset ? Math.min(...backgroundDataset.x) : xDataMin
+  const bgDataXMax = backgroundDataset ? Math.max(...backgroundDataset.x) : xDataMax
+  const normDataXMin = normalizationInput ? Math.min(...normalizationInput.x) : xDataMin
+  const normDataXMax = normalizationInput ? Math.max(...normalizationInput.x) : xDataMax
+  const backgroundLayout = {
+    ...chartLayout(),
+    shapes: buildRegionShapes(params.bg_x_start ?? bgDataXMin, params.bg_x_end ?? bgDataXMax, '#f59e0b'),
+    annotations: buildRegionAnnotations(params.bg_x_start ?? bgDataXMin, params.bg_x_end ?? bgDataXMax, '背景區間', '#f59e0b'),
+  }
+  const normalizationLayout = {
+    ...chartLayout(),
+    shapes: buildRegionShapes(params.norm_x_start ?? normDataXMin, params.norm_x_end ?? normDataXMax, '#14b8a6'),
+    annotations: buildRegionAnnotations(params.norm_x_start ?? normDataXMin, params.norm_x_end ?? normDataXMax, '歸一化區間', '#14b8a6'),
+  }
   const renderFinalChart = useCallback((minHeight: number, bindLegend = true) => (
     <Plot
       data={applyHidden(finalChartTraces, finalHidden)}
@@ -2394,6 +2623,18 @@ export default function Raman({
                       <input type="number" value={params.bg_x_end ?? ''} onChange={e => setParams(current => ({ ...current, bg_x_end: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
                     </label>
                   </div>
+                  <div className="mt-3">
+                    <DualRangeInput
+                      label="背景區間拉桿"
+                      min={xDataMin}
+                      max={xDataMax}
+                      start={params.bg_x_start ?? xDataMin}
+                      end={params.bg_x_end ?? xDataMax}
+                      step={1}
+                      unit="cm⁻¹"
+                      onChange={({ start, end }) => setParams(current => ({ ...current, bg_x_start: start, bg_x_end: end }))}
+                    />
+                  </div>
                   {params.bg_method === 'polynomial' && (
                     <label className="mt-3 block">
                       <span className="mb-1 block text-xs text-[var(--text-soft)]">多項式階數</span>
@@ -2452,63 +2693,38 @@ export default function Raman({
                   buttonClassName="text-sm"
                 />
               </label>
-              {params.norm_method !== 'none' && params.norm_method !== 'mean_region' && (
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
-                    <input type="number" value={params.norm_x_start ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_start: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
-                    <input type="number" value={params.norm_x_end ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_end: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                </div>
-              )}
-              {params.norm_method === 'mean_region' && (
+              {params.norm_method !== 'none' && (
                 <div className="mt-3 space-y-3">
-                  <p className="text-xs text-[var(--text-soft)]">
-                    計算所選區間內所有點的平均強度，再以此值除整條光譜。
-                  </p>
-                  <div>
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="text-xs text-[var(--text-soft)]">區間起點</span>
-                      <span className="font-mono text-xs text-[var(--accent)]">
-                        {(params.norm_x_start ?? xDataMin).toFixed(0)} cm⁻¹
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={xDataMin}
-                      max={xDataMax}
-                      step={1}
-                      value={params.norm_x_start ?? xDataMin}
-                      onChange={e => setParams(current => ({ ...current, norm_x_start: Number(e.target.value) }))}
-                      className="w-full accent-[var(--accent)]"
-                    />
+                  {params.norm_method === 'mean_region' && (
+                    <p className="text-xs text-[var(--text-soft)]">
+                      計算所選區間內所有點的平均強度，再以此值除整條光譜。
+                    </p>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
+                      <input type="number" value={params.norm_x_start ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_start: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
+                      <input type="number" value={params.norm_x_end ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_end: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
                   </div>
-                  <div>
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="text-xs text-[var(--text-soft)]">區間終點</span>
-                      <span className="font-mono text-xs text-[var(--accent)]">
-                        {(params.norm_x_end ?? xDataMax).toFixed(0)} cm⁻¹
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={xDataMin}
-                      max={xDataMax}
-                      step={1}
-                      value={params.norm_x_end ?? xDataMax}
-                      onChange={e => setParams(current => ({ ...current, norm_x_end: Number(e.target.value) }))}
-                      className="w-full accent-[var(--accent)]"
-                    />
-                  </div>
+                  <DualRangeInput
+                    label="歸一化區間拉桿"
+                    min={xDataMin}
+                    max={xDataMax}
+                    start={params.norm_x_start ?? xDataMin}
+                    end={params.norm_x_end ?? xDataMax}
+                    step={1}
+                    unit="cm⁻¹"
+                    onChange={({ start, end }) => setParams(current => ({ ...current, norm_x_start: start, norm_x_end: end }))}
+                  />
                   <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-soft)]">
-                    平均區間：{(params.norm_x_start ?? xDataMin).toFixed(0)} – {(params.norm_x_end ?? xDataMax).toFixed(0)} cm⁻¹
+                    歸一化區間：{(params.norm_x_start ?? xDataMin).toFixed(0)} - {(params.norm_x_end ?? xDataMax).toFixed(0)} cm⁻¹
                   </div>
                 </div>
               )}
-
             </SidebarCard>
 
             <SidebarCard step={4} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
@@ -3126,7 +3342,7 @@ export default function Raman({
                 </div>
               )}
 
-              {!isOverlayView && preprocessChartTraces.length > 0 && (
+              {!isOverlayView && !hasBackgroundStage && !hasNormalizationStage && preprocessChartTraces.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                   <ChartToolbar
                     title="2. 前處理後"
@@ -3168,7 +3384,7 @@ export default function Raman({
                   <DeferredRender minHeight={340}>
                     <Plot
                       data={applyHidden(backgroundChartTraces, backgroundHidden)}
-                      layout={chartLayout()}
+                      layout={backgroundLayout as Plotly.Layout}
                       config={withPlotFullscreen({ scrollZoom: false })}
                       style={{ width: '100%', minHeight: '340px' }}
                       onLegendClick={makeLegendClick(setBackgroundHidden) as never}
@@ -3180,6 +3396,37 @@ export default function Raman({
                     <button
                       type="button"
                       onClick={() => downloadFile(buildStageCsv(backgroundStageDatasets, 'raman_shift_cm-1', 'intensity_processed'), 'raman_background_stage.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載此步驟 CSV
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isOverlayView && hasNormalizationStage && normalizationChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="4. 歸一化"
+                    colorValue={chartLineColors.normalization}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">顯示歸一化前與歸一化後光譜，綠色區塊為目前選取的歸一化區間；若已啟用背景扣除，這一步會接續背景扣除後的結果。</p>
+                  <DeferredRender minHeight={340}>
+                    <Plot
+                      data={applyHidden(normalizationChartTraces, normalizationHidden)}
+                      layout={normalizationLayout as Plotly.Layout}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', minHeight: '340px' }}
+                      onLegendClick={makeLegendClick(setNormalizationHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildStageCsv(normalizationStageDatasets, 'raman_shift_cm-1', 'intensity_processed'), 'raman_normalization_stage.csv', 'text/csv')}
                       className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                     >
                       下載此步驟 CSV
