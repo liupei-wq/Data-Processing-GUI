@@ -388,3 +388,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-05 CST：XPS 新增 `.asc` 檔案類型支援；修改 `web/frontend/src/pages/XPS.tsx` 兩處 FileUpload 的 accept 屬性加入 `.asc`，同時更新 Section hint 從 "XY / VMS / TXT / CSV" 改為 "XY / VMS / TXT / CSV / ASC"；後端 parser 已支援，無需修改；驗證 grep 確認修改已生效。
 
 - 2026-05-05：讀取 CLAUDE.md 後完成最終檢查：git diff --check 無錯誤（僅換行提示），status 顯示 CLAUDE.md 與 web/frontend/src/pages/Raman.tsx 已修改。
+
+- 2026-05-05 CST：確認 Raman 模組已支援 `.asc` 檔案；FileUpload accept 屬性為 `['.txt', '.csv', '.asc', '.dat']`，hint 顯示 "支援 TXT / CSV / ASC / DAT"；無需新增修改。
