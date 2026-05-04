@@ -135,7 +135,7 @@ class CalibrationRequest(BaseModel):
     standard_element: str
     peak_label: str
     reference_be: float
-    search_window: float = 4.0
+    search_window: float = 10.0
 
 
 class CalibrationResponse(BaseModel):

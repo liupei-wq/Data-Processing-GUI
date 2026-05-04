@@ -279,6 +279,10 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 ## 動作紀錄
 
+### 2026-05-05
+
+- 2026-05-05 CST：修正 XPS 能量校正 bug：`search_window` 從 4 改為 10（後端 `CalibrationRequest` 預設值同步），讓搜尋範圍擴大至 ±10 eV，避免真實偏移量 ≥4 eV 時峰落在窗口外而抓到錯誤特徵；同步將校正結果顯示改為小數點後兩位（`toFixed(2)`），energy_shift 累積值也改用 `toFixed(2)` 儲存。影響檔案：`web/frontend/src/pages/XPS.tsx`、`web/backend/routers/xps.py`；後端語法檢查通過。
+
 ### 2026-05-03
 
 - 2026-05-03 CST：掃描整個代碼庫，更新 `CLAUDE.md` 加入技術棧表格、完整目錄結構、效能優化備忘；建立 `AGENTS.md` 作為 AI Agent 快速參考；將 `ENV_SETUP.zh-TW.md` 完整整合進 `README.md`；驗證三份文件皆已正確寫入。

@@ -1697,7 +1697,7 @@ export default function XPS({
         calibrationElement,
         calibrationPeakLabel,
         calibrationPeak.be,
-        4,
+        10,
       )
       setCalibrationResult(res)
       if (!res.success) {
@@ -1709,11 +1709,11 @@ export default function XPS({
           ...current,
           params: {
             ...current.params,
-            energy_shift: Number((current.params.energy_shift + res.offset_ev).toFixed(4)),
+            energy_shift: Number((current.params.energy_shift + res.offset_ev).toFixed(2)),
           },
         }))
       } else {
-        setParams(current => ({ ...current, energy_shift: Number((current.energy_shift + res.offset_ev).toFixed(4)) }))
+        setParams(current => ({ ...current, energy_shift: Number((current.energy_shift + res.offset_ev).toFixed(2)) }))
       }
     } catch (e: unknown) {
       setCalibrationError((e as Error).message)
@@ -2243,11 +2243,11 @@ export default function XPS({
                         <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] px-3 py-3 text-xs text-[var(--text-main)]">
                           <p className="font-medium">
                             {calibrationResult.standard_element} {calibrationResult.peak_label}：
-                            觀測 {calibrationResult.observed_be?.toFixed(3)} eV
+                            觀測 {calibrationResult.observed_be?.toFixed(2)} eV
                           </p>
                           <p className="mt-1 text-[var(--text-soft)]">
-                            參考 {calibrationResult.reference_be.toFixed(3)} eV，已套用偏移 {calibrationResult.offset_ev >= 0 ? '+' : ''}
-                            {calibrationResult.offset_ev.toFixed(3)} eV。
+                            參考 {calibrationResult.reference_be.toFixed(2)} eV，已套用偏移 {calibrationResult.offset_ev >= 0 ? '+' : ''}
+                            {calibrationResult.offset_ev.toFixed(2)} eV。
                           </p>
                         </div>
                       )}
