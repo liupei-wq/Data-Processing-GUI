@@ -353,7 +353,7 @@ export default function XAS({
               <div className="px-4 pt-4">
               {/* 1. 載入 */}
               <Section step={1} title="載入資料" hint="DAT / XMU / NOR / TXT">
-                <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor']} />
+                <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor', '.xlsx', '.xls']} />
                 <CheckRow label="TFY 使用 1 − TFY 翻轉" checked={flipTfy} onChange={v => { setFlipTfy(v); setRawFiles([]) }} />
                 {rawFiles.length > 0 && (
                   <div className="space-y-1">

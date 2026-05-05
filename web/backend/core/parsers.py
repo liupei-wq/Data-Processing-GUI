@@ -8,6 +8,73 @@ import numpy as np
 import pandas as pd
 
 
+EXCEL_MAGIC = (b"PK\x03\x04", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+
+
+def looks_like_excel(raw: bytes) -> bool:
+    """Return True for common OOXML (.xlsx) or OLE2 (.xls) workbook bytes."""
+    return any(raw.startswith(prefix) for prefix in EXCEL_MAGIC)
+
+
+def numeric_excel_table(raw: bytes, min_columns: int = 2):
+    """
+    Read the first usable numeric table from an Excel workbook.
+
+    Header rows are allowed: non-numeric cells are coerced to NaN, then a sheet
+    is accepted when it has at least ``min_columns`` numeric columns with two
+    or more complete data rows.
+    """
+    try:
+        sheets = pd.read_excel(io.BytesIO(raw), sheet_name=None, header=None)
+    except ImportError as exc:
+        return None, f"Excel 解析需要 openpyxl/xlrd 套件：{exc}"
+    except Exception as exc:
+        if looks_like_excel(raw):
+            return None, f"Excel 解析失敗：{exc}"
+        return None, None
+
+    for sheet_name, df in sheets.items():
+        if df is None or df.empty:
+            continue
+        numeric = df.apply(pd.to_numeric, errors="coerce").dropna(how="all")
+        if numeric.empty:
+            continue
+
+        valid_cols = [
+            col for col in numeric.columns
+            if numeric[col].notna().sum() >= 2 and numeric[col].notna().mean() >= 0.5
+        ]
+        if len(valid_cols) < min_columns:
+            continue
+
+        table = numeric[valid_cols].dropna(how="any")
+        if len(table) >= 2:
+            table = table.iloc[:, :max(min_columns, len(valid_cols))]
+            table.columns = [f"col_{idx + 1}" for idx in range(table.shape[1])]
+            table.attrs["sheet_name"] = sheet_name
+            return table.reset_index(drop=True), None
+
+    if looks_like_excel(raw):
+        return None, f"Excel 解析失敗：找不到至少 {min_columns} 欄、2 列以上的數值資料"
+    return None, None
+
+
+def parse_excel_two_column_spectrum_bytes(raw: bytes):
+    table, err = numeric_excel_table(raw, min_columns=2)
+    if table is None:
+        return None, None, err
+
+    x = table.iloc[:, 0].to_numpy(dtype=float)
+    y = table.iloc[:, 1].to_numpy(dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    if len(x) < 2:
+        return None, None, "Excel 解析失敗：有效資料點不足"
+
+    idx = np.argsort(x)
+    return x[idx], y[idx], None
+
+
 def is_numeric_line(line: str) -> bool:
     """Return True if every whitespace/comma-separated token in line is a float."""
     parts = line.strip().replace(",", " ").split()
@@ -25,6 +92,12 @@ def parse_two_column_spectrum_bytes(
     raw: bytes,
     encodings=("utf-8", "utf-8-sig", "big5", "cp950", "latin-1", "utf-16"),
 ):
+    x, y, excel_err = parse_excel_two_column_spectrum_bytes(raw)
+    if x is not None and y is not None:
+        return x, y, None
+    if excel_err and looks_like_excel(raw):
+        return None, None, excel_err
+
     for enc in encodings:
         try:
             content = raw.decode(enc)
@@ -158,6 +231,12 @@ def parse_structured_xps(content_str: str):
 
 
 def parse_xps_bytes(raw: bytes):
+    x, y, excel_err = parse_excel_two_column_spectrum_bytes(raw)
+    if x is not None and y is not None:
+        return x, y, None
+    if excel_err and looks_like_excel(raw):
+        return None, None, excel_err
+
     for enc in ("utf-8", "big5", "cp950", "latin-1", "utf-16"):
         try:
             content_str = raw.decode(enc)

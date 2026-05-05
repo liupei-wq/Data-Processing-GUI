@@ -13,6 +13,7 @@ import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from core.parsers import looks_like_excel, numeric_excel_table
 from core.processing import apply_background, apply_normalization
 from core.spectrum_ops import interpolate_spectrum_to_grid, mean_spectrum_arrays
 
@@ -35,6 +36,12 @@ def _is_numeric_line(line: str) -> bool:
 
 def _parse_xas_table_bytes(raw: bytes):
     """Parse text-like XAS/DAT files and return only numeric columns."""
+    excel_df, excel_err = numeric_excel_table(raw, min_columns=3)
+    if excel_df is not None:
+        return excel_df, None
+    if excel_err and looks_like_excel(raw):
+        return None, excel_err
+
     for enc in ("utf-8", "utf-8-sig", "big5", "cp950", "latin-1", "utf-16"):
         try:
             text = raw.decode(enc)

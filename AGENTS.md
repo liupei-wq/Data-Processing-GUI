@@ -71,6 +71,7 @@ railway.toml                 # Railway 設定
 5. **不可變資料優先**：建立新物件，不直接修改現有物件
 6. **錯誤處理**：每一層都要處理錯誤，禁止靜默吞掉例外
 7. **輸入驗證**：在系統邊界驗證所有輸入
+8. **Excel 匯入**：後端 parser 支援 `.xlsx` / `.xls`，部署需包含 `openpyxl` / `xlrd`
 
 ## 常用指令
 
@@ -105,3 +106,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - `README.md` 預設使用繁體中文
 - Render 免費方案閒置後會休眠，首次請求較慢
 - 前端 bundle 較大（Plotly），目前尚未實作 lazy loading
+- 2026-05-05：新增 Excel 匯入、Area 歸一化正面積相容修正、XPS VBM 外推線顯示範圍修正；驗證 `py_compile`、`npm run build`、`git diff --check` 通過。

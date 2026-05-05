@@ -29,7 +29,7 @@
 | 圖表 | Plotly.js 2.32 + react-plotly.js 2.6 | |
 | 後端框架 | FastAPI + Uvicorn | FastAPI 0.111, Uvicorn 0.29 |
 | 後端語言 | Python 3.11 | |
-| 科學計算 | NumPy 1.26, SciPy 1.12, pandas 2.0, lmfit 1.3 | |
+| 科學計算 | NumPy 1.26, SciPy 1.12, pandas 2.0, lmfit 1.3, openpyxl/xlrd | |
 | 容器 | Docker (多階段 build) | |
 | 部署 | Render (free) + Railway | |
 
@@ -390,3 +390,9 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-05：讀取 CLAUDE.md 後完成最終檢查：git diff --check 無錯誤（僅換行提示），status 顯示 CLAUDE.md 與 web/frontend/src/pages/Raman.tsx 已修改。
 
 - 2026-05-05 CST：確認 Raman 模組已支援 `.asc` 檔案；FileUpload accept 屬性為 `['.txt', '.csv', '.asc', '.dat']`，hint 顯示 "支援 TXT / CSV / ASC / DAT"；無需新增修改。
+
+- 2026-05-05 CST：新增 Excel 匯入支援：`core.parsers` 可先解析 `.xlsx` / `.xls` 數值表，XRD/Raman/XES/SingleProcessTool/XPS 走二欄 parser，XAS 走三欄以上 parser；前端 FileUpload 與 XPS/Raman/XAS accept 顯示加入 `.xlsx` / `.xls`；`web/backend/requirements.txt` 新增 `openpyxl`、`xlrd`。
+
+- 2026-05-05 CST：修正 Area 歸一化問題：`normalization_factor` 的 Area 系列方法改用排序後正面積，遇到扣背景後負值會先平移到非負 floor，並加入 NumPy 1.x/2.x 相容 `_trapezoid` helper；驗證反向 x 與負值資料不再輸出全 0。
+
+- 2026-05-05 CST：修正 XPS VBM 外推線顯示範圍：後端回傳的 `x_fit` 現在包含邊緣區、基準區與 VBM 交點附近 margin，避免帶偏移/校正後外推斜線落在示意圖外；驗證 `python3 -m py_compile ...`、`npm run build`、`git diff --check` 通過。

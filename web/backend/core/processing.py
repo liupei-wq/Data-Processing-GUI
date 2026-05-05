@@ -469,7 +469,13 @@ def _trapz_on_sorted_grid(x, y):
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     order = np.argsort(x)
-    return float(np.trapz(y[order], x[order]))
+    return _trapezoid(y[order], x[order])
+
+
+def _trapezoid(y, x):
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
 
 
 def _validate_normalization_factor(factor, method, eps=1e-12):
@@ -537,7 +543,17 @@ def normalization_factor(x, y, norm_method="none", norm_x_start=None, norm_x_end
         if method == "si_520_height" and (float(np.min(xs)) > 500.0 or float(np.max(xs)) < 540.0):
             warning = "Si 520 height used the available overlap with the requested 500-540 cm-1 window"
     elif method in {"area", "range_area", "selected_range_area"}:
-        factor = _trapz_on_sorted_grid(xs, ys)
+        order = np.argsort(xs)
+        xs_sorted = xs[order]
+        ys_sorted = ys[order]
+        y_floor = float(np.min(ys_sorted))
+        positive_ys = ys_sorted - min(y_floor, 0.0)
+        factor = _trapezoid(positive_ys, xs_sorted)
+        if factor <= 0 or not np.isfinite(factor):
+            factor = abs(_trapz_on_sorted_grid(xs_sorted, ys_sorted))
+            warning = "Area normalization used absolute integral because the selected region has no positive area after baseline shift"
+        elif y_floor < 0:
+            warning = "Area normalization measured area after shifting the selected region to a non-negative floor"
     elif method == "mean_region":
         factor = float(np.mean(ys))
     elif method == "si_520_fitted_area":
@@ -632,7 +648,7 @@ def normalize_area(x, y, region_x_start=None, region_x_end=None):
     sort_idx = np.argsort(xs)
     xs, ys = xs[sort_idx], ys[sort_idx]
     positive_ys = ys - min(np.min(ys), 0)
-    total_area = np.trapezoid(positive_ys, xs)
+    total_area = _trapezoid(positive_ys, xs)
     if total_area == 0:
         return np.zeros_like(y)
     return y / total_area

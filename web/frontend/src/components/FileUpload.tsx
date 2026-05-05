@@ -16,9 +16,15 @@ export default function FileUpload({ onFiles, isLoading = false, moduleLabel = '
     [onFiles],
   )
 
-  const acceptMap: Record<string, string[]> = accept
-    ? { 'application/octet-stream': accept, 'text/plain': accept, 'text/csv': accept }
-    : { 'text/plain': ['.txt', '.asc', '.xy', '.dat'], 'text/csv': ['.csv'] }
+  const defaultFormats = ['.txt', '.csv', '.xy', '.asc', '.dat', '.xlsx', '.xls']
+  const acceptedFormats = accept ?? defaultFormats
+  const acceptMap: Record<string, string[]> = {
+    'application/octet-stream': acceptedFormats,
+    'text/plain': acceptedFormats,
+    'text/csv': acceptedFormats,
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+    'application/vnd.ms-excel': ['.xls'],
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -26,7 +32,7 @@ export default function FileUpload({ onFiles, isLoading = false, moduleLabel = '
     disabled: isLoading,
   })
 
-  const formatList = accept ?? ['.txt', '.csv', '.xy', '.asc', '.dat']
+  const formatList = acceptedFormats
 
   return (
     <div

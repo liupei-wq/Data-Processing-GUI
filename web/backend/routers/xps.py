@@ -484,8 +484,12 @@ def compute_vbm(req: VbmRequest):
     else:
         message = "斜率接近零，無法外推 VBM"
 
-    x_lo_plot = min(lo_e, float(vbm_ev) - 1.0) if vbm_ev is not None else lo_e - 1.0
-    x_hi_plot = max(hi_e, hi_b)
+    x_margin = max((hi_e - lo_e) * 0.25, 0.5)
+    x_candidates = [lo_e, hi_e, lo_b, hi_b]
+    if vbm_ev is not None and np.isfinite(vbm_ev):
+        x_candidates.extend([float(vbm_ev) - x_margin, float(vbm_ev) + x_margin])
+    x_lo_plot = min(x_candidates)
+    x_hi_plot = max(x_candidates)
     x_fit_arr = np.linspace(x_lo_plot, x_hi_plot, 80)
     y_fit_arr = slope * x_fit_arr + intercept
 

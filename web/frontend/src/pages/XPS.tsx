@@ -1992,9 +1992,9 @@ export default function XPS({
               </div>
 
               <div className="px-4 pt-4">
-                <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV / ASC">
+                <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV / ASC / XLSX">
                   <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}</div>
-                  <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="XPS" accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc']} />
+                  <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="XPS" accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc', '.xlsx', '.xls']} />
                   {rawFiles.length > 0 && (
                     <div className="space-y-1">
                       {rawFiles.map(f => (
@@ -2181,7 +2181,7 @@ export default function XPS({
                         onFiles={handleStandardFiles}
                         isLoading={calibrationLoading}
                         moduleLabel="標準樣品"
-                        accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc']}
+                        accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc', '.xlsx', '.xls']}
                       />
                       {standardFiles.length > 0 && (
                         <div className="space-y-1">

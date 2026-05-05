@@ -2628,14 +2628,14 @@ export default function Raman({
             </div>
 
             <div className="px-4 py-5">
-            <SidebarCard step={1} title="載入檔案" hint="支援 TXT / CSV / ASC / DAT" infoContent={
+            <SidebarCard step={1} title="載入檔案" hint="支援 TXT / CSV / ASC / DAT / XLSX" infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">載入檔案說明</p>
                 <p>可同時上傳多筆 Raman 光譜；後續可切換單檔查看或做疊圖比較，處理流程則會逐筆獨立執行。</p>
               </div>
             }>
               <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}（可多選）</div>
-              <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="Raman" accept={['.txt', '.csv', '.asc', '.dat']} />
+              <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="Raman" accept={['.txt', '.csv', '.asc', '.dat', '.xlsx', '.xls']} />
               {rawFiles.length > 0 && (
                 <div className="mt-3 space-y-1.5">
                   {rawFiles.map(file => (
