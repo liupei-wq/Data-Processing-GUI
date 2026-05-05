@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ES2020",
+    "moduleResolution": "bundler",
+    "noEmit": false,
+    "outDir": ".tmp-tests",
+    "allowImportingTsExtensions": false,
+    "types": [],
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": [
+    "src/types/raman.ts",
+    "src/features/raman/spectrumResults.ts",
+    "tests/**/*.ts"
+  ]
+}

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.peak_fitting import fit_peaks
-from core.processing import apply_background, apply_normalization, airpls_background, arpls_background, asls_background, masked_weight_profile
+from core.processing import apply_background, apply_normalization_with_diagnostics, airpls_background, arpls_background, asls_background, masked_weight_profile
 from core.spectrum_ops import detect_spectrum_peaks
 from db.raman_database import RAMAN_REFERENCES, get_enriched_raman_peaks, get_raman_peak_library
 
@@ -37,9 +37,21 @@ class ProcessParams(BaseModel):
     bg_baseline_iter: int = 20
     bg_anchor_x: List[float] = []
     bg_anchor_y: List[float] = []
-    norm_method: str = "none"         # none | min_max | max | area | mean_region
+    norm_method: str = "none"         # none | min_max | max | area | range_max | range_area | si_520_height | si_520_fitted_area | mean_region
     norm_x_start: Optional[float] = None
     norm_x_end: Optional[float] = None
+
+
+class NormalizationDiagnostics(BaseModel):
+    sample_id: str = ""
+    method: str = "none"
+    factor: float = 1.0
+    x_range: str = ""
+    before_min: Optional[float] = None
+    before_max: Optional[float] = None
+    after_min: Optional[float] = None
+    after_max: Optional[float] = None
+    warning: str = ""
 
 
 class ProcessRequest(BaseModel):
@@ -53,6 +65,7 @@ class DatasetOutput(BaseModel):
     y_raw: List[float]
     y_background: Optional[List[float]] = None
     y_processed: List[float]
+    normalization_diagnostics: Optional[NormalizationDiagnostics] = None
 
 
 class ProcessResponse(BaseModel):
@@ -446,7 +459,10 @@ def process_data(req: ProcessRequest):
     for ds in req.datasets:
         x = np.asarray(ds.x, dtype=float)
         y_raw = np.asarray(ds.y, dtype=float)
-        datasets.append(_build_dataset_output(ds.name, x, y_raw, params))
+        try:
+            datasets.append(_build_dataset_output(ds.name, x, y_raw, params))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"{ds.name}: {exc}") from exc
     return ProcessResponse(datasets=datasets)
 
 
@@ -476,12 +492,13 @@ def _build_dataset_output(
             manual_anchor_y=params.bg_anchor_y,
         )
 
-    y_processed = apply_normalization(
+    y_processed, norm_diagnostics = apply_normalization_with_diagnostics(
         x,
         y_processed,
         norm_method=params.norm_method,
         norm_x_start=params.norm_x_start,
         norm_x_end=params.norm_x_end,
+        sample_id=name,
     )
 
     return DatasetOutput(
@@ -490,6 +507,7 @@ def _build_dataset_output(
         y_raw=y_raw.tolist(),
         y_background=background_curve.tolist() if background_curve is not None else None,
         y_processed=y_processed.tolist(),
+        normalization_diagnostics=NormalizationDiagnostics(**norm_diagnostics),
     )
 
 
@@ -1381,6 +1399,13 @@ def _normal_profile_for_physical_peak(profile: str, peak_type: str) -> str:
 GROUP_SEQUENCE = ["Si group", "β-Ga₂O₃ group", "NiO group"]
 ACCEPTED_PEAK_STATUSES = {"accepted", "matched", "shifted"}
 PROBED_OBSERVED_STATUSES = {"accepted", "matched", "shifted", "candidate", "uncertain", "ambiguous", "overlapped"}
+NON_QUANT_COMPONENT_TOKENS = {
+    "residual_assist",
+    "residual assist",
+    "background",
+    "baseline",
+    "residual",
+}
 
 
 def _group_name_for_candidate(candidate: dict) -> str:
@@ -1402,6 +1427,34 @@ def _group_material_name(group_name: str) -> str:
     if group_name == "NiO group":
         return "NiO"
     return group_name.replace(" group", "")
+
+
+def _row_counts_for_area_pct(row: dict) -> bool:
+    peak_type = str(row.get("Peak_Type", "")).lower()
+    material = str(row.get("Material", "")).lower()
+    phase = str(row.get("Phase", "")).lower()
+    status = str(row.get("Status", "")).lower()
+    fit_status = str(row.get("Fit_Status", "")).lower()
+    text = f"{peak_type} {material} {phase}"
+    if any(token in text for token in NON_QUANT_COMPONENT_TOKENS):
+        return False
+    if not bool(row.get("Can_Be_Quantified", True)):
+        return False
+    if status in {"disabled", "invalid", "rejected", "not_observed", "not observed"}:
+        return False
+    if "invalid" in fit_status or "disabled" in fit_status:
+        return False
+    return status in ACCEPTED_PEAK_STATUSES or status == "pass"
+
+
+def _recompute_area_pct(rows: list[dict]) -> list[dict]:
+    total_area = sum(abs(float(row.get("Area", 0.0))) for row in rows if _row_counts_for_area_pct(row))
+    for row in rows:
+        if total_area > 0 and _row_counts_for_area_pct(row):
+            row["Area_pct"] = abs(float(row.get("Area", 0.0))) / total_area * 100.0
+        else:
+            row["Area_pct"] = 0.0
+    return rows
 
 
 def _group_config(group_name: str) -> dict:
@@ -2625,6 +2678,8 @@ def fit_raman_peaks(req: FitRequest):
             final_rows_raw.append(row)
         else:
             final_rows_raw.append(dict(probed_rows_by_id.get(peak_id, _peak_row_from_candidate(candidate, None, noise_final, None, group_shift=0.0))))
+
+    _recompute_area_pct(final_rows_raw)
 
     group_summaries: list[GroupSummary] = []
     summary_by_group: dict[str, GroupSummary] = {}

@@ -24,6 +24,17 @@ import {
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import {
+  buildGroupedLongFormatTraces,
+  buildProcessedOverlayTraces,
+  buildXAxisDiagnostics,
+  createCommonGrid,
+  createSpectrumResult,
+  interpolateToCommonGrid,
+  recomputeAreaPercentages,
+  spectrumResultsToLongFormat,
+  validateSpectrumResults,
+} from '../features/raman/spectrumResults'
+import {
   detectPeaks,
   fetchPeakLibrary,
   fetchReferencePeaks,
@@ -138,11 +149,15 @@ const BACKGROUND_METHOD_OPTIONS: { value: ProcessParams['bg_method']; label: str
 ]
 
 const NORMALIZATION_OPTIONS: { value: ProcessParams['norm_method']; label: string }[] = [
-  { value: 'none', label: '不歸一化' },
+  { value: 'none', label: 'None' },
+  { value: 'max', label: 'Global max' },
   { value: 'min_max', label: 'Min-Max' },
-  { value: 'max', label: 'Divide by max' },
-  { value: 'area', label: 'Divide by area' },
-  { value: 'mean_region', label: '除以算術平均（選區間）' },
+  { value: 'area', label: 'Total area (trapz)' },
+  { value: 'range_max', label: 'Selected range max' },
+  { value: 'range_area', label: 'Selected range area' },
+  { value: 'si_520_height', label: 'Si 520 peak height' },
+  { value: 'si_520_fitted_area', label: 'Si 520 fitted area' },
+  { value: 'mean_region', label: 'Mean in range' },
 ]
 
 const ROBUST_LOSS_OPTIONS: { value: FitParams['robust_loss']; label: string }[] = [
@@ -1384,17 +1399,34 @@ export default function Raman({
     () => overlayDatasets.map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed })),
     [overlayDatasets],
   )
+  const overlaySpectrumResults = useMemo(
+    () => overlayDatasets.map(dataset => createSpectrumResult(dataset, null, {
+      sample_id: dataset.name,
+      label: dataset.name,
+      axis_unit: 'cm-1',
+      data_stage: 'processed',
+    })),
+    [overlayDatasets],
+  )
+  const overlayValidation = useMemo(
+    () => validateSpectrumResults(overlaySpectrumResults, { minX: -1000, maxX: 10000 }),
+    [overlaySpectrumResults],
+  )
+  const overlayXAxisDiagnostics = useMemo(
+    () => buildXAxisDiagnostics(overlaySpectrumResults),
+    [overlaySpectrumResults],
+  )
+  const overlayNormalizationDiagnosticsRows = useMemo(
+    () => overlayDatasets
+      .map(dataset => dataset.normalization_diagnostics)
+      .filter((row): row is NonNullable<typeof row> => Boolean(row)),
+    [overlayDatasets],
+  )
   const overlayChartTraces = useMemo(() => {
     const colors = (LINE_COLOR_PALETTES[chartLineColors.overlay] ?? LINE_COLOR_PALETTES.blue).series
-    return overlayStageDatasets.map((dataset, index) => ({
-      x: dataset.x,
-      y: dataset.y,
-      type: 'scatter',
-      mode: 'lines',
-      name: dataset.name,
-      line: { color: colors[index % colors.length], width: 2.2 },
-    } as Plotly.Data))
-  }, [chartLineColors.overlay, overlayStageDatasets])
+    const longRows = spectrumResultsToLongFormat(overlaySpectrumResults, 'processed')
+    return buildGroupedLongFormatTraces(longRows, colors) as Plotly.Data[]
+  }, [chartLineColors.overlay, overlaySpectrumResults])
   const preprocessStageDatasets = useMemo(() => {
     if (!activeDataset) return []
     const comparisonLabel = describeProcessedView(params)
@@ -1440,6 +1472,12 @@ export default function Raman({
   const normalizationStageDatasets = useMemo(
     () => normalizationDataset ? [{ name: normalizationDataset.name, x: normalizationDataset.x, y: normalizationDataset.y_processed }] : [],
     [normalizationDataset],
+  )
+  const normalizationDiagnosticsRows = useMemo(
+    () => (result?.datasets ?? [])
+      .map(dataset => dataset.normalization_diagnostics)
+      .filter((row): row is NonNullable<typeof row> => Boolean(row)),
+    [result],
   )
   const normalizationChartTraces = useMemo(() => (
     normalizationDataset && normalizationInput
@@ -1923,7 +1961,7 @@ export default function Raman({
       if (!response.success) {
         throw new Error(response.message || '峰擬合失敗')
       }
-      setFitResult(response)
+      setFitResult({ ...response, peaks: recomputeAreaPercentages(response.peaks) })
       setAutoRefitSummary(null)
       setAutoDebugSummary(null)
     } catch (e: unknown) {
@@ -1971,7 +2009,7 @@ export default function Raman({
         if (!response.success) {
           throw new Error(response.message || '峰擬合失敗')
         }
-        finalResult = response
+        finalResult = { ...response, peaks: recomputeAreaPercentages(response.peaks) }
 
         const candidateById = new Map(workingCandidates.map(item => [item.peak_id, item]))
         const toDisable = response.peaks
@@ -2080,7 +2118,7 @@ export default function Raman({
       if (!response.success) {
         throw new Error(response.message || '峰擬合失敗')
       }
-      return response
+      return { ...response, peaks: recomputeAreaPercentages(response.peaks) }
     }
 
     const peakCenter = (candidate: FitPeakCandidate) => (
@@ -2448,7 +2486,7 @@ export default function Raman({
           fitParams,
         )
         if (!response.success) throw new Error(`${dataset.name}: ${response.message || '峰擬合失敗'}`)
-        outputs.push(response)
+        outputs.push({ ...response, peaks: recomputeAreaPercentages(response.peaks) })
       }
       setBatchResults(outputs)
       if (outputs[0]) setFitResult(outputs[0])
@@ -2482,6 +2520,34 @@ export default function Raman({
       })
     })
   }, [batchNormalize, batchResults])
+  const batchSpectrumResults = useMemo(() => {
+    if (!result) return []
+    return batchResults.flatMap(batch => {
+      const dataset = result.datasets.find(item => item.name === batch.dataset_name)
+      return dataset ? [createSpectrumResult(dataset, batch, {
+        sample_id: batch.report?.sample_id || batch.dataset_name,
+        label: batch.dataset_name,
+        axis_unit: 'cm-1',
+        data_stage: 'fit',
+      })] : []
+    })
+  }, [batchResults, result])
+  const batchXAxisDiagnostics = useMemo(
+    () => buildXAxisDiagnostics(batchSpectrumResults),
+    [batchSpectrumResults],
+  )
+  const batchCommonGrid = useMemo(
+    () => createCommonGrid(batchSpectrumResults, 500),
+    [batchSpectrumResults],
+  )
+  const batchCommonGridSeries = useMemo(
+    () => interpolateToCommonGrid(batchSpectrumResults, batchCommonGrid),
+    [batchCommonGrid, batchSpectrumResults],
+  )
+  const batchSpectrumOverlayTraces = useMemo(() => {
+    const colors = LINE_COLOR_PALETTES.blue.series
+    return buildProcessedOverlayTraces(batchSpectrumResults, colors) as Plotly.Data[]
+  }, [batchSpectrumResults])
 
   const exportBatchCsv = useCallback(() => {
     const headers = ['Dataset', 'Peak', 'Phase', 'Center_cm', 'FWHM_cm', 'Area', 'Normalized_Area', 'Confidence']
@@ -2695,34 +2761,43 @@ export default function Raman({
               </label>
               {params.norm_method !== 'none' && (
                 <div className="mt-3 space-y-3">
+                  {params.norm_method === 'si_520_fitted_area' && (
+                    <p className="text-xs text-amber-300">
+                      Si 520 fitted area normalization is applied after fitting because it needs fitted peak areas.
+                    </p>
+                  )}
                   {params.norm_method === 'mean_region' && (
                     <p className="text-xs text-[var(--text-soft)]">
                       計算所選區間內所有點的平均強度，再以此值除整條光譜。
                     </p>
                   )}
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
-                      <input type="number" value={params.norm_x_start ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_start: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
-                      <input type="number" value={params.norm_x_end ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_end: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                    </label>
-                  </div>
-                  <DualRangeInput
-                    label="歸一化區間拉桿"
-                    min={xDataMin}
-                    max={xDataMax}
-                    start={params.norm_x_start ?? xDataMin}
-                    end={params.norm_x_end ?? xDataMax}
-                    step={1}
-                    unit="cm⁻¹"
-                    onChange={({ start, end }) => setParams(current => ({ ...current, norm_x_start: start, norm_x_end: end }))}
-                  />
-                  <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-soft)]">
-                    歸一化區間：{(params.norm_x_start ?? xDataMin).toFixed(0)} - {(params.norm_x_end ?? xDataMax).toFixed(0)} cm⁻¹
-                  </div>
+                  {(['min_max', 'range_max', 'range_area', 'si_520_height', 'mean_region'] as ProcessParams['norm_method'][]).includes(params.norm_method) && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
+                          <input type="number" value={params.norm_x_start ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_start: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
+                          <input type="number" value={params.norm_x_end ?? ''} onChange={e => setParams(current => ({ ...current, norm_x_end: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                      </div>
+                      <DualRangeInput
+                        label="歸一化區間拉桿"
+                        min={xDataMin}
+                        max={xDataMax}
+                        start={params.norm_x_start ?? xDataMin}
+                        end={params.norm_x_end ?? xDataMax}
+                        step={1}
+                        unit="cm⁻¹"
+                        onChange={({ start, end }) => setParams(current => ({ ...current, norm_x_start: start, norm_x_end: end }))}
+                      />
+                      <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-soft)]">
+                        歸一化區間：{(params.norm_x_start ?? xDataMin).toFixed(0)} - {(params.norm_x_end ?? xDataMax).toFixed(0)} cm⁻¹
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </SidebarCard>
@@ -3330,6 +3405,71 @@ export default function Raman({
                       useResizeHandler
                     />
                   </DeferredRender>
+                  {(!overlayValidation.valid || overlayValidation.warnings.length > 0) && (
+                    <div className="mt-3 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
+                      {[...overlayValidation.errors, ...overlayValidation.warnings].map(item => (
+                        <div key={item}>{item}</div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-3 overflow-auto rounded-xl border border-[var(--card-border)]">
+                    <table className="min-w-full text-left text-xs">
+                      <thead className="bg-[var(--card-ghost)] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">sample_id</th>
+                          <th className="px-3 py-2 font-medium">x_min</th>
+                          <th className="px-3 py-2 font-medium">x_max</th>
+                          <th className="px-3 py-2 font-medium">n_points</th>
+                          <th className="px-3 py-2 font-medium">is_monotonic</th>
+                          <th className="px-3 py-2 font-medium">duplicate_count</th>
+                          <th className="px-3 py-2 font-medium">axis_unit</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {overlayXAxisDiagnostics.map(row => (
+                          <tr key={row.sample_id} className="border-t border-[var(--card-border)] text-[var(--text-main)]">
+                            <td className="px-3 py-2">{row.sample_id}</td>
+                            <td className="px-3 py-2">{row.x_min == null ? '-' : row.x_min.toFixed(3)}</td>
+                            <td className="px-3 py-2">{row.x_max == null ? '-' : row.x_max.toFixed(3)}</td>
+                            <td className="px-3 py-2">{row.n_points}</td>
+                            <td className="px-3 py-2">{row.is_monotonic ? 'true' : 'false'}</td>
+                            <td className="px-3 py-2">{row.duplicate_count}</td>
+                            <td className="px-3 py-2">{row.axis_unit}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {overlayNormalizationDiagnosticsRows.length > 0 && (
+                    <div className="mt-3 overflow-auto rounded-xl border border-[var(--card-border)]">
+                      <table className="min-w-full text-left text-xs">
+                        <thead className="bg-[var(--card-ghost)] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">sample_id</th>
+                            <th className="px-3 py-2 font-medium">norm method</th>
+                            <th className="px-3 py-2 font-medium">factor</th>
+                            <th className="px-3 py-2 font-medium">x range</th>
+                            <th className="px-3 py-2 font-medium">before min/max</th>
+                            <th className="px-3 py-2 font-medium">after min/max</th>
+                            <th className="px-3 py-2 font-medium">warning</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {overlayNormalizationDiagnosticsRows.map(row => (
+                            <tr key={`${row.sample_id}-${row.method}`} className="border-t border-[var(--card-border)] text-[var(--text-main)]">
+                              <td className="px-3 py-2">{row.sample_id}</td>
+                              <td className="px-3 py-2">{row.method}</td>
+                              <td className="px-3 py-2">{Number.isFinite(row.factor) ? row.factor.toExponential(4) : '-'}</td>
+                              <td className="px-3 py-2">{row.x_range || '-'}</td>
+                              <td className="px-3 py-2">{row.before_min == null || row.before_max == null ? '-' : `${row.before_min.toExponential(3)} / ${row.before_max.toExponential(3)}`}</td>
+                              <td className="px-3 py-2">{row.after_min == null || row.after_max == null ? '-' : `${row.after_min.toExponential(3)} / ${row.after_max.toExponential(3)}`}</td>
+                              <td className="px-3 py-2">{row.warning || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -3423,6 +3563,36 @@ export default function Raman({
                       useResizeHandler
                     />
                   </DeferredRender>
+                  {normalizationDiagnosticsRows.length > 0 && (
+                    <div className="mt-3 overflow-auto rounded-xl border border-[var(--card-border)]">
+                      <table className="min-w-full text-left text-xs">
+                        <thead className="bg-[var(--card-ghost)] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">sample_id</th>
+                            <th className="px-3 py-2 font-medium">method</th>
+                            <th className="px-3 py-2 font-medium">factor</th>
+                            <th className="px-3 py-2 font-medium">x range</th>
+                            <th className="px-3 py-2 font-medium">before min/max</th>
+                            <th className="px-3 py-2 font-medium">after min/max</th>
+                            <th className="px-3 py-2 font-medium">warning</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {normalizationDiagnosticsRows.map(row => (
+                            <tr key={`${row.sample_id}-${row.method}`} className="border-t border-[var(--card-border)] text-[var(--text-main)]">
+                              <td className="px-3 py-2">{row.sample_id}</td>
+                              <td className="px-3 py-2">{row.method}</td>
+                              <td className="px-3 py-2">{Number.isFinite(row.factor) ? row.factor.toExponential(4) : '-'}</td>
+                              <td className="px-3 py-2">{row.x_range || '-'}</td>
+                              <td className="px-3 py-2">{row.before_min == null || row.before_max == null ? '-' : `${row.before_min.toExponential(3)} / ${row.before_max.toExponential(3)}`}</td>
+                              <td className="px-3 py-2">{row.after_min == null || row.after_max == null ? '-' : `${row.after_min.toExponential(3)} / ${row.after_max.toExponential(3)}`}</td>
+                              <td className="px-3 py-2">{row.warning || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                   <div className="mt-3 flex justify-start">
                     <button
                       type="button"
@@ -4205,6 +4375,50 @@ export default function Raman({
                             </button>
                           </div>
                         </div>
+                        {batchSpectrumOverlayTraces.length > 0 && (
+                          <DeferredRender minHeight={300}>
+                            <Plot
+                              data={batchSpectrumOverlayTraces}
+                              layout={chartLayout()}
+                              config={withPlotFullscreen({ scrollZoom: false })}
+                              style={{ width: '100%', minHeight: '300px' }}
+                              useResizeHandler
+                            />
+                          </DeferredRender>
+                        )}
+                        {batchXAxisDiagnostics.length > 0 && (
+                          <div className="mb-4 overflow-auto rounded-xl border border-[var(--card-border)]">
+                            <table className="min-w-full text-left text-xs">
+                              <thead className="bg-[var(--card-ghost)] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                                <tr>
+                                  <th className="px-3 py-2 font-medium">sample_id</th>
+                                  <th className="px-3 py-2 font-medium">x_min</th>
+                                  <th className="px-3 py-2 font-medium">x_max</th>
+                                  <th className="px-3 py-2 font-medium">n_points</th>
+                                  <th className="px-3 py-2 font-medium">is_monotonic</th>
+                                  <th className="px-3 py-2 font-medium">duplicate_count</th>
+                                  <th className="px-3 py-2 font-medium">axis_unit</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {batchXAxisDiagnostics.map(row => (
+                                  <tr key={row.sample_id} className="border-t border-[var(--card-border)] text-[var(--text-main)]">
+                                    <td className="px-3 py-2">{row.sample_id}</td>
+                                    <td className="px-3 py-2">{row.x_min == null ? '-' : row.x_min.toFixed(3)}</td>
+                                    <td className="px-3 py-2">{row.x_max == null ? '-' : row.x_max.toFixed(3)}</td>
+                                    <td className="px-3 py-2">{row.n_points}</td>
+                                    <td className="px-3 py-2">{row.is_monotonic ? 'true' : 'false'}</td>
+                                    <td className="px-3 py-2">{row.duplicate_count}</td>
+                                    <td className="px-3 py-2">{row.axis_unit}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <div className="border-t border-[var(--card-border)] px-3 py-2 text-xs text-[var(--text-soft)]">
+                              common-grid interpolation: {batchCommonGrid.length} x_common points, {batchCommonGridSeries.length} samples
+                            </div>
+                          </div>
+                        )}
                         <DeferredRender minHeight={320}>
                           <Plot
                             data={batchDeltaComparisonTraces(batchResults)}

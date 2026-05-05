@@ -457,6 +457,134 @@ def _normalization_mask(x, y, region_x_start=None, region_x_end=None):
     return mask
 
 
+def _finite_stats(values):
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    if len(finite) == 0:
+        return None, None
+    return float(np.min(finite)), float(np.max(finite))
+
+
+def _trapz_on_sorted_grid(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    order = np.argsort(x)
+    return float(np.trapz(y[order], x[order]))
+
+
+def _validate_normalization_factor(factor, method, eps=1e-12):
+    if not np.isfinite(factor):
+        raise ValueError(f"Normalization failed for {method}: factor is not finite")
+    if factor <= 0:
+        raise ValueError(f"Normalization failed for {method}: factor must be positive, got {factor:g}")
+    if abs(factor) < eps:
+        raise ValueError(f"Normalization failed for {method}: factor is too small ({factor:g})")
+
+
+def normalization_factor(x, y, norm_method="none", norm_x_start=None, norm_x_end=None):
+    """
+    Calculate one normalization factor for one spectrum.
+
+    This helper never combines samples. Area methods intentionally use
+    np.trapz(y, x) on the selected sample grid rather than sum(y).
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    method = norm_method or "none"
+
+    if method == "none":
+        return {
+            "method": method,
+            "factor": 1.0,
+            "offset": 0.0,
+            "x_start": None,
+            "x_end": None,
+            "warning": "",
+        }
+
+    if len(x) != len(y) or len(x) == 0:
+        raise ValueError("Normalization failed: x/y arrays must be non-empty and have the same length")
+    if not np.all(np.isfinite(x)):
+        raise ValueError("Normalization failed: x contains non-finite values")
+
+    uses_region = method in {"range_max", "range_area", "selected_range_max", "selected_range_area", "mean_region"}
+    uses_region = uses_region or (method in {"min_max"} and norm_x_start is not None and norm_x_end is not None)
+    uses_region = uses_region or (method in {"max", "area"} and norm_x_start is not None and norm_x_end is not None)
+
+    if method == "si_520_height":
+        start = 500.0 if norm_x_start is None else float(norm_x_start)
+        end = 540.0 if norm_x_end is None else float(norm_x_end)
+    else:
+        start = float(norm_x_start) if norm_x_start is not None else float(np.min(x))
+        end = float(norm_x_end) if norm_x_end is not None else float(np.max(x))
+
+    mask = _normalization_mask(x, y, start, end) if uses_region or method == "si_520_height" else (np.isfinite(x) & np.isfinite(y))
+    if not np.any(mask):
+        raise ValueError(f"Normalization failed for {method}: selected x range has no finite data")
+
+    ys = y[mask]
+    xs = x[mask]
+    warning = ""
+    offset = 0.0
+
+    if method == "min_max":
+        y_min = float(np.min(ys))
+        y_max = float(np.max(ys))
+        offset = y_min
+        factor = y_max - y_min
+    elif method in {"max", "range_max", "selected_range_max", "si_520_height"}:
+        factor = float(np.max(ys))
+        if method == "si_520_height" and (float(np.min(xs)) > 500.0 or float(np.max(xs)) < 540.0):
+            warning = "Si 520 height used the available overlap with the requested 500-540 cm-1 window"
+    elif method in {"area", "range_area", "selected_range_area"}:
+        factor = _trapz_on_sorted_grid(xs, ys)
+    elif method == "mean_region":
+        factor = float(np.mean(ys))
+    elif method == "si_520_fitted_area":
+        raise ValueError("Normalization method si_520_fitted_area requires fitted peak data and cannot be computed during preprocessing")
+    else:
+        raise ValueError(f"Unknown normalization method: {method}")
+
+    _validate_normalization_factor(factor, method)
+    return {
+        "method": method,
+        "factor": factor,
+        "offset": offset,
+        "x_start": float(np.min(xs)) if np.any(mask) else None,
+        "x_end": float(np.max(xs)) if np.any(mask) else None,
+        "warning": warning,
+    }
+
+
+def apply_normalization_with_diagnostics(x, y, norm_method="none",
+                                         norm_x_start=None, norm_x_end=None,
+                                         sample_id=""):
+    """Normalize one sample's intensity and return y plus diagnostics."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    before_min, before_max = _finite_stats(y)
+    info = normalization_factor(x, y, norm_method, norm_x_start, norm_x_end)
+
+    if info["method"] == "min_max":
+        y_out = (y - info["offset"]) / info["factor"]
+    else:
+        y_out = y / info["factor"]
+
+    after_min, after_max = _finite_stats(y_out)
+    diagnostics = {
+        "sample_id": sample_id,
+        "method": info["method"],
+        "factor": float(info["factor"]),
+        "x_range": "" if info["x_start"] is None or info["x_end"] is None else f"{info['x_start']:.6g}-{info['x_end']:.6g}",
+        "before_min": before_min,
+        "before_max": before_max,
+        "after_min": after_min,
+        "after_max": after_max,
+        "warning": info["warning"],
+    }
+    return y_out, diagnostics
+
+
 def normalize_min_max(x, y, region_x_start=None, region_x_end=None):
     """Scale y using the min/max inside the selected normalization region."""
     x = np.asarray(x, dtype=float)
@@ -533,23 +661,21 @@ def apply_normalization(x, y, norm_method="none",
 
     if len(x) == 0 or len(y) == 0:
         return y.copy()
-
-    if norm_x_start is None:
-        norm_x_start = x.min()
-    if norm_x_end is None:
-        norm_x_end = x.max()
-
-    y_out = y.copy()
-    if norm_method == "min_max":
-        y_out = normalize_min_max(x, y_out, norm_x_start, norm_x_end)
-    elif norm_method == "max":
-        y_out = normalize_max(x, y_out, norm_x_start, norm_x_end)
-    elif norm_method == "area":
-        y_out = normalize_area(x, y_out, norm_x_start, norm_x_end)
-    elif norm_method == "mean_region":
-        y_out = normalize_mean_region(x, y_out, norm_x_start, norm_x_end)
-
-    return y_out
+    try:
+        y_out, _ = apply_normalization_with_diagnostics(
+            x,
+            y,
+            norm_method=norm_method,
+            norm_x_start=norm_x_start,
+            norm_x_end=norm_x_end,
+        )
+        return y_out
+    except ValueError:
+        # Keep legacy callers outside Raman from crashing; Raman uses the
+        # diagnostics helper directly so invalid factors still stop there.
+        if norm_method in {"min_max", "max", "area", "range_max", "range_area", "si_520_height", "mean_region"}:
+            return np.zeros_like(y)
+        return y.copy()
 
 
 def apply_processing(x, y, bg_method="none", norm_method="none",

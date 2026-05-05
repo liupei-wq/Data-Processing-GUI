@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:raman": "tsc -p tsconfig.tests.json && node .tmp-tests/tests/raman/spectrumResults.test.js"
   },
   "dependencies": {
     "plotly.js": "^2.32.0",

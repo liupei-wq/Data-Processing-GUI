@@ -15,9 +15,21 @@ export interface ProcessParams {
   bg_baseline_iter: number
   bg_anchor_x: number[]
   bg_anchor_y: number[]
-  norm_method: 'none' | 'min_max' | 'max' | 'area' | 'mean_region'
+  norm_method: 'none' | 'max' | 'min_max' | 'area' | 'range_max' | 'range_area' | 'si_520_height' | 'si_520_fitted_area' | 'mean_region'
   norm_x_start: number | null
   norm_x_end: number | null
+}
+
+export interface NormalizationDiagnostics {
+  sample_id: string
+  method: string
+  factor: number
+  x_range: string
+  before_min: number | null
+  before_max: number | null
+  after_min: number | null
+  after_max: number | null
+  warning: string
 }
 
 export interface ProcessedDataset {
@@ -26,10 +38,42 @@ export interface ProcessedDataset {
   y_raw: number[]
   y_background: number[] | null
   y_processed: number[]
+  normalization_diagnostics?: NormalizationDiagnostics | null
 }
 
 export interface ProcessResult {
   datasets: ProcessedDataset[]
+}
+
+export interface SpectrumComponent {
+  component_id: string
+  component_type: string
+  label: string
+  y: number[]
+}
+
+export interface SpectrumResult {
+  sample_id: string
+  label: string
+  x: number[]
+  y_raw: number[]
+  y_processed: number[]
+  y_fit: number[]
+  y_residual: number[]
+  components: SpectrumComponent[]
+  axis_unit: string
+  data_stage: 'raw' | 'processed' | 'fit' | 'residual' | 'component' | string
+  normalization_diagnostics?: NormalizationDiagnostics | null
+}
+
+export interface XAxisDiagnosticsRow {
+  sample_id: string
+  x_min: number | null
+  x_max: number | null
+  n_points: number
+  is_monotonic: boolean
+  duplicate_count: number
+  axis_unit: string
 }
 
 export interface DetectedPeak {

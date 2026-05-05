@@ -550,9 +550,22 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
                 peak_entry[key] = value
         peaks_out.append(peak_entry)
 
-    total_area = sum(p["area"] for p in peaks_out)
+    def include_in_area_pct(peak: dict) -> bool:
+        peak_type = str(peak.get("peak_type", "")).lower()
+        material = str(peak.get("material", "")).lower()
+        status = str(peak.get("status", peak.get("Status", ""))).lower()
+        model_component = any(token in peak_type or token in material for token in [
+            "residual_assist",
+            "residual assist",
+            "background",
+            "baseline",
+        ])
+        invalid = status in {"disabled", "invalid", "rejected", "not_observed", "not observed"}
+        return not model_component and not invalid and bool(peak.get("can_be_quantified", True))
+
+    total_area = sum(abs(p["area"]) for p in peaks_out if include_in_area_pct(p))
     for p in peaks_out:
-        p["area_pct"] = p["area"] / total_area * 100 if total_area > 0 else 0.0
+        p["area_pct"] = abs(p["area"]) / total_area * 100 if total_area > 0 and include_in_area_pct(p) else 0.0
 
     return {
         "success": True,
