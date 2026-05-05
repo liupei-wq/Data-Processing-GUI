@@ -468,14 +468,62 @@ def _finite_stats(values):
 def _trapz_on_sorted_grid(x, y):
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    order = np.argsort(x)
-    return _trapezoid(y[order], x[order])
+    xs, ys = _sorted_unique_xy(x, y)
+    if len(xs) < 2:
+        return 0.0
+    return _trapezoid(ys, xs)
 
 
 def _trapezoid(y, x):
     if hasattr(np, "trapezoid"):
         return float(np.trapezoid(y, x))
     return float(np.trapz(y, x))
+
+
+def _sorted_unique_xy(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    xs = x[finite]
+    ys = y[finite]
+    if len(xs) == 0:
+        return xs, ys
+
+    order = np.argsort(xs)
+    xs = xs[order]
+    ys = ys[order]
+    unique_x, inverse = np.unique(xs, return_inverse=True)
+    if len(unique_x) == len(xs):
+        return xs, ys
+
+    sums = np.zeros(len(unique_x), dtype=float)
+    counts = np.zeros(len(unique_x), dtype=float)
+    np.add.at(sums, inverse, ys)
+    np.add.at(counts, inverse, 1.0)
+    return unique_x, sums / counts
+
+
+def _area_normalization_factor(x, y):
+    xs, ys = _sorted_unique_xy(x, y)
+    if len(xs) < 2:
+        raise ValueError("Area normalization requires at least two unique finite x values")
+
+    warning = ""
+    y_floor = float(np.min(ys))
+    if y_floor < 0:
+        area_signal = np.maximum(ys - y_floor, 0.0)
+        warning = "Area normalization measured area after shifting the selected region to a non-negative floor"
+    else:
+        area_signal = np.maximum(ys, 0.0)
+
+    factor = _trapezoid(area_signal, xs)
+    if factor <= 0 or not np.isfinite(factor):
+        signed_area = abs(_trapezoid(ys, xs))
+        absolute_area = _trapezoid(np.abs(ys), xs)
+        factor = max(signed_area, absolute_area)
+        warning = "Area normalization used absolute integral because the selected region has no positive area"
+
+    return factor, warning, xs, ys
 
 
 def _validate_normalization_factor(factor, method, eps=1e-12):
@@ -543,17 +591,18 @@ def normalization_factor(x, y, norm_method="none", norm_x_start=None, norm_x_end
         if method == "si_520_height" and (float(np.min(xs)) > 500.0 or float(np.max(xs)) < 540.0):
             warning = "Si 520 height used the available overlap with the requested 500-540 cm-1 window"
     elif method in {"area", "range_area", "selected_range_area"}:
-        order = np.argsort(xs)
-        xs_sorted = xs[order]
-        ys_sorted = ys[order]
-        y_floor = float(np.min(ys_sorted))
-        positive_ys = ys_sorted - min(y_floor, 0.0)
-        factor = _trapezoid(positive_ys, xs_sorted)
-        if factor <= 0 or not np.isfinite(factor):
-            factor = abs(_trapz_on_sorted_grid(xs_sorted, ys_sorted))
-            warning = "Area normalization used absolute integral because the selected region has no positive area after baseline shift"
-        elif y_floor < 0:
-            warning = "Area normalization measured area after shifting the selected region to a non-negative floor"
+        xs_for_area, ys_for_area = xs, ys
+        if len(np.unique(xs_for_area[np.isfinite(xs_for_area)])) < 2:
+            full_mask = np.isfinite(x) & np.isfinite(y)
+            if len(np.unique(x[full_mask])) >= 2:
+                xs_for_area = x[full_mask]
+                ys_for_area = y[full_mask]
+                warning = "Area normalization used the full spectrum because the selected range has fewer than two unique x values"
+
+        factor, area_warning, xs_area, _ = _area_normalization_factor(xs_for_area, ys_for_area)
+        if area_warning:
+            warning = f"{warning}; {area_warning}" if warning else area_warning
+        xs = xs_area
     elif method == "mean_region":
         factor = float(np.mean(ys))
     elif method == "si_520_fitted_area":
@@ -640,18 +689,11 @@ def normalize_area(x, y, region_x_start=None, region_x_end=None):
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    mask = _normalization_mask(x, y, region_x_start, region_x_end)
-    if not np.any(mask):
-        return y.copy()
-
-    xs, ys = x[mask], y[mask]
-    sort_idx = np.argsort(xs)
-    xs, ys = xs[sort_idx], ys[sort_idx]
-    positive_ys = ys - min(np.min(ys), 0)
-    total_area = _trapezoid(positive_ys, xs)
-    if total_area == 0:
+    try:
+        info = normalization_factor(x, y, "area", region_x_start, region_x_end)
+    except ValueError:
         return np.zeros_like(y)
-    return y / total_area
+    return y / info["factor"]
 
 
 def normalize_mean_region(x, y, region_x_start, region_x_end):

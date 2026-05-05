@@ -395,4 +395,6 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 - 2026-05-05 CST：修正 Area 歸一化問題：`normalization_factor` 的 Area 系列方法改用排序後正面積，遇到扣背景後負值會先平移到非負 floor，並加入 NumPy 1.x/2.x 相容 `_trapezoid` helper；驗證反向 x 與負值資料不再輸出全 0。
 
+- 2026-05-05 CST：再次強化 XPS Area 歸一化：後端 Area factor 會合併重複 x、在選取區間少於兩個唯一 x 值時 fallback 到全譜、必要時改用絕對積分；前端 XPS 歸一化階段與最終圖在 Area 歸一化且同時顯示原始/背景時使用右側 y 軸，避免歸一化後曲線被原始強度壓扁。驗證 `python3 -m py_compile ...`、Area fallback quick check、`npm run build`、`git diff --check` 通過。
+
 - 2026-05-05 CST：修正 XPS VBM 外推線顯示範圍：後端回傳的 `x_fit` 現在包含邊緣區、基準區與 VBM 交點附近 margin，避免帶偏移/校正後外推斜線落在示意圖外；驗證 `python3 -m py_compile ...`、`npm run build`、`git diff --check` 通過。

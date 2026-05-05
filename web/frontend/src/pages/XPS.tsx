@@ -183,6 +183,7 @@ function buildPipelineOverlayTraces(
   outputDataset: { x: number[]; y: number[]; name: string },
   outputLabel: string,
   paletteKey: string,
+  outputYAxis: 'y' | 'y2' = 'y',
 ): Plotly.Data[] {
   const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
   return [
@@ -202,6 +203,7 @@ function buildPipelineOverlayTraces(
       mode: 'lines',
       name: outputLabel,
       line: { color: palette.primary, width: 2.1 },
+      yaxis: outputYAxis,
     },
   ]
 }
@@ -260,22 +262,22 @@ function buildRegionAnnotations(start: number | null | undefined, end: number | 
   }]
 }
 
-function chartLayout(xReversed = true): Partial<Plotly.Layout> {
+function chartLayout(xReversed = true, yAxisTitle = 'Intensity (a.u.)', secondaryYAxisTitle?: string): Partial<Plotly.Layout> {
   const grid = cssVar('--chart-grid', 'rgba(148,163,184,0.14)')
   const text = cssVar('--chart-text', '#d9e4f0')
   const bg = cssVar('--chart-bg', 'rgba(15,23,42,0.52)')
   const legendBg = cssVar('--chart-legend-bg', 'rgba(15,23,42,0.72)')
   const hoverBg = cssVar('--chart-hover-bg', 'rgba(15,23,42,0.95)')
   const hoverBorder = cssVar('--chart-hover-border', 'rgba(148,163,184,0.22)')
-  return {
+  const layout: Partial<Plotly.Layout> = {
     xaxis: {
       title: { text: 'Binding Energy (eV)' },
       autorange: xReversed ? 'reversed' : true,
       showgrid: true, gridcolor: grid, zeroline: false, color: text,
     },
-    yaxis: { title: { text: 'Intensity (a.u.)' }, showgrid: true, gridcolor: grid, zeroline: false, color: text },
+    yaxis: { title: { text: yAxisTitle }, showgrid: true, gridcolor: grid, zeroline: false, color: text },
     legend: { x: 1, xanchor: 'right', y: 1, bgcolor: legendBg, bordercolor: hoverBorder, borderwidth: 1, font: { color: text } },
-    margin: { l: 60, r: 20, t: 28, b: 58 },
+    margin: { l: 60, r: secondaryYAxisTitle ? 72 : 20, t: 28, b: 58 },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: bg,
     font: { color: text },
@@ -283,9 +285,20 @@ function chartLayout(xReversed = true): Partial<Plotly.Layout> {
     hoverlabel: { bgcolor: hoverBg, bordercolor: hoverBorder, font: { color: text } },
     autosize: true,
   }
+  if (secondaryYAxisTitle) {
+    layout.yaxis2 = {
+      title: { text: secondaryYAxisTitle },
+      overlaying: 'y',
+      side: 'right',
+      showgrid: false,
+      zeroline: false,
+      color: text,
+    }
+  }
+  return layout
 }
 
-function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean, paletteKey: string): Plotly.Data[] {
+function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean, paletteKey: string, processedYAxis: 'y' | 'y2' = 'y'): Plotly.Data[] {
   const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
   const traces: Plotly.Data[] = []
   if (showRaw) {
@@ -294,7 +307,7 @@ function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: bo
   if (showBg && dataset.y_background) {
     traces.push({ x: dataset.x, y: dataset.y_background, type: 'scatter', mode: 'lines', name: '背景', line: { color: palette.tertiary, width: 1.3, dash: 'dot' } })
   }
-  traces.push({ x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: palette.primary, width: 2.0 } })
+  traces.push({ x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: palette.primary, width: 2.0 }, yaxis: processedYAxis })
   return traces
 }
 
@@ -1838,6 +1851,12 @@ export default function XPS({
     : []
   const renderFinalChart = (height = 380, bindLegend = true) => {
     if (!currentDisplayDataset) return null
+    const usesAreaNormalization = currentParams.norm_method === 'area'
+    const showReferenceScale = processingViewMode === 'single' && (showRaw || (showBg && !!currentDisplayDataset.y_background))
+    const useAreaSecondaryAxis = usesAreaNormalization && !currentFitResult && showReferenceScale
+    const finalLayout = useAreaSecondaryAxis
+      ? chartLayout(true, '原始 / 背景強度 (a.u.)', 'Area 歸一化強度')
+      : chartLayout(true, usesAreaNormalization ? 'Area 歸一化強度' : 'Intensity (a.u.)')
 
     return (
       <Plot
@@ -1848,8 +1867,9 @@ export default function XPS({
               processingViewMode === 'single' ? showRaw : false,
               processingViewMode === 'single' ? showBg : false,
               chartLineColors.final,
+              useAreaSecondaryAxis ? 'y2' : 'y',
             )) as Plotly.Data[], finalHidden)}
-        layout={chartLayout() as Plotly.Layout}
+        layout={finalLayout as Plotly.Layout}
         config={withPlotFullscreen()}
         style={{ width: '100%', height }}
         onLegendClick={bindLegend ? (makeLegendClick(setFinalHidden) as never) : undefined}
@@ -1919,12 +1939,14 @@ export default function XPS({
       ]
     : []
   const normalizationInput = hasBackgroundStage ? backgroundDataset : preprocessDataset
+  const usesAreaNormalization = currentParams.norm_method === 'area'
   const normalizationChartTraces = normalizationDataset && normalizationInput
     ? buildPipelineOverlayTraces(
         { x: normalizationInput.x, y: normalizationInput.y_processed, name: '歸一化前' },
         { x: normalizationDataset.x, y: normalizationDataset.y_processed, name: '歸一化後' },
         '歸一化後',
         chartLineColors.normalization,
+        usesAreaNormalization ? 'y2' : 'y',
       )
     : []
   const bgDataXMin = backgroundDataset ? Math.min(...backgroundDataset.x) : beMin
@@ -1937,7 +1959,9 @@ export default function XPS({
     annotations: buildRegionAnnotations(currentParams.bg_x_start ?? bgDataXMin, currentParams.bg_x_end ?? bgDataXMax, '背景區間', '#f59e0b'),
   }
   const normalizationLayout = {
-    ...(chartLayout() as Plotly.Layout),
+    ...(usesAreaNormalization
+      ? chartLayout(true, '歸一化前強度 (a.u.)', 'Area 歸一化強度')
+      : chartLayout()),
     shapes: buildRegionShapes(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '#14b8a6'),
     annotations: buildRegionAnnotations(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '歸一化區間', '#14b8a6'),
   }

@@ -106,4 +106,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - `README.md` 預設使用繁體中文
 - Render 免費方案閒置後會休眠，首次請求較慢
 - 前端 bundle 較大（Plotly），目前尚未實作 lazy loading
-- 2026-05-05：新增 Excel 匯入、Area 歸一化正面積相容修正、XPS VBM 外推線顯示範圍修正；驗證 `py_compile`、`npm run build`、`git diff --check` 通過。
+- 2026-05-05：新增 Excel 匯入、Area 歸一化正面積相容修正、XPS Area 歸一化單點/重複 x fallback 與右側 y 軸顯示、XPS VBM 外推線顯示範圍修正；驗證 `py_compile`、`npm run build`、`git diff --check` 通過。
