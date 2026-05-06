@@ -22,10 +22,13 @@ const SIDEBAR_MIN_WIDTH = 300
 const SIDEBAR_MAX_WIDTH = 520
 const SIDEBAR_DEFAULT_WIDTH = 340
 const SIDEBAR_COLLAPSED_PEEK = 28
+const INTERP_POINTS_MIN = 200
+const INTERP_POINTS_MAX = 10000
+const INTERP_POINTS_DEFAULT = 2000
 
 const DEFAULT_PARAMS: ProcessParams = {
   interpolate: false,
-  n_points: 2000,
+  n_points: INTERP_POINTS_DEFAULT,
   average: false,
   energy_shift: 0,
   bg_enabled: false,
@@ -62,6 +65,59 @@ const OVERLAY_COLORS = [
   '#fb7185', '#facc15', '#22d3ee', '#818cf8',
 ]
 
+const CHANNEL_COLORS: Record<'TEY' | 'TFY', string> = {
+  TEY: '#38bdf8',
+  TFY: '#a78bfa',
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+
+function getFileStats(file: ParsedXasFile) {
+  const xs = file.x
+  if (!xs || xs.length < 2) return null
+  const finite = xs.filter(Number.isFinite)
+  if (finite.length < 2) return null
+  const xStart = finite[0]
+  const xEnd = finite[finite.length - 1]
+  const span = Math.abs(xEnd - xStart)
+  const nPts = finite.length
+  const step = span / Math.max(nPts - 1, 1)
+  return { xStart, xEnd, span, nPts, step }
+}
+
+function estimateInterpolationPoints(files: ParsedXasFile[]) {
+  if (files.length === 0) return INTERP_POINTS_DEFAULT
+  const estimated = files.map(file => {
+    if (!file.x || file.x.length < 2) return file.x.length || INTERP_POINTS_DEFAULT
+    const xs = [...file.x].filter(Number.isFinite).sort((a, b) => a - b)
+    if (xs.length < 2) return file.x.length || INTERP_POINTS_DEFAULT
+    const diffs: number[] = []
+    for (let i = 1; i < xs.length; i += 1) {
+      const diff = xs[i] - xs[i - 1]
+      if (Number.isFinite(diff) && diff > 0) diffs.push(diff)
+    }
+    const step = median(diffs)
+    const span = xs[xs.length - 1] - xs[0]
+    if (!Number.isFinite(step) || step <= 0 || !Number.isFinite(span) || span <= 0) {
+      return file.x.length || INTERP_POINTS_DEFAULT
+    }
+    return Math.round(span / step) + 1
+  })
+  const raw = median(estimated)
+  const roundTo = raw < 300 ? 10 : 50
+  const target = Math.round(raw / roundTo) * roundTo
+  return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
+}
+
 function chartLayout(xLabel: string, yLabel: string): Partial<Plotly.Layout> {
   const css = typeof window !== 'undefined' ? getComputedStyle(document.documentElement) : null
   const grid = css?.getPropertyValue('--chart-grid').trim() || 'rgba(148,163,184,0.14)'
@@ -84,14 +140,26 @@ function chartLayout(xLabel: string, yLabel: string): Partial<Plotly.Layout> {
   }
 }
 
+function getChannelRaw(dataset: ProcessedDataset, channel: 'TEY' | 'TFY') {
+  return channel === 'TEY' ? dataset.tey_raw : dataset.tfy_raw
+}
+
+function getChannelProcessed(dataset: ProcessedDataset, channel: 'TEY' | 'TFY') {
+  return channel === 'TEY' ? dataset.tey_processed : dataset.tfy_processed
+}
+
+function getChannelAfterGaussian(dataset: ProcessedDataset, channel: 'TEY' | 'TFY') {
+  return channel === 'TEY' ? dataset.tey_after_gauss : dataset.tfy_after_gauss
+}
+
 function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw: boolean): Plotly.Data[] {
-  const raw = channel === 'TEY' ? dataset.tey_raw : dataset.tfy_raw
-  const processed = channel === 'TEY' ? dataset.tey_processed : dataset.tfy_processed
+  const raw = getChannelRaw(dataset, channel)
+  const processed = getChannelProcessed(dataset, channel)
   const traces: Plotly.Data[] = []
   if (showRaw) {
     traces.push({ x: dataset.x, y: raw, type: 'scatter', mode: 'lines', name: '原始', line: { color: '#94a3b8', width: 1.4 } })
   }
-  traces.push({ x: dataset.x, y: processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: channel === 'TEY' ? '#38bdf8' : '#a78bfa', width: 2.0 } })
+  traces.push({ x: dataset.x, y: processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: CHANNEL_COLORS[channel], width: 2.0 } })
   const wl = channel === 'TEY' ? dataset.white_line_tey : dataset.white_line_tfy
   if (wl != null) {
     traces.push({
@@ -101,6 +169,50 @@ function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw:
       mode: 'lines',
       name: `White Line ${wl.toFixed(2)} eV`,
       line: { color: '#f97316', width: 1.4, dash: 'dash' },
+    })
+  }
+  return traces
+}
+
+function buildRawTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY'): Plotly.Data[] {
+  return [{
+    x: dataset.x,
+    y: getChannelRaw(dataset, channel),
+    type: 'scatter',
+    mode: 'lines',
+    name: `原始 ${channel}`,
+    line: { color: CHANNEL_COLORS[channel], width: 1.9 },
+  }]
+}
+
+function buildComparisonTraces(
+  x: number[],
+  beforeY: number[] | null | undefined,
+  afterY: number[] | null | undefined,
+  channel: 'TEY' | 'TFY',
+  beforeName: string,
+  afterName: string,
+): Plotly.Data[] {
+  const traces: Plotly.Data[] = []
+  if (beforeY && beforeY.length > 0) {
+    traces.push({
+      x,
+      y: beforeY,
+      type: 'scatter',
+      mode: 'lines',
+      name: beforeName,
+      line: { color: '#94a3b8', width: 1.35, dash: 'dot' },
+      opacity: 0.78,
+    })
+  }
+  if (afterY && afterY.length > 0) {
+    traces.push({
+      x,
+      y: afterY,
+      type: 'scatter',
+      mode: 'lines',
+      name: afterName,
+      line: { color: CHANNEL_COLORS[channel], width: 2.05 },
     })
   }
   return traces
@@ -139,6 +251,176 @@ function buildMultiTraces(datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', 
     }
   })
   return traces
+}
+
+function buildOverlayValueTraces(
+  datasets: ProcessedDataset[],
+  channel: 'TEY' | 'TFY',
+  valueGetter: (dataset: ProcessedDataset, channel: 'TEY' | 'TFY') => number[] | null | undefined,
+  suffix: string,
+): Plotly.Data[] {
+  return datasets.flatMap((ds, i) => {
+    const y = valueGetter(ds, channel)
+    if (!y || y.length === 0) return []
+    const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+    const shortName = ds.name.replace(/\.[^.]+$/, '').slice(-24)
+    return [{
+      x: ds.x,
+      y,
+      type: 'scatter' as const,
+      mode: 'lines' as const,
+      name: `${shortName} ${suffix}`,
+      line: { color, width: 1.9 },
+    }]
+  })
+}
+
+function buildOverlayComparisonTraces(
+  beforeDatasets: ProcessedDataset[],
+  afterDatasets: ProcessedDataset[],
+  channel: 'TEY' | 'TFY',
+  beforeGetter: (dataset: ProcessedDataset, channel: 'TEY' | 'TFY') => number[] | null | undefined,
+  afterGetter: (dataset: ProcessedDataset, channel: 'TEY' | 'TFY') => number[] | null | undefined,
+  beforeSuffix: string,
+  afterSuffix: string,
+): Plotly.Data[] {
+  const beforeByName = new Map(beforeDatasets.map(ds => [ds.name, ds]))
+  const fallbackBefore = beforeDatasets[0]
+  const traces: Plotly.Data[] = []
+  afterDatasets.forEach((afterDs, i) => {
+    const beforeDs = beforeByName.get(afterDs.name) ?? fallbackBefore
+    const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+    const shortName = afterDs.name.replace(/\.[^.]+$/, '').slice(-24)
+    const beforeY = beforeDs ? beforeGetter(beforeDs, channel) : null
+    const afterY = afterGetter(afterDs, channel)
+    if (beforeY && beforeY.length > 0) {
+      traces.push({
+        x: beforeDs?.x ?? afterDs.x,
+        y: beforeY,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${shortName} ${beforeSuffix}`,
+        line: { color, width: 1.1, dash: 'dot' },
+        opacity: 0.36,
+        showlegend: false,
+      })
+    }
+    if (afterY && afterY.length > 0) {
+      traces.push({
+        x: afterDs.x,
+        y: afterY,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${shortName} ${afterSuffix}`,
+        line: { color, width: 1.9 },
+      })
+    }
+  })
+  return traces
+}
+
+function buildOverlayBackgroundComparisonTraces(
+  preprocessDatasets: ProcessedDataset[],
+  backgroundDatasets: ProcessedDataset[],
+  channel: 'TEY' | 'TFY',
+): Plotly.Data[] {
+  const preprocessByName = new Map(preprocessDatasets.map(ds => [ds.name, ds]))
+  const fallbackPreprocess = preprocessDatasets[0]
+  const traces: Plotly.Data[] = []
+  backgroundDatasets.forEach((afterDs, i) => {
+    const beforeDs = preprocessByName.get(afterDs.name) ?? fallbackPreprocess
+    const beforeY = getChannelAfterGaussian(afterDs, channel) ?? (beforeDs ? getChannelProcessed(beforeDs, channel) : null)
+    const afterY = getChannelProcessed(afterDs, channel)
+    const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+    const shortName = afterDs.name.replace(/\.[^.]+$/, '').slice(-24)
+    if (beforeY && beforeY.length > 0) {
+      traces.push({
+        x: getChannelAfterGaussian(afterDs, channel) ? afterDs.x : (beforeDs?.x ?? afterDs.x),
+        y: beforeY,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${shortName} 扣背景前`,
+        line: { color, width: 1.1, dash: 'dot' },
+        opacity: 0.36,
+        showlegend: false,
+      })
+    }
+    traces.push({
+      x: afterDs.x,
+      y: afterY,
+      type: 'scatter',
+      mode: 'lines',
+      name: `${shortName} 扣背景後`,
+      line: { color, width: 1.9 },
+    })
+  })
+  return traces
+}
+
+function buildRegionShapes(start: number | null | undefined, end: number | null | undefined, color: string) {
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end) || start === end) return []
+  const x0 = Math.min(start, end)
+  const x1 = Math.max(start, end)
+  return [
+    {
+      type: 'rect' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0,
+      x1,
+      y0: 0,
+      y1: 1,
+      fillcolor: color,
+      opacity: 0.24,
+      line: { width: 0 },
+      layer: 'below' as const,
+    },
+    {
+      type: 'line' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0,
+      x1: x0,
+      y0: 0,
+      y1: 1,
+      line: { color, width: 1.45, dash: 'dot' as const },
+    },
+    {
+      type: 'line' as const,
+      xref: 'x' as const,
+      yref: 'paper' as const,
+      x0: x1,
+      x1,
+      y0: 0,
+      y1: 1,
+      line: { color, width: 1.45, dash: 'dot' as const },
+    },
+  ]
+}
+
+function buildRegionAnnotations(start: number | null | undefined, end: number | null | undefined, label: string, color: string) {
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end) || start === end) return []
+  return [{
+    x: (start + end) / 2,
+    y: 1.04,
+    xref: 'x' as const,
+    yref: 'paper' as const,
+    text: label,
+    showarrow: false,
+    font: { size: 11, color },
+  }]
+}
+
+function chartLayoutWithRegions(
+  xLabel: string,
+  yLabel: string,
+  regions: { start: number | null | undefined; end: number | null | undefined; label: string; color: string }[],
+): Partial<Plotly.Layout> {
+  return {
+    ...chartLayout(xLabel, yLabel),
+    shapes: regions.flatMap(region => buildRegionShapes(region.start, region.end, region.color)),
+    annotations: regions.flatMap(region => buildRegionAnnotations(region.start, region.end, region.label, region.color)),
+  }
 }
 
 function csvEscape(v: string | number | null | undefined): string {
@@ -295,9 +577,12 @@ export default function XAS({
   const [flipTfy, setFlipTfy] = useState(true)
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
+  const [preprocessResult, setPreprocessResult] = useState<ProcessResult | null>(null)
+  const [preNormalizationResult, setPreNormalizationResult] = useState<ProcessResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
+  const [autoInterpPoints, setAutoInterpPoints] = useState(true)
   const [viewMode, setViewMode] = useState<'single' | 'overlay'>('single')
   const [overlaySelectedNames, setOverlaySelectedNames] = useState<string[]>([])
   const [showOverlayModal, setShowOverlayModal] = useState(false)
@@ -319,58 +604,78 @@ export default function XAS({
 
   const isOverlayMode = viewMode === 'overlay'
   const clampedIdx = Math.min(selectedSingleIdx, Math.max(0, (result?.datasets.length ?? 1) - 1))
-  const activeDataset = isOverlayMode
-    ? null
-    : (result?.average ?? result?.datasets[clampedIdx] ?? null)
-  const overlayDatasets: ProcessedDataset[] = isOverlayMode
-    ? (result?.datasets.filter(d => overlaySelectedNames.length === 0 || overlaySelectedNames.includes(d.name)) ?? [])
-    : []
-
-  const renderChannelChart = useCallback((dataset: ProcessedDataset, channel: 'TEY' | 'TFY', height: number) => (
-    <Plot
-      data={buildTraces(dataset, channel, showRaw) as Plotly.Data[]}
-      layout={chartLayout('Energy (eV)', `${channel} Intensity`) as Plotly.Layout}
-      config={withPlotFullscreen()}
-      style={{ width: '100%', height }}
-    />
-  ), [showRaw])
-
-  const renderOverlayChart = useCallback((datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', height: number) => (
-    <Plot
-      data={buildMultiTraces(datasets, channel, showRaw) as Plotly.Data[]}
-      layout={chartLayout('Energy (eV)', `${channel} Intensity`) as Plotly.Layout}
-      config={withPlotFullscreen()}
-      style={{ width: '100%', height }}
-    />
-  ), [showRaw])
-
-  const openChannelPopup = useCallback((channel: 'TEY' | 'TFY') => {
-    if (!onOpenPlotPopup) return
-    if (viewMode === 'overlay' && overlayDatasets.length > 0) {
-      onOpenPlotPopup({
-        title: `XAS ${channel} 疊圖（${overlayDatasets.length} 筆）`,
-        content: renderOverlayChart(overlayDatasets, channel, 440),
-      })
-    } else if (activeDataset) {
-      onOpenPlotPopup({
-        title: `XAS ${channel} 圖表 - ${activeDataset.name}`,
-        content: renderChannelChart(activeDataset, channel, 440),
-      })
-    }
-  }, [viewMode, overlayDatasets, activeDataset, onOpenPlotPopup, renderChannelChart, renderOverlayChart])
+  const getActiveDataset = useCallback((target: ProcessResult | null) => (
+    isOverlayMode ? null : (target?.average ?? target?.datasets[clampedIdx] ?? null)
+  ), [clampedIdx, isOverlayMode])
+  const getOverlayDatasets = useCallback((target: ProcessResult | null): ProcessedDataset[] => (
+    isOverlayMode
+      ? (target?.datasets.filter(d => overlaySelectedNames.length === 0 || overlaySelectedNames.includes(d.name)) ?? [])
+      : []
+  ), [isOverlayMode, overlaySelectedNames])
+  const activeDataset = getActiveDataset(result)
+  const preprocessDataset = getActiveDataset(preprocessResult)
+  const preNormalizationDataset = getActiveDataset(preNormalizationResult)
+  const overlayDatasets = getOverlayDatasets(result)
+  const overlayPreprocessDatasets = getOverlayDatasets(preprocessResult)
+  const overlayPreNormalizationDatasets = getOverlayDatasets(preNormalizationResult)
+  const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
+  const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
+  const interpolationEnabled = params.interpolate
 
   // reprocess whenever rawFiles or params change
   useEffect(() => {
-    if (rawFiles.length === 0) { setResult(null); return }
+    if (rawFiles.length === 0) {
+      setResult(null)
+      setPreprocessResult(null)
+      setPreNormalizationResult(null)
+      return
+    }
     let cancelled = false
     setIsLoading(true); setError(null)
     const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, tey: f.tey, tfy: f.tfy }))
-    processData(datasets, params)
-      .then(r => { if (!cancelled) setResult(r) })
+    const effectiveParams: ProcessParams = {
+      ...params,
+      n_points: effectiveNPoints,
+    }
+    const preprocessParams: ProcessParams = {
+      ...effectiveParams,
+      bg_enabled: false,
+      norm_method: 'none',
+      norm_x_start: null,
+      norm_x_end: null,
+      norm_pre_start: null,
+      norm_pre_end: null,
+      white_line_start: null,
+      white_line_end: null,
+      gauss_enabled: false,
+      gauss_peaks: [],
+    }
+    const preNormalizationParams: ProcessParams = {
+      ...effectiveParams,
+      norm_method: 'none',
+      norm_x_start: null,
+      norm_x_end: null,
+      norm_pre_start: null,
+      norm_pre_end: null,
+      white_line_start: null,
+      white_line_end: null,
+    }
+    Promise.all([
+      processData(datasets, effectiveParams),
+      processData(datasets, preprocessParams),
+      processData(datasets, preNormalizationParams),
+    ])
+      .then(([finalStage, preprocessStage, preNormalizationStage]) => {
+        if (!cancelled) {
+          setResult(finalStage)
+          setPreprocessResult(preprocessStage)
+          setPreNormalizationResult(preNormalizationStage)
+        }
+      })
       .catch(e => { if (!cancelled) setError(String(e.message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
-  }, [rawFiles, params])
+  }, [rawFiles, params, effectiveNPoints])
 
   // sidebar resize
   useEffect(() => {
@@ -483,6 +788,100 @@ export default function XAS({
     ? { width: SIDEBAR_COLLAPSED_PEEK, minWidth: SIDEBAR_COLLAPSED_PEEK, overflow: 'hidden' }
     : { width: sidebarWidth, minWidth: SIDEBAR_MIN_WIDTH, maxWidth: SIDEBAR_MAX_WIDTH }
 
+  const backgroundRegions = [{
+    start: params.bg_x_start ?? energyMin,
+    end: params.bg_x_end ?? energyMax,
+    label: '背景區間',
+    color: '#f59e0b',
+  }]
+  const normalizationRegions = params.norm_method === 'post_edge'
+    ? [
+        {
+          start: params.norm_pre_start ?? energyMin,
+          end: params.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3),
+          label: 'Pre-edge 區間',
+          color: '#f97316',
+        },
+        {
+          start: params.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7),
+          end: params.norm_x_end ?? energyMax,
+          label: 'Post-edge 區間',
+          color: '#14b8a6',
+        },
+      ]
+    : [{
+        start: params.norm_x_start ?? energyMin,
+        end: params.norm_x_end ?? energyMax,
+        label: params.norm_method === 'mean_region' ? 'Mean Region' : '歸一化區間',
+        color: '#14b8a6',
+      }]
+  const plainTeyLayout = chartLayout('Energy (eV)', 'TEY Intensity')
+  const plainTfyLayout = chartLayout('Energy (eV)', 'TFY Intensity')
+  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', backgroundRegions)
+  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', backgroundRegions)
+  const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', normalizationRegions)
+  const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', normalizationRegions)
+
+  const rawStageSource = preprocessDataset ?? activeDataset
+  const rawOverlaySource = overlayPreprocessDatasets.length > 0 ? overlayPreprocessDatasets : overlayDatasets
+  const backgroundBeforeY = (dataset: ProcessedDataset, fallback: ProcessedDataset | null, channel: 'TEY' | 'TFY') => (
+    getChannelAfterGaussian(dataset, channel) ?? (fallback ? getChannelProcessed(fallback, channel) : getChannelRaw(dataset, channel))
+  )
+  const hasBackgroundStage = params.bg_enabled && Boolean(preNormalizationDataset || overlayPreNormalizationDatasets.length > 0)
+  const hasNormalizationStage = params.norm_method !== 'none' && Boolean(activeDataset || overlayDatasets.length > 0)
+  const renderStagePlot = (data: Plotly.Data[], layout: Partial<Plotly.Layout>, height = 310) => (
+    <Plot
+      data={data}
+      layout={layout as Plotly.Layout}
+      config={withPlotFullscreen()}
+      style={{ width: '100%', height }}
+    />
+  )
+  const renderStageCard = (
+    title: string,
+    data: Plotly.Data[],
+    layout: Partial<Plotly.Layout>,
+    popupTitle: string,
+  ) => (
+    <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
+        {onOpenPlotPopup && (
+          <button
+            type="button"
+            className="chart-popup-button"
+            onClick={() => onOpenPlotPopup({
+              title: popupTitle,
+              content: renderStagePlot(data, layout, 440),
+            })}
+            aria-label="彈出圖表"
+          />
+        )}
+      </div>
+      {renderStagePlot(data, layout)}
+    </div>
+  )
+  const renderStagePair = (
+    title: string,
+    teyData: Plotly.Data[],
+    tfyData: Plotly.Data[],
+    teyLayout: Partial<Plotly.Layout>,
+    tfyLayout: Partial<Plotly.Layout>,
+  ) => {
+    if (teyData.length === 0 && tfyData.length === 0) return null
+    return (
+      <section className="mb-4">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {renderStageCard('TEY（Total Electron Yield）', teyData, teyLayout, `${title} · TEY`)}
+          {renderStageCard('TFY（Total Fluorescence Yield）', tfyData, tfyLayout, `${title} · TFY`)}
+        </div>
+      </section>
+    )
+  }
+
   return (
     <div className={`flex h-screen flex-row overflow-hidden${sidebarResizing ? ' select-none' : ''}`}>
       {/* ── sidebar ── */}
@@ -533,7 +932,74 @@ export default function XAS({
               <Section step={2} title="內插 / 資料模式" hint="多檔：單筆 / 疊圖 / 平均" defaultOpen={false}>
                 <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
                 {params.interpolate && (
-                  <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={10000} step={100} />
+                  <>
+                    <CheckRow label="自動調整點數" checked={autoInterpPoints} onChange={setAutoInterpPoints} />
+                    {autoInterpPoints ? (
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] px-3 py-3 text-xs">
+                        <p className="font-medium text-[var(--text-main)]">自動建議：{effectiveNPoints} 點</p>
+                        <p className="mt-1 text-[var(--text-soft)]">
+                          依各筆資料的能量 span 除以原始中位步距估算自然點數，取中位數後四捨五入。
+                        </p>
+                      </div>
+                    ) : (
+                      <NumInput
+                        label="點數"
+                        value={params.n_points}
+                        onChange={set('n_points')}
+                        min={INTERP_POINTS_MIN}
+                        max={INTERP_POINTS_MAX}
+                        step={100}
+                      />
+                    )}
+                  </>
+                )}
+                {rawFiles.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] overflow-hidden">
+                      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 border-b border-[var(--card-divider)] px-2.5 py-1.5 text-[9px] uppercase tracking-[0.14em] text-[var(--text-soft)]">
+                        <span>檔案</span>
+                        <span className="text-right">點數</span>
+                        <span className="text-right">Energy 範圍</span>
+                        <span className="text-right">步距</span>
+                      </div>
+                      {rawFiles.map(file => {
+                        const stats = getFileStats(file)
+                        if (!stats) return null
+                        const newStep = interpolationEnabled && effectiveNPoints > 1 ? stats.span / (effectiveNPoints - 1) : null
+                        const stepChanged = newStep != null && Math.abs(newStep - stats.step) > 0.0005
+                        return (
+                          <div key={file.name} className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 border-t border-[var(--card-divider)] px-2.5 py-1.5 text-[10px] first:border-t-0">
+                            <span className="truncate text-[var(--text-main)]" title={file.name}>{file.name}</span>
+                            <span className="text-right text-[var(--text-soft)]">
+                              {stats.nPts}
+                              {interpolationEnabled && <span className="ml-1 text-[var(--accent-strong)]">→ {effectiveNPoints}</span>}
+                            </span>
+                            <span className="text-right text-[var(--text-soft)]">{stats.xStart.toFixed(1)} – {stats.xEnd.toFixed(1)}</span>
+                            <span className="text-right text-[var(--text-soft)]">
+                              {stats.step.toFixed(3)}
+                              {stepChanged && newStep != null && (
+                                <span className={`ml-1 ${newStep < stats.step ? 'text-[var(--accent-strong)]' : 'text-amber-400'}`}>
+                                  → {newStep.toFixed(3)}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {interpolationEnabled && (() => {
+                      const statsAll = rawFiles.map(getFileStats)
+                      const hasDenseStep = statsAll.some(stats => stats && effectiveNPoints > 1 && (stats.span / (effectiveNPoints - 1)) < stats.step * 0.9)
+                      const hasSparseStep = statsAll.some(stats => stats && effectiveNPoints > 1 && (stats.span / (effectiveNPoints - 1)) > stats.step * 1.1)
+                      if (!hasDenseStep && !hasSparseStep) return null
+                      return (
+                        <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2.5 py-2 text-[10px] text-[var(--text-soft)]">
+                          {hasDenseStep && <p className="text-[var(--accent-strong)]">點數增加：步距變小，內插會補出更密的能量網格。</p>}
+                          {hasSparseStep && <p className="text-amber-400">點數減少：步距變大，解析度會下降。</p>}
+                        </div>
+                      )
+                    })()}
+                  </div>
                 )}
                 {rawFiles.length > 1 && (
                   <div className="space-y-2 pt-1">
@@ -619,14 +1085,38 @@ export default function XAS({
               </Section>
 
               {/* 5. 歸一化 */}
-              <Section step={5} title="歸一化" hint="Post-edge Step / Min-Max" defaultOpen={false}>
-                <SelectInput label="方法" value={params.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
+              <Section step={5} title="歸一化" hint="Post-edge Step / Mean Region / Min-Max" defaultOpen={false}>
+                <SelectInput label="方法" value={params.norm_method} onChange={v => {
+                  const method = v as ProcessParams['norm_method']
+                  setParams(p => {
+                    if (method === 'post_edge') {
+                      return {
+                        ...p,
+                        norm_method: method,
+                        norm_pre_start: p.norm_pre_start ?? energyMin,
+                        norm_pre_end: p.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3),
+                        norm_x_start: p.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7),
+                        norm_x_end: p.norm_x_end ?? energyMax,
+                      }
+                    }
+                    if (method === 'min_max' || method === 'max' || method === 'area' || method === 'mean_region') {
+                      return {
+                        ...p,
+                        norm_method: method,
+                        norm_x_start: p.norm_x_start ?? energyMin,
+                        norm_x_end: p.norm_x_end ?? energyMax,
+                      }
+                    }
+                    return { ...p, norm_method: method }
+                  })
+                }}
                   options={[
                     { value: 'none', label: '不歸一化' },
                     { value: 'min_max', label: 'Min–Max' },
                     { value: 'max', label: 'Max' },
                     { value: 'area', label: 'Area' },
                     { value: 'post_edge', label: 'Post-edge Step' },
+                    { value: 'mean_region', label: 'Mean Region' },
                   ]}
                 />
                 {params.norm_method === 'post_edge' && (
@@ -647,7 +1137,7 @@ export default function XAS({
                     />
                   </>
                 )}
-                {(params.norm_method === 'area' || params.norm_method === 'min_max') && (
+                {(params.norm_method === 'area' || params.norm_method === 'min_max' || params.norm_method === 'max' || params.norm_method === 'mean_region') && (
                   <DualRangeInput
                     label="歸一化區間"
                     min={energyMin} max={energyMax}
@@ -895,6 +1385,7 @@ export default function XAS({
           description={moduleContent.description}
           chips={[
             { label: `資料量 ${rawFiles.length}` },
+            { label: `內插 ${params.interpolate ? `${effectiveNPoints} 點` : '未啟用'}` },
             { label: `平均 ${params.average ? '開啟' : '關閉'}` },
             { label: `White Line ${activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null ? '已計算' : '未設定'}` },
           ]}
@@ -904,6 +1395,7 @@ export default function XAS({
           items={[
             { label: '資料集', value: rawFiles.length > 0 ? `${rawFiles.length} 個` : '未載入' },
             { label: '平均模式', value: params.average ? '開啟' : '關閉' },
+            { label: '內插點數', value: params.interpolate ? `${effectiveNPoints} 點${autoInterpPoints ? '（自動）' : ''}` : '未啟用' },
             { label: '能量範圍', value: activeDataset ? `${activeDataset.x[0].toFixed(1)} – ${activeDataset.x[activeDataset.x.length - 1].toFixed(1)} eV` : '未建立' },
           ]}
         />
@@ -982,36 +1474,93 @@ export default function XAS({
               <CheckRow label="顯示原始資料" checked={showRaw} onChange={setShowRaw} />
             </div>
 
-            {/* TEY / TFY 左右並排 */}
-            <div className="mb-4 grid gap-4 md:grid-cols-2">
-              {/* TEY */}
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm font-semibold text-[var(--text-main)]">TEY（Total Electron Yield）</p>
-                  {onOpenPlotPopup && (
-                    <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TEY')} aria-label="彈出圖表" />
-                  )}
-                </div>
-                {isOverlayMode
-                  ? renderOverlayChart(overlayDatasets, 'TEY', 310)
-                  : activeDataset && renderChannelChart(activeDataset, 'TEY', 310)
-                }
-              </div>
+            {renderStagePair(
+              '1. 原始光譜',
+              isOverlayMode
+                ? buildOverlayValueTraces(rawOverlaySource, 'TEY', getChannelRaw, '原始')
+                : rawStageSource ? buildRawTraces(rawStageSource, 'TEY') : [],
+              isOverlayMode
+                ? buildOverlayValueTraces(rawOverlaySource, 'TFY', getChannelRaw, '原始')
+                : rawStageSource ? buildRawTraces(rawStageSource, 'TFY') : [],
+              plainTeyLayout,
+              plainTfyLayout,
+            )}
 
-              {/* TFY */}
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm font-semibold text-[var(--text-main)]">TFY（Total Fluorescence Yield）</p>
-                  {onOpenPlotPopup && (
-                    <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TFY')} aria-label="彈出圖表" />
-                  )}
-                </div>
-                {isOverlayMode
-                  ? renderOverlayChart(overlayDatasets, 'TFY', 310)
-                  : activeDataset && renderChannelChart(activeDataset, 'TFY', 310)
-                }
-              </div>
-            </div>
+            {renderStagePair(
+              '2. 前處理後',
+              isOverlayMode
+                ? buildOverlayComparisonTraces(rawOverlaySource, overlayPreprocessDatasets, 'TEY', getChannelRaw, getChannelProcessed, '原始', '前處理後')
+                : preprocessDataset ? buildComparisonTraces(preprocessDataset.x, getChannelRaw(preprocessDataset, 'TEY'), getChannelProcessed(preprocessDataset, 'TEY'), 'TEY', '原始', '前處理後') : [],
+              isOverlayMode
+                ? buildOverlayComparisonTraces(rawOverlaySource, overlayPreprocessDatasets, 'TFY', getChannelRaw, getChannelProcessed, '原始', '前處理後')
+                : preprocessDataset ? buildComparisonTraces(preprocessDataset.x, getChannelRaw(preprocessDataset, 'TFY'), getChannelProcessed(preprocessDataset, 'TFY'), 'TFY', '原始', '前處理後') : [],
+              plainTeyLayout,
+              plainTfyLayout,
+            )}
+
+            {hasBackgroundStage && renderStagePair(
+              '3. 背景扣除',
+              isOverlayMode
+                ? buildOverlayBackgroundComparisonTraces(overlayPreprocessDatasets, overlayPreNormalizationDatasets, 'TEY')
+                : preNormalizationDataset ? buildComparisonTraces(
+                  preNormalizationDataset.x,
+                  backgroundBeforeY(preNormalizationDataset, preprocessDataset, 'TEY'),
+                  getChannelProcessed(preNormalizationDataset, 'TEY'),
+                  'TEY',
+                  '扣背景前',
+                  '扣背景後',
+                ) : [],
+              isOverlayMode
+                ? buildOverlayBackgroundComparisonTraces(overlayPreprocessDatasets, overlayPreNormalizationDatasets, 'TFY')
+                : preNormalizationDataset ? buildComparisonTraces(
+                  preNormalizationDataset.x,
+                  backgroundBeforeY(preNormalizationDataset, preprocessDataset, 'TFY'),
+                  getChannelProcessed(preNormalizationDataset, 'TFY'),
+                  'TFY',
+                  '扣背景前',
+                  '扣背景後',
+                ) : [],
+              backgroundTeyLayout,
+              backgroundTfyLayout,
+            )}
+
+            {hasNormalizationStage && renderStagePair(
+              `${hasBackgroundStage ? 4 : 3}. 歸一化`,
+              isOverlayMode
+                ? buildOverlayComparisonTraces(overlayPreNormalizationDatasets, overlayDatasets, 'TEY', getChannelProcessed, getChannelProcessed, '歸一化前', '歸一化後')
+                : activeDataset && preNormalizationDataset ? buildComparisonTraces(
+                  activeDataset.x,
+                  getChannelProcessed(preNormalizationDataset, 'TEY'),
+                  getChannelProcessed(activeDataset, 'TEY'),
+                  'TEY',
+                  '歸一化前',
+                  '歸一化後',
+                ) : [],
+              isOverlayMode
+                ? buildOverlayComparisonTraces(overlayPreNormalizationDatasets, overlayDatasets, 'TFY', getChannelProcessed, getChannelProcessed, '歸一化前', '歸一化後')
+                : activeDataset && preNormalizationDataset ? buildComparisonTraces(
+                  activeDataset.x,
+                  getChannelProcessed(preNormalizationDataset, 'TFY'),
+                  getChannelProcessed(activeDataset, 'TFY'),
+                  'TFY',
+                  '歸一化前',
+                  '歸一化後',
+                ) : [],
+              normalizationTeyLayout,
+              normalizationTfyLayout,
+            )}
+
+            {renderStagePair(
+              `${hasNormalizationStage ? (hasBackgroundStage ? 5 : 4) : (hasBackgroundStage ? 4 : 3)}. 最終光譜`,
+              isOverlayMode
+                ? buildMultiTraces(overlayDatasets, 'TEY', showRaw)
+                : activeDataset ? buildTraces(activeDataset, 'TEY', showRaw) : [],
+              isOverlayMode
+                ? buildMultiTraces(overlayDatasets, 'TFY', showRaw)
+                : activeDataset ? buildTraces(activeDataset, 'TFY', showRaw) : [],
+              plainTeyLayout,
+              plainTfyLayout,
+            )}
 
             {/* Single-mode only sections */}
             {activeDataset && (<>

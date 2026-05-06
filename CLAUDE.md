@@ -98,7 +98,7 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 web/
 ├── backend/
 │   ├── main.py              # FastAPI 入口（含 CORS、static file serving）
-│   ├── requirements.txt     # 含 lmfit（XANES 去卷積需要）
+│   ├── requirements.txt     # 含 lmfit（XAS/XPS 峰擬合需要）
 │   ├── core/                # parsers / processing / peak_fitting / spectrum_ops
 │   │   ├── parsers.py       # .xy / .txt / .csv / .vms / .pro / .dat 解析
 │   │   ├── processing.py    # Shirley / Tougaard / Linear / Polynomial / AsLS / airPLS / rubber-band
@@ -112,7 +112,7 @@ web/
 │   └── routers/
 │       ├── xrd.py           # parse / process / peaks / references / reference-peaks / fit
 │       ├── raman.py         # parse / process / peaks / references / reference-peaks / fit
-│       ├── xas.py           # parse / process / deconv
+│       ├── xas.py           # parse / process / fit / samples / sample-peaks
 │       ├── xps.py           # parse / process / calibrate / fit / vbm / rsf / elements / element-peaks / periodic-table
 │       └── xes.py           # parse / process / peaks / references / reference-peaks
 ├── frontend/
@@ -151,7 +151,7 @@ railway.toml               # Railway 設定（builder=DOCKERFILE）
 |---|---|
 | `/api/xrd` | parse / process / peaks / references / reference-peaks / fit |
 | `/api/raman` | parse / process / peaks / references / reference-peaks / fit |
-| `/api/xas` | parse / process / deconv |
+| `/api/xas` | parse / process / fit / samples / sample-peaks |
 | `/api/xps` | parse / process / calibrate / fit / vbm / rsf / elements / element-peaks / periodic-table |
 | `/api/xes` | parse / process / peaks / references / reference-peaks |
 | `GET /health` | `{"status":"ok"}` |
@@ -164,7 +164,7 @@ railway.toml               # Railway 設定（builder=DOCKERFILE）
 |---|---|
 | **XRD** | ✅ 完整：MAD 雜訊估算自動尋峰 / high-medium-low 信心分類 / 排除區間 / Thin film on Si preset / 參考峰匹配 / Scherrer |
 | **Raman** | ✅ 完整：Si 應力估算 / Preset 匯入匯出 / 峰擬合 / 去尖峰 / 平滑 / 背景扣除 |
-| **XAS** | ✅ 完整：TEY+TFY / 高斯模板扣除 / 二階微分 / XANES 去卷積 |
+| **XAS** | ✅ 完整：TEY+TFY / 分階段圖卡 / 背景與歸一化區間標示 / 高斯模板扣除 / 峰擬合 |
 | **XPS** | ✅ 完整，且目前是功能最完整的模組 |
 | **XES** | ✅ 1D 光譜模式完整（含 I0 正規化）；缺 FITS 影像模式 |
 | **SEM** | ⏳ 未實作 |
@@ -278,6 +278,18 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 ---
 
 ## 動作紀錄
+
+### 2026-05-06（本次）
+
+- 2026-05-06 CST：讀取 `CLAUDE.md`，確認本次需求為在 XAS 內插化新增像 XPS 一樣的自動偵測模式，範圍限定 `web/` 網頁版。
+- 2026-05-06 CST：讀取 XPS 內插自動偵測邏輯與 XAS 目前 `interpolate/n_points` UI/處理流程，確認 XPS 由前端依原始 x 軸中位步距估算有效點數後送入後端。
+- 2026-05-06 CST：XAS 內插新增自動偵測點數：`estimateInterpolationPoints()` 依每筆原始 energy 軸的 median step 估算自然點數、取中位數後四捨五入並夾在 200–10000；側欄新增「自動調整點數」、自動建議、每檔原點數/新點數與步距變化；主內容摘要顯示有效內插點數；分階段三次 `/process` 皆使用同一個 `effectiveNPoints`。影響檔案：`web/frontend/src/pages/XAS.tsx`；驗證 `python3 -m py_compile ...`、`cd web/frontend && npm run build`、`git diff --check` 通過。
+- 2026-05-06 CST：讀取 `CLAUDE.md`，確認本次需求為比對 XAS `Post-edge Step` 與 XPS `Mean Region` 歸一化邏輯，並將 XAS 圖表改為類 XPS 分階段顯示且保留 TEY/TFY 左右並排與取量範圍標示。
+- 2026-05-06 CST：搜尋並讀取 `web/backend/routers/xas.py`、`web/backend/routers/xps.py`、`web/backend/core/processing.py`、`web/frontend/src/pages/XAS.tsx`、`web/frontend/src/pages/XPS.tsx` 與 XAS 型別，確認 XAS `Post-edge Step` 為 `(y - pre_mean) / (post_mean - pre_mean)`，不同於 XPS `Mean Region` 的 `y / mean(region)`。
+- 2026-05-06 CST：XAS 新增 `mean_region` 歸一化方法並修正非 `post_edge` 歸一化呼叫錯誤；`Post-edge Step` 保留 pre/post edge step 算法，且後端 fallback 改用 `x_min + 0.3/0.7 * span` 避免高能量軸範圍誤判；`Mean Region` 走 core `apply_normalization(..., norm_method='mean_region')`。影響檔案：`web/backend/routers/xas.py`、`web/frontend/src/types/xas.ts`、`web/frontend/src/pages/XAS.tsx`。
+- 2026-05-06 CST：XAS 主圖改為分階段顯示：`1. 原始光譜`、`2. 前處理後`、`3. 背景扣除`、`4. 歸一化`、`5. 最終光譜`（依啟用項目自動編號），每一階段維持 TEY/TFY 左右並排；背景圖以橘色區塊標示背景範圍，歸一化圖以綠色標示 normal/mean region，`post_edge` 額外以橘色標示 pre-edge、綠色標示 post-edge。前端彈出圖表同步支援分階段資料。
+- 2026-05-06 CST：更新 `CLAUDE.md` 與 `AGENTS.md` 的 XAS 狀態與注意事項；驗證 `python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/core/*.py`、`cd web/frontend && npm run build`、`git diff --check` 全部通過。
+- 2026-05-06 CST：修正 XAS 啟用背景扣除時 `/api/xas/process` 500 錯誤：`apply_background` 參數改為 `bg_x_start/bg_x_end`、回傳值改為接收扣背景後光譜，並在前端尚未寫入區間時使用全譜 fallback；以模擬資料驗證背景扣除 + `mean_region` 與背景扣除 + `post_edge` 均可執行。驗證 `python3 -m py_compile ...`、`cd web/frontend && npm run build`、`git diff --check` 通過。
 
 ### 2026-05-05
 

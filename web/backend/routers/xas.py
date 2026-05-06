@@ -238,7 +238,7 @@ class ProcessParams(BaseModel):
     bg_baseline_lambda: float = 1e5
     bg_baseline_p: float = 0.01
     bg_baseline_iter: int = 20
-    norm_method: str = "none"         # none | min_max | max | area | post_edge
+    norm_method: str = "none"         # none | min_max | max | area | post_edge | mean_region
     norm_x_start: Optional[float] = None
     norm_x_end: Optional[float] = None
     norm_pre_start: Optional[float] = None  # for post_edge: pre-edge region start
@@ -375,39 +375,53 @@ def process_xas(req: ProcessRequest):
 
         # background subtraction
         if p.bg_enabled:
+            bg_start = p.bg_x_start if p.bg_x_start is not None else float(np.min(x_out))
+            bg_end = p.bg_x_end if p.bg_x_end is not None else float(np.max(x_out))
             bg_kwargs: dict[str, Any] = {
                 "method": p.bg_method,
-                "x_start": p.bg_x_start,
-                "x_end": p.bg_x_end,
+                "bg_x_start": bg_start,
+                "bg_x_end": bg_end,
                 "poly_deg": p.bg_poly_deg,
                 "baseline_lambda": p.bg_baseline_lambda,
                 "baseline_p": p.bg_baseline_p,
                 "baseline_iter": p.bg_baseline_iter,
             }
             if p.bg_channel in ("both", "TEY"):
-                _, tey_proc = apply_background(x_out, tey_proc, **bg_kwargs)
+                tey_proc, _ = apply_background(x_out, tey_proc, **bg_kwargs)
             if p.bg_channel in ("both", "TFY"):
-                _, tfy_proc = apply_background(x_out, tfy_proc, **bg_kwargs)
+                tfy_proc, _ = apply_background(x_out, tfy_proc, **bg_kwargs)
 
         # normalization
         edge_step_tey: float | None = None
         edge_step_tfy: float | None = None
 
-        if p.norm_method == "post_edge" and p.norm_pre_start is not None and p.norm_pre_end is not None:
-            norm_start = p.norm_x_start if p.norm_x_start is not None else float(x_out[-1] * 0.9)
-            norm_end = p.norm_x_end if p.norm_x_end is not None else float(x_out[-1])
-            tey_proc, step_t = _normalize_post_edge(x_out, tey_proc, (p.norm_pre_start, p.norm_pre_end), (norm_start, norm_end))
-            tfy_proc, step_f = _normalize_post_edge(x_out, tfy_proc, (p.norm_pre_start, p.norm_pre_end), (norm_start, norm_end))
+        if p.norm_method == "post_edge":
+            x_min = float(np.min(x_out))
+            x_max = float(np.max(x_out))
+            x_span = max(x_max - x_min, 1e-12)
+            pre_start = p.norm_pre_start if p.norm_pre_start is not None else x_min
+            pre_end = p.norm_pre_end if p.norm_pre_end is not None else x_min + x_span * 0.3
+            norm_start = p.norm_x_start if p.norm_x_start is not None else x_min + x_span * 0.7
+            norm_end = p.norm_x_end if p.norm_x_end is not None else x_max
+            tey_proc, step_t = _normalize_post_edge(x_out, tey_proc, (pre_start, pre_end), (norm_start, norm_end))
+            tfy_proc, step_f = _normalize_post_edge(x_out, tfy_proc, (pre_start, pre_end), (norm_start, norm_end))
             edge_step_tey = float(step_t)
             edge_step_tfy = float(step_f)
         elif p.norm_method != "none" and p.norm_method != "post_edge":
-            norm_kwargs: dict[str, Any] = {
-                "method": p.norm_method,
-                "x_start": p.norm_x_start,
-                "x_end": p.norm_x_end,
-            }
-            _, tey_proc = apply_normalization(x_out, tey_proc, **norm_kwargs)
-            _, tfy_proc = apply_normalization(x_out, tfy_proc, **norm_kwargs)
+            tey_proc = apply_normalization(
+                x_out,
+                tey_proc,
+                norm_method=p.norm_method,
+                norm_x_start=p.norm_x_start,
+                norm_x_end=p.norm_x_end,
+            )
+            tfy_proc = apply_normalization(
+                x_out,
+                tfy_proc,
+                norm_method=p.norm_method,
+                norm_x_start=p.norm_x_start,
+                norm_x_end=p.norm_x_end,
+            )
 
         # white line
         wl_tey: float | None = None

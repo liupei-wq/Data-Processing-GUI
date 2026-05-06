@@ -72,6 +72,7 @@ railway.toml                 # Railway 設定
 6. **錯誤處理**：每一層都要處理錯誤，禁止靜默吞掉例外
 7. **輸入驗證**：在系統邊界驗證所有輸入
 8. **Excel 匯入**：後端 parser 支援 `.xlsx` / `.xls`，部署需包含 `openpyxl` / `xlrd`
+9. **XAS 分階段圖卡**：XAS 主圖以階段顯示，且每階段仍維持 TEY / TFY 左右並排；背景與歸一化需用 Plotly shape/annotation 標示取量範圍
 
 ## 常用指令
 
@@ -107,3 +108,6 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - Render 免費方案閒置後會休眠，首次請求較慢
 - 前端 bundle 較大（Plotly），目前尚未實作 lazy loading
 - 2026-05-05：新增 Excel 匯入、Area 歸一化正面積相容修正、XPS Area 歸一化單點/重複 x fallback 與右側 y 軸顯示、XPS VBM 外推線顯示範圍修正；驗證 `py_compile`、`npm run build`、`git diff --check` 通過。
+- 2026-05-06：XAS 新增 `Mean Region` 歸一化；確認 `Post-edge Step` 與 XPS `Mean Region` 不同，前者為 `(y-pre_mean)/(post_mean-pre_mean)`，後者為 `y/mean(region)`；XAS 主圖改為原始/前處理/背景/歸一化/最終分階段 TEY+TFY 並排圖卡，背景與歸一化取量範圍會顯示在圖上。驗證 `py_compile`、`npm run build`、`git diff --check` 通過。
+- 2026-05-06：修正 XAS 背景扣除造成 `/api/xas/process` 500：`apply_background` 需用 `bg_x_start/bg_x_end`，且回傳第一值才是扣背景後光譜；背景區間未設定時後端 fallback 到全譜。
+- 2026-05-06：XAS 內插新增像 XPS 的自動偵測點數；前端依 energy 軸 median step 估算有效點數（200–10000），側欄顯示自動建議與每檔步距變化，所有分階段處理共用同一個 `effectiveNPoints`。

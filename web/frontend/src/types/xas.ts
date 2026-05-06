@@ -39,7 +39,7 @@ export interface ProcessParams {
   bg_baseline_lambda: number
   bg_baseline_p: number
   bg_baseline_iter: number
-  norm_method: 'none' | 'min_max' | 'max' | 'area' | 'post_edge'
+  norm_method: 'none' | 'min_max' | 'max' | 'area' | 'post_edge' | 'mean_region'
   norm_x_start: number | null
   norm_x_end: number | null
   norm_pre_start: number | null
