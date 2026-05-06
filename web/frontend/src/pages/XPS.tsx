@@ -1062,7 +1062,7 @@ function createEmptyBundle(signature = ''): DatasetPipelineBundle {
 
 function createDefaultOverlayState(): OverlayProcessState {
   return {
-    params: { ...DEFAULT_PARAMS, average: true, interpolate: true },
+    params: { ...DEFAULT_PARAMS, average: false, interpolate: true },
     autoInterpPoints: true,
     manualEnergyShiftEnabled: false,
   }
@@ -1142,6 +1142,7 @@ function getOverlayStageDatasets(stage: ProcessResult | null | undefined, useAve
   if (useAverage && stage.average) {
     return [{ name: `${stage.average.name || '平均光譜'}（平均）`, x: stage.average.x, y: stage.average.y_processed }]
   }
+  if (useAverage) return []
   return stage.datasets.map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
 }
 
@@ -1282,23 +1283,28 @@ export default function XPS({
   const currentParams = processingViewMode === 'overlay' ? overlayState.params : params
   const currentAutoInterpPoints = processingViewMode === 'overlay' ? overlayState.autoInterpPoints : autoInterpPoints
   const currentManualEnergyShiftEnabled = processingViewMode === 'overlay' ? overlayState.manualEnergyShiftEnabled : manualEnergyShiftEnabled
+  const overlayAverageEnabled = processingViewMode === 'overlay' && overlayState.params.average
+  const overlayNonAverageMode = processingViewMode === 'overlay' && !overlayState.params.average
 
   const activeDataset = getStageDataset(result, activeDatasetIdx, false)
   const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, false)
   const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, false)
   const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, false)
   const overlayPrimaryDataset = getStageDataset(overlayBundle?.final ?? null, 0, overlayState.params.average)
+  const overlayAverageDataset = overlayBundle?.final?.average ?? null
   const fitTargetDataset = processingViewMode === 'overlay'
-    ? getStageDataset(overlayBundle?.final ?? null, 0, true)
+    ? (overlayState.params.average ? overlayAverageDataset : null)
     : activeDataset
   const fitTargetPeakScale = fitTargetDataset
     ? Math.max(...fitTargetDataset.y_processed.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
     : 1000
-  const currentFitResult = processingViewMode === 'overlay' ? overlayFitResult : fitResult
-  const currentRsfRows = processingViewMode === 'overlay' ? overlayRsfRows : rsfRows
-  const currentDisplayDataset = processingViewMode === 'overlay' ? fitTargetDataset : activeDataset
+  const currentFitResult = processingViewMode === 'overlay' ? (overlayState.params.average ? overlayFitResult : null) : fitResult
+  const currentRsfRows = processingViewMode === 'overlay' ? (overlayState.params.average ? overlayRsfRows : []) : rsfRows
+  const currentDisplayDataset = processingViewMode === 'overlay' ? (overlayState.params.average ? fitTargetDataset : null) : activeDataset
   const currentReportFileName = processingViewMode === 'overlay'
-    ? (overlayFiles.length > 0 ? `overlay_average__${overlayFiles.map(file => file.name).join('__')}` : 'overlay_average')
+    ? (overlayFiles.length > 0
+      ? `${overlayState.params.average ? 'overlay_average' : 'overlay'}__${overlayFiles.map(file => file.name).join('__')}`
+      : (overlayState.params.average ? 'overlay_average' : 'overlay'))
     : (activeFile?.name ?? '')
   const beMin = processingViewMode === 'overlay'
     ? (overlayPrimaryDataset ? Math.min(...overlayPrimaryDataset.x) : 0)
@@ -1567,10 +1573,11 @@ export default function XPS({
       return
     }
 
-        const overlayParams: ProcessParams = {
-          ...overlayState.params,
-          n_points: overlayState.autoInterpPoints ? effectiveNPoints : overlayState.params.n_points,
-        }
+    const overlayParams: ProcessParams = {
+      ...overlayState.params,
+      interpolate: overlayState.params.interpolate || overlayState.params.average,
+      n_points: overlayState.autoInterpPoints ? effectiveNPoints : overlayState.params.n_points,
+    }
     const signature = JSON.stringify({
       mode: 'overlay',
       files: overlayFiles.map(file => `${file.name}:${file.x.length}`),
@@ -1584,17 +1591,17 @@ export default function XPS({
     setProcessingKeys(prev => (prev.includes('__overlay__') ? prev : [...prev, '__overlay__']))
 
     const datasets: DatasetInput[] = overlayFiles.map(file => ({ name: file.name, x: file.x, y: file.y }))
-    const overlayInterpolationEnabled = overlayParams.interpolate
+    const overlayInterpolationEnabled = overlayParams.interpolate || overlayParams.average
     const overlayHasPreprocessStage = overlayInterpolationEnabled || Math.abs(overlayParams.energy_shift) > 1e-8
     const overlayHasBackgroundStage = overlayParams.bg_enabled
     const overlayHasNormalizationStage = overlayParams.norm_method !== 'none'
-      const overlayPreprocessParams: ProcessParams = {
-        ...DEFAULT_PARAMS,
-        interpolate: overlayInterpolationEnabled,
-        n_points: overlayParams.n_points,
-        average: overlayParams.average,
-        energy_shift: overlayParams.energy_shift,
-      }
+    const overlayPreprocessParams: ProcessParams = {
+      ...DEFAULT_PARAMS,
+      interpolate: overlayInterpolationEnabled,
+      n_points: overlayParams.n_points,
+      average: overlayParams.average,
+      energy_shift: overlayParams.energy_shift,
+    }
     const overlayBackgroundParams: ProcessParams = {
       ...overlayPreprocessParams,
       bg_enabled: overlayHasBackgroundStage,
@@ -1911,6 +1918,10 @@ export default function XPS({
   }
 
   const lookupRsfFn = async () => {
+    if (processingViewMode === 'overlay' && !overlayState.params.average) {
+      setRsfError('疊圖不平均模式下 RSF 定量已停用。請先啟用多檔平均，或切回單筆資料。')
+      return
+    }
     const validCount = currentRsfRows.filter(r => r.element.trim() && r.orbitalLabel.trim()).length
     if (validCount === 0) { setRsfError('請先填入元素與軌域標籤'); return }
     setRsfLoading(true); setRsfError(null)
@@ -1953,7 +1964,7 @@ export default function XPS({
   }
 
   const addManualPeak = () => {
-    const center = activeDataset ? (beMin + beMax) / 2 : 500
+    const center = fitTargetDataset ? (beMin + beMax) / 2 : 500
     setPeakCandidates(prev => [...prev, createPeakCandidate({
       label: `峰 ${prev.length + 1}`,
       center,
@@ -1965,11 +1976,11 @@ export default function XPS({
   }
 
   const handleFit = async () => {
-    if (!fitTargetDataset) return
     if (processingViewMode === 'overlay' && !overlayState.params.average) {
-      setFitError('疊圖模式的峰擬合只會使用多檔平均後的結果，請先保留多檔平均。')
+      setFitError('疊圖不平均模式下峰擬合已停用。請先啟用多檔平均，或切回單筆資料。')
       return
     }
+    if (!fitTargetDataset) return
     const activePeaks = peakCandidates.filter(p => p.enabled)
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
     setIsFitting(true); setFitError(null)
@@ -2213,10 +2224,10 @@ export default function XPS({
                   </div>
                 }>
                   <TogglePill
-                    label={processingViewMode === 'overlay' ? '疊圖模式固定啟用內插' : '啟用內插'}
-                    checked={processingViewMode === 'overlay' ? true : currentParams.interpolate}
+                    label={overlayAverageEnabled ? '平均模式固定啟用內插' : '啟用內插'}
+                    checked={interpolationEnabled}
                     onChange={value => {
-                      if (processingViewMode === 'overlay') {
+                      if (overlayAverageEnabled) {
                         setOverlayState(current => ({
                           ...current,
                           params: { ...current.params, interpolate: true },
@@ -2344,11 +2355,29 @@ export default function XPS({
                   ) : overlayFiles.length > 1 ? (
                     <>
                       <TogglePill
-                        label="疊圖模式固定使用多檔平均"
-                        checked
-                        onChange={() => {}}
+                        label="平均所有疊圖數據"
+                        checked={overlayState.params.average}
+                        onChange={value => {
+                          setOverlayState(current => ({
+                            ...current,
+                            autoInterpPoints: value ? true : current.autoInterpPoints,
+                            params: {
+                              ...current.params,
+                              average: value,
+                              interpolate: value ? true : current.params.interpolate,
+                            },
+                          }))
+                        }}
                       />
-                      <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下會固定先把目前選取的多筆資料對齊到同一組內插點數，再用平均後的單一結果做後續背景扣除、歸一化、峰擬合與 RSF 分析。</p>
+                      {overlayState.params.average ? (
+                        <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                          已啟用平均：目前選取資料會先對齊到同一組內插點數，再產生一條平均光譜；後續峰擬合與 RSF 只會使用這條平均光譜。
+                        </p>
+                      ) : (
+                        <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                          目前是不平均疊圖：每筆資料會各自套用同一組內插、能量校正、背景扣除與歸一化參數後疊圖比較；峰擬合與 RSF 會鎖定停用。
+                        </p>
+                      )}
                     </>
                   ) : (
                     <p className="text-[10px] text-[var(--text-soft)]">請先在多筆疊圖模式選至少 2 筆資料，這一步才可啟用。</p>
@@ -2535,7 +2564,13 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={7} title="峰擬合" hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
+                <Section step={7} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
+                  {overlayNonAverageMode && (
+                    <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-3 text-[10px] leading-5 text-amber-300">
+                      不平均疊圖模式下會同時存在多條處理後光譜，峰擬合與 RSF 需要單一輸入光譜，因此這裡先鎖定。請啟用「平均所有疊圖數據」，或切回單筆資料後再擬合。
+                    </div>
+                  )}
+                  <div className={overlayNonAverageMode ? 'hidden' : 'space-y-3'}>
                   <CustomSelect label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
@@ -2682,7 +2717,8 @@ export default function XPS({
                       </button>
                     </>
                   )}
-                  {fitError && <p className="text-xs text-rose-400">{fitError}</p>}
+                  </div>
+                  {!overlayNonAverageMode && fitError && <p className="text-xs text-rose-400">{fitError}</p>}
                 </Section>
 
                 {xpsMode === 'valence_band' && (
@@ -2864,7 +2900,7 @@ export default function XPS({
                     >
                       <span className="block text-sm font-semibold text-[var(--text-main)]">選擇疊圖資料</span>
                       <span className="mt-1 block text-xs text-[var(--text-soft)]">
-                        {processingViewMode === 'overlay' ? '目前疊圖模式獨立計算，不沿用單筆參數。' : ''}
+                        {processingViewMode === 'overlay' ? `目前疊圖模式獨立計算${overlayState.params.average ? '，已啟用平均。' : '，不平均。'}` : ''}
                         {processingViewMode === 'overlay' ? ' ' : ''}
                         已選 {overlaySelection.length} 筆
                         {overlaySelection.length >= 2 ? '，可直接看中間欄疊圖結果' : '，至少選 2 筆才會顯示疊圖'}
@@ -2940,11 +2976,13 @@ export default function XPS({
             {overlayPreprocessDatasets.length >= overlayMinCount && (overlayState.params.interpolate || overlayState.params.average || Math.abs(overlayState.params.energy_shift) > 1e-8) && (
               <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title="多筆疊圖：內插 / 平均 / 校正後"
+                  title={overlayState.params.average ? '多筆疊圖：內插 / 平均 / 校正後' : '多筆疊圖：內插 / 校正後'}
                   colorValue={chartLineColors.overlay}
                   onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
                 />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料在背景扣除前的前處理結果疊圖。</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {overlayState.params.average ? '多檔平均光譜在背景扣除前的前處理結果。' : '各筆資料在背景扣除前的前處理結果疊圖。'}
+                </p>
                 <Plot
                   data={applyHidden(buildOverlayTraces(overlayPreprocessDatasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
                   layout={chartLayout() as Plotly.Layout}
@@ -2967,7 +3005,9 @@ export default function XPS({
                   colorValue={chartLineColors.overlayBg}
                   onColorChange={value => setChartLineColors(current => ({ ...current, overlayBg: value }))}
                 />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料背景扣除後的結果疊圖。橘色區塊是目前設定的背景扣除區間。</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。
+                </p>
                 <Plot
                   data={applyHidden(buildOverlayTraces(overlayBackgroundDatasets, chartLineColors.overlayBg) as Plotly.Data[], overlayBgHidden)}
                   layout={overlayBgLayout as Plotly.Layout}
@@ -2990,7 +3030,9 @@ export default function XPS({
                   colorValue={chartLineColors.overlayNorm}
                   onColorChange={value => setChartLineColors(current => ({ ...current, overlayNorm: value }))}
                 />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料歸一化後的結果疊圖。綠色區塊是目前設定的歸一化區間。</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {overlayState.params.average ? '多檔平均光譜歸一化後的結果。' : '各筆資料歸一化後的結果疊圖。'}綠色區塊是目前設定的歸一化區間。
+                </p>
                 <Plot
                   data={applyHidden(buildOverlayTraces(overlayNormalizationDatasets, chartLineColors.overlayNorm) as Plotly.Data[], overlayNormHidden)}
                   layout={overlayNormLayout as Plotly.Layout}
@@ -3013,7 +3055,9 @@ export default function XPS({
                   colorValue={chartLineColors.overlay}
                   onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
                 />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">各筆資料目前最新的處理結果疊圖。</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {overlayState.params.average ? '多檔平均光譜目前最新的處理結果。' : '各筆資料目前最新的處理結果疊圖。'}
+                </p>
                 <Plot
                   data={applyHidden(buildOverlayTraces(overlayFinalDatasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
                   layout={chartLayout() as Plotly.Layout}
@@ -3132,7 +3176,7 @@ export default function XPS({
                   {processingViewMode === 'single' ? (
                     <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
                   ) : (
-                    <p className="text-xs text-[var(--text-soft)]">疊圖模式下這張圖固定顯示多檔平均後的單一結果。</p>
+                    <p className="text-xs text-[var(--text-soft)]">疊圖平均模式下這張圖顯示多檔平均後的單一結果。</p>
                   )}
                 </div>
                 {renderFinalChart()}
@@ -3150,7 +3194,7 @@ export default function XPS({
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">5. 峰擬合光譜</p>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
                   {processingViewMode === 'overlay'
-                    ? '疊圖模式下這裡會直接對「多檔平均後的單一結果」做擬合，避免拿多條未平均光譜一起擬合。'
+                    ? '疊圖平均模式下這裡會直接對「多檔平均後的單一結果」做擬合，避免拿多條未平均光譜一起擬合。'
                     : '這張圖會獨立顯示擬合輸入、總擬合、各峰組件與殘差，避免只疊在最終圖上不明顯。'}
                 </p>
                 <Plot
@@ -3323,7 +3367,7 @@ export default function XPS({
                   <p className="text-sm font-semibold text-[var(--text-main)]">匯出</p>
                   <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">
                     下載各階段光譜、峰擬合結果、RSF 定量表，以及含完整處理參數的 JSON 報告。
-                    {processingViewMode === 'overlay' ? ' 疊圖模式會固定匯出多檔平均後的單一分析結果。' : ''}
+                    {processingViewMode === 'overlay' ? ' 疊圖平均模式會匯出多檔平均後的單一分析結果；不平均疊圖的各階段 CSV 可直接從每張疊圖圖卡下載。' : ''}
                   </p>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3">
@@ -3442,7 +3486,7 @@ export default function XPS({
             <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
               <div>
                 <p className="text-sm font-semibold text-[var(--text-main)]">多筆數據疊圖處理</p>
-                <p className="mt-1 text-xs text-[var(--text-soft)]">會列出目前所有資料，你可以從中選取要一起比較的光譜。</p>
+                <p className="mt-1 text-xs text-[var(--text-soft)]">會列出目前所有資料，你可以從中選取要一起比較的光譜；套用後預設以不平均疊圖處理。</p>
               </div>
               <button
                 type="button"
@@ -3547,7 +3591,7 @@ export default function XPS({
                   套用疊圖選擇
                 </button>
               </div>
-              <p className="text-xs text-[var(--text-soft)]">多筆疊圖模式會使用獨立的一套內插、背景扣除與歸一化參數，不會沿用單筆資料處理時的設定。</p>
+              <p className="text-xs text-[var(--text-soft)]">多筆疊圖模式會使用獨立的一套內插、背景扣除與歸一化參數，不會沿用單筆資料處理時的設定；需要峰擬合或 RSF 時請在第 3 步啟用多檔平均。</p>
             </div>
           </div>
         </div>

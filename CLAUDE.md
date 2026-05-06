@@ -175,7 +175,7 @@ railway.toml               # Railway 設定（builder=DOCKERFILE）
 
 1. 載入：`.xy / .txt / .csv / .vms / .pro / .dat`
 2. 內插：每筆各自 `linspace`，不建立共同 x 軸，`INTERP_POINTS_MIN=50 / MAX=5000`
-3. 多檔平均：僅疊圖模式可用，平均前先對齊到同一內插網格
+3. 多筆疊圖 / 多檔平均：疊圖模式預設不平均，會讓多筆資料各自套同一組參數後分階段疊圖；第 3 步可明確啟用「平均所有疊圖數據」，平均前會對齊到同一內插網格
 4. 能量校正：手動位移 + 標準樣品資料庫自動校正（`POST /api/xps/calibrate`）
 5. 背景扣除：Shirley / Tougaard(B=2866,C=1643) / Linear / Polynomial / AsLS / airPLS
 6. 歸一化：None / Min-Max / Max / Area / Mean Region
@@ -196,7 +196,8 @@ railway.toml               # Railway 設定（builder=DOCKERFILE）
 
 - `processingViewMode = 'single' | 'overlay'`
 - 單筆模式：每筆資料各自保存 session（`params / peaks / fitResult / rsfRows`）
-- 疊圖模式：使用獨立 `overlayState`，不共用單筆參數
+- 疊圖模式：使用獨立 `overlayState`，不共用單筆參數；`average=false` 時顯示每筆 processed dataset，`average=true` 時才產生平均光譜
+- 疊圖不平均模式會鎖定峰擬合與 RSF；需要峰擬合 / RSF 時須先啟用第 3 步多檔平均，或切回單筆資料
 - `overlayDraftSelection` 用來避免勾選中途就觸發處理
 - 入口位於右上角「選擇疊圖資料」按鈕，透過 modal 選取
 
@@ -290,6 +291,8 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-06 CST：XAS 主圖改為分階段顯示：`1. 原始光譜`、`2. 前處理後`、`3. 背景扣除`、`4. 歸一化`、`5. 最終光譜`（依啟用項目自動編號），每一階段維持 TEY/TFY 左右並排；背景圖以橘色區塊標示背景範圍，歸一化圖以綠色標示 normal/mean region，`post_edge` 額外以橘色標示 pre-edge、綠色標示 post-edge。前端彈出圖表同步支援分階段資料。
 - 2026-05-06 CST：更新 `CLAUDE.md` 與 `AGENTS.md` 的 XAS 狀態與注意事項；驗證 `python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/core/*.py`、`cd web/frontend && npm run build`、`git diff --check` 全部通過。
 - 2026-05-06 CST：修正 XAS 啟用背景扣除時 `/api/xas/process` 500 錯誤：`apply_background` 參數改為 `bg_x_start/bg_x_end`、回傳值改為接收扣背景後光譜，並在前端尚未寫入區間時使用全譜 fallback；以模擬資料驗證背景扣除 + `mean_region` 與背景扣除 + `post_edge` 均可執行。驗證 `python3 -m py_compile ...`、`cd web/frontend && npm run build`、`git diff --check` 通過。
+- 2026-05-06 CST：讀取 XPS/XAS 多檔處理與疊圖邏輯，確認 XAS 疊圖模式是「多筆資料各自套同一組參數處理後疊圖」，平均只是額外動作；XPS 疊圖模式目前由前端 `overlayState` 預設並固定 `average=true`，因此會先平均成單一光譜再進背景扣除、歸一化、峰擬合與 RSF。後端 XPS 已能在 `average=false` 時回傳每筆 processed dataset，後續若要支援「不平均、多筆疊圖一起處理」，主要需調整 `web/frontend/src/pages/XPS.tsx` 的 overlay UI 與分析流程限制。
+- 2026-05-06 CST：XPS 疊圖處理改為 XAS 風格分支：`createDefaultOverlayState()` 預設 `average=false`，Section 3 改成可切換「平均所有疊圖數據」；不平均疊圖會讓多筆資料各自套用同一組內插、能量校正、背景扣除與歸一化參數並分階段疊圖，峰擬合與 RSF 在此分支鎖定停用；啟用平均後才會使用後端回傳的 `average` 單一光譜做最終圖、峰擬合與 RSF，且避免暫時誤拿第一筆資料當平均光譜。影響檔案：`web/frontend/src/pages/XPS.tsx`；驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
 
 ### 2026-05-05
 

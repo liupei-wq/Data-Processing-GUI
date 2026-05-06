@@ -73,6 +73,7 @@ railway.toml                 # Railway 設定
 7. **輸入驗證**：在系統邊界驗證所有輸入
 8. **Excel 匯入**：後端 parser 支援 `.xlsx` / `.xls`，部署需包含 `openpyxl` / `xlrd`
 9. **XAS 分階段圖卡**：XAS 主圖以階段顯示，且每階段仍維持 TEY / TFY 左右並排；背景與歸一化需用 Plotly shape/annotation 標示取量範圍
+10. **XPS 疊圖分支**：疊圖模式預設不平均，會讓多筆資料各自套同一組處理參數後分階段疊圖；第 3 步「平均所有疊圖數據」開啟後才用平均光譜做峰擬合 / RSF。不平均疊圖時峰擬合與 RSF 必須鎖定停用。
 
 ## 常用指令
 
@@ -111,3 +112,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-06：XAS 新增 `Mean Region` 歸一化；確認 `Post-edge Step` 與 XPS `Mean Region` 不同，前者為 `(y-pre_mean)/(post_mean-pre_mean)`，後者為 `y/mean(region)`；XAS 主圖改為原始/前處理/背景/歸一化/最終分階段 TEY+TFY 並排圖卡，背景與歸一化取量範圍會顯示在圖上。驗證 `py_compile`、`npm run build`、`git diff --check` 通過。
 - 2026-05-06：修正 XAS 背景扣除造成 `/api/xas/process` 500：`apply_background` 需用 `bg_x_start/bg_x_end`，且回傳第一值才是扣背景後光譜；背景區間未設定時後端 fallback 到全譜。
 - 2026-05-06：XAS 內插新增像 XPS 的自動偵測點數；前端依 energy 軸 median step 估算有效點數（200–10000），側欄顯示自動建議與每檔步距變化，所有分階段處理共用同一個 `effectiveNPoints`。
+- 2026-05-06：XPS 疊圖模式改為預設不平均，多筆資料會各自處理後分階段疊圖；Section 3 可明確啟用「平均所有疊圖數據」，啟用後才用後端 `average` 單一光譜做峰擬合與 RSF。不平均疊圖分支會鎖定峰擬合 / RSF。驗證 `npm run build`、`git diff --check` 通過。
