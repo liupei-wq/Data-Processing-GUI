@@ -32,6 +32,13 @@ const SIDEBAR_COLLAPSED_PEEK = 28
 const INTERP_POINTS_MIN = 50
 const INTERP_POINTS_MAX = 5000
 const INTERP_POINTS_DEFAULT = 1000
+const PEAK_CENTER_DB_TOLERANCE_EV = 0.45
+const PEAK_CENTER_MANUAL_TOLERANCE_EV = 1.2
+const PEAK_MIN_GAP_EV = 0.12
+const PEAK_FWHM_MIN_ABS = 0.12
+const PEAK_FWHM_MAX_MULTIPLIER = 2.2
+const PEAK_FWHM_MIN_RATIO = 0.55
+const PEAK_AMPLITUDE_MAX_MULTIPLIER = 4.0
 
 const LINE_COLOR_OPTIONS = [
   { value: 'blue', label: 'Blue' },
@@ -850,10 +857,153 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
 
 function createPeakId() { return `XP${Math.random().toString(36).slice(2, 7)}` }
 
+type PeakSourceType = 'database' | 'manual'
+
 interface PeakCandidate extends InitPeak {
   id: string
   label: string
   enabled: boolean
+  sourceType: PeakSourceType
+}
+
+function createPeakCandidate(
+  input: {
+    label: string
+    center: number
+    fwhm: number
+    amplitude: number
+    sourceType: PeakSourceType
+    enabled?: boolean
+    theoretical_center?: number
+    lock_center?: boolean
+    lock_fwhm?: boolean
+    lock_area?: boolean
+  },
+  datasetMax = 1000,
+): PeakCandidate {
+  const center = Number.isFinite(input.center) ? input.center : 0
+  const fwhm = Math.max(Number.isFinite(input.fwhm) ? input.fwhm : 1.0, PEAK_FWHM_MIN_ABS)
+  const amplitude = Math.max(Number.isFinite(input.amplitude) ? input.amplitude : datasetMax * 0.5, 0)
+  const theoreticalCenter = Number.isFinite(input.theoretical_center) ? Number(input.theoretical_center) : center
+  const centerTolerance = input.sourceType === 'database'
+    ? PEAK_CENTER_DB_TOLERANCE_EV
+    : PEAK_CENTER_MANUAL_TOLERANCE_EV
+  const amplitudeMax = Math.max(amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1)
+  return {
+    id: createPeakId(),
+    label: input.label,
+    enabled: input.enabled ?? true,
+    center,
+    fwhm,
+    amplitude,
+    sourceType: input.sourceType,
+    theoretical_center: theoreticalCenter,
+    lock_center: input.lock_center ?? true,
+    lock_fwhm: input.lock_fwhm ?? true,
+    lock_area: input.lock_area ?? true,
+    center_min: theoreticalCenter - centerTolerance,
+    center_max: theoreticalCenter + centerTolerance,
+    fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, fwhm * PEAK_FWHM_MIN_RATIO),
+    fwhm_max: Math.max(fwhm * PEAK_FWHM_MAX_MULTIPLIER, fwhm + 0.2),
+    amplitude_max: amplitudeMax,
+  }
+}
+
+function sanitizePeakCandidate(peak: PeakCandidate, datasetMax = 1000): PeakCandidate {
+  const sourceType = peak.sourceType ?? 'database'
+  const base = createPeakCandidate({
+    label: peak.label,
+    center: peak.center,
+    fwhm: peak.fwhm,
+    amplitude: peak.amplitude,
+    sourceType,
+    enabled: peak.enabled,
+    theoretical_center: peak.theoretical_center,
+    lock_center: peak.lock_center,
+    lock_fwhm: peak.lock_fwhm,
+    lock_area: peak.lock_area,
+  }, datasetMax)
+  return {
+    ...base,
+    id: peak.id || createPeakId(),
+    center_min: peak.center_min ?? base.center_min,
+    center_max: peak.center_max ?? base.center_max,
+    fwhm_min: peak.fwhm_min ?? base.fwhm_min,
+    fwhm_max: peak.fwhm_max ?? base.fwhm_max,
+    amplitude_max: peak.amplitude_max ?? Math.max(peak.amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+  }
+}
+
+function updatePeakCenterSeed(peak: PeakCandidate, center: number, datasetMax = 1000): PeakCandidate {
+  const sourceType = peak.sourceType ?? 'database'
+  const theoreticalCenter = center
+  const centerTolerance = sourceType === 'database'
+    ? PEAK_CENTER_DB_TOLERANCE_EV
+    : PEAK_CENTER_MANUAL_TOLERANCE_EV
+  return sanitizePeakCandidate({
+    ...peak,
+    center,
+    theoretical_center: theoreticalCenter,
+    center_min: theoreticalCenter - centerTolerance,
+    center_max: theoreticalCenter + centerTolerance,
+  }, datasetMax)
+}
+
+function updatePeakFwhmSeed(peak: PeakCandidate, fwhm: number, datasetMax = 1000): PeakCandidate {
+  const nextFwhm = Math.max(fwhm, PEAK_FWHM_MIN_ABS)
+  return sanitizePeakCandidate({
+    ...peak,
+    fwhm: nextFwhm,
+    fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, nextFwhm * PEAK_FWHM_MIN_RATIO),
+    fwhm_max: Math.max(nextFwhm * PEAK_FWHM_MAX_MULTIPLIER, nextFwhm + 0.2),
+  }, datasetMax)
+}
+
+function updatePeakAmplitudeSeed(peak: PeakCandidate, amplitude: number, datasetMax = 1000): PeakCandidate {
+  const nextAmplitude = Math.max(amplitude, 0)
+  return sanitizePeakCandidate({
+    ...peak,
+    amplitude: nextAmplitude,
+    amplitude_max: Math.max(nextAmplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+  }, datasetMax)
+}
+
+function buildFitPeakPayloads(peaks: PeakCandidate[], dataset: ProcessedDataset): InitPeak[] {
+  const datasetMax = Math.max(...dataset.y_processed.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+  const sanitized = peaks.map(pk => sanitizePeakCandidate(pk, datasetMax))
+  const indexed = sanitized.map((peak, index) => ({ peak, index })).sort((a, b) => a.peak.center - b.peak.center)
+  const payloads = sanitized.map(pk => ({ ...pk }))
+
+  indexed.forEach((entry, sortedIndex) => {
+    const current = entry.peak
+    const prevCenter = indexed[sortedIndex - 1]?.peak.center
+    const nextCenter = indexed[sortedIndex + 1]?.peak.center
+    let centerMin = current.center_min ?? current.center
+    let centerMax = current.center_max ?? current.center
+    if (!current.lock_center) {
+      if (Number.isFinite(prevCenter)) centerMin = Math.max(centerMin, (prevCenter as number) + PEAK_MIN_GAP_EV)
+      if (Number.isFinite(nextCenter)) centerMax = Math.min(centerMax, (nextCenter as number) - PEAK_MIN_GAP_EV)
+      if (centerMax - centerMin < 0.02) {
+        const safeCenter = clamp(current.center, centerMin, centerMax)
+        centerMin = safeCenter - 0.01
+        centerMax = safeCenter + 0.01
+      }
+    } else {
+      centerMin = current.center
+      centerMax = current.center
+    }
+
+    payloads[entry.index] = {
+      ...current,
+      center_min: centerMin,
+      center_max: centerMax,
+      fwhm_min: current.lock_fwhm ? current.fwhm : Math.max(current.fwhm_min ?? PEAK_FWHM_MIN_ABS, PEAK_FWHM_MIN_ABS),
+      fwhm_max: current.lock_fwhm ? current.fwhm : Math.max(current.fwhm_max ?? current.fwhm, current.fwhm + 0.05),
+      amplitude_max: current.lock_area ? Math.max(current.amplitude, 1) : Math.max(current.amplitude_max ?? 0, current.amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+    }
+  })
+
+  return payloads.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, ...peak }) => peak)
 }
 
 interface DatasetSessionState {
@@ -1141,6 +1291,9 @@ export default function XPS({
   const fitTargetDataset = processingViewMode === 'overlay'
     ? getStageDataset(overlayBundle?.final ?? null, 0, true)
     : activeDataset
+  const fitTargetPeakScale = fitTargetDataset
+    ? Math.max(...fitTargetDataset.y_processed.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+    : 1000
   const currentFitResult = processingViewMode === 'overlay' ? overlayFitResult : fitResult
   const currentRsfRows = processingViewMode === 'overlay' ? overlayRsfRows : rsfRows
   const currentDisplayDataset = processingViewMode === 'overlay' ? fitTargetDataset : activeDataset
@@ -1239,13 +1392,13 @@ export default function XPS({
     setManualEnergyShiftEnabled(session.manualEnergyShiftEnabled)
     setSelectedElement(session.selectedElement)
     setFitProfile(session.fitProfile)
-    setPeakCandidates(session.peakCandidates)
+    setPeakCandidates(session.peakCandidates.map(pk => sanitizePeakCandidate(pk, fitTargetPeakScale)))
     setFitResult(session.fitResult)
     setRsfRows(session.rsfRows)
     window.setTimeout(() => {
       restoringSessionRef.current = false
     }, 0)
-  }, [activeDatasetKey, datasetSessions])
+  }, [activeDatasetKey, datasetSessions, fitTargetPeakScale])
 
   useEffect(() => {
     if (processingViewMode !== 'single' || !activeDatasetKey || restoringSessionRef.current) return
@@ -1786,15 +1939,14 @@ export default function XPS({
     setElementsLoading(true); setFitError(null)
     try {
       const data = await fetchElementPeaks(selectedElement)
-      const maxY = fitTargetDataset ? Math.max(...fitTargetDataset.y_processed) : 1000
-      const newPeaks: PeakCandidate[] = data.peaks.map(pk => ({
-        id: createPeakId(),
+      const newPeaks: PeakCandidate[] = data.peaks.map(pk => createPeakCandidate({
         label: `${selectedElement} ${pk.label}`,
-        enabled: true,
         center: pk.be,
         fwhm: pk.fwhm,
-        amplitude: maxY * 0.5,
-      }))
+        amplitude: fitTargetPeakScale * 0.5,
+        sourceType: 'database',
+        theoretical_center: pk.be,
+      }, fitTargetPeakScale))
       setPeakCandidates(prev => [...prev, ...newPeaks])
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setElementsLoading(false) }
@@ -1802,10 +1954,14 @@ export default function XPS({
 
   const addManualPeak = () => {
     const center = activeDataset ? (beMin + beMax) / 2 : 500
-    setPeakCandidates(prev => [...prev, {
-      id: createPeakId(), label: `峰 ${prev.length + 1}`, enabled: true,
-      center, fwhm: 1.5, amplitude: 1000,
-    }])
+    setPeakCandidates(prev => [...prev, createPeakCandidate({
+      label: `峰 ${prev.length + 1}`,
+      center,
+      fwhm: 1.5,
+      amplitude: Math.max(fitTargetPeakScale * 0.35, 100),
+      sourceType: 'manual',
+      theoretical_center: center,
+    }, fitTargetPeakScale)])
   }
 
   const handleFit = async () => {
@@ -1818,9 +1974,23 @@ export default function XPS({
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
     setIsFitting(true); setFitError(null)
     try {
-      const initPeaks: InitPeak[] = activePeaks.map(p => ({ center: p.center, fwhm: p.fwhm, amplitude: p.amplitude, label: p.label }))
-      const peakLabels = activePeaks.map(p => p.label)
-      const res = await fitPeaks(fitTargetDataset.x, fitTargetDataset.y_processed, initPeaks, fitProfile, peakLabels)
+      const initPeaks = buildFitPeakPayloads(activePeaks, fitTargetDataset)
+      const peakLabels = initPeaks.map(p => p.label ?? '')
+      const fitCenters = initPeaks.map(p => p.center)
+      const fitWidths = initPeaks.map(p => Math.max(p.fwhm, 0.05))
+      const fitPadding = Math.max(3, Math.max(...fitWidths) * 6)
+      const fitRange: [number, number] = [
+        Math.max(Math.min(...fitTargetDataset.x), Math.min(...fitCenters) - fitPadding),
+        Math.min(Math.max(...fitTargetDataset.x), Math.max(...fitCenters) + fitPadding),
+      ]
+      const res = await fitPeaks(
+        fitTargetDataset.x,
+        fitTargetDataset.y_processed,
+        initPeaks,
+        fitProfile,
+        peakLabels,
+        { maxfev: 6000, fitRange },
+      )
       if (processingViewMode === 'overlay') {
         setOverlayFitResult(res)
       } else {
@@ -2443,15 +2613,72 @@ export default function XPS({
                         </button>
                         <button type="button" onClick={() => setPeakCandidates(prev => prev.filter(p => p.id !== pk.id))} className="text-rose-400 hover:text-rose-300">✕</button>
                       </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <NumInput label="中心 (eV)" value={pk.center} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, center: v } : p))} step={0.1} />
-                        <NumInput label="FWHM (eV)" value={pk.fwhm} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, fwhm: v } : p))} min={0.01} step={0.1} />
-                        <NumInput label="強度" value={pk.amplitude} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, amplitude: v } : p))} min={0} step={100} />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                          {pk.sourceType === 'database' ? '理論峰' : '手動峰'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_center: !p.lock_center } : p))}
+                          className={[
+                            'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.lock_center
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {pk.lock_center ? '中心固定' : '中心可調'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_fwhm: !p.lock_fwhm } : p))}
+                          className={[
+                            'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.lock_fwhm
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {pk.lock_fwhm ? '寬度固定' : '寬度可調'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_area: !p.lock_area } : p))}
+                          className={[
+                            'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.lock_area
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {pk.lock_area ? '高度固定' : '高度可調'}
+                        </button>
                       </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <NumInput label="中心 (eV)" value={pk.center} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? updatePeakCenterSeed(p, v, fitTargetPeakScale) : p))} step={0.1} />
+                        <NumInput label="FWHM (eV)" value={pk.fwhm} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? updatePeakFwhmSeed(p, v, fitTargetPeakScale) : p))} min={0.01} step={0.1} />
+                        <NumInput label="強度" value={pk.amplitude} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? updatePeakAmplitudeSeed(p, v, fitTargetPeakScale) : p))} min={0} step={100} />
+                      </div>
+                      <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                        {pk.lock_center
+                          ? `中心將固定在 ${pk.center.toFixed(2)} eV`
+                          : `中心可在 ${(pk.center_min ?? pk.center).toFixed(2)} – ${(pk.center_max ?? pk.center).toFixed(2)} eV 內位移`}
+                        {' · '}
+                        {pk.lock_fwhm
+                          ? `FWHM 固定為 ${pk.fwhm.toFixed(2)} eV`
+                          : `FWHM 可在 ${(pk.fwhm_min ?? pk.fwhm).toFixed(2)} – ${(pk.fwhm_max ?? pk.fwhm).toFixed(2)} eV 內調整`}
+                        {' · '}
+                        {pk.lock_area
+                          ? `高度固定為 ${pk.amplitude.toFixed(0)}`
+                          : `高度上限約 ${(pk.amplitude_max ?? pk.amplitude).toFixed(0)}`}
+                      </p>
                     </div>
                   ))}
                   {peakCandidates.length > 0 && (
                     <>
+                      <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                        鎖定只限制擬合時的自由度；你仍可先手動改 seed。若同時放開多個峰，系統會自動維持最小峰距，避免峰位互相交叉。
+                      </p>
                       {peakCandidates.length > 1 && (
                         <button type="button" onClick={() => setPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
                       )}

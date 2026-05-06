@@ -108,9 +108,20 @@ export async function fitPeaks(
   peaks: InitPeak[],
   profile: string,
   peakLabels?: string[],
+  options?: {
+    maxfev?: number
+    fitRange?: [number, number]
+  },
 ): Promise<FitResult> {
-  const body: Record<string, unknown> = { x, y, peaks, profile }
+  const body: Record<string, unknown> = {
+    x,
+    y,
+    peaks,
+    profile,
+    maxfev: options?.maxfev ?? 6000,
+  }
   if (peakLabels) body.peak_labels = peakLabels
+  if (options?.fitRange) body.fit_range = options.fitRange
   const res = await fetch(`${BASE}/fit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

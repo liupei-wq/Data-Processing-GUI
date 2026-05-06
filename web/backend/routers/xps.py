@@ -102,6 +102,15 @@ class InitPeak(BaseModel):
     fwhm: float
     amplitude: float
     label: Optional[str] = None
+    lock_center: bool = True
+    lock_fwhm: bool = True
+    lock_area: bool = True
+    center_min: Optional[float] = None
+    center_max: Optional[float] = None
+    fwhm_min: Optional[float] = None
+    fwhm_max: Optional[float] = None
+    amplitude_max: Optional[float] = None
+    theoretical_center: Optional[float] = None
 
 
 class FitRequest(BaseModel):
@@ -109,7 +118,8 @@ class FitRequest(BaseModel):
     y: List[float]
     peaks: List[InitPeak]
     profile: str = "voigt"
-    maxfev: int = 20000
+    maxfev: int = 6000
+    fit_range: Optional[List[float]] = None
     peak_labels: Optional[List[str]] = None
 
 
@@ -386,12 +396,40 @@ def fit_xps_peaks(req: FitRequest):
             "center": pk.center,
             "fwhm": pk.fwhm,
             "amplitude": pk.amplitude,
+            "lock_center": pk.lock_center,
+            "lock_fwhm": pk.lock_fwhm,
+            "lock_area": pk.lock_area,
+            "center_min": pk.center_min,
+            "center_max": pk.center_max,
+            "fwhm_min": pk.fwhm_min,
+            "fwhm_max": pk.fwhm_max,
+            "amplitude_max": pk.amplitude_max,
+            "theoretical_center": pk.theoretical_center,
+            "label": pk.label,
         }
         for pk in req.peaks
     ]
 
+    fit_range = req.fit_range
+    if fit_range is None and req.peaks:
+        centers = np.array([pk.center for pk in req.peaks], dtype=float)
+        fwhms = np.array([max(pk.fwhm, 0.05) for pk in req.peaks], dtype=float)
+        padding = max(3.0, float(np.max(fwhms)) * 6.0)
+        fit_lo = max(float(np.min(x)), float(np.min(centers)) - padding)
+        fit_hi = min(float(np.max(x)), float(np.max(centers)) + padding)
+        fit_range = [fit_lo, fit_hi]
+
+    capped_maxfev = max(1000, min(int(req.maxfev), 8000))
+
     try:
-        result = fit_peaks(x, y, init_peaks, profile=req.profile, maxfev=req.maxfev)
+        result = fit_peaks(
+            x,
+            y,
+            init_peaks,
+            profile=req.profile,
+            maxfev=capped_maxfev,
+            fit_range=fit_range,
+        )
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"擬合失敗：{exc}") from exc
 

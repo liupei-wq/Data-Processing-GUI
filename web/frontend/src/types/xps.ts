@@ -64,6 +64,15 @@ export interface InitPeak {
   fwhm: number
   amplitude: number
   label?: string
+  lock_center?: boolean
+  lock_fwhm?: boolean
+  lock_area?: boolean
+  center_min?: number
+  center_max?: number
+  fwhm_min?: number
+  fwhm_max?: number
+  amplitude_max?: number
+  theoretical_center?: number
 }
 
 export interface ElementDbPeak {
