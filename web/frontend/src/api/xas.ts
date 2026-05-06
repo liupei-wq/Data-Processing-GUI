@@ -1,6 +1,4 @@
 import type {
-  DeconvRequest,
-  DeconvResult,
   ParseResponse,
   ProcessParams,
   ProcessResult,
@@ -33,18 +31,6 @@ export async function processData(
   })
   if (!res.ok) {
     throw new Error(await readApiError(res, 'XAS 資料處理失敗'))
-  }
-  return res.json()
-}
-
-export async function deconvXanes(req: DeconvRequest): Promise<DeconvResult> {
-  const res = await fetch(`${BASE}/deconv`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
-  if (!res.ok) {
-    throw new Error(await readApiError(res, 'XANES 去卷積失敗'))
   }
   return res.json()
 }

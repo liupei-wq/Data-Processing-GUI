@@ -900,7 +900,7 @@ function createPeakCandidate(
     theoretical_center: theoreticalCenter,
     lock_center: input.lock_center ?? true,
     lock_fwhm: input.lock_fwhm ?? true,
-    lock_area: input.lock_area ?? true,
+    lock_area: input.lock_area ?? false,
     center_min: theoreticalCenter - centerTolerance,
     center_max: theoreticalCenter + centerTolerance,
     fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, fwhm * PEAK_FWHM_MIN_RATIO),
@@ -1976,20 +1976,13 @@ export default function XPS({
     try {
       const initPeaks = buildFitPeakPayloads(activePeaks, fitTargetDataset)
       const peakLabels = initPeaks.map(p => p.label ?? '')
-      const fitCenters = initPeaks.map(p => p.center)
-      const fitWidths = initPeaks.map(p => Math.max(p.fwhm, 0.05))
-      const fitPadding = Math.max(3, Math.max(...fitWidths) * 6)
-      const fitRange: [number, number] = [
-        Math.max(Math.min(...fitTargetDataset.x), Math.min(...fitCenters) - fitPadding),
-        Math.min(Math.max(...fitTargetDataset.x), Math.max(...fitCenters) + fitPadding),
-      ]
       const res = await fitPeaks(
         fitTargetDataset.x,
         fitTargetDataset.y_processed,
         initPeaks,
         fitProfile,
         peakLabels,
-        { maxfev: 6000, fitRange },
+        { maxfev: 8000 },
       )
       if (processingViewMode === 'overlay') {
         setOverlayFitResult(res)
@@ -2882,8 +2875,10 @@ export default function XPS({
               </div>
             )}
 
+            {/* ── Stage 1+2: Raw + Preprocess side by side ── */}
+            <div className="mb-4 flex flex-col gap-4 md:flex-row">
             {rawChartTraces.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
                 {rawChartSourceFiles.length > 0 && (
                   <div className="mb-3 flex flex-wrap gap-2">
@@ -2943,7 +2938,7 @@ export default function XPS({
 
             {/* ── overlay: preprocess stage ── */}
             {overlayPreprocessDatasets.length >= overlayMinCount && (overlayState.params.interpolate || overlayState.params.average || Math.abs(overlayState.params.energy_shift) > 1e-8) && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
                   title="多筆疊圖：內插 / 平均 / 校正後"
                   colorValue={chartLineColors.overlay}
@@ -3034,7 +3029,7 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
                   title={`2. ${stageDisplayLabel ? `${stageDisplayLabel}後` : '前處理後'}`}
                   colorValue={chartLineColors.preprocess}
@@ -3058,8 +3053,12 @@ export default function XPS({
               </div>
             )}
 
+            </div>{/* end flex row 1: raw + preprocess */}
+
+            {/* ── Stage 3+4: Background + Normalization side by side ── */}
+            <div className="mb-4 flex flex-col gap-4 md:flex-row">
             {processingViewMode === 'single' && hasBackgroundStage && backgroundChartTraces.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <ChartToolbar
@@ -3089,7 +3088,7 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && hasNormalizationStage && normalizationChartTraces.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
                   title="4. 歸一化"
                   colorValue={chartLineColors.normalization}
@@ -3112,6 +3111,8 @@ export default function XPS({
                 </div>
               </div>
             )}
+
+            </div>{/* end flex row 2: background + normalization */}
 
             {currentDisplayDataset && (processingViewMode === 'single' ? result : fitTargetDataset) && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">

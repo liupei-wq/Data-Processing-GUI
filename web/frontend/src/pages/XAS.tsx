@@ -5,11 +5,9 @@ import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
-import { deconvXanes, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
+import { fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
-  DeconvPeak,
-  DeconvResult,
   GaussPeak,
   ParsedXasFile,
   ProcessParams,
@@ -50,7 +48,6 @@ const DEFAULT_PARAMS: ProcessParams = {
   gauss_channel: 'both',
   gauss_peaks: [],
   gauss_search: 0.5,
-  d2y_enabled: false,
 }
 
 const BACKGROUND_METHOD_HELP: Record<Exclude<ProcessParams['bg_method'], 'none'>, string> = {
@@ -59,6 +56,11 @@ const BACKGROUND_METHOD_HELP: Record<Exclude<ProcessParams['bg_method'], 'none'>
   asls: 'AsLS 透過不對稱加權與平滑懲罰估計背景，會盡量讓基線落在峰形下方。',
   airpls: 'airPLS 是自適應迭代版的懲罰最小平方法，對複雜基線通常更穩健，手動參數也更少。',
 }
+
+const OVERLAY_COLORS = [
+  '#38bdf8', '#a78bfa', '#34d399', '#f97316',
+  '#fb7185', '#facc15', '#22d3ee', '#818cf8',
+]
 
 function chartLayout(xLabel: string, yLabel: string): Partial<Plotly.Layout> {
   const css = typeof window !== 'undefined' ? getComputedStyle(document.documentElement) : null
@@ -101,6 +103,41 @@ function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw:
       line: { color: '#f97316', width: 1.4, dash: 'dash' },
     })
   }
+  return traces
+}
+
+function buildMultiTraces(datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', showRaw: boolean): Plotly.Data[] {
+  const traces: Plotly.Data[] = []
+  datasets.forEach((ds, i) => {
+    const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+    const raw = channel === 'TEY' ? ds.tey_raw : ds.tfy_raw
+    const processed = channel === 'TEY' ? ds.tey_processed : ds.tfy_processed
+    const shortName = ds.name.replace(/\.[^.]+$/, '').slice(-24)
+    if (showRaw) {
+      traces.push({
+        x: ds.x, y: raw, type: 'scatter', mode: 'lines',
+        name: `${shortName} 原始`,
+        line: { color, width: 1.2, dash: 'dot' },
+        opacity: 0.45,
+      })
+    }
+    traces.push({
+      x: ds.x, y: processed, type: 'scatter', mode: 'lines',
+      name: shortName,
+      line: { color, width: 2.0 },
+    })
+    const wl = channel === 'TEY' ? ds.white_line_tey : ds.white_line_tfy
+    if (wl != null) {
+      traces.push({
+        x: [wl, wl],
+        y: [Math.min(...processed), Math.max(...processed)],
+        type: 'scatter', mode: 'lines',
+        name: `${shortName} WL ${wl.toFixed(2)} eV`,
+        line: { color, width: 1.2, dash: 'dash' },
+        showlegend: false,
+      })
+    }
+  })
   return traces
 }
 
@@ -164,6 +201,43 @@ function NumInput({ label, value, onChange, min, max, step = 1, disabled = false
   )
 }
 
+function DualRangeInput({
+  label, min, max, start, end, step = 0.1, onChange, disabled = false,
+}: {
+  label: string; min: number; max: number; start: number; end: number
+  step?: number; onChange: (next: { start: number; end: number }) => void; disabled?: boolean
+}) {
+  const low = Math.min(start, end)
+  const high = Math.max(start, end)
+  const boundedMin = Number.isFinite(min) ? min : 0
+  const boundedMax = Number.isFinite(max) && max > boundedMin ? max : boundedMin + 1
+  const span = Math.max(boundedMax - boundedMin, 1e-9)
+  const startPct = ((low - boundedMin) / span) * 100
+  const endPct = ((high - boundedMin) / span) * 100
+  return (
+    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
+        <span className="text-[11px] font-medium text-[var(--text-main)]">
+          {low.toFixed(1)} – {high.toFixed(1)} eV
+        </span>
+      </div>
+      <div className="relative h-9">
+        <div className="xps-range-track" />
+        <div className="xps-range-selection" style={{ left: `${startPct}%`, width: `${Math.max(endPct - startPct, 0)}%` }} />
+        <input type="range" min={boundedMin} max={boundedMax} step={step} value={low} disabled={disabled}
+          onChange={e => onChange({ start: Math.min(Number(e.target.value), high), end: high })}
+          className="xps-range-slider xps-range-slider--primary"
+        />
+        <input type="range" min={boundedMin} max={boundedMax} step={step} value={high} disabled={disabled}
+          onChange={e => onChange({ start: low, end: Math.max(Number(e.target.value), low) })}
+          className="xps-range-slider xps-range-slider--secondary"
+        />
+      </div>
+    </div>
+  )
+}
+
 function SelectInput({ label, value, onChange, options, disabled = false }: {
   label: string; value: string; onChange: (v: string) => void
   options: { value: string; label: string }[]; disabled?: boolean
@@ -224,6 +298,10 @@ export default function XAS({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
+  const [viewMode, setViewMode] = useState<'single' | 'overlay'>('single')
+  const [overlaySelectedNames, setOverlaySelectedNames] = useState<string[]>([])
+  const [showOverlayModal, setShowOverlayModal] = useState(false)
+  const [selectedSingleIdx, setSelectedSingleIdx] = useState(0)
 
   // ── Peak fitting state ────────────────────────────────────────────────────
   const [fitChannel, setFitChannel] = useState<'TEY' | 'TFY'>('TEY')
@@ -238,21 +316,16 @@ export default function XAS({
   const [samplesLoading, setSamplesLoading] = useState(false)
   const samplesLoaded = useRef(false)
 
-  // ── XANES deconvolution state ─────────────────────────────────────────────
-  const [deconvPeaks, setDeconvPeaks] = useState<DeconvPeak[]>([])
-  const [deconvFwhmInst, setDeconvFwhmInst] = useState(0.5)
-  const [deconvFwhmInit, setDeconvFwhmInit] = useState(1.5)
-  const [deconvLinkFwhm, setDeconvLinkFwhm] = useState(false)
-  const [deconvIncludeStep, setDeconvIncludeStep] = useState(true)
-  const [deconvE0, setDeconvE0] = useState(0)
-  const [deconvFitLo, setDeconvFitLo] = useState<number | null>(null)
-  const [deconvFitHi, setDeconvFitHi] = useState<number | null>(null)
-  const [deconvChannel, setDeconvChannel] = useState<'TEY' | 'TFY'>('TEY')
-  const [deconvResult, setDeconvResult] = useState<DeconvResult | null>(null)
-  const [deconvLoading, setDeconvLoading] = useState(false)
-  const [deconvError, setDeconvError] = useState<string | null>(null)
 
-  const activeDataset = result?.average ?? result?.datasets[0] ?? null
+  const isOverlayMode = viewMode === 'overlay'
+  const clampedIdx = Math.min(selectedSingleIdx, Math.max(0, (result?.datasets.length ?? 1) - 1))
+  const activeDataset = isOverlayMode
+    ? null
+    : (result?.average ?? result?.datasets[clampedIdx] ?? null)
+  const overlayDatasets: ProcessedDataset[] = isOverlayMode
+    ? (result?.datasets.filter(d => overlaySelectedNames.length === 0 || overlaySelectedNames.includes(d.name)) ?? [])
+    : []
+
   const renderChannelChart = useCallback((dataset: ProcessedDataset, channel: 'TEY' | 'TFY', height: number) => (
     <Plot
       data={buildTraces(dataset, channel, showRaw) as Plotly.Data[]}
@@ -261,14 +334,30 @@ export default function XAS({
       style={{ width: '100%', height }}
     />
   ), [showRaw])
-  const openChannelPopup = useCallback((channel: 'TEY' | 'TFY') => {
-    if (!activeDataset || !onOpenPlotPopup) return
 
-    onOpenPlotPopup({
-      title: `XAS ${channel} 圖表 - ${activeDataset.name}`,
-      content: renderChannelChart(activeDataset, channel, 420),
-    })
-  }, [activeDataset, onOpenPlotPopup, renderChannelChart])
+  const renderOverlayChart = useCallback((datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', height: number) => (
+    <Plot
+      data={buildMultiTraces(datasets, channel, showRaw) as Plotly.Data[]}
+      layout={chartLayout('Energy (eV)', `${channel} Intensity`) as Plotly.Layout}
+      config={withPlotFullscreen()}
+      style={{ width: '100%', height }}
+    />
+  ), [showRaw])
+
+  const openChannelPopup = useCallback((channel: 'TEY' | 'TFY') => {
+    if (!onOpenPlotPopup) return
+    if (viewMode === 'overlay' && overlayDatasets.length > 0) {
+      onOpenPlotPopup({
+        title: `XAS ${channel} 疊圖（${overlayDatasets.length} 筆）`,
+        content: renderOverlayChart(overlayDatasets, channel, 440),
+      })
+    } else if (activeDataset) {
+      onOpenPlotPopup({
+        title: `XAS ${channel} 圖表 - ${activeDataset.name}`,
+        content: renderChannelChart(activeDataset, channel, 440),
+      })
+    }
+  }, [viewMode, overlayDatasets, activeDataset, onOpenPlotPopup, renderChannelChart, renderOverlayChart])
 
   // reprocess whenever rawFiles or params change
   useEffect(() => {
@@ -384,32 +473,6 @@ export default function XAS({
     finally { setIsFitting(false) }
   }, [activeDataset, fitChannel, fitPeakCandidates, fitProfile])
 
-  const runDeconv = useCallback(async () => {
-    if (!activeDataset) return
-    const y = deconvChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
-    setDeconvLoading(true)
-    setDeconvError(null)
-    try {
-      const res = await deconvXanes({
-        x: activeDataset.x,
-        y,
-        peaks: deconvPeaks,
-        fwhm_inst: deconvFwhmInst,
-        fwhm_init: deconvFwhmInit,
-        link_fwhm: deconvLinkFwhm,
-        include_step: deconvIncludeStep,
-        e0: deconvE0,
-        fit_lo: deconvFitLo,
-        fit_hi: deconvFitHi,
-      })
-      setDeconvResult(res)
-    } catch (e: unknown) {
-      setDeconvError((e as Error).message)
-    } finally {
-      setDeconvLoading(false)
-    }
-  }, [activeDataset, deconvChannel, deconvPeaks, deconvFwhmInst, deconvFwhmInit, deconvLinkFwhm, deconvIncludeStep, deconvE0, deconvFitLo, deconvFitHi])
-
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
 
@@ -466,13 +529,59 @@ export default function XAS({
                 )}
               </Section>
 
-              {/* 2. 內插與平均 */}
-              <Section step={2} title="內插 / 平均" hint="多檔統一點數後平均" defaultOpen={false}>
+              {/* 2. 內插與資料模式 */}
+              <Section step={2} title="內插 / 資料模式" hint="多檔：單筆 / 疊圖 / 平均" defaultOpen={false}>
                 <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
                 {params.interpolate && (
                   <NumInput label="點數" value={params.n_points} onChange={set('n_points')} min={200} max={10000} step={100} />
                 )}
-                {rawFiles.length > 1 && <CheckRow label="多檔平均" checked={params.average} onChange={set('average')} />}
+                {rawFiles.length > 1 && (
+                  <div className="space-y-2 pt-1">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">資料模式</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setViewMode('single'); setParams(p => ({ ...p, average: false })) }}
+                        className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${viewMode === 'single' ? 'bg-[var(--accent-strong)] text-white' : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]'}`}
+                      >
+                        單筆
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setViewMode('overlay'); setShowOverlayModal(true) }}
+                        className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${viewMode === 'overlay' ? 'bg-[var(--accent-strong)] text-white' : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]'}`}
+                      >
+                        疊圖
+                      </button>
+                    </div>
+                    {viewMode === 'overlay' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setShowOverlayModal(true)}
+                          className="w-full rounded-lg border border-[var(--accent-soft)] py-1.5 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+                        >
+                          選擇疊圖資料（{overlaySelectedNames.length === 0 ? rawFiles.length : overlaySelectedNames.length} 筆）
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setParams(p => ({ ...p, average: true })); setViewMode('single') }}
+                          className="w-full rounded-lg border border-[var(--card-border)] py-1.5 text-xs text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)] transition-colors"
+                        >
+                          平均所有疊圖數據
+                        </button>
+                      </>
+                    )}
+                    {viewMode === 'single' && rawFiles.length > 1 && (
+                      <SelectInput
+                        label="顯示資料"
+                        value={String(clampedIdx)}
+                        onChange={v => setSelectedSingleIdx(Number(v))}
+                        options={rawFiles.map((f, i) => ({ value: String(i), label: f.name }))}
+                      />
+                    )}
+                  </div>
+                )}
               </Section>
 
               {/* 3. 能量校正 */}
@@ -495,10 +604,13 @@ export default function XAS({
                     <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
                       {BACKGROUND_METHOD_HELP[params.bg_method as Exclude<ProcessParams['bg_method'], 'none'>]}
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="起始 (eV)" value={params.bg_x_start ?? energyMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
-                      <NumInput label="結束 (eV)" value={params.bg_x_end ?? energyMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
-                    </div>
+                    <DualRangeInput
+                      label="背景扣除區間"
+                      min={energyMin} max={energyMax}
+                      start={params.bg_x_start ?? energyMin}
+                      end={params.bg_x_end ?? energyMax}
+                      onChange={({ start, end }) => setParams(p => ({ ...p, bg_x_start: start, bg_x_end: end }))}
+                    />
                     {params.bg_method === 'polynomial' && (
                       <NumInput label="多項式次數" value={params.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />
                     )}
@@ -519,23 +631,30 @@ export default function XAS({
                 />
                 {params.norm_method === 'post_edge' && (
                   <>
-                    <p className="text-[10px] text-[var(--text-soft)]">Pre-edge 區間（用於估算 edge step）</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="Pre 起始 (eV)" value={params.norm_pre_start ?? energyMin} onChange={v => set('norm_pre_start')(v)} step={0.1} />
-                      <NumInput label="Pre 結束 (eV)" value={params.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3)} onChange={v => set('norm_pre_end')(v)} step={0.1} />
-                    </div>
-                    <p className="text-[10px] text-[var(--text-soft)]">Post-edge 參考區間</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="Post 起始 (eV)" value={params.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7)} onChange={v => set('norm_x_start')(v)} step={0.1} />
-                      <NumInput label="Post 結束 (eV)" value={params.norm_x_end ?? energyMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
-                    </div>
+                    <DualRangeInput
+                      label="Pre-edge 區間"
+                      min={energyMin} max={energyMax}
+                      start={params.norm_pre_start ?? energyMin}
+                      end={params.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3)}
+                      onChange={({ start, end }) => setParams(p => ({ ...p, norm_pre_start: start, norm_pre_end: end }))}
+                    />
+                    <DualRangeInput
+                      label="Post-edge 區間"
+                      min={energyMin} max={energyMax}
+                      start={params.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7)}
+                      end={params.norm_x_end ?? energyMax}
+                      onChange={({ start, end }) => setParams(p => ({ ...p, norm_x_start: start, norm_x_end: end }))}
+                    />
                   </>
                 )}
                 {(params.norm_method === 'area' || params.norm_method === 'min_max') && (
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="起始 (eV)" value={params.norm_x_start ?? energyMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
-                    <NumInput label="結束 (eV)" value={params.norm_x_end ?? energyMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
-                  </div>
+                  <DualRangeInput
+                    label="歸一化區間"
+                    min={energyMin} max={energyMax}
+                    start={params.norm_x_start ?? energyMin}
+                    end={params.norm_x_end ?? energyMax}
+                    onChange={({ start, end }) => setParams(p => ({ ...p, norm_x_start: start, norm_x_end: end }))}
+                  />
                 )}
               </Section>
 
@@ -639,17 +758,14 @@ export default function XAS({
                 )}
               </Section>
 
-              {/* 8. 二階微分 */}
-              <Section step={8} title="二階微分" hint="輔助辨識吸收邊特徵" defaultOpen={false}>
-                <CheckRow label="計算二階微分" checked={params.d2y_enabled} onChange={set('d2y_enabled')} />
-                <p className="text-[10px] text-[var(--text-soft)]">輔助辨識吸收邊精細結構，不影響主光譜輸出。</p>
-              </Section>
-
-              {/* 9. 峰擬合 */}
+              {/* 8. 峰擬合 */}
               {result && (
-                <Section step={9} title="峰擬合" hint="Voigt / Gaussian / Lorentzian" defaultOpen={false}
-                  onOpen={loadSamplesList}
+                <Section step={8} title={isOverlayMode ? '峰擬合（疊圖模式停用）' : '峰擬合'} hint="Voigt / Gaussian / Lorentzian" defaultOpen={false}
+                  onOpen={isOverlayMode ? undefined : loadSamplesList}
                 >
+                  {isOverlayMode ? (
+                    <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下不可用。請切回單筆模式，或先平均數據後再擬合。</p>
+                  ) : (<>
                   <SelectInput label="擬合通道" value={fitChannel}
                     onChange={v => { setFitChannel(v as 'TEY' | 'TFY'); setFitResult(null) }}
                     options={[{ value: 'TEY', label: 'TEY' }, { value: 'TFY', label: 'TFY' }]}
@@ -752,76 +868,10 @@ export default function XAS({
                     </>
                   )}
                   {fitError && <p className="text-[10px] text-rose-400">{fitError}</p>}
+                  </>)}
                 </Section>
               )}
 
-              {/* 10. XANES 去卷積擬合 */}
-              {result && (
-                <Section step={10} title="XANES 去卷積" hint="lmfit Step + 多峰擬合" defaultOpen={false}>
-                  <SelectInput
-                    label="擬合通道"
-                    value={deconvChannel}
-                    onChange={v => { setDeconvChannel(v as 'TEY' | 'TFY'); setDeconvResult(null) }}
-                    options={[{ value: 'TEY', label: 'TEY' }, { value: 'TFY', label: 'TFY' }]}
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="E0 (eV)" value={deconvE0} onChange={setDeconvE0} step={0.5} />
-                    <NumInput label="儀器 FWHM (eV)" value={deconvFwhmInst} onChange={setDeconvFwhmInst} min={0.01} step={0.1} />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="初始 FWHM (eV)" value={deconvFwhmInit} onChange={setDeconvFwhmInit} min={0.1} step={0.1} />
-                    <NumInput label="擬合起始 (eV)" value={deconvFitLo ?? energyMin} onChange={v => setDeconvFitLo(v)} step={0.1} />
-                  </div>
-                  <NumInput label="擬合終止 (eV)" value={deconvFitHi ?? energyMax} onChange={v => setDeconvFitHi(v)} step={0.1} />
-                  <CheckRow label="包含 Step (Arctan)" checked={deconvIncludeStep} onChange={setDeconvIncludeStep} />
-                  <CheckRow label="連動所有峰 FWHM" checked={deconvLinkFwhm} onChange={setDeconvLinkFwhm} />
-
-                  <div className="space-y-2">
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">擬合峰</p>
-                    {deconvPeaks.map((pk, i) => (
-                      <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <input
-                            value={pk.name}
-                            onChange={e => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, name: e.target.value } : p))}
-                            placeholder={`峰 ${i + 1} 名稱`}
-                            className="w-full rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1 text-[10px] text-[var(--input-text)] focus:outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setDeconvPeaks(ps => ps.filter((_, j) => j !== i))}
-                            className="ml-1 shrink-0 text-[10px] text-rose-400 hover:text-rose-300"
-                          >
-                            ×
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-3 gap-1">
-                          <NumInput label="中心(eV)" value={pk.center} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, center: v } : p))} step={0.1} />
-                          <NumInput label="±偏移" value={pk.delta} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, delta: v } : p))} min={0} step={0.1} />
-                          <SelectInput label="峰形" value={pk.ptype} onChange={v => setDeconvPeaks(ps => ps.map((p, j) => j === i ? { ...p, ptype: v as DeconvPeak['ptype'] } : p))} options={[{ value: 'gaussian', label: 'G' }, { value: 'lorentzian', label: 'L' }]} />
-                        </div>
-                      </div>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => setDeconvPeaks(ps => [...ps, { center: (energyMin + energyMax) / 2, delta: 2, name: '', ptype: 'gaussian' }])}
-                      className="w-full rounded-lg border border-dashed border-[var(--accent-soft)] py-1.5 text-[10px] text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
-                    >
-                      + 新增峰
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => void runDeconv()}
-                    disabled={deconvLoading || !activeDataset}
-                    className="w-full rounded-lg bg-[var(--accent-strong)] px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-                  >
-                    {deconvLoading ? '擬合中…' : '執行 XANES 去卷積'}
-                  </button>
-                  {deconvError && <p className="text-[10px] text-rose-400">{deconvError}</p>}
-                </Section>
-              )}
               </div>
             </div>
           </>
@@ -878,35 +928,51 @@ export default function XAS({
           <EmptyWorkspaceState
             module="xas"
             title={moduleContent.uploadTitle}
-            description="左側已提供內插、多檔平均、背景扣除、歸一化、White Line 搜尋、高斯模板扣除與 XANES 去卷積。上傳之後會在這裡顯示 XAS / XANES 圖譜與分析結果。"
+            description="左側已提供內插、多檔平均、背景扣除、歸一化、White Line 搜尋、高斯模板扣除與峰擬合。上傳之後會在這裡顯示 XAS / XANES 圖譜與分析結果。"
             formats={['.DAT', '.XMU', '.NOR', '.TXT', '.CSV']}
           />
         )}
 
-        {result && activeDataset && (
+        {result && (activeDataset != null || overlayDatasets.length > 0) && (
           <>
             {/* summary cards */}
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow-soft)]">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
                 <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{result.datasets.length} 個</p>
-                {params.average && result.average && <p className="mt-1 text-xs text-[var(--text-soft)]">已平均</p>}
+                {isOverlayMode
+                  ? <p className="mt-1 text-xs text-[var(--accent-strong)]">疊圖模式（{overlayDatasets.length} 筆顯示）</p>
+                  : params.average && result.average
+                    ? <p className="mt-1 text-xs text-[var(--text-soft)]">已平均</p>
+                    : null
+                }
               </div>
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow-soft)]">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">能量範圍</p>
                 <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
-                  {activeDataset.x[0].toFixed(1)} – {activeDataset.x[activeDataset.x.length - 1].toFixed(1)} eV
+                  {activeDataset
+                    ? `${activeDataset.x[0].toFixed(1)} – ${activeDataset.x[activeDataset.x.length - 1].toFixed(1)} eV`
+                    : overlayDatasets.length > 0
+                      ? `${Math.min(...overlayDatasets.map(d => d.x[0])).toFixed(1)} – ${Math.max(...overlayDatasets.map(d => d.x[d.x.length - 1])).toFixed(1)} eV`
+                      : '未建立'
+                  }
                 </p>
               </div>
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow-soft)]">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">White Line</p>
-                <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
-                  {activeDataset.white_line_tey != null
-                    ? `TEY ${activeDataset.white_line_tey.toFixed(2)} eV`
-                    : '未設定搜尋範圍'}
-                </p>
-                {activeDataset.white_line_tfy != null && (
-                  <p className="text-xs text-[var(--text-soft)]">TFY {activeDataset.white_line_tfy.toFixed(2)} eV</p>
+                {activeDataset ? (
+                  <>
+                    <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
+                      {activeDataset.white_line_tey != null
+                        ? `TEY ${activeDataset.white_line_tey.toFixed(2)} eV`
+                        : '未設定搜尋範圍'}
+                    </p>
+                    {activeDataset.white_line_tfy != null && (
+                      <p className="text-xs text-[var(--text-soft)]">TFY {activeDataset.white_line_tfy.toFixed(2)} eV</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="mt-1 text-xs text-[var(--text-soft)]">疊圖模式</p>
                 )}
               </div>
             </div>
@@ -916,32 +982,39 @@ export default function XAS({
               <CheckRow label="顯示原始資料" checked={showRaw} onChange={setShowRaw} />
             </div>
 
-            {/* TEY chart */}
-            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-[var(--text-main)]">TEY（Total Electron Yield）</p>
-                {onOpenPlotPopup && (
-                  <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TEY')}>
-                    彈出圖表
-                  </button>
-                )}
+            {/* TEY / TFY 左右並排 */}
+            <div className="mb-4 grid gap-4 md:grid-cols-2">
+              {/* TEY */}
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">TEY（Total Electron Yield）</p>
+                  {onOpenPlotPopup && (
+                    <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TEY')} aria-label="彈出圖表" />
+                  )}
+                </div>
+                {isOverlayMode
+                  ? renderOverlayChart(overlayDatasets, 'TEY', 310)
+                  : activeDataset && renderChannelChart(activeDataset, 'TEY', 310)
+                }
               </div>
-              {renderChannelChart(activeDataset, 'TEY', 340)}
+
+              {/* TFY */}
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">TFY（Total Fluorescence Yield）</p>
+                  {onOpenPlotPopup && (
+                    <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TFY')} aria-label="彈出圖表" />
+                  )}
+                </div>
+                {isOverlayMode
+                  ? renderOverlayChart(overlayDatasets, 'TFY', 310)
+                  : activeDataset && renderChannelChart(activeDataset, 'TFY', 310)
+                }
+              </div>
             </div>
 
-            {/* TFY chart */}
-            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-[var(--text-main)]">TFY（Total Fluorescence Yield）</p>
-                {onOpenPlotPopup && (
-                  <button type="button" className="chart-popup-button" onClick={() => openChannelPopup('TFY')}>
-                    彈出圖表
-                  </button>
-                )}
-              </div>
-              {renderChannelChart(activeDataset, 'TFY', 340)}
-            </div>
-
+            {/* Single-mode only sections */}
+            {activeDataset && (<>
             {/* Gaussian subtraction comparison chart */}
             {(activeDataset.tey_gaussian != null || activeDataset.tfy_gaussian != null) && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
@@ -976,22 +1049,6 @@ export default function XAS({
                     />
                   </>
                 )}
-              </div>
-            )}
-
-            {/* second derivative charts */}
-            {(activeDataset.tey_d2y != null || activeDataset.tfy_d2y != null) && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">二階微分（d²μ/dE²）</p>
-                <Plot
-                  data={[
-                    ...(activeDataset.tey_d2y != null ? [{ x: activeDataset.x, y: activeDataset.tey_d2y, type: 'scatter' as const, mode: 'lines' as const, name: 'TEY d²/dE²', line: { color: '#38bdf8', width: 1.8 } }] : []),
-                    ...(activeDataset.tfy_d2y != null ? [{ x: activeDataset.x, y: activeDataset.tfy_d2y, type: 'scatter' as const, mode: 'lines' as const, name: 'TFY d²/dE²', line: { color: '#a78bfa', width: 1.8 } }] : []),
-                  ] as Plotly.Data[]}
-                  layout={chartLayout('Energy (eV)', 'd²μ/dE²') as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 300 }}
-                />
               </div>
             )}
 
@@ -1087,57 +1144,6 @@ export default function XAS({
               </div>
             )}
 
-            {/* XANES deconvolution result */}
-            {deconvResult?.success && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-[var(--text-main)]">XANES 去卷積結果 ({deconvChannel})</p>
-                  <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
-                    R² {(1 - deconvResult.r_factor).toFixed(5)}
-                  </span>
-                </div>
-                <Plot
-                  data={[
-                    { x: deconvResult.x_fit, y: deconvChannel === 'TEY' ? activeDataset.tey_processed.slice(0, deconvResult.x_fit.length) : activeDataset.tfy_processed.slice(0, deconvResult.x_fit.length), type: 'scatter', mode: 'lines', name: '原始', line: { color: '#94a3b8', width: 1.4 } },
-                    { x: deconvResult.x_fit, y: deconvResult.y_fit, type: 'scatter', mode: 'lines', name: '總擬合', line: { color: '#38bdf8', width: 2 } },
-                    { x: deconvResult.x_fit, y: deconvResult.residual, type: 'scatter', mode: 'lines', name: '殘差', line: { color: '#f97316', width: 1.2, dash: 'dot' as const } },
-                    ...Object.entries(deconvResult.components).map(([name, yArr]) => ({
-                      x: deconvResult.x_fit,
-                      y: yArr,
-                      type: 'scatter' as const,
-                      mode: 'lines' as const,
-                      name,
-                      line: { width: 1.4 },
-                      opacity: 0.75,
-                    })),
-                  ] as Plotly.Data[]}
-                  layout={chartLayout('Energy (eV)', '歸一化強度') as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 340 }}
-                />
-                <div className="mt-3 overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
-                        <th className="pb-2 text-left font-medium">參數</th>
-                        <th className="pb-2 text-right font-medium">值</th>
-                        <th className="pb-2 text-right font-medium">±誤差</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-[var(--text-main)]">
-                      {deconvResult.params_table.filter(r => r.vary).map(r => (
-                        <tr key={r.name} className="border-b border-[var(--card-divider)]">
-                          <td className="py-1.5 font-mono">{r.name}</td>
-                          <td className="py-1.5 text-right">{r.value.toFixed(4)}</td>
-                          <td className="py-1.5 text-right text-[var(--text-soft)]">±{r.stderr.toFixed(4)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
             {/* edge step table */}
             {activeDataset.edge_step_tey != null && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
@@ -1201,10 +1207,97 @@ export default function XAS({
                 )}
               </div>
             </div>
+            </>)}
+
+            {/* Overlay mode export */}
+            {isOverlayMode && overlayDatasets.length > 0 && (
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">疊圖匯出</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allRows: (string | number | null)[][] = []
+                      overlayDatasets.forEach(ds => {
+                        ds.x.forEach((x, i) => {
+                          allRows.push([ds.name, x, ds.tey_processed[i], ds.tfy_processed[i]])
+                        })
+                      })
+                      downloadFile(
+                        toCsv(['name', 'energy_eV', 'TEY_processed', 'TFY_processed'], allRows),
+                        'xas_overlay.csv', 'text/csv',
+                      )
+                    }}
+                    className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+                  >
+                    所有疊圖數據 CSV
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
         </div>
       </main>
+
+      {/* Overlay selection modal */}
+      {showOverlayModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-[var(--card-border)] bg-[var(--panel-bg)] p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-base font-semibold text-[var(--text-main)]">選擇疊圖資料</h3>
+              <button type="button" onClick={() => setShowOverlayModal(false)}
+                className="text-lg leading-none text-[var(--text-soft)] hover:text-[var(--text-main)]"
+              >✕</button>
+            </div>
+            <div className="max-h-64 space-y-2 overflow-y-auto">
+              {rawFiles.map(f => {
+                const allSelected = overlaySelectedNames.length === 0
+                const isChecked = allSelected || overlaySelectedNames.includes(f.name)
+                return (
+                  <label
+                    key={f.name}
+                    className="flex cursor-pointer items-center gap-3 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 hover:bg-[var(--card-ghost)]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={e => {
+                        const current = allSelected ? rawFiles.map(x => x.name) : [...overlaySelectedNames]
+                        if (e.target.checked) {
+                          const next = current.includes(f.name) ? current : [...current, f.name]
+                          setOverlaySelectedNames(next.length === rawFiles.length ? [] : next)
+                        } else {
+                          setOverlaySelectedNames(current.filter(n => n !== f.name))
+                        }
+                      }}
+                      className="accent-[var(--accent-strong)]"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-main)]">{f.name}</span>
+                    <span className="shrink-0 text-[10px] text-[var(--text-soft)]">{f.x.length} pts</span>
+                  </label>
+                )
+              })}
+            </div>
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setOverlaySelectedNames([])}
+                className="text-xs text-[var(--text-soft)] hover:text-[var(--text-main)]"
+              >
+                全選
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowOverlayModal(false)}
+                className="rounded-lg bg-[var(--accent-strong)] px-5 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+              >
+                確認
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
