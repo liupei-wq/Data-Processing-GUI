@@ -114,3 +114,50 @@ export interface DeconvResult {
   params_table: DeconvParamRow[]
   message: string
 }
+
+// ── Peak fitting types ──────────────────────────────────────────────────────
+
+export interface XasInitPeak {
+  center: number
+  fwhm: number
+  amplitude: number
+  label?: string
+}
+
+export interface XasFitPeakRow {
+  Peak_Name: string
+  Center_eV: number
+  FWHM_eV: number
+  Area: number
+  Height: number
+  Area_pct: number | null
+}
+
+export interface XasFitResult {
+  y_fit: number[]
+  y_individual: number[][]
+  residuals: number[]
+  peaks: XasFitPeakRow[]
+}
+
+// ── XAS sample database types ───────────────────────────────────────────────
+
+export interface XasSampleListItem {
+  name: string
+  description: string
+  edges: string[]
+}
+
+export interface XasEdgePeak {
+  label: string
+  energy_eV: number
+  fwhm_eV: number
+  meaning: string
+}
+
+export interface XasSampleEdgeResponse {
+  sample: string
+  edge: string
+  energy_range: [number, number]
+  peaks: XasEdgePeak[]
+}

@@ -1,4 +1,15 @@
-import type { DeconvRequest, DeconvResult, ParseResponse, ProcessParams, ProcessResult, DatasetInput } from '../types/xas'
+import type {
+  DeconvRequest,
+  DeconvResult,
+  ParseResponse,
+  ProcessParams,
+  ProcessResult,
+  DatasetInput,
+  XasInitPeak,
+  XasFitResult,
+  XasSampleListItem,
+  XasSampleEdgeResponse,
+} from '../types/xas'
 import { readApiError } from './http'
 
 const BASE = '/api/xas'
@@ -35,5 +46,40 @@ export async function deconvXanes(req: DeconvRequest): Promise<DeconvResult> {
   if (!res.ok) {
     throw new Error(await readApiError(res, 'XANES 去卷積失敗'))
   }
+  return res.json()
+}
+
+export async function fitXasPeaks(
+  x: number[],
+  y: number[],
+  peaks: XasInitPeak[],
+  profile: string,
+  peakLabels?: string[],
+): Promise<XasFitResult> {
+  const body: Record<string, unknown> = { x, y, peaks, profile }
+  if (peakLabels) body.peak_labels = peakLabels
+  const res = await fetch(`${BASE}/fit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await readApiError(res, 'XAS peak fitting 失敗'))
+  return res.json()
+}
+
+export async function listXasSamples(): Promise<XasSampleListItem[]> {
+  const res = await fetch(`${BASE}/samples`)
+  if (!res.ok) throw new Error(await readApiError(res, 'XAS 樣品列表載入失敗'))
+  return res.json()
+}
+
+export async function fetchXasSamplePeaks(
+  sampleName: string,
+  edgeName: string,
+): Promise<XasSampleEdgeResponse> {
+  const res = await fetch(
+    `${BASE}/sample-peaks/${encodeURIComponent(sampleName)}/${encodeURIComponent(edgeName)}`,
+  )
+  if (!res.ok) throw new Error(await readApiError(res, 'XAS 樣品峰資料載入失敗'))
   return res.json()
 }

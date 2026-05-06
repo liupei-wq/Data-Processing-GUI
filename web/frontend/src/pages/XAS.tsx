@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
-import { deconvXanes, parseFiles, processData } from '../api/xas'
+import { deconvXanes, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
   DeconvPeak,
@@ -15,6 +15,9 @@ import type {
   ProcessParams,
   ProcessResult,
   ProcessedDataset,
+  XasFitResult,
+  XasInitPeak,
+  XasSampleListItem,
 } from '../types/xas'
 
 const SIDEBAR_MIN_WIDTH = 300
@@ -115,13 +118,19 @@ function downloadFile(content: string, name: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-function Section({ step, title, hint, children, defaultOpen = true }: {
+function Section({ step, title, hint, children, defaultOpen = true, onOpen }: {
   step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
+  onOpen?: () => void
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const handleToggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && onOpen) onOpen()
+  }
   return (
     <div className="theme-block mb-3 overflow-hidden rounded-[22px]">
-      <button type="button" onClick={() => setOpen(o => !o)}
+      <button type="button" onClick={handleToggle}
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
@@ -181,6 +190,18 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
   )
 }
 
+// ── Peak fitting helpers ──────────────────────────────────────────────────────
+
+function createPeakId() { return `XA${Math.random().toString(36).slice(2, 7)}` }
+
+interface XasPeakCandidate extends XasInitPeak {
+  id: string
+  label: string
+  enabled: boolean
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function XAS({
   onModuleSelect,
   onOpenPlotPopup,
@@ -204,7 +225,20 @@ export default function XAS({
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
 
-  // XANES deconvolution state
+  // ── Peak fitting state ────────────────────────────────────────────────────
+  const [fitChannel, setFitChannel] = useState<'TEY' | 'TFY'>('TEY')
+  const [fitProfile, setFitProfile] = useState<string>('voigt')
+  const [fitPeakCandidates, setFitPeakCandidates] = useState<XasPeakCandidate[]>([])
+  const [fitResult, setFitResult] = useState<XasFitResult | null>(null)
+  const [isFitting, setIsFitting] = useState(false)
+  const [fitError, setFitError] = useState<string | null>(null)
+  const [samplesList, setSamplesList] = useState<XasSampleListItem[]>([])
+  const [selectedSample, setSelectedSample] = useState<string>('')
+  const [selectedEdge, setSelectedEdge] = useState<string>('')
+  const [samplesLoading, setSamplesLoading] = useState(false)
+  const samplesLoaded = useRef(false)
+
+  // ── XANES deconvolution state ─────────────────────────────────────────────
   const [deconvPeaks, setDeconvPeaks] = useState<DeconvPeak[]>([])
   const [deconvFwhmInst, setDeconvFwhmInst] = useState(0.5)
   const [deconvFwhmInit, setDeconvFwhmInit] = useState(1.5)
@@ -288,6 +322,67 @@ export default function XAS({
       setError((e as Error).message)
     } finally { setIsLoading(false) }
   }, [flipTfy])
+
+  // load samples list once when fitting section is first needed
+  const loadSamplesList = useCallback(async () => {
+    if (samplesLoaded.current) return
+    samplesLoaded.current = true
+    setSamplesLoading(true)
+    try {
+      const data = await listXasSamples()
+      setSamplesList(data)
+    } catch {
+      // silently ignore
+    } finally {
+      setSamplesLoading(false)
+    }
+  }, [])
+
+  const loadSampleEdgePeaks = useCallback(async () => {
+    if (!selectedSample || !selectedEdge || !activeDataset) return
+    setSamplesLoading(true); setFitError(null)
+    try {
+      const data = await fetchXasSamplePeaks(selectedSample, selectedEdge)
+      const yArr = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+      const maxY = Math.max(...yArr)
+      const newPeaks: XasPeakCandidate[] = data.peaks.map(pk => ({
+        id: createPeakId(),
+        label: pk.label,
+        enabled: true,
+        center: pk.energy_eV,
+        fwhm: pk.fwhm_eV,
+        amplitude: maxY * 0.3,
+      }))
+      setFitPeakCandidates(prev => [...prev, ...newPeaks])
+    } catch (e: unknown) { setFitError((e as Error).message) }
+    finally { setSamplesLoading(false) }
+  }, [selectedSample, selectedEdge, activeDataset, fitChannel])
+
+  const addManualFitPeak = useCallback(() => {
+    const center = activeDataset
+      ? (activeDataset.x[0] + activeDataset.x[activeDataset.x.length - 1]) / 2
+      : 500
+    setFitPeakCandidates(prev => [...prev, {
+      id: createPeakId(), label: `峰 ${prev.length + 1}`, enabled: true,
+      center, fwhm: 1.5, amplitude: 1.0,
+    }])
+  }, [activeDataset])
+
+  const handleFit = useCallback(async () => {
+    if (!activeDataset) return
+    const activePeaks = fitPeakCandidates.filter(p => p.enabled)
+    if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
+    setIsFitting(true); setFitError(null); setFitResult(null)
+    try {
+      const initPeaks: XasInitPeak[] = activePeaks.map(p => ({
+        center: p.center, fwhm: p.fwhm, amplitude: p.amplitude, label: p.label,
+      }))
+      const y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+      const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label))
+      setFitResult(res)
+    } catch (e: unknown) { setFitError((e as Error).message) }
+    finally { setIsFitting(false) }
+  }, [activeDataset, fitChannel, fitPeakCandidates, fitProfile])
 
   const runDeconv = useCallback(async () => {
     if (!activeDataset) return
@@ -550,9 +645,119 @@ export default function XAS({
                 <p className="text-[10px] text-[var(--text-soft)]">輔助辨識吸收邊精細結構，不影響主光譜輸出。</p>
               </Section>
 
-              {/* 9. XANES 去卷積擬合 */}
+              {/* 9. 峰擬合 */}
               {result && (
-                <Section step={9} title="XANES 去卷積" hint="lmfit Step + 多峰擬合" defaultOpen={false}>
+                <Section step={9} title="峰擬合" hint="Voigt / Gaussian / Lorentzian" defaultOpen={false}
+                  onOpen={loadSamplesList}
+                >
+                  <SelectInput label="擬合通道" value={fitChannel}
+                    onChange={v => { setFitChannel(v as 'TEY' | 'TFY'); setFitResult(null) }}
+                    options={[{ value: 'TEY', label: 'TEY' }, { value: 'TFY', label: 'TFY' }]}
+                  />
+                  <SelectInput label="峰形" value={fitProfile} onChange={setFitProfile}
+                    options={[
+                      { value: 'voigt', label: 'Voigt' },
+                      { value: 'gaussian', label: 'Gaussian' },
+                      { value: 'lorentzian', label: 'Lorentzian' },
+                    ]}
+                  />
+
+                  {/* 從樣品資料庫載入 */}
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">從樣品資料庫載入</p>
+                    <SelectInput
+                      label="樣品"
+                      value={selectedSample}
+                      onChange={v => { setSelectedSample(v); setSelectedEdge('') }}
+                      options={[
+                        { value: '', label: samplesLoading ? '載入中…' : '選擇樣品…' },
+                        ...samplesList.map(s => ({ value: s.name, label: `${s.name} — ${s.description}` })),
+                      ]}
+                    />
+                    {selectedSample && (
+                      <SelectInput
+                        label="吸收邊"
+                        value={selectedEdge}
+                        onChange={setSelectedEdge}
+                        options={[
+                          { value: '', label: '選擇吸收邊…' },
+                          ...(samplesList.find(s => s.name === selectedSample)?.edges ?? []).map(e => ({ value: e, label: e })),
+                        ]}
+                      />
+                    )}
+                    {selectedSample && selectedEdge && (
+                      <button
+                        type="button"
+                        onClick={() => void loadSampleEdgePeaks()}
+                        disabled={samplesLoading}
+                        className="w-full rounded-lg border border-[var(--accent-strong)] px-3 py-1.5 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 transition-colors"
+                      >
+                        {samplesLoading ? '載入中…' : '匯入參考峰'}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 手動新增 */}
+                  <button type="button" onClick={addManualFitPeak}
+                    className="w-full rounded-lg border border-dashed border-[var(--card-border)] py-2 text-xs text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)] transition-colors"
+                  >
+                    + 手動新增峰
+                  </button>
+
+                  {/* 峰列表 */}
+                  {fitPeakCandidates.map(pk => (
+                    <div
+                      key={pk.id}
+                      className={[
+                        'rounded-xl p-3 text-xs space-y-2 transition-all duration-150',
+                        pk.enabled
+                          ? 'border border-[color:color-mix(in_srgb,var(--accent-secondary)_50%,transparent)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_7%,var(--card-bg))]'
+                          : 'border border-[var(--card-border)] bg-[var(--card-bg)]',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, enabled: !p.enabled } : p))}
+                          className={['flex flex-1 items-center gap-2 text-xs font-medium transition-colors duration-150',
+                            pk.enabled ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-soft)] hover:text-[var(--text-main)]'].join(' ')}
+                        >
+                          <span className={['h-2.5 w-2.5 shrink-0 rounded-full transition-all duration-150',
+                            pk.enabled ? 'bg-[var(--accent-secondary)]' : 'border border-[var(--card-border)]'].join(' ')} />
+                          <span className="truncate">{pk.label}</span>
+                        </button>
+                        <button type="button" onClick={() => setFitPeakCandidates(prev => prev.filter(p => p.id !== pk.id))} className="text-rose-400 hover:text-rose-300">✕</button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1">
+                        <NumInput label="中心(eV)" value={pk.center} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, center: v } : p))} step={0.1} />
+                        <NumInput label="FWHM(eV)" value={pk.fwhm} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, fwhm: v } : p))} min={0.01} step={0.1} />
+                        <NumInput label="強度" value={pk.amplitude} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, amplitude: v } : p))} min={0} step={0.01} />
+                      </div>
+                    </div>
+                  ))}
+
+                  {fitPeakCandidates.length > 0 && (
+                    <>
+                      {fitPeakCandidates.length > 1 && (
+                        <button type="button" onClick={() => setFitPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void handleFit()}
+                        disabled={isFitting || !activeDataset}
+                        className="w-full rounded-lg bg-[var(--accent-strong)] py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                      >
+                        {isFitting ? '擬合中…' : '執行峰擬合'}
+                      </button>
+                    </>
+                  )}
+                  {fitError && <p className="text-[10px] text-rose-400">{fitError}</p>}
+                </Section>
+              )}
+
+              {/* 10. XANES 去卷積擬合 */}
+              {result && (
+                <Section step={10} title="XANES 去卷積" hint="lmfit Step + 多峰擬合" defaultOpen={false}>
                   <SelectInput
                     label="擬合通道"
                     value={deconvChannel}
@@ -787,6 +992,98 @@ export default function XAS({
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 300 }}
                 />
+              </div>
+            )}
+
+            {/* Peak fitting result */}
+            {fitResult && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果（{fitChannel}）</p>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
+                      {fitProfile.toUpperCase()} · {fitResult.peaks.length} 峰
+                    </span>
+                    <button type="button" onClick={() => setFitResult(null)} className="text-[10px] text-rose-400 hover:text-rose-300">清除</button>
+                  </div>
+                </div>
+                <Plot
+                  data={[
+                    {
+                      x: activeDataset.x,
+                      y: fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed,
+                      type: 'scatter', mode: 'lines', name: '原始',
+                      line: { color: '#94a3b8', width: 1.4 },
+                    },
+                    {
+                      x: activeDataset.x,
+                      y: fitResult.y_fit,
+                      type: 'scatter', mode: 'lines', name: '總擬合',
+                      line: { color: '#38bdf8', width: 2.2 },
+                    },
+                    {
+                      x: activeDataset.x,
+                      y: fitResult.residuals,
+                      type: 'scatter', mode: 'lines', name: '殘差',
+                      line: { color: '#f97316', width: 1.2, dash: 'dot' as const },
+                    },
+                    ...fitResult.peaks.map((pk, i) => ({
+                      x: activeDataset.x,
+                      y: fitResult.y_individual[i] ?? [],
+                      type: 'scatter' as const,
+                      mode: 'lines' as const,
+                      name: pk.Peak_Name,
+                      line: { width: 1.6 },
+                      opacity: 0.80,
+                      fill: 'tozeroy' as const,
+                    })),
+                  ] as Plotly.Data[]}
+                  layout={chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout}
+                  config={withPlotFullscreen()}
+                  style={{ width: '100%', height: 360 }}
+                />
+                {/* result table */}
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
+                        <th className="pb-2 text-left font-medium">峰名稱</th>
+                        <th className="pb-2 text-right font-medium">中心 (eV)</th>
+                        <th className="pb-2 text-right font-medium">FWHM (eV)</th>
+                        <th className="pb-2 text-right font-medium">面積</th>
+                        <th className="pb-2 text-right font-medium">面積%</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-[var(--text-main)]">
+                      {fitResult.peaks.map(pk => (
+                        <tr key={pk.Peak_Name} className="border-b border-[var(--card-divider)]">
+                          <td className="py-1.5 font-mono">{pk.Peak_Name}</td>
+                          <td className="py-1.5 text-right">{pk.Center_eV.toFixed(3)}</td>
+                          <td className="py-1.5 text-right">{pk.FWHM_eV.toFixed(3)}</td>
+                          <td className="py-1.5 text-right">{pk.Area.toFixed(2)}</td>
+                          <td className="py-1.5 text-right text-[var(--accent-strong)]">{pk.Area_pct?.toFixed(1) ?? '—'}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {/* export */}
+                <div className="mt-3 flex justify-start">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const headers = ['peak_name', 'center_eV', 'fwhm_eV', 'area', 'height', 'area_pct']
+                      const rows = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Height, pk.Area_pct ?? ''])
+                      downloadFile(
+                        [headers.join(','), ...rows.map(r => r.map(csvEscape).join(','))].join('\n'),
+                        'xas_fit_result.csv', 'text/csv',
+                      )
+                    }}
+                    className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+                  >
+                    擬合結果 CSV
+                  </button>
+                </div>
               </div>
             )}
 

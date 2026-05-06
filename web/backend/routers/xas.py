@@ -14,8 +14,10 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from core.parsers import looks_like_excel, numeric_excel_table
+from core.peak_fitting import fit_peaks
 from core.processing import apply_background, apply_normalization
 from core.spectrum_ops import interpolate_spectrum_to_grid, mean_spectrum_arrays
+from db.xas_database import get_sample_edge_peaks, list_samples
 
 router = APIRouter()
 
@@ -597,4 +599,130 @@ def xanes_deconv(req: DeconvRequest):
         r_factor=r_factor,
         params_table=param_rows,
         message=str(fit_result.message) if fit_result.message else "",
+    )
+
+
+# ── Peak fitting (XPS-compatible, adapted for XAS energy axis) ────────────────
+
+class XasInitPeak(BaseModel):
+    center: float
+    fwhm: float
+    amplitude: float
+    label: Optional[str] = None
+
+
+class XasFitRequest(BaseModel):
+    x: List[float]
+    y: List[float]
+    peaks: List[XasInitPeak]
+    profile: str = "voigt"
+    maxfev: int = 20000
+    peak_labels: Optional[List[str]] = None
+
+
+class XasFitPeakRow(BaseModel):
+    Peak_Name: str
+    Center_eV: float
+    FWHM_eV: float
+    Area: float
+    Height: float
+    Area_pct: Optional[float] = None
+
+
+class XasFitResponse(BaseModel):
+    y_fit: List[float]
+    y_individual: List[List[float]]
+    residuals: List[float]
+    peaks: List[XasFitPeakRow]
+
+
+@router.post("/fit", response_model=XasFitResponse)
+def fit_xas_peaks(req: XasFitRequest):
+    x = np.array(req.x, dtype=float)
+    y = np.array(req.y, dtype=float)
+
+    if len(x) < 4 or not req.peaks:
+        raise HTTPException(status_code=400, detail="資料或峰值參數不足")
+
+    init_peaks = [
+        {"center": pk.center, "fwhm": pk.fwhm, "amplitude": pk.amplitude}
+        for pk in req.peaks
+    ]
+
+    try:
+        result = fit_peaks(x, y, init_peaks, profile=req.profile, maxfev=req.maxfev)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"擬合失敗：{exc}") from exc
+
+    if not result.get("success", False):
+        raise HTTPException(status_code=422, detail=result.get("message", "擬合失敗"))
+
+    raw_peaks = result.get("peaks", [])
+    total_area = sum(abs(pk.get("area", 0)) for pk in raw_peaks)
+
+    rows: list[XasFitPeakRow] = []
+    for i, pk in enumerate(raw_peaks, 1):
+        area = float(pk.get("area", 0))
+        name = (
+            req.peak_labels[i - 1]
+            if req.peak_labels and i - 1 < len(req.peak_labels)
+            else str(pk.get("label", f"Peak {i}"))
+        )
+        rows.append(XasFitPeakRow(
+            Peak_Name=name,
+            Center_eV=float(pk.get("center", 0)),
+            FWHM_eV=float(pk.get("fwhm", 0)),
+            Area=area,
+            Height=float(pk.get("amplitude", 0)),
+            Area_pct=round(100 * abs(area) / total_area, 2) if total_area > 0 else 0,
+        ))
+
+    def _to_list(arr):
+        return arr.tolist() if hasattr(arr, "tolist") else list(arr)
+
+    return XasFitResponse(
+        y_fit=_to_list(result.get("y_fit", [])),
+        y_individual=[_to_list(yi) for yi in result.get("y_individual", [])],
+        residuals=_to_list(result.get("residuals", [])),
+        peaks=rows,
+    )
+
+
+# ── XAS sample database endpoints ─────────────────────────────────────────────
+
+class XasSampleListItem(BaseModel):
+    name: str
+    description: str
+    edges: List[str]
+
+
+class XasEdgePeak(BaseModel):
+    label: str
+    energy_eV: float
+    fwhm_eV: float
+    meaning: str
+
+
+class XasSampleEdgeResponse(BaseModel):
+    sample: str
+    edge: str
+    energy_range: List[float]
+    peaks: List[XasEdgePeak]
+
+
+@router.get("/samples", response_model=List[XasSampleListItem])
+def get_xas_samples():
+    return [XasSampleListItem(**s) for s in list_samples()]
+
+
+@router.get("/sample-peaks/{sample_name}/{edge_name:path}", response_model=XasSampleEdgeResponse)
+def get_xas_sample_peaks(sample_name: str, edge_name: str):
+    data = get_sample_edge_peaks(sample_name, edge_name)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"找不到樣品 '{sample_name}' 或邊 '{edge_name}'")
+    return XasSampleEdgeResponse(
+        sample=data["sample"],
+        edge=data["edge"],
+        energy_range=data["energy_range"],
+        peaks=[XasEdgePeak(**p) for p in data["peaks"]],
     )
