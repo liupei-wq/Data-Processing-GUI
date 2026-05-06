@@ -398,3 +398,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-05 CST：再次強化 XPS Area 歸一化：後端 Area factor 會合併重複 x、在選取區間少於兩個唯一 x 值時 fallback 到全譜、必要時改用絕對積分；前端 XPS 歸一化階段與最終圖在 Area 歸一化且同時顯示原始/背景時使用右側 y 軸，避免歸一化後曲線被原始強度壓扁。驗證 `python3 -m py_compile ...`、Area fallback quick check、`npm run build`、`git diff --check` 通過。
 
 - 2026-05-05 CST：修正 XPS VBM 外推線顯示範圍：後端回傳的 `x_fit` 現在包含邊緣區、基準區與 VBM 交點附近 margin，避免帶偏移/校正後外推斜線落在示意圖外；驗證 `python3 -m py_compile ...`、`npm run build`、`git diff --check` 通過。
+
+- 2026-05-06 CST：XPS Valence Band VBM 線性外推改版：① 側欄「邊緣起/邊緣終」改名為「切線起/切線終」，新增兩組 `DualRangeInput` 雙把手拉桿（切線區間與基準線區間），拉桿範圍由 `beMin/beMax` 決定；② 主圖卡移除 `vbmResult?.success` 顯示條件，只要有 `activeDataset` 即顯示圖表，同時加入橘色（切線）與紫色（基準線）區間陰影與標籤，計算後再疊加切線（外推）與基準線水平線（延伸至全 x 軸）；影響檔案：`web/frontend/src/pages/XPS.tsx`；前端建置通過。
+
+- 2026-05-06 CST：修正 XPS VBM 數學邏輯兩處問題：① 後端 `compute_vbm` 新增 `np.isfinite` 保護與光譜範圍檢查（允許 ±2×光譜寬度 或 ±50 eV），VBM 超出範圍時 success=False 並回傳說明訊息，避免外推到無意義值時仍顯示成功；② 前端預設基準線區間從 (10, 15) 改為 (−1, 0.5)，符合標準 VBM 外推法（基準線應在 Fermi edge 附近的近零訊號區，而非 VB 內部）；影響檔案：`web/backend/routers/xps.py`、`web/frontend/src/pages/XPS.tsx`；後端語法與前端建置均通過。

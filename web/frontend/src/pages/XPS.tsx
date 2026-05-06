@@ -1090,9 +1090,9 @@ export default function XPS({
 
   // VBM extrapolation
   const [vbmEdgeLo, setVbmEdgeLo] = useState(1.0)
-  const [vbmEdgeHi, setVbmEdgeHi] = useState(5.0)
-  const [vbmBaselineLo, setVbmBaselineLo] = useState(10.0)
-  const [vbmBaselineHi, setVbmBaselineHi] = useState(15.0)
+  const [vbmEdgeHi, setVbmEdgeHi] = useState(3.0)
+  const [vbmBaselineLo, setVbmBaselineLo] = useState(-1.0)
+  const [vbmBaselineHi, setVbmBaselineHi] = useState(0.5)
   const [vbmResult, setVbmResult] = useState<VbmResult | null>(null)
   const [vbmLoading, setVbmLoading] = useState(false)
   const [vbmError, setVbmError] = useState<string | null>(null)
@@ -2469,13 +2469,31 @@ export default function XPS({
                   <Section step={8} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
                     <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
                     <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="邊緣起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
-                      <NumInput label="邊緣終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
+                      <NumInput label="切線起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
+                      <NumInput label="切線終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
                     </div>
+                    <DualRangeInput
+                      label="切線區間拉桿"
+                      min={beMin}
+                      max={beMax}
+                      start={vbmEdgeLo}
+                      end={vbmEdgeHi}
+                      step={0.1}
+                      onChange={({ start, end }) => { setVbmEdgeLo(start); setVbmEdgeHi(end) }}
+                    />
                     <div className="grid grid-cols-2 gap-2">
                       <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
                       <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
                     </div>
+                    <DualRangeInput
+                      label="基準線區間拉桿"
+                      min={beMin}
+                      max={beMax}
+                      start={vbmBaselineLo}
+                      end={vbmBaselineHi}
+                      step={0.1}
+                      onChange={({ start, end }) => { setVbmBaselineLo(start); setVbmBaselineHi(end) }}
+                    />
                     <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
                       className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
                     >
@@ -2946,25 +2964,35 @@ export default function XPS({
               </div>
             )}
 
-            {processingViewMode === 'single' && xpsMode === 'valence_band' && vbmResult?.success && activeDataset && (
+            {processingViewMode === 'single' && xpsMode === 'valence_band' && activeDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推</p>
                 <Plot
                   data={[
                     { x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
-                    { x: vbmResult.x_fit, y: vbmResult.y_fit, type: 'scatter', mode: 'lines', name: '外推線', line: { color: '#f97316', width: 1.5, dash: 'dash' } },
-                    { x: vbmResult.x_fit.length > 0 ? [vbmResult.x_fit[0], vbmResult.x_fit[vbmResult.x_fit.length - 1]] : [], y: [vbmResult.baseline_level, vbmResult.baseline_level], type: 'scatter', mode: 'lines', name: '基準線', line: { color: '#a855f7', width: 1.2, dash: 'dot' } },
-                    ...(vbmResult.vbm_ev != null ? [{ x: [vbmResult.vbm_ev], y: [vbmResult.baseline_level], type: 'scatter' as const, mode: 'markers' as const, name: 'VBM', marker: { color: '#f97316', size: 10, symbol: 'diamond' as const } }] : []),
+                    ...(vbmResult?.success ? [
+                      { x: vbmResult.x_fit, y: vbmResult.y_fit, type: 'scatter', mode: 'lines', name: '切線 (外推)', line: { color: '#f97316', width: 1.5, dash: 'dash' } },
+                      { x: [beMin, beMax], y: [vbmResult.baseline_level, vbmResult.baseline_level], type: 'scatter', mode: 'lines', name: '基準線', line: { color: '#a855f7', width: 1.2, dash: 'dot' } },
+                    ] : []),
+                    ...(vbmResult?.success && vbmResult.vbm_ev != null ? [{ x: [vbmResult.vbm_ev], y: [vbmResult.baseline_level], type: 'scatter' as const, mode: 'markers' as const, name: 'VBM', marker: { color: '#f97316', size: 10, symbol: 'diamond' as const } }] : []),
                   ] as Plotly.Data[]}
                   layout={{
                     ...(chartLayout() as Plotly.Layout),
                     margin: { l: 60, r: 20, t: 20, b: 50 },
-                    annotations: vbmResult.vbm_ev != null ? [{
-                      x: vbmResult.vbm_ev, y: vbmResult.baseline_level,
-                      text: `VBM = ${vbmResult.vbm_ev.toFixed(3)} eV`,
-                      showarrow: true, arrowhead: 2, ax: 50, ay: -35,
-                      font: { color: '#f97316', size: 11 }, arrowcolor: '#f97316',
-                    }] : [],
+                    shapes: [
+                      ...buildRegionShapes(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '#f97316'),
+                      ...buildRegionShapes(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '#a855f7'),
+                    ] as unknown as Plotly.Shape[],
+                    annotations: [
+                      ...buildRegionAnnotations(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '切線區間', '#f97316'),
+                      ...buildRegionAnnotations(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '基準線區間', '#a855f7'),
+                      ...(vbmResult?.success && vbmResult.vbm_ev != null ? [{
+                        x: vbmResult.vbm_ev, y: vbmResult.baseline_level,
+                        text: `VBM = ${vbmResult.vbm_ev.toFixed(3)} eV`,
+                        showarrow: true, arrowhead: 2, ax: 50, ay: -35,
+                        font: { color: '#f97316', size: 11 }, arrowcolor: '#f97316',
+                      }] : []),
+                    ],
                   }}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 280 }}

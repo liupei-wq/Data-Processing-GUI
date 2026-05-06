@@ -479,8 +479,17 @@ def compute_vbm(req: VbmRequest):
     success = False
     message = ""
     if abs(slope) > 1e-10:
-        vbm_ev = float((baseline_level - intercept) / slope)
-        success = True
+        vbm_candidate = (baseline_level - intercept) / slope
+        if np.isfinite(vbm_candidate):
+            x_range = float(np.max(x) - np.min(x))
+            margin = max(x_range * 2.0, 50.0)
+            if float(np.min(x)) - margin <= vbm_candidate <= float(np.max(x)) + margin:
+                vbm_ev = float(vbm_candidate)
+                success = True
+            else:
+                message = f"外推 VBM ({vbm_candidate:.1f} eV) 超出光譜範圍，請重新選取區間"
+        else:
+            message = "VBM 計算結果非有限值，請重新選取區間"
     else:
         message = "斜率接近零，無法外推 VBM"
 
