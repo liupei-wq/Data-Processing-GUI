@@ -501,3 +501,4 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-07 CST：準備將 XPS 資料庫更新提交並推送到 `origin/main`；提交範圍限定 `web/backend/db/xps_database.py`、`CLAUDE.md`、`AGENTS.md`。
 - 2026-05-07 CST：本 repo 尚未設定 commit 作者資訊，將使用 local git config `Codex <codex@openai.com>` 完成本次 XPS 資料庫提交，不修改全域 git config。
 - 2026-05-07 CST：已建立本次 XPS 資料庫更新 commit `f5833ad`（Update XPS Ga and O references），接著將補入此紀錄並 amend 後推送。
+- 2026-05-07 CST：XPS 資料庫更新已 rebase 到遠端最新 `main` 後推送完成；實際推送 commit 為 `7ff68bf`（Update XPS Ga and O references）。
