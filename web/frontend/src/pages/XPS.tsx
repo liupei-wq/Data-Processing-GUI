@@ -2955,6 +2955,7 @@ export default function XPS({
                     <p className="font-semibold text-[var(--text-main)]">背景扣除方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">Linear</span> — 線性連接起點與終點 bg(E)=aE+b。適用背景緩慢線性變化的簡單情況。峰頂遠超出線性基線時可能低估背景。</div>
                     <div><span className="font-medium text-[var(--text-main)]">Shirley</span> — 迭代演算，背景正比於較高 BE 端的積分強度。業界最常用，適合對稱 XPS 核心能階峰，兩端自然歸零。峰形嚴重非對稱或有強散射時效果較差。</div>
+                    <div><span className="font-medium text-[var(--text-main)]">Shirley + Linear Offset</span> — 在 Shirley 背景上再同時納入一個緩慢線性斜率，適合高 BE 側有輕微整體傾斜、但又不希望手動先扣一條斜線再做 Shirley 的情況。</div>
                     <div><span className="font-medium text-[var(--text-main)]">Tougaard</span> — 物理模型，基於能量損失函數 B(E)=B·∫J/(E′−E+C)² dE′，預設 B=2866、C=1643。適合寬能量範圍，對峰形無對稱假設。計算較慢，需選較大 BE 範圍。</div>
                     <div><span className="font-medium text-[var(--text-main)]">Polynomial</span> — 多項式擬合兩端背景。適合峰位不在邊緣、背景形狀較複雜的情況。次數過高容易過擬合，建議從 2–4 開始試。</div>
                     <div><span className="font-medium text-[var(--text-main)]">AsLS</span> — 非對稱最小二乘法（Asymmetric Least Squares）。以懲罰項讓估計背景平滑且盡量落在光譜下方。適合寬帶彎曲背景。</div>
@@ -2968,6 +2969,7 @@ export default function XPS({
                         options={[
                           { value: 'linear', label: 'Linear' },
                           { value: 'shirley', label: 'Shirley' },
+                          { value: 'shirley_linear', label: 'Shirley + Linear Offset' },
                           { value: 'tougaard', label: 'Tougaard' },
                           { value: 'polynomial', label: 'Polynomial' },
                           { value: 'asls', label: 'AsLS' },

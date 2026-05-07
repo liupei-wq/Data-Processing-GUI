@@ -22,7 +22,7 @@ export interface ProcessParams {
   average: boolean
   energy_shift: number
   bg_enabled: boolean
-  bg_method: 'linear' | 'shirley' | 'tougaard' | 'polynomial' | 'asls' | 'airpls'
+  bg_method: 'linear' | 'shirley' | 'shirley_linear' | 'tougaard' | 'polynomial' | 'asls' | 'airpls'
   bg_x_start: number | null
   bg_x_end: number | null
   bg_poly_deg: number

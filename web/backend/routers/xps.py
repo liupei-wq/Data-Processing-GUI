@@ -43,7 +43,7 @@ class ProcessParams(BaseModel):
     average: bool = False
     energy_shift: float = 0.0
     bg_enabled: bool = False
-    bg_method: str = "linear"        # linear | shirley | tougaard | polynomial | asls | airpls
+    bg_method: str = "linear"        # linear | shirley | shirley_linear | tougaard | polynomial | asls | airpls
     bg_x_start: Optional[float] = None
     bg_x_end: Optional[float] = None
     bg_poly_deg: int = 3

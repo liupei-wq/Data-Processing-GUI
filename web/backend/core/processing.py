@@ -30,6 +30,24 @@ def linear_background(x, y):
     return bg
 
 
+def shirley_linear_background(x, y, max_iter=20):
+    """
+    Shirley background with an added linear trend component.
+
+    The linear part captures slow slope across the selected window, and the
+    Shirley part models the peak-related inelastic tail on top of that slope.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(y) < 2:
+        return np.zeros_like(y)
+
+    linear_part = linear_background(x, y)
+    residual = y - linear_part
+    shirley_part = shirley_background(residual, max_iter=max_iter)
+    return linear_part + shirley_part
+
+
 def constant_background(y):
     """Constant baseline at the lower edge of the segment."""
     y = np.asarray(y, dtype=float)
@@ -273,9 +291,11 @@ def masked_weight_profile(x, centers=None, widths=None, extra_mask=None, notch_d
 def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20):
     """
     Iterative 2-parameter Tougaard background for XPS.
-    bg(E) = C × ∫_E^E_max (y(E')−bg(E')) × K(E'−E) dE'
-    K(T) = T / (T² + B)²
-    Default B=2866 eV², C=1643 eV³ (universal Tougaard parameters).
+    bg(E) = B × ∫_E^E_max max(y(E')−bg(E'), 0) × T / (T² + C)² dE'
+    where T = E' - E.
+
+    Default B=2866、C=1643 are the commonly used universal Tougaard
+    parameters for XPS core-level backgrounds.
     Background grows from the high-BE tail toward the peak.
     """
     x = np.asarray(x, dtype=float)
@@ -288,9 +308,9 @@ def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20):
         bg_prev = bg.copy()
         for i in range(n - 1):
             T = xs[i + 1:] - xs[i]
-            K = T / (T ** 2 + B) ** 2
+            K = T / (T ** 2 + C) ** 2
             integrand = np.maximum(ys[i + 1:] - bg[i + 1:], 0.0) * K
-            bg[i] = C * float(np.trapezoid(integrand, xs[i + 1:]))
+            bg[i] = B * float(np.trapezoid(integrand, xs[i + 1:]))
         if np.max(np.abs(bg - bg_prev)) < 1e-8 * (np.max(np.abs(ys)) + 1e-10):
             break
     result = np.zeros_like(y)
@@ -328,6 +348,8 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
         bg_seg = linear_background(xs, ys)
     elif method == "shirley":
         bg_seg = shirley_background(ys)
+    elif method == "shirley_linear":
+        bg_seg = shirley_linear_background(xs, ys)
     elif method == "polynomial":
         bg_seg = polynomial_background(xs, ys, degree=poly_deg)
     elif method == "rubber_band":
