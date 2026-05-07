@@ -1062,6 +1062,7 @@ interface PeakCandidate extends InitPeak {
   label: string
   enabled: boolean
   sourceType: PeakSourceType
+  cardLocked: boolean
 }
 
 function createPeakCandidate(
@@ -1099,6 +1100,7 @@ function createPeakCandidate(
     lock_center: input.lock_center ?? true,
     lock_fwhm: input.lock_fwhm ?? true,
     lock_area: input.lock_area ?? false,
+    cardLocked: true,
     center_min: theoreticalCenter - centerTolerance,
     center_max: theoreticalCenter + centerTolerance,
     fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, fwhm * PEAK_FWHM_MIN_RATIO),
@@ -1124,6 +1126,7 @@ function sanitizePeakCandidate(peak: PeakCandidate, datasetMax = 1000): PeakCand
   return {
     ...base,
     id: peak.id || createPeakId(),
+    cardLocked: peak.cardLocked ?? true,
     center_min: peak.center_min ?? base.center_min,
     center_max: peak.center_max ?? base.center_max,
     fwhm_min: peak.fwhm_min ?? base.fwhm_min,
@@ -1201,7 +1204,7 @@ function buildFitPeakPayloads(peaks: PeakCandidate[], dataset: ProcessedDataset)
     }
   })
 
-  return payloads.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, ...peak }) => peak)
+  return payloads.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, cardLocked: _cardLocked, ...peak }) => peak)
 }
 
 interface DatasetSessionState {
@@ -1406,6 +1409,7 @@ export default function XPS({
   // display
   const [showRaw, setShowRaw] = useState(true)
   const [showBg, setShowBg] = useState(true)
+  const [showXpsBgBefore, setShowXpsBgBefore] = useState(true)
   const [activeDatasetIdx, setActiveDatasetIdx] = useState(0)
   const [rawHidden, setRawHidden] = useState<string[]>([])
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
@@ -2282,6 +2286,7 @@ export default function XPS({
       amplitude: Math.max(fitTargetPeakScale * 0.35, 100),
       sourceType: 'manual',
       theoretical_center: center,
+      lock_center: false,
     }, fitTargetPeakScale)])
   }
 
@@ -3010,6 +3015,19 @@ export default function XPS({
                           ].join(' ')} />
                           {pk.label}
                         </button>
+                        <button
+                          type="button"
+                          title={pk.cardLocked ? '點擊解鎖以編輯約束條件' : '點擊鎖定（防止誤觸）'}
+                          onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, cardLocked: !p.cardLocked } : p))}
+                          className={[
+                            'flex h-6 w-6 items-center justify-center rounded-full text-sm transition-colors',
+                            pk.cardLocked
+                              ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-amber-400',
+                          ].join(' ')}
+                        >
+                          {pk.cardLocked ? '🔒' : '🔓'}
+                        </button>
                         <button type="button" onClick={() => setPeakCandidates(prev => prev.filter(p => p.id !== pk.id))} className="text-rose-400 hover:text-rose-300">✕</button>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -3018,9 +3036,11 @@ export default function XPS({
                         </span>
                         <button
                           type="button"
+                          disabled={pk.cardLocked}
                           onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_center: !p.lock_center } : p))}
                           className={[
                             'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.cardLocked ? 'opacity-35 cursor-not-allowed border border-[var(--card-border)] text-[var(--text-soft)]' :
                             pk.lock_center
                               ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
                               : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
@@ -3030,9 +3050,11 @@ export default function XPS({
                         </button>
                         <button
                           type="button"
+                          disabled={pk.cardLocked}
                           onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_fwhm: !p.lock_fwhm } : p))}
                           className={[
                             'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.cardLocked ? 'opacity-35 cursor-not-allowed border border-[var(--card-border)] text-[var(--text-soft)]' :
                             pk.lock_fwhm
                               ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
                               : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
@@ -3042,9 +3064,11 @@ export default function XPS({
                         </button>
                         <button
                           type="button"
+                          disabled={pk.cardLocked}
                           onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_area: !p.lock_area } : p))}
                           className={[
                             'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.cardLocked ? 'opacity-35 cursor-not-allowed border border-[var(--card-border)] text-[var(--text-soft)]' :
                             pk.lock_area
                               ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
                               : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
@@ -3348,10 +3372,10 @@ export default function XPS({
             )}
 
             {/* ── overlay: background stage ── */}
-            {overlayPreprocessDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length >= overlayMinCount && (
+            {overlayPreprocessDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length >= overlayMinCount && overlayState.params.bg_enabled && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title={overlayState.params.bg_enabled ? '多筆疊圖：背景扣除後' : '多筆疊圖：背景扣除（未啟用）'}
+                  title="多筆疊圖：背景扣除後"
                   colorValue={chartLineColors.overlayBg}
                   onColorChange={value => {
                     setChartLineColors(current => ({ ...current, overlayBg: value }))
@@ -3366,9 +3390,7 @@ export default function XPS({
                   />
                 </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {overlayState.params.bg_enabled
-                    ? `${overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。`
-                    : '目前未啟用背景扣除，這一階段直接沿用前處理結果。'}
+                  {overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。
                 </p>
                 <Plot
                   data={applyHidden(buildOverlayTracesWithSeriesColors(overlayBackgroundDatasets, getDatasetColorKey) as Plotly.Data[], overlayBgHidden)}
@@ -3403,10 +3425,10 @@ export default function XPS({
             )}
 
             {/* ── overlay: normalization stage ── */}
-            {overlayFinalDatasets.length >= overlayMinCount && overlayNormalizationDatasets.length >= overlayMinCount && (
+            {overlayFinalDatasets.length >= overlayMinCount && overlayNormalizationDatasets.length >= overlayMinCount && hasNormalizationStage && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title={hasNormalizationStage ? '多筆疊圖：歸一化後' : '多筆疊圖：歸一化（未啟用）'}
+                  title="多筆疊圖：歸一化後"
                   colorValue={chartLineColors.overlayNorm}
                   onColorChange={value => {
                     setChartLineColors(current => ({ ...current, overlayNorm: value }))
@@ -3421,9 +3443,7 @@ export default function XPS({
                   />
                 </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {hasNormalizationStage
-                    ? `${overlayState.params.average ? '多檔平均光譜歸一化後的結果。' : '各筆資料歸一化後的結果疊圖。'}綠色區塊是目前設定的歸一化區間。`
-                    : '目前未啟用歸一化，這一階段直接沿用上一階段結果。'}
+                  {overlayState.params.average ? '多檔平均光譜歸一化後的結果。' : '各筆資料歸一化後的結果疊圖。'}綠色區塊是目前設定的歸一化區間。
                 </p>
                 <Plot
                   data={applyHidden(buildOverlayTracesWithSeriesColors(overlayNormalizationDatasets, getDatasetColorKey) as Plotly.Data[], overlayNormHidden)}
@@ -3516,23 +3536,26 @@ export default function XPS({
                 </div>
               </div>
             )}
-            {processingViewMode === 'single' && backgroundChartTraces.length > 0 && (
+            {processingViewMode === 'single' && backgroundChartTraces.length > 0 && hasBackgroundStage && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <ChartToolbar
-                      title={hasBackgroundStage ? '3. 背景扣除' : '3. 背景扣除（未啟用）'}
+                      title="3. 背景扣除"
                       colorValue={chartLineColors.background}
                       onColorChange={value => setChartLineColors(current => ({ ...current, background: value }))}
                     />
                   </div>
-                  <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
+                  <div className="flex items-center gap-3">
+                    <CheckRow label="顯示扣背景前" checked={showXpsBgBefore} onChange={setShowXpsBgBefore} />
+                    <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
+                  </div>
                 </div>
-                <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {hasBackgroundStage ? '輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。' : '目前未啟用背景扣除，這一階段直接沿用前一階段結果。'}
-                </p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。</p>
                 <Plot
-                  data={applyHidden((showBg ? backgroundChartTraces : backgroundChartTraces.filter(trace => trace.name !== '背景線')) as Plotly.Data[], bgHidden)}
+                  data={applyHidden(backgroundChartTraces
+                    .filter(t => showBg || t.name !== '背景線')
+                    .filter(t => showXpsBgBefore || t.name !== '背景扣除前') as Plotly.Data[], bgHidden)}
                   layout={backgroundLayout as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
@@ -3560,16 +3583,14 @@ export default function XPS({
               </div>
             )}
 
-            {processingViewMode === 'single' && normalizationChartTraces.length > 0 && (
+            {processingViewMode === 'single' && normalizationChartTraces.length > 0 && hasNormalizationStage && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title={hasNormalizationStage ? '4. 歸一化' : '4. 歸一化（未啟用）'}
+                  title="4. 歸一化"
                   colorValue={chartLineColors.normalization}
                   onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
                 />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {hasNormalizationStage ? '輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。' : '目前未啟用歸一化，這一階段直接沿用上一階段結果。'}
-                </p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。</p>
                 <Plot
                   data={applyHidden(normalizationChartTraces as Plotly.Data[], normHidden)}
                   layout={normalizationLayout as Plotly.Layout}
@@ -3649,9 +3670,39 @@ export default function XPS({
               </div>
             )}
 
-            {currentFitResult && currentFitResult.peaks.length > 0 && (
+            {currentFitResult && currentFitResult.peaks.length > 0 && (() => {
+              const _y = fitTargetDataset?.y_processed ?? []
+              const _res = currentFitResult.residuals
+              const _sres = _res.reduce((s, r) => s + r * r, 0)
+              const _ymean = _y.length > 0 ? _y.reduce((s, v) => s + v, 0) / _y.length : 0
+              const _stot = _y.reduce((s, v) => s + (v - _ymean) ** 2, 0)
+              const r2 = _stot > 1e-20 ? Math.max(0, 1 - _sres / _stot) : 0
+              const rmse = Math.sqrt(_sres / Math.max(_res.length, 1))
+              const chiRed = _res.length > currentFitResult.peaks.length * 3
+                ? _sres / (_res.length - currentFitResult.peaks.length * 3)
+                : null
+              return (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">峰擬合結果</p>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果</p>
+                  <span className={[
+                    'rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+                    r2 >= 0.99 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                    : r2 >= 0.97 ? 'border-sky-500/40 bg-sky-500/10 text-sky-400'
+                    : r2 >= 0.90 ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+                    : 'border-rose-500/40 bg-rose-500/10 text-rose-400',
+                  ].join(' ')}>
+                    R² = {r2.toFixed(4)}
+                  </span>
+                  <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
+                    RMSE = {rmse.toFixed(4)}
+                  </span>
+                  {chiRed != null && (
+                    <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
+                      χ²ᵣ = {chiRed.toFixed(4)}
+                    </span>
+                  )}
+                </div>
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
@@ -3675,7 +3726,8 @@ export default function XPS({
                   </tbody>
                 </table>
               </div>
-            )}
+              )
+            })()}
 
             {processingViewMode === 'single' && xpsMode === 'valence_band' && activeDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">

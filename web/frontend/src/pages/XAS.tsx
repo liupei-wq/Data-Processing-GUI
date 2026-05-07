@@ -485,6 +485,8 @@ function chartLayoutWithRegions(
     ...chartLayout(xLabel, yLabel),
     shapes: regions.flatMap(region => buildRegionShapes(region.start, region.end, region.color)),
     annotations: regions.flatMap(region => buildRegionAnnotations(region.start, region.end, region.label, region.color)),
+    uirevision: 'stable',
+    transition: { duration: 0 } as Plotly.Transition,
   }
 }
 
@@ -683,8 +685,11 @@ export default function XAS({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
+  const [showBgBefore, setShowBgBefore] = useState(false)
+  const [showBgBaseline, setShowBgBaseline] = useState(false)
+  const [showNormBefore, setShowNormBefore] = useState(false)
   const [showWhiteLineMarkers, setShowWhiteLineMarkers] = useState(true)
-  const [whiteLineEnabled, setWhiteLineEnabled] = useState(true)
+  const [whiteLineEnabled, setWhiteLineEnabled] = useState(false)
   const [autoInterpPoints, setAutoInterpPoints] = useState(true)
   const [viewMode, setViewMode] = useState<'single' | 'overlay'>('single')
   const [overlaySelectedNames, setOverlaySelectedNames] = useState<string[]>([])
@@ -728,7 +733,7 @@ export default function XAS({
   const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
   const interpolationEnabled = params.interpolate
 
-  // reprocess whenever rawFiles or params change
+  // reprocess whenever rawFiles or params change (300ms debounce to avoid rapid API calls during slider drag)
   useEffect(() => {
     if (rawFiles.length === 0) {
       setResult(null)
@@ -739,62 +744,65 @@ export default function XAS({
       return
     }
     let cancelled = false
-    setIsLoading(true); setError(null)
-    const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, tey: f.tey, tfy: f.tfy }))
-    const effectiveParams: ProcessParams = {
-      ...params,
-      n_points: effectiveNPoints,
-      ...(whiteLineEnabled ? {} : {
+    const timer = setTimeout(() => {
+      if (cancelled) return
+      setIsLoading(true); setError(null)
+      const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, tey: f.tey, tfy: f.tfy }))
+      const effectiveParams: ProcessParams = {
+        ...params,
+        n_points: effectiveNPoints,
+        ...(whiteLineEnabled ? {} : {
+          white_line_start: null,
+          white_line_end: null,
+        }),
+      }
+      const preprocessParams: ProcessParams = {
+        ...effectiveParams,
+        bg_enabled: false,
+        norm_method: 'none',
+        norm_tey_start: null,
+        norm_tey_end: null,
+        norm_tfy_start: null,
+        norm_tfy_end: null,
+        norm_tey_pre_start: null,
+        norm_tey_pre_end: null,
+        norm_tfy_pre_start: null,
+        norm_tfy_pre_end: null,
         white_line_start: null,
         white_line_end: null,
-      }),
-    }
-    const preprocessParams: ProcessParams = {
-      ...effectiveParams,
-      bg_enabled: false,
-      norm_method: 'none',
-      norm_tey_start: null,
-      norm_tey_end: null,
-      norm_tfy_start: null,
-      norm_tfy_end: null,
-      norm_tey_pre_start: null,
-      norm_tey_pre_end: null,
-      norm_tfy_pre_start: null,
-      norm_tfy_pre_end: null,
-      white_line_start: null,
-      white_line_end: null,
-      gauss_enabled: false,
-      gauss_peaks: [],
-    }
-    const preNormalizationParams: ProcessParams = {
-      ...effectiveParams,
-      norm_method: 'none',
-      norm_tey_start: null,
-      norm_tey_end: null,
-      norm_tfy_start: null,
-      norm_tfy_end: null,
-      norm_tey_pre_start: null,
-      norm_tey_pre_end: null,
-      norm_tfy_pre_start: null,
-      norm_tfy_pre_end: null,
-      white_line_start: null,
-      white_line_end: null,
-    }
-    Promise.all([
-      processData(datasets, effectiveParams),
-      processData(datasets, preprocessParams),
-      processData(datasets, preNormalizationParams),
-    ])
-      .then(([finalStage, preprocessStage, preNormalizationStage]) => {
-        if (!cancelled) {
-          setResult(finalStage)
-          setPreprocessResult(preprocessStage)
-          setPreNormalizationResult(preNormalizationStage)
-        }
-      })
-      .catch(e => { if (!cancelled) setError(String(e.message)) })
-      .finally(() => { if (!cancelled) setIsLoading(false) })
-    return () => { cancelled = true }
+        gauss_enabled: false,
+        gauss_peaks: [],
+      }
+      const preNormalizationParams: ProcessParams = {
+        ...effectiveParams,
+        norm_method: 'none',
+        norm_tey_start: null,
+        norm_tey_end: null,
+        norm_tfy_start: null,
+        norm_tfy_end: null,
+        norm_tey_pre_start: null,
+        norm_tey_pre_end: null,
+        norm_tfy_pre_start: null,
+        norm_tfy_pre_end: null,
+        white_line_start: null,
+        white_line_end: null,
+      }
+      Promise.all([
+        processData(datasets, effectiveParams),
+        processData(datasets, preprocessParams),
+        processData(datasets, preNormalizationParams),
+      ])
+        .then(([finalStage, preprocessStage, preNormalizationStage]) => {
+          if (!cancelled) {
+            setResult(finalStage)
+            setPreprocessResult(preprocessStage)
+            setPreNormalizationResult(preNormalizationStage)
+          }
+        })
+        .catch(e => { if (!cancelled) setError(String(e.message)) })
+        .finally(() => { if (!cancelled) setIsLoading(false) })
+    }, 300)
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [rawFiles, params, effectiveNPoints, whiteLineEnabled])
 
   useEffect(() => {
@@ -960,19 +968,80 @@ export default function XAS({
   }, [getNormalizationRange, getPreEdgeRange, params.norm_method, params.norm_tey_end, params.norm_tey_start, params.norm_tfy_end, params.norm_tfy_start])
   const plainTeyLayout = chartLayout('Energy (eV)', 'TEY Intensity')
   const plainTfyLayout = chartLayout('Energy (eV)', 'TFY Intensity')
-  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', [{ ...getBackgroundRange('TEY', backgroundBounds), label: '背景區間', color: '#f59e0b' }])
-  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', [{ ...getBackgroundRange('TFY', backgroundBounds), label: '背景區間', color: '#f59e0b' }])
-  const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', getNormalizationRegions('TEY', normalizationBounds))
-  const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', getNormalizationRegions('TFY', normalizationBounds))
+  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', [{ ...getBackgroundRange('TEY', energyBounds), label: '背景區間', color: '#f59e0b' }])
+  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', [{ ...getBackgroundRange('TFY', energyBounds), label: '背景區間', color: '#f59e0b' }])
+  const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', getNormalizationRegions('TEY', energyBounds))
+  const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', getNormalizationRegions('TFY', energyBounds))
 
   const rawStageSource = preprocessDataset ?? activeDataset
   const rawOverlaySource = overlayPreprocessDatasets.length > 0 ? overlayPreprocessDatasets : overlayDatasets
+  const hasPreprocessing = params.interpolate || params.average || params.energy_shift !== 0
+  const preprocessParts = [
+    params.interpolate ? '內插' : null,
+    params.average ? '多檔平均' : null,
+    params.energy_shift !== 0 ? '能量校正' : null,
+  ].filter(Boolean) as string[]
+  const preprocessLabel = preprocessParts.length > 0 ? `（${preprocessParts.join('・')}）` : ''
   const backgroundBeforeY = (dataset: ProcessedDataset, fallback: ProcessedDataset | null, channel: 'TEY' | 'TFY') => (
     getChannelAfterGaussian(dataset, channel) ?? (fallback ? getChannelProcessed(fallback, channel) : getChannelRaw(dataset, channel))
   )
+
+  // Build background chart traces with optional before/baseline
+  const buildBgTracesSingle = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
+    if (!preNormalizationDataset) return []
+    const color = CHANNEL_COLORS[channel]
+    const afterY = getChannelProcessed(preNormalizationDataset, channel)
+    const traces: Plotly.Data[] = [
+      { x: preNormalizationDataset.x, y: afterY, type: 'scatter', mode: 'lines', name: '扣背景後', line: { color, width: 2 } },
+    ]
+    if (showBgBefore) {
+      const beforeY = backgroundBeforeY(preNormalizationDataset, preprocessDataset, channel)
+      traces.unshift({ x: preNormalizationDataset.x, y: beforeY, type: 'scatter', mode: 'lines', name: '扣背景前', line: { color: '#94a3b8', width: 1.4, dash: 'dot' as const }, opacity: 0.7 })
+    }
+    if (showBgBaseline && preprocessDataset) {
+      const beforeY = backgroundBeforeY(preNormalizationDataset, preprocessDataset, channel)
+      const baselineY = beforeY.map((v, i) => v - afterY[i])
+      traces.push({ x: preNormalizationDataset.x, y: baselineY, type: 'scatter', mode: 'lines', name: '背景基準線', line: { color: '#f97316', width: 1.4, dash: 'dash' as const } })
+    }
+    return traces
+  }
+
+  // Build overlay background traces (filter before/baseline by toggle)
+  const buildBgTracesOverlay = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
+    const all = buildOverlayBackgroundComparisonTraces(overlayPreprocessDatasets, overlayPreNormalizationDatasets, channel)
+    return all.filter(t => {
+      const name = (t as { name?: string }).name ?? ''
+      if (name.includes('扣背景前') && !showBgBefore) return false
+      return true
+    })
+  }
+
+  // Build normalization chart traces with optional before
+  const buildNormTracesSingle = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
+    if (!activeDataset) return []
+    const color = CHANNEL_COLORS[channel]
+    const afterY = getChannelProcessed(activeDataset, channel)
+    const traces: Plotly.Data[] = [
+      { x: activeDataset.x, y: afterY, type: 'scatter', mode: 'lines', name: '歸一化後', line: { color, width: 2 } },
+    ]
+    if (showNormBefore && preNormalizationDataset) {
+      const beforeY = getChannelProcessed(preNormalizationDataset, channel)
+      traces.unshift({ x: preNormalizationDataset.x, y: beforeY, type: 'scatter', mode: 'lines', name: '歸一化前', line: { color: '#94a3b8', width: 1.4, dash: 'dot' as const }, opacity: 0.7 })
+    }
+    return traces
+  }
+
+  const buildNormTracesOverlay = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
+    const all = buildOverlayComparisonTraces(overlayPreNormalizationDatasets, overlayDatasets, channel, getChannelProcessed, getChannelProcessed, '歸一化前', '歸一化後')
+    return all.filter(t => {
+      const name = (t as { name?: string }).name ?? ''
+      if (name.includes('歸一化前') && !showNormBefore) return false
+      return true
+    })
+  }
   const hasBackgroundStage = params.bg_enabled && Boolean(preNormalizationDataset || overlayPreNormalizationDatasets.length > 0)
   const hasNormalizationStage = params.norm_method !== 'none' && Boolean(activeDataset || overlayDatasets.length > 0)
-  const whiteLineRangeLabel = `${(params.white_line_start ?? whiteLineBounds.min).toFixed(1)} – ${(params.white_line_end ?? whiteLineBounds.max).toFixed(1)} eV`
+  const whiteLineRangeLabel = `${(params.white_line_start ?? energyBounds.min).toFixed(1)} – ${(params.white_line_end ?? energyBounds.max).toFixed(1)} eV`
   const hasWhiteLineResult = Boolean(activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null)
   const renderStagePlot = (data: Plotly.Data[], layout: Partial<Plotly.Layout>, height = 310) => (
     <Plot
@@ -1043,19 +1112,30 @@ export default function XAS({
     )
   }
 
+  // White Line auto-init: only fire after result arrives, detect peak center ± window
   useEffect(() => {
-    if (!whiteLineEnabled || rawFiles.length === 0) return
-    if (rawFiles.length === 0) return
+    if (!whiteLineEnabled || !result) return
     if (params.white_line_start != null && params.white_line_end != null) return
+    const dataset = isOverlayMode
+      ? (result.datasets[0] ?? null)
+      : (result.average ?? result.datasets[0] ?? null)
+    if (!dataset || dataset.x.length === 0) return
+    const y = dataset.tey_processed
+    const x = dataset.x
+    let maxIdx = 0
+    for (let i = 1; i < y.length; i++) {
+      if (y[i] > y[maxIdx]) maxIdx = i
+    }
+    const peakCenter = x[maxIdx]
+    const span = x[x.length - 1] - x[0]
+    const halfWindow = Math.min(span * 0.15, 15)
+    const autoStart = Math.max(x[0], peakCenter - halfWindow)
+    const autoEnd = Math.min(x[x.length - 1], peakCenter + halfWindow)
     setParams(current => {
       if (current.white_line_start != null && current.white_line_end != null) return current
-      return {
-        ...current,
-        white_line_start: current.white_line_start ?? whiteLineBounds.min,
-        white_line_end: current.white_line_end ?? whiteLineBounds.max,
-      }
+      return { ...current, white_line_start: autoStart, white_line_end: autoEnd }
     })
-  }, [params.white_line_end, params.white_line_start, rawFiles.length, whiteLineBounds.max, whiteLineBounds.min, whiteLineEnabled])
+  }, [whiteLineEnabled, result, params.white_line_start, params.white_line_end, isOverlayMode])
 
   useEffect(() => {
     if (!onUpdatePlotPopup) return
@@ -1078,7 +1158,7 @@ export default function XAS({
   ])
 
   const renderBackgroundSidebarInputs = (channel: XasChannel) => {
-    const range = getBackgroundRange(channel, backgroundBounds)
+    const range = getBackgroundRange(channel, energyBounds)
     return (
       <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
         <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{channel} 區間</p>
@@ -1107,8 +1187,8 @@ export default function XAS({
   }
 
   const renderNormalizationSidebarInputs = (channel: XasChannel) => {
-    const range = getNormalizationRange(channel, normalizationBounds)
-    const preRange = getPreEdgeRange(channel, normalizationBounds)
+    const range = getNormalizationRange(channel, energyBounds)
+    const preRange = getPreEdgeRange(channel, energyBounds)
     return (
       <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
         <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{channel} 區間</p>
@@ -1182,12 +1262,12 @@ export default function XAS({
   }
 
   const renderBackgroundChartControls = (channel: XasChannel) => {
-    const range = getBackgroundRange(channel, backgroundBounds)
+    const range = getBackgroundRange(channel, energyBounds)
     return (
       <DualRangeInput
         label={`${channel} 背景扣除區間`}
-        min={backgroundBounds.min}
-        max={backgroundBounds.max}
+        min={energyBounds.min}
+        max={energyBounds.max}
         start={range.start}
         end={range.end}
         onChange={({ start, end }) => setParams(current => ({
@@ -1201,15 +1281,15 @@ export default function XAS({
   }
 
   const renderNormalizationChartControls = (channel: XasChannel) => {
-    const range = getNormalizationRange(channel, normalizationBounds)
-    const preRange = getPreEdgeRange(channel, normalizationBounds)
+    const range = getNormalizationRange(channel, energyBounds)
+    const preRange = getPreEdgeRange(channel, energyBounds)
     return (
       <div className="space-y-3">
         {params.norm_method === 'post_edge' && (
           <DualRangeInput
             label={`${channel} Pre-edge 區間`}
-            min={normalizationBounds.min}
-            max={normalizationBounds.max}
+            min={energyBounds.min}
+            max={energyBounds.max}
             start={preRange.start}
             end={preRange.end}
             onChange={({ start, end }) => setParams(current => ({
@@ -1222,8 +1302,8 @@ export default function XAS({
         )}
         <DualRangeInput
           label={`${channel} ${params.norm_method === 'post_edge' ? 'Post-edge' : params.norm_method === 'mean_region' ? 'Mean Region' : '歸一化'} 區間`}
-          min={normalizationBounds.min}
-          max={normalizationBounds.max}
+          min={energyBounds.min}
+          max={energyBounds.max}
           start={range.start}
           end={range.end}
           onChange={({ start, end }) => setParams(current => ({
@@ -1618,18 +1698,18 @@ export default function XAS({
                   <>
                     <p className="text-[10px] text-[var(--text-soft)]">設定搜尋區間，自動找到最高點能量。</p>
                     <div className="grid grid-cols-2 gap-2">
-                      <NumInput label="起始 (eV)" value={params.white_line_start ?? whiteLineBounds.min} onChange={v => set('white_line_start')(v)} step={0.1} />
-                      <NumInput label="結束 (eV)" value={params.white_line_end ?? whiteLineBounds.max} onChange={v => set('white_line_end')(v)} step={0.1} />
+                      <NumInput label="起始 (eV)" value={params.white_line_start ?? energyBounds.min} onChange={v => set('white_line_start')(v)} step={0.1} />
+                      <NumInput label="結束 (eV)" value={params.white_line_end ?? energyBounds.max} onChange={v => set('white_line_end')(v)} step={0.1} />
                     </div>
                     <p className="text-[10px] text-[var(--accent-strong)]">
                       目前搜尋範圍內會直接在最終光譜標示 White Line 垂直線與峰頂位置。
                     </p>
                     <button
                       type="button"
-                      onClick={() => setParams(p => ({ ...p, white_line_start: whiteLineBounds.min, white_line_end: whiteLineBounds.max }))}
+                      onClick={() => setParams(p => ({ ...p, white_line_start: null, white_line_end: null }))}
                       className="text-[10px] text-[var(--accent-strong)] hover:underline"
                     >
-                      重設為全範圍
+                      重設（自動偵測）
                     </button>
                   </>
                 )}
@@ -1913,94 +1993,81 @@ export default function XAS({
             </div>
 
             {/* display control */}
-            <div className="mb-3 flex items-center gap-3">
+            <div className="mb-3 flex flex-wrap items-center gap-4">
               <CheckRow label="顯示原始資料" checked={showRaw} onChange={setShowRaw} />
             </div>
 
-            {renderStagePair(
-              '1. 原始光譜',
-              isOverlayMode
-                ? buildOverlayValueTraces(rawOverlaySource, 'TEY', getChannelRaw, '原始')
-                : rawStageSource ? buildRawTraces(rawStageSource, 'TEY') : [],
-              isOverlayMode
-                ? buildOverlayValueTraces(rawOverlaySource, 'TFY', getChannelRaw, '原始')
-                : rawStageSource ? buildRawTraces(rawStageSource, 'TFY') : [],
-              plainTeyLayout,
-              plainTfyLayout,
-            )}
+            {/* 1. Adaptive: raw OR preprocessed */}
+            {!hasPreprocessing
+              ? renderStagePair(
+                  '1. 原始光譜',
+                  isOverlayMode
+                    ? buildOverlayValueTraces(rawOverlaySource, 'TEY', getChannelRaw, '原始')
+                    : rawStageSource ? buildRawTraces(rawStageSource, 'TEY') : [],
+                  isOverlayMode
+                    ? buildOverlayValueTraces(rawOverlaySource, 'TFY', getChannelRaw, '原始')
+                    : rawStageSource ? buildRawTraces(rawStageSource, 'TFY') : [],
+                  plainTeyLayout,
+                  plainTfyLayout,
+                )
+              : renderStagePair(
+                  `1. 前處理後${preprocessLabel}`,
+                  isOverlayMode
+                    ? buildOverlayComparisonTraces(rawOverlaySource, overlayPreprocessDatasets, 'TEY', getChannelRaw, getChannelProcessed, '原始', '前處理後')
+                    : preprocessDataset ? buildComparisonTraces(preprocessDataset.x, getChannelRaw(preprocessDataset, 'TEY'), getChannelProcessed(preprocessDataset, 'TEY'), 'TEY', '原始', '前處理後') : [],
+                  isOverlayMode
+                    ? buildOverlayComparisonTraces(rawOverlaySource, overlayPreprocessDatasets, 'TFY', getChannelRaw, getChannelProcessed, '原始', '前處理後')
+                    : preprocessDataset ? buildComparisonTraces(preprocessDataset.x, getChannelRaw(preprocessDataset, 'TFY'), getChannelProcessed(preprocessDataset, 'TFY'), 'TFY', '原始', '前處理後') : [],
+                  plainTeyLayout,
+                  plainTfyLayout,
+                )
+            }
 
-            {renderStagePair(
-              '2. 前處理後',
-              isOverlayMode
-                ? buildOverlayComparisonTraces(rawOverlaySource, overlayPreprocessDatasets, 'TEY', getChannelRaw, getChannelProcessed, '原始', '前處理後')
-                : preprocessDataset ? buildComparisonTraces(preprocessDataset.x, getChannelRaw(preprocessDataset, 'TEY'), getChannelProcessed(preprocessDataset, 'TEY'), 'TEY', '原始', '前處理後') : [],
-              isOverlayMode
-                ? buildOverlayComparisonTraces(rawOverlaySource, overlayPreprocessDatasets, 'TFY', getChannelRaw, getChannelProcessed, '原始', '前處理後')
-                : preprocessDataset ? buildComparisonTraces(preprocessDataset.x, getChannelRaw(preprocessDataset, 'TFY'), getChannelProcessed(preprocessDataset, 'TFY'), 'TFY', '原始', '前處理後') : [],
-              plainTeyLayout,
-              plainTfyLayout,
-            )}
-
-            {renderStagePair(
-              params.bg_enabled ? '3. 背景扣除' : '3. 背景扣除（未啟用）',
-              isOverlayMode
-                ? buildOverlayBackgroundComparisonTraces(overlayPreprocessDatasets, overlayPreNormalizationDatasets, 'TEY')
-                : preNormalizationDataset ? buildComparisonTraces(
-                  preNormalizationDataset.x,
-                  backgroundBeforeY(preNormalizationDataset, preprocessDataset, 'TEY'),
-                  getChannelProcessed(preNormalizationDataset, 'TEY'),
-                  'TEY',
-                  '扣背景前',
-                  '扣背景後',
-                ) : [],
-              isOverlayMode
-                ? buildOverlayBackgroundComparisonTraces(overlayPreprocessDatasets, overlayPreNormalizationDatasets, 'TFY')
-                : preNormalizationDataset ? buildComparisonTraces(
-                  preNormalizationDataset.x,
-                  backgroundBeforeY(preNormalizationDataset, preprocessDataset, 'TFY'),
-                  getChannelProcessed(preNormalizationDataset, 'TFY'),
-                  'TFY',
-                  '扣背景前',
-                  '扣背景後',
-                ) : [],
+            {/* 2. Background (only when enabled) */}
+            {params.bg_enabled && renderStagePair(
+              '2. 背景扣除',
+              isOverlayMode ? buildBgTracesOverlay('TEY') : buildBgTracesSingle('TEY'),
+              isOverlayMode ? buildBgTracesOverlay('TFY') : buildBgTracesSingle('TFY'),
               backgroundTeyLayout,
               backgroundTfyLayout,
-              params.bg_enabled ? renderBackgroundChartControls('TEY') : undefined,
-              params.bg_enabled ? renderBackgroundChartControls('TFY') : undefined,
-              params.bg_enabled ? '這一步會把背景扣除前後的差異直接疊在同一張圖上。' : '目前未啟用背景扣除，這一階段直接沿用前處理結果。',
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  <CheckRow label="顯示扣背景前" checked={showBgBefore} onChange={setShowBgBefore} />
+                  <CheckRow label="顯示背景基準線" checked={showBgBaseline} onChange={setShowBgBaseline} />
+                </div>
+                {renderBackgroundChartControls('TEY')}
+              </div>,
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  <CheckRow label="顯示扣背景前" checked={showBgBefore} onChange={setShowBgBefore} />
+                  <CheckRow label="顯示背景基準線" checked={showBgBaseline} onChange={setShowBgBaseline} />
+                </div>
+                {renderBackgroundChartControls('TFY')}
+              </div>,
+              '橘色區間為背景扣除範圍；勾選可疊加扣背景前曲線或背景基準線。',
             )}
 
-            {renderStagePair(
-              params.norm_method !== 'none' ? '4. 歸一化' : '4. 歸一化（未啟用）',
-              isOverlayMode
-                ? buildOverlayComparisonTraces(overlayPreNormalizationDatasets, overlayDatasets, 'TEY', getChannelProcessed, getChannelProcessed, '歸一化前', '歸一化後')
-                : activeDataset && preNormalizationDataset ? buildComparisonTraces(
-                  activeDataset.x,
-                  getChannelProcessed(preNormalizationDataset, 'TEY'),
-                  getChannelProcessed(activeDataset, 'TEY'),
-                  'TEY',
-                  '歸一化前',
-                  '歸一化後',
-                ) : [],
-              isOverlayMode
-                ? buildOverlayComparisonTraces(overlayPreNormalizationDatasets, overlayDatasets, 'TFY', getChannelProcessed, getChannelProcessed, '歸一化前', '歸一化後')
-                : activeDataset && preNormalizationDataset ? buildComparisonTraces(
-                  activeDataset.x,
-                  getChannelProcessed(preNormalizationDataset, 'TFY'),
-                  getChannelProcessed(activeDataset, 'TFY'),
-                  'TFY',
-                  '歸一化前',
-                  '歸一化後',
-                ) : [],
+            {/* 3. Normalization (only when enabled) */}
+            {params.norm_method !== 'none' && renderStagePair(
+              '3. 歸一化',
+              isOverlayMode ? buildNormTracesOverlay('TEY') : buildNormTracesSingle('TEY'),
+              isOverlayMode ? buildNormTracesOverlay('TFY') : buildNormTracesSingle('TFY'),
               normalizationTeyLayout,
               normalizationTfyLayout,
-              params.norm_method !== 'none' ? renderNormalizationChartControls('TEY') : undefined,
-              params.norm_method !== 'none' ? renderNormalizationChartControls('TFY') : undefined,
-              params.norm_method !== 'none' ? '綠色區間代表目前採樣的歸一化範圍。' : '目前未啟用歸一化，這一階段直接沿用上一階段結果。',
+              <div className="space-y-3">
+                <CheckRow label="顯示歸一化前" checked={showNormBefore} onChange={setShowNormBefore} />
+                {renderNormalizationChartControls('TEY')}
+              </div>,
+              <div className="space-y-3">
+                <CheckRow label="顯示歸一化前" checked={showNormBefore} onChange={setShowNormBefore} />
+                {renderNormalizationChartControls('TFY')}
+              </div>,
+              '綠色區間代表目前採樣的歸一化範圍；勾選可疊加歸一化前曲線。',
             )}
 
+            {/* 4. Final spectrum (always) */}
             {renderStagePair(
-              '5. 最終光譜',
+              '4. 最終光譜',
               isOverlayMode
                 ? buildMultiTraces(overlayDatasets, 'TEY', showRaw, showWhiteLineMarkers && whiteLineEnabled)
                 : activeDataset ? buildTraces(activeDataset, 'TEY', showRaw, showWhiteLineMarkers && whiteLineEnabled) : [],
@@ -2013,50 +2080,42 @@ export default function XAS({
 
             {/* Single-mode only sections */}
             {activeDataset && (<>
-            {/* Gaussian subtraction comparison chart */}
+            {/* Gaussian subtraction comparison chart (only when enabled and has data) */}
+            {params.gauss_enabled && (activeDataset.tey_gaussian != null || activeDataset.tfy_gaussian != null) && (
             <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-              <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">
-                {params.gauss_enabled ? '高斯模板扣除對比' : '高斯模板扣除（未啟用）'}
-              </p>
-              {!params.gauss_enabled ? (
-                <p className="text-xs text-[var(--text-soft)]">目前未啟用高斯模板扣除，這一步會直接沿用歸一化後的結果。</p>
-              ) : activeDataset.tey_gaussian == null && activeDataset.tfy_gaussian == null ? (
-                <p className="text-xs text-[var(--text-soft)]">已啟用高斯模板扣除，但目前尚未建立可套用的模板峰。</p>
-              ) : (
+              <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">高斯模板扣除對比</p>
+              {activeDataset.tey_gaussian != null && (
                 <>
-                {activeDataset.tey_gaussian != null && (
-                  <>
-                    <p className="mb-1 text-xs text-[var(--text-soft)]">TEY</p>
-                    <Plot
-                      data={[
-                        { x: activeDataset.x, y: activeDataset.tey_raw, type: 'scatter', mode: 'lines', name: '原始 TEY', line: { color: '#94a3b8', width: 1.4 } },
-                        { x: activeDataset.x, y: activeDataset.tey_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
-                        { x: activeDataset.x, y: activeDataset.tey_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TEY', line: { color: '#38bdf8', width: 2 } },
-                      ] as Plotly.Data[]}
-                      layout={chartLayout('Energy (eV)', 'TEY Intensity') as Plotly.Layout}
-                      config={withPlotFullscreen()}
-                      style={{ width: '100%', height: 300 }}
-                    />
-                  </>
-                )}
-                {activeDataset.tfy_gaussian != null && (
-                  <>
-                    <p className="mb-1 mt-3 text-xs text-[var(--text-soft)]">TFY</p>
-                    <Plot
-                      data={[
-                        { x: activeDataset.x, y: activeDataset.tfy_raw, type: 'scatter', mode: 'lines', name: '原始 TFY', line: { color: '#94a3b8', width: 1.4 } },
-                        { x: activeDataset.x, y: activeDataset.tfy_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
-                        { x: activeDataset.x, y: activeDataset.tfy_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TFY', line: { color: '#a78bfa', width: 2 } },
-                      ] as Plotly.Data[]}
-                      layout={chartLayout('Energy (eV)', 'TFY Intensity') as Plotly.Layout}
-                      config={withPlotFullscreen()}
-                      style={{ width: '100%', height: 300 }}
-                    />
-                  </>
-                )}
+                  <p className="mb-1 text-xs text-[var(--text-soft)]">TEY</p>
+                  <Plot
+                    data={[
+                      { x: activeDataset.x, y: activeDataset.tey_raw, type: 'scatter', mode: 'lines', name: '原始 TEY', line: { color: '#94a3b8', width: 1.4 } },
+                      { x: activeDataset.x, y: activeDataset.tey_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
+                      { x: activeDataset.x, y: activeDataset.tey_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TEY', line: { color: '#38bdf8', width: 2 } },
+                    ] as Plotly.Data[]}
+                    layout={chartLayout('Energy (eV)', 'TEY Intensity') as Plotly.Layout}
+                    config={withPlotFullscreen()}
+                    style={{ width: '100%', height: 300 }}
+                  />
+                </>
+              )}
+              {activeDataset.tfy_gaussian != null && (
+                <>
+                  <p className="mb-1 mt-3 text-xs text-[var(--text-soft)]">TFY</p>
+                  <Plot
+                    data={[
+                      { x: activeDataset.x, y: activeDataset.tfy_raw, type: 'scatter', mode: 'lines', name: '原始 TFY', line: { color: '#94a3b8', width: 1.4 } },
+                      { x: activeDataset.x, y: activeDataset.tfy_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
+                      { x: activeDataset.x, y: activeDataset.tfy_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TFY', line: { color: '#a78bfa', width: 2 } },
+                    ] as Plotly.Data[]}
+                    layout={chartLayout('Energy (eV)', 'TFY Intensity') as Plotly.Layout}
+                    config={withPlotFullscreen()}
+                    style={{ width: '100%', height: 300 }}
+                  />
                 </>
               )}
             </div>
+            )}
 
             {/* Peak fitting result */}
             {fitResult && (
