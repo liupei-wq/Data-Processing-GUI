@@ -2144,12 +2144,34 @@ export default function XPS({
     setOverlayRsfRows([])
   }
 
+  const updateSingleSessionState = (patch: Partial<DatasetSessionState>) => {
+    if (!activeDatasetKey || restoringSessionRef.current) return
+    setDatasetSessions(prev => {
+      const currentSession = prev[activeDatasetKey] ?? createDefaultSession()
+      return {
+        ...prev,
+        [activeDatasetKey]: {
+          ...currentSession,
+          ...patch,
+        },
+      }
+    })
+  }
+
+  const updateSingleParams = (updater: (current: ProcessParams) => ProcessParams) => {
+    setParams(current => {
+      const next = updater(current)
+      updateSingleSessionState({ params: { ...next, average: false } })
+      return next
+    })
+  }
+
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) => {
     if (processingViewMode === 'overlay') {
       setOverlayState(current => ({ ...current, params: { ...current.params, [key]: val } }))
       return
     }
-    setParams(p => ({ ...p, [key]: val }))
+    updateSingleParams(current => ({ ...current, [key]: val }))
   }
 
   const applyNormalizationMethod = (method: Exclude<ProcessParams['norm_method'], 'none'>) => {
@@ -2167,7 +2189,7 @@ export default function XPS({
       }))
       return
     }
-    setParams(current => ({
+    updateSingleParams(current => ({
       ...current,
       norm_method: method,
       norm_x_start: current.norm_x_start ?? nextNormStart,
