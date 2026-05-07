@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest, PlotPopupUpdate } from '../hooks/usePlotPopups'
-import { fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
+import { downloadFitReport, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
   GaussPeak,
@@ -480,13 +480,26 @@ function chartLayoutWithRegions(
   xLabel: string,
   yLabel: string,
   regions: { start: number | null | undefined; end: number | null | undefined; label: string; color: string }[],
+  withDualAxis = false,
 ): Partial<Plotly.Layout> {
+  const css = typeof window !== 'undefined' ? getComputedStyle(document.documentElement) : null
+  const text = css?.getPropertyValue('--chart-text').trim() || '#d9e4f0'
   return {
     ...chartLayout(xLabel, yLabel),
     shapes: regions.flatMap(region => buildRegionShapes(region.start, region.end, region.color)),
     annotations: regions.flatMap(region => buildRegionAnnotations(region.start, region.end, region.label, region.color)),
     uirevision: 'stable',
     transition: { duration: 0 } as Plotly.Transition,
+    ...(withDualAxis ? {
+      yaxis2: {
+        overlaying: 'y' as const,
+        side: 'right' as const,
+        showgrid: false,
+        zeroline: false,
+        color: text,
+        title: { text: '原始強度', font: { size: 11 } },
+      },
+    } : {}),
   }
 }
 
@@ -649,12 +662,135 @@ function TogglePill({ label, checked, onChange }: { label: string; checked: bool
 
 // ── Peak fitting helpers ──────────────────────────────────────────────────────
 
+const PEAK_CENTER_DB_TOLERANCE_EV = 0.45
+const PEAK_CENTER_MANUAL_TOLERANCE_EV = 1.2
+const PEAK_FWHM_MIN_ABS = 0.05
+const PEAK_FWHM_MAX_MULTIPLIER = 2.2
+const PEAK_FWHM_MIN_RATIO = 0.55
+const PEAK_AMPLITUDE_MAX_MULTIPLIER = 4.0
+
+type XasPeakSourceType = 'database' | 'manual'
+
 function createPeakId() { return `XA${Math.random().toString(36).slice(2, 7)}` }
 
 interface XasPeakCandidate extends XasInitPeak {
   id: string
   label: string
   enabled: boolean
+  sourceType: XasPeakSourceType
+  cardLocked: boolean
+}
+
+function createXasPeakCandidate(
+  input: {
+    label: string
+    center: number
+    fwhm: number
+    amplitude: number
+    sourceType: XasPeakSourceType
+    enabled?: boolean
+    theoretical_center?: number
+    lock_center?: boolean
+    lock_fwhm?: boolean
+    lock_area?: boolean
+  },
+  datasetMax = 100,
+): XasPeakCandidate {
+  const center = Number.isFinite(input.center) ? input.center : 0
+  const fwhm = Math.max(Number.isFinite(input.fwhm) ? input.fwhm : 1.0, PEAK_FWHM_MIN_ABS)
+  const amplitude = Math.max(Number.isFinite(input.amplitude) ? input.amplitude : datasetMax * 0.5, 0)
+  const theoreticalCenter = Number.isFinite(input.theoretical_center) ? Number(input.theoretical_center) : center
+  const centerTolerance = input.sourceType === 'database' ? PEAK_CENTER_DB_TOLERANCE_EV : PEAK_CENTER_MANUAL_TOLERANCE_EV
+  const amplitudeMax = Math.max(amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1)
+  return {
+    id: createPeakId(),
+    label: input.label,
+    enabled: input.enabled ?? true,
+    center,
+    fwhm,
+    amplitude,
+    sourceType: input.sourceType,
+    theoretical_center: theoreticalCenter,
+    lock_center: input.lock_center ?? true,
+    lock_fwhm: input.lock_fwhm ?? true,
+    lock_area: input.lock_area ?? false,
+    cardLocked: true,
+    center_min: theoreticalCenter - centerTolerance,
+    center_max: theoreticalCenter + centerTolerance,
+    fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, fwhm * PEAK_FWHM_MIN_RATIO),
+    fwhm_max: Math.max(fwhm * PEAK_FWHM_MAX_MULTIPLIER, fwhm + 0.2),
+    amplitude_max: amplitudeMax,
+  }
+}
+
+function sanitizeXasPeakCandidate(peak: XasPeakCandidate, datasetMax = 100): XasPeakCandidate {
+  const sourceType = peak.sourceType ?? 'database'
+  const base = createXasPeakCandidate({
+    label: peak.label,
+    center: peak.center,
+    fwhm: peak.fwhm,
+    amplitude: peak.amplitude,
+    sourceType,
+    enabled: peak.enabled,
+    theoretical_center: peak.theoretical_center ?? undefined,
+    lock_center: peak.lock_center,
+    lock_fwhm: peak.lock_fwhm,
+    lock_area: peak.lock_area,
+  }, datasetMax)
+  return {
+    ...base,
+    id: peak.id || createPeakId(),
+    cardLocked: peak.cardLocked ?? true,
+    center_min: peak.center_min ?? base.center_min,
+    center_max: peak.center_max ?? base.center_max,
+    fwhm_min: peak.fwhm_min ?? base.fwhm_min,
+    fwhm_max: peak.fwhm_max ?? base.fwhm_max,
+    amplitude_max: peak.amplitude_max ?? Math.max(peak.amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+  }
+}
+
+function updateXasPeakCenterSeed(peak: XasPeakCandidate, center: number, datasetMax = 100): XasPeakCandidate {
+  const sourceType = peak.sourceType ?? 'database'
+  const theoreticalCenter = center
+  const centerTolerance = sourceType === 'database' ? PEAK_CENTER_DB_TOLERANCE_EV : PEAK_CENTER_MANUAL_TOLERANCE_EV
+  return sanitizeXasPeakCandidate({
+    ...peak,
+    center,
+    theoretical_center: theoreticalCenter,
+    center_min: theoreticalCenter - centerTolerance,
+    center_max: theoreticalCenter + centerTolerance,
+  }, datasetMax)
+}
+
+function updateXasPeakFwhmSeed(peak: XasPeakCandidate, fwhm: number, datasetMax = 100): XasPeakCandidate {
+  const nextFwhm = Math.max(fwhm, PEAK_FWHM_MIN_ABS)
+  return sanitizeXasPeakCandidate({
+    ...peak,
+    fwhm: nextFwhm,
+    fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, nextFwhm * PEAK_FWHM_MIN_RATIO),
+    fwhm_max: Math.max(nextFwhm * PEAK_FWHM_MAX_MULTIPLIER, nextFwhm + 0.2),
+  }, datasetMax)
+}
+
+function updateXasPeakAmplitudeSeed(peak: XasPeakCandidate, amplitude: number, datasetMax = 100): XasPeakCandidate {
+  const nextAmplitude = Math.max(amplitude, 0)
+  return sanitizeXasPeakCandidate({
+    ...peak,
+    amplitude: nextAmplitude,
+    amplitude_max: Math.max(nextAmplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+  }, datasetMax)
+}
+
+function buildXasFitPeakPayloads(peaks: XasPeakCandidate[], datasetMax: number): XasInitPeak[] {
+  const sanitized = peaks.map(pk => sanitizeXasPeakCandidate(pk, datasetMax))
+  return sanitized.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, cardLocked: _cardLocked, ...peak }) => ({
+    ...peak,
+    center_min: peak.lock_center ? peak.center : (peak.center_min ?? peak.center),
+    center_max: peak.lock_center ? peak.center : (peak.center_max ?? peak.center),
+    fwhm_min: peak.lock_fwhm ? peak.fwhm : Math.max(peak.fwhm_min ?? PEAK_FWHM_MIN_ABS, PEAK_FWHM_MIN_ABS),
+    fwhm_max: peak.lock_fwhm ? peak.fwhm : Math.max(peak.fwhm_max ?? peak.fwhm, peak.fwhm + 0.05),
+    amplitude_max: peak.lock_area ? Math.max(peak.amplitude, 1) : Math.max(peak.amplitude_max ?? 0, peak.amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+  }))
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -685,9 +821,9 @@ export default function XAS({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
-  const [showBgBefore, setShowBgBefore] = useState(false)
-  const [showBgBaseline, setShowBgBaseline] = useState(false)
-  const [showNormBefore, setShowNormBefore] = useState(false)
+  const [showBgBefore, setShowBgBefore] = useState<{ TEY: boolean; TFY: boolean }>({ TEY: false, TFY: false })
+  const [showBgBaseline, setShowBgBaseline] = useState<{ TEY: boolean; TFY: boolean }>({ TEY: false, TFY: false })
+  const [showNormBefore, setShowNormBefore] = useState<{ TEY: boolean; TFY: boolean }>({ TEY: false, TFY: false })
   const [showWhiteLineMarkers, setShowWhiteLineMarkers] = useState(true)
   const [whiteLineEnabled, setWhiteLineEnabled] = useState(false)
   const [autoInterpPoints, setAutoInterpPoints] = useState(true)
@@ -710,6 +846,7 @@ export default function XAS({
   const [selectedEdge, setSelectedEdge] = useState<string>('')
   const [samplesLoading, setSamplesLoading] = useState(false)
   const samplesLoaded = useRef(false)
+  const [fitEdgeTypeFilter, setFitEdgeTypeFilter] = useState<'all' | 'K' | 'L'>('all')
 
 
   const isOverlayMode = viewMode === 'overlay'
@@ -866,21 +1003,27 @@ export default function XAS({
     }
   }, [])
 
+  const fitDatasetMax = useMemo(() => {
+    if (!activeDataset) return 1
+    const y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+    return Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+  }, [activeDataset, fitChannel])
+
   const loadSampleEdgePeaks = useCallback(async () => {
     if (!selectedSample || !selectedEdge || !activeDataset) return
     setSamplesLoading(true); setFitError(null)
     try {
       const data = await fetchXasSamplePeaks(selectedSample, selectedEdge)
       const yArr = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
-      const maxY = Math.max(...yArr)
-      const newPeaks: XasPeakCandidate[] = data.peaks.map(pk => ({
-        id: createPeakId(),
+      const maxY = Math.max(...yArr.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+      const newPeaks: XasPeakCandidate[] = data.peaks.map(pk => createXasPeakCandidate({
         label: pk.label,
-        enabled: true,
         center: pk.energy_eV,
         fwhm: pk.fwhm_eV,
         amplitude: maxY * 0.3,
-      }))
+        sourceType: 'database',
+        lock_center: true,
+      }, maxY))
       setFitPeakCandidates(prev => [...prev, ...newPeaks])
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setSamplesLoading(false) }
@@ -890,11 +1033,15 @@ export default function XAS({
     const center = activeDataset
       ? (activeDataset.x[0] + activeDataset.x[activeDataset.x.length - 1]) / 2
       : 500
-    setFitPeakCandidates(prev => [...prev, {
-      id: createPeakId(), label: `峰 ${prev.length + 1}`, enabled: true,
-      center, fwhm: 1.5, amplitude: 1.0,
-    }])
-  }, [activeDataset])
+    setFitPeakCandidates(prev => [...prev, createXasPeakCandidate({
+      label: `峰 ${prev.length + 1}`,
+      center,
+      fwhm: 1.5,
+      amplitude: fitDatasetMax * 0.3,
+      sourceType: 'manual',
+      lock_center: false,
+    }, fitDatasetMax)])
+  }, [activeDataset, fitDatasetMax])
 
   const handleFit = useCallback(async () => {
     if (!activeDataset) return
@@ -902,10 +1049,9 @@ export default function XAS({
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
     setIsFitting(true); setFitError(null); setFitResult(null)
     try {
-      const initPeaks: XasInitPeak[] = activePeaks.map(p => ({
-        center: p.center, fwhm: p.fwhm, amplitude: p.amplitude, label: p.label,
-      }))
       const y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+      const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+      const initPeaks = buildXasFitPeakPayloads(activePeaks, datasetMax)
       const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label))
       setFitResult(res)
     } catch (e: unknown) { setFitError((e as Error).message) }
@@ -968,10 +1114,10 @@ export default function XAS({
   }, [getNormalizationRange, getPreEdgeRange, params.norm_method, params.norm_tey_end, params.norm_tey_start, params.norm_tfy_end, params.norm_tfy_start])
   const plainTeyLayout = chartLayout('Energy (eV)', 'TEY Intensity')
   const plainTfyLayout = chartLayout('Energy (eV)', 'TFY Intensity')
-  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', [{ ...getBackgroundRange('TEY', energyBounds), label: '背景區間', color: '#f59e0b' }])
-  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', [{ ...getBackgroundRange('TFY', energyBounds), label: '背景區間', color: '#f59e0b' }])
-  const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', getNormalizationRegions('TEY', energyBounds))
-  const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', getNormalizationRegions('TFY', energyBounds))
+  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', [{ ...getBackgroundRange('TEY', energyBounds), label: '背景區間', color: '#f59e0b' }], true)
+  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', [{ ...getBackgroundRange('TFY', energyBounds), label: '背景區間', color: '#f59e0b' }], true)
+  const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', getNormalizationRegions('TEY', energyBounds), true)
+  const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', getNormalizationRegions('TFY', energyBounds), true)
 
   const rawStageSource = preprocessDataset ?? activeDataset
   const rawOverlaySource = overlayPreprocessDatasets.length > 0 ? overlayPreprocessDatasets : overlayDatasets
@@ -986,7 +1132,7 @@ export default function XAS({
     getChannelAfterGaussian(dataset, channel) ?? (fallback ? getChannelProcessed(fallback, channel) : getChannelRaw(dataset, channel))
   )
 
-  // Build background chart traces with optional before/baseline
+  // Build background chart traces with optional before/baseline (dual y-axis: after=y1, before/baseline=y2)
   const buildBgTracesSingle = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
     if (!preNormalizationDataset) return []
     const color = CHANNEL_COLORS[channel]
@@ -994,29 +1140,38 @@ export default function XAS({
     const traces: Plotly.Data[] = [
       { x: preNormalizationDataset.x, y: afterY, type: 'scatter', mode: 'lines', name: '扣背景後', line: { color, width: 2 } },
     ]
-    if (showBgBefore) {
+    if (showBgBefore[channel] && preprocessDataset) {
       const beforeY = backgroundBeforeY(preNormalizationDataset, preprocessDataset, channel)
-      traces.unshift({ x: preNormalizationDataset.x, y: beforeY, type: 'scatter', mode: 'lines', name: '扣背景前', line: { color: '#94a3b8', width: 1.4, dash: 'dot' as const }, opacity: 0.7 })
+      traces.push({ x: preNormalizationDataset.x, y: beforeY, type: 'scatter', mode: 'lines', name: '扣背景前', yaxis: 'y2' as const, line: { color: '#94a3b8', width: 1.4, dash: 'dot' as const }, opacity: 0.8 })
     }
-    if (showBgBaseline && preprocessDataset) {
+    if (showBgBaseline[channel] && preprocessDataset) {
       const beforeY = backgroundBeforeY(preNormalizationDataset, preprocessDataset, channel)
       const baselineY = beforeY.map((v, i) => v - afterY[i])
-      traces.push({ x: preNormalizationDataset.x, y: baselineY, type: 'scatter', mode: 'lines', name: '背景基準線', line: { color: '#f97316', width: 1.4, dash: 'dash' as const } })
+      traces.push({ x: preNormalizationDataset.x, y: baselineY, type: 'scatter', mode: 'lines', name: '背景基準線', yaxis: 'y2' as const, line: { color: '#f97316', width: 1.4, dash: 'dash' as const } })
     }
     return traces
   }
 
-  // Build overlay background traces (filter before/baseline by toggle)
+  // Build overlay background traces (filter before by channel toggle, put on y2)
   const buildBgTracesOverlay = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
-    const all = buildOverlayBackgroundComparisonTraces(overlayPreprocessDatasets, overlayPreNormalizationDatasets, channel)
-    return all.filter(t => {
-      const name = (t as { name?: string }).name ?? ''
-      if (name.includes('扣背景前') && !showBgBefore) return false
-      return true
+    const preprocessByName = new Map(overlayPreprocessDatasets.map(ds => [ds.name, ds]))
+    const fallbackPre = overlayPreprocessDatasets[0]
+    const traces: Plotly.Data[] = []
+    overlayPreNormalizationDatasets.forEach((afterDs, i) => {
+      const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+      const shortName = afterDs.name.replace(/\.[^.]+$/, '').slice(-24)
+      const afterY = getChannelProcessed(afterDs, channel)
+      traces.push({ x: afterDs.x, y: afterY, type: 'scatter', mode: 'lines', name: `${shortName} 扣背景後`, line: { color, width: 1.9 } })
+      if (showBgBefore[channel]) {
+        const beforeDs = preprocessByName.get(afterDs.name) ?? fallbackPre
+        const beforeY = beforeDs ? backgroundBeforeY(afterDs, beforeDs, channel) : null
+        if (beforeY) traces.push({ x: afterDs.x, y: beforeY, type: 'scatter', mode: 'lines', name: `${shortName} 扣背景前`, yaxis: 'y2' as const, line: { color, width: 1.1, dash: 'dot' as const }, opacity: 0.5 })
+      }
     })
+    return traces
   }
 
-  // Build normalization chart traces with optional before
+  // Build normalization chart traces with optional before (dual y-axis: after=y1, before=y2)
   const buildNormTracesSingle = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
     if (!activeDataset) return []
     const color = CHANNEL_COLORS[channel]
@@ -1024,20 +1179,28 @@ export default function XAS({
     const traces: Plotly.Data[] = [
       { x: activeDataset.x, y: afterY, type: 'scatter', mode: 'lines', name: '歸一化後', line: { color, width: 2 } },
     ]
-    if (showNormBefore && preNormalizationDataset) {
+    if (showNormBefore[channel] && preNormalizationDataset) {
       const beforeY = getChannelProcessed(preNormalizationDataset, channel)
-      traces.unshift({ x: preNormalizationDataset.x, y: beforeY, type: 'scatter', mode: 'lines', name: '歸一化前', line: { color: '#94a3b8', width: 1.4, dash: 'dot' as const }, opacity: 0.7 })
+      traces.push({ x: preNormalizationDataset.x, y: beforeY, type: 'scatter', mode: 'lines', name: '歸一化前', yaxis: 'y2' as const, line: { color: '#94a3b8', width: 1.4, dash: 'dot' as const }, opacity: 0.8 })
     }
     return traces
   }
 
   const buildNormTracesOverlay = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
-    const all = buildOverlayComparisonTraces(overlayPreNormalizationDatasets, overlayDatasets, channel, getChannelProcessed, getChannelProcessed, '歸一化前', '歸一化後')
-    return all.filter(t => {
-      const name = (t as { name?: string }).name ?? ''
-      if (name.includes('歸一化前') && !showNormBefore) return false
-      return true
+    const traces: Plotly.Data[] = []
+    overlayDatasets.forEach((afterDs, i) => {
+      const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+      const shortName = afterDs.name.replace(/\.[^.]+$/, '').slice(-24)
+      traces.push({ x: afterDs.x, y: getChannelProcessed(afterDs, channel), type: 'scatter', mode: 'lines', name: `${shortName} 歸一化後`, line: { color, width: 1.9 } })
     })
+    if (showNormBefore[channel]) {
+      overlayPreNormalizationDatasets.forEach((beforeDs, i) => {
+        const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+        const shortName = beforeDs.name.replace(/\.[^.]+$/, '').slice(-24)
+        traces.push({ x: beforeDs.x, y: getChannelProcessed(beforeDs, channel), type: 'scatter', mode: 'lines', name: `${shortName} 歸一化前`, yaxis: 'y2' as const, line: { color, width: 1.1, dash: 'dot' as const }, opacity: 0.5 })
+      })
+    }
+    return traces
   }
   const hasBackgroundStage = params.bg_enabled && Boolean(preNormalizationDataset || overlayPreNormalizationDatasets.length > 0)
   const hasNormalizationStage = params.norm_method !== 'none' && Boolean(activeDataset || overlayDatasets.length > 0)
@@ -1745,6 +1908,24 @@ export default function XAS({
                   {/* 從樣品資料庫載入 */}
                   <div className="space-y-1.5">
                     <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">從樣品資料庫載入</p>
+                    {/* K / L edge 篩選器 */}
+                    <div className="flex gap-1">
+                      {(['all', 'K', 'L'] as const).map(t => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => { setFitEdgeTypeFilter(t); setSelectedEdge('') }}
+                          className={[
+                            'flex-1 rounded-full py-1 text-[10px] font-medium transition-colors',
+                            fitEdgeTypeFilter === t
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {t === 'all' ? '全部' : `${t}-edge`}
+                        </button>
+                      ))}
+                    </div>
                     <SelectInput
                       label="樣品"
                       value={selectedSample}
@@ -1761,7 +1942,13 @@ export default function XAS({
                         onChange={setSelectedEdge}
                         options={[
                           { value: '', label: '選擇吸收邊…' },
-                          ...(samplesList.find(s => s.name === selectedSample)?.edges ?? []).map(e => ({ value: e, label: e })),
+                          ...(samplesList.find(s => s.name === selectedSample)?.edges ?? [])
+                            .filter(e =>
+                              fitEdgeTypeFilter === 'all' ||
+                              (fitEdgeTypeFilter === 'K' && e.includes('K-edge')) ||
+                              (fitEdgeTypeFilter === 'L' && e.includes('L-edge'))
+                            )
+                            .map(e => ({ value: e, label: e })),
                         ]}
                       />
                     )}
@@ -1795,6 +1982,7 @@ export default function XAS({
                           : 'border border-[var(--card-border)] bg-[var(--card-bg)]',
                       ].join(' ')}
                     >
+                      {/* 峰頭部：啟用 / 主鎖 / 刪除 */}
                       <div className="flex items-center justify-between gap-2">
                         <button
                           type="button"
@@ -1803,21 +1991,100 @@ export default function XAS({
                             pk.enabled ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-soft)] hover:text-[var(--text-main)]'].join(' ')}
                         >
                           <span className={['h-2.5 w-2.5 shrink-0 rounded-full transition-all duration-150',
-                            pk.enabled ? 'bg-[var(--accent-secondary)]' : 'border border-[var(--card-border)]'].join(' ')} />
+                            pk.enabled ? 'bg-[var(--accent-secondary)] [box-shadow:0_0_6px_color-mix(in_srgb,var(--accent-secondary)_70%,transparent)]' : 'border border-[var(--card-border)]'].join(' ')} />
                           <span className="truncate">{pk.label}</span>
+                        </button>
+                        <button
+                          type="button"
+                          title={pk.cardLocked ? '點擊解鎖以編輯約束條件' : '點擊鎖定（防止誤觸）'}
+                          onClick={() => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, cardLocked: !p.cardLocked } : p))}
+                          className={[
+                            'flex h-6 w-6 items-center justify-center rounded-full text-sm transition-colors',
+                            pk.cardLocked
+                              ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-amber-400',
+                          ].join(' ')}
+                        >
+                          {pk.cardLocked ? '🔒' : '🔓'}
                         </button>
                         <button type="button" onClick={() => setFitPeakCandidates(prev => prev.filter(p => p.id !== pk.id))} className="text-rose-400 hover:text-rose-300">✕</button>
                       </div>
-                      <div className="grid grid-cols-3 gap-1">
-                        <NumInput label="中心(eV)" value={pk.center} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, center: v } : p))} step={0.1} />
-                        <NumInput label="FWHM(eV)" value={pk.fwhm} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, fwhm: v } : p))} min={0.01} step={0.1} />
-                        <NumInput label="強度" value={pk.amplitude} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, amplitude: v } : p))} min={0} step={0.01} />
+                      {/* 來源標籤 + 約束切換 */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                          {pk.sourceType === 'database' ? '理論峰' : '手動峰'}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={pk.cardLocked}
+                          onClick={() => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_center: !p.lock_center } : p))}
+                          className={[
+                            'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.cardLocked ? 'opacity-35 cursor-not-allowed border border-[var(--card-border)] text-[var(--text-soft)]' :
+                            pk.lock_center
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {pk.lock_center ? '中心固定' : '中心可調'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={pk.cardLocked}
+                          onClick={() => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_fwhm: !p.lock_fwhm } : p))}
+                          className={[
+                            'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.cardLocked ? 'opacity-35 cursor-not-allowed border border-[var(--card-border)] text-[var(--text-soft)]' :
+                            pk.lock_fwhm
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {pk.lock_fwhm ? '寬度固定' : '寬度可調'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={pk.cardLocked}
+                          onClick={() => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, lock_area: !p.lock_area } : p))}
+                          className={[
+                            'rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                            pk.cardLocked ? 'opacity-35 cursor-not-allowed border border-[var(--card-border)] text-[var(--text-soft)]' :
+                            pk.lock_area
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {pk.lock_area ? '高度固定' : '高度可調'}
+                        </button>
                       </div>
+                      {/* 數值輸入 */}
+                      <div className="grid grid-cols-3 gap-1">
+                        <NumInput label="中心(eV)" value={pk.center} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? updateXasPeakCenterSeed(p, v, fitDatasetMax) : p))} step={0.1} />
+                        <NumInput label="FWHM(eV)" value={pk.fwhm} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? updateXasPeakFwhmSeed(p, v, fitDatasetMax) : p))} min={0.01} step={0.1} />
+                        <NumInput label="強度" value={pk.amplitude} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? updateXasPeakAmplitudeSeed(p, v, fitDatasetMax) : p))} min={0} step={0.01} />
+                      </div>
+                      {/* 約束資訊 */}
+                      <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                        {pk.lock_center
+                          ? `中心將固定在 ${pk.center.toFixed(3)} eV`
+                          : `中心可在 ${(pk.center_min ?? pk.center).toFixed(3)} – ${(pk.center_max ?? pk.center).toFixed(3)} eV 內位移`}
+                        {' · '}
+                        {pk.lock_fwhm
+                          ? `FWHM 固定為 ${pk.fwhm.toFixed(3)} eV`
+                          : `FWHM 可在 ${(pk.fwhm_min ?? pk.fwhm).toFixed(3)} – ${(pk.fwhm_max ?? pk.fwhm).toFixed(3)} eV 內調整`}
+                        {' · '}
+                        {pk.lock_area
+                          ? `高度固定為 ${pk.amplitude.toFixed(4)}`
+                          : `高度上限約 ${(pk.amplitude_max ?? pk.amplitude).toFixed(4)}`}
+                      </p>
                     </div>
                   ))}
 
                   {fitPeakCandidates.length > 0 && (
                     <>
+                      <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                        鎖定只限制擬合時的自由度；你仍可先手動改 seed。
+                      </p>
                       {fitPeakCandidates.length > 1 && (
                         <button type="button" onClick={() => setFitPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
                       )}
@@ -1992,11 +2259,6 @@ export default function XAS({
               </div>
             </div>
 
-            {/* display control */}
-            <div className="mb-3 flex flex-wrap items-center gap-4">
-              <CheckRow label="顯示原始資料" checked={showRaw} onChange={setShowRaw} />
-            </div>
-
             {/* 1. Adaptive: raw OR preprocessed */}
             {!hasPreprocessing
               ? renderStagePair(
@@ -2032,19 +2294,19 @@ export default function XAS({
               backgroundTfyLayout,
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  <CheckRow label="顯示扣背景前" checked={showBgBefore} onChange={setShowBgBefore} />
-                  <CheckRow label="顯示背景基準線" checked={showBgBaseline} onChange={setShowBgBaseline} />
+                  <CheckRow label="疊加扣背景前（右軸）" checked={showBgBefore.TEY} onChange={v => setShowBgBefore(p => ({ ...p, TEY: v }))} />
+                  <CheckRow label="疊加背景基準線（右軸）" checked={showBgBaseline.TEY} onChange={v => setShowBgBaseline(p => ({ ...p, TEY: v }))} />
                 </div>
                 {renderBackgroundChartControls('TEY')}
               </div>,
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  <CheckRow label="顯示扣背景前" checked={showBgBefore} onChange={setShowBgBefore} />
-                  <CheckRow label="顯示背景基準線" checked={showBgBaseline} onChange={setShowBgBaseline} />
+                  <CheckRow label="疊加扣背景前（右軸）" checked={showBgBefore.TFY} onChange={v => setShowBgBefore(p => ({ ...p, TFY: v }))} />
+                  <CheckRow label="疊加背景基準線（右軸）" checked={showBgBaseline.TFY} onChange={v => setShowBgBaseline(p => ({ ...p, TFY: v }))} />
                 </div>
                 {renderBackgroundChartControls('TFY')}
               </div>,
-              '橘色區間為背景扣除範圍；勾選可疊加扣背景前曲線或背景基準線。',
+              '橘色區間為背景扣除範圍；左軸為扣背景後，右軸為原始強度。',
             )}
 
             {/* 3. Normalization (only when enabled) */}
@@ -2055,25 +2317,25 @@ export default function XAS({
               normalizationTeyLayout,
               normalizationTfyLayout,
               <div className="space-y-3">
-                <CheckRow label="顯示歸一化前" checked={showNormBefore} onChange={setShowNormBefore} />
+                <CheckRow label="疊加歸一化前（右軸）" checked={showNormBefore.TEY} onChange={v => setShowNormBefore(p => ({ ...p, TEY: v }))} />
                 {renderNormalizationChartControls('TEY')}
               </div>,
               <div className="space-y-3">
-                <CheckRow label="顯示歸一化前" checked={showNormBefore} onChange={setShowNormBefore} />
+                <CheckRow label="疊加歸一化前（右軸）" checked={showNormBefore.TFY} onChange={v => setShowNormBefore(p => ({ ...p, TFY: v }))} />
                 {renderNormalizationChartControls('TFY')}
               </div>,
-              '綠色區間代表目前採樣的歸一化範圍；勾選可疊加歸一化前曲線。',
+              '綠色區間代表目前採樣的歸一化範圍；左軸為歸一化後，右軸為原始強度。',
             )}
 
-            {/* 4. Final spectrum (always) */}
+            {/* 4. Final spectrum – processed only (raw visible in stage 1) */}
             {renderStagePair(
               '4. 最終光譜',
               isOverlayMode
-                ? buildMultiTraces(overlayDatasets, 'TEY', showRaw, showWhiteLineMarkers && whiteLineEnabled)
-                : activeDataset ? buildTraces(activeDataset, 'TEY', showRaw, showWhiteLineMarkers && whiteLineEnabled) : [],
+                ? buildMultiTraces(overlayDatasets, 'TEY', false, showWhiteLineMarkers && whiteLineEnabled)
+                : activeDataset ? buildTraces(activeDataset, 'TEY', false, showWhiteLineMarkers && whiteLineEnabled) : [],
               isOverlayMode
-                ? buildMultiTraces(overlayDatasets, 'TFY', showRaw, showWhiteLineMarkers && whiteLineEnabled)
-                : activeDataset ? buildTraces(activeDataset, 'TFY', showRaw, showWhiteLineMarkers && whiteLineEnabled) : [],
+                ? buildMultiTraces(overlayDatasets, 'TFY', false, showWhiteLineMarkers && whiteLineEnabled)
+                : activeDataset ? buildTraces(activeDataset, 'TFY', false, showWhiteLineMarkers && whiteLineEnabled) : [],
               plainTeyLayout,
               plainTfyLayout,
             )}
@@ -2118,14 +2380,42 @@ export default function XAS({
             )}
 
             {/* Peak fitting result */}
-            {fitResult && (
+            {fitResult && activeDataset && (() => {
+              const _y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+              const _res = fitResult.residuals
+              const _sres = _res.reduce((s, r) => s + r * r, 0)
+              const _ymean = _y.length > 0 ? _y.reduce((s, v) => s + v, 0) / _y.length : 0
+              const _stot = _y.reduce((s, v) => s + (v - _ymean) ** 2, 0)
+              const r2 = _stot > 1e-20 ? Math.max(0, 1 - _sres / _stot) : 0
+              const rmse = Math.sqrt(_sres / Math.max(_res.length, 1))
+              const chiRed = _res.length > fitResult.peaks.length * 3
+                ? _sres / (_res.length - fitResult.peaks.length * 3)
+                : null
+              return (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
                 <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
                   <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果（{fitChannel}）</p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
                       {fitProfile.toUpperCase()} · {fitResult.peaks.length} 峰
                     </span>
+                    <span className={[
+                      'rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+                      r2 >= 0.99 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                      : r2 >= 0.97 ? 'border-sky-500/40 bg-sky-500/10 text-sky-400'
+                      : r2 >= 0.90 ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+                      : 'border-rose-500/40 bg-rose-500/10 text-rose-400',
+                    ].join(' ')}>
+                      R² = {r2.toFixed(4)}
+                    </span>
+                    <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
+                      RMSE = {rmse.toFixed(4)}
+                    </span>
+                    {chiRed != null && (
+                      <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
+                        χ²ᵣ = {chiRed.toFixed(4)}
+                      </span>
+                    )}
                     <button type="button" onClick={() => setFitResult(null)} className="text-[10px] text-rose-400 hover:text-rose-300">清除</button>
                   </div>
                 </div>
@@ -2190,24 +2480,54 @@ export default function XAS({
                   </table>
                 </div>
                 {/* export */}
-                <div className="mt-3 flex justify-start">
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {/* 光譜數據 TXT for Origin Pro */}
                   <button
                     type="button"
                     onClick={() => {
-                      const headers = ['peak_name', 'center_eV', 'fwhm_eV', 'area', 'height', 'area_pct']
-                      const rows = fitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Height, pk.Area_pct ?? ''])
-                      downloadFile(
-                        [headers.join(','), ...rows.map(r => r.map(csvEscape).join(','))].join('\n'),
-                        'xas_fit_result.csv', 'text/csv',
-                      )
+                      const peakHeaders = fitResult.peaks.map(pk => pk.Peak_Name)
+                      const header = ['Energy_eV', 'Observed', 'Total_Fit', 'Residuals', ...peakHeaders].join('\t')
+                      const lines = activeDataset.x.map((x, i) => {
+                        const obs = (fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed)[i] ?? ''
+                        const fit = fitResult.y_fit[i] ?? ''
+                        const res = fitResult.residuals[i] ?? ''
+                        const pkVals = fitResult.y_individual.map(yi => yi[i] ?? '')
+                        return [x, obs, fit, res, ...pkVals].join('\t')
+                      })
+                      downloadFile([header, ...lines].join('\n'), 'xas_fit_spectra.txt', 'text/plain')
                     }}
                     className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
                   >
-                    擬合結果 CSV
+                    光譜數據 TXT（Origin Pro）
+                  </button>
+                  {/* 分析報告 Excel */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void downloadFitReport({
+                        channel: fitChannel,
+                        profile: fitProfile,
+                        r2,
+                        rmse,
+                        chi_red: chiRed,
+                        peaks: fitResult.peaks.map(pk => ({
+                          name: pk.Peak_Name,
+                          center: pk.Center_eV,
+                          fwhm: pk.FWHM_eV,
+                          area: pk.Area,
+                          height: pk.Height,
+                          area_pct: pk.Area_pct,
+                        })),
+                      })
+                    }}
+                    className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+                  >
+                    分析報告 Excel
                   </button>
                 </div>
               </div>
-            )}
+              )
+            })()}
 
             {/* edge step table */}
             {activeDataset.edge_step_tey != null && (
@@ -2253,23 +2573,6 @@ export default function XAS({
                 >
                   處理後光譜 CSV
                 </button>
-                {activeDataset.white_line_tey != null && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const ds = activeDataset
-                      const headers = ['channel', 'white_line_eV', 'edge_step']
-                      const rows: (string | number | null)[][] = [
-                        ['TEY', ds.white_line_tey, ds.edge_step_tey],
-                        ['TFY', ds.white_line_tfy, ds.edge_step_tfy],
-                      ]
-                      downloadFile(toCsv(headers, rows), 'xas_summary.csv', 'text/csv')
-                    }}
-                    className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
-                  >
-                    摘要 CSV
-                  </button>
-                )}
               </div>
             </div>
             </>)}

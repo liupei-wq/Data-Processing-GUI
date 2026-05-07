@@ -88,6 +88,15 @@ export interface XasInitPeak {
   fwhm: number
   amplitude: number
   label?: string
+  lock_center?: boolean
+  lock_fwhm?: boolean
+  lock_area?: boolean
+  center_min?: number | null
+  center_max?: number | null
+  fwhm_min?: number | null
+  fwhm_max?: number | null
+  amplitude_max?: number | null
+  theoretical_center?: number | null
 }
 
 export interface XasFitPeakRow {

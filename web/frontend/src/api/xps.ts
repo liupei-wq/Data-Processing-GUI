@@ -161,3 +161,46 @@ export async function lookupRsf(items: RsfRequestItem[]): Promise<RsfResultRow[]
   if (!res.ok) throw new Error(await readApiError(res, 'XPS RSF 查詢失敗'))
   return res.json()
 }
+
+export interface XpsFitReportPeak {
+  name: string
+  center: number
+  fwhm: number
+  area: number
+  height: number
+  area_pct?: number | null
+}
+
+export interface XpsRsfReportRow {
+  peak_name: string
+  element: string
+  orbital: string
+  area: number
+  rsf?: number | null
+  rsf_area?: number | null
+  atomic_pct?: number | null
+}
+
+export async function downloadXpsFitReport(payload: {
+  channel?: string
+  profile: string
+  r2: number
+  rmse: number
+  chi_red?: number | null
+  peaks: XpsFitReportPeak[]
+  rsf_rows?: XpsRsfReportRow[] | null
+}): Promise<void> {
+  const res = await fetch(`${BASE}/fit-report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(await readApiError(res, 'XPS Excel 報告產生失敗'))
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'xps_fit_report.xlsx'
+  a.click()
+  URL.revokeObjectURL(url)
+}

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from core.parsers import looks_like_excel, numeric_excel_table
@@ -650,6 +651,15 @@ class XasInitPeak(BaseModel):
     fwhm: float
     amplitude: float
     label: Optional[str] = None
+    lock_center: bool = True
+    lock_fwhm: bool = True
+    lock_area: bool = True
+    center_min: Optional[float] = None
+    center_max: Optional[float] = None
+    fwhm_min: Optional[float] = None
+    fwhm_max: Optional[float] = None
+    amplitude_max: Optional[float] = None
+    theoretical_center: Optional[float] = None
 
 
 class XasFitRequest(BaseModel):
@@ -657,8 +667,9 @@ class XasFitRequest(BaseModel):
     y: List[float]
     peaks: List[XasInitPeak]
     profile: str = "voigt"
-    maxfev: int = 20000
+    maxfev: int = 6000
     peak_labels: Optional[List[str]] = None
+    fit_range: Optional[List[float]] = None
 
 
 class XasFitPeakRow(BaseModel):
@@ -686,12 +697,37 @@ def fit_xas_peaks(req: XasFitRequest):
         raise HTTPException(status_code=400, detail="資料或峰值參數不足")
 
     init_peaks = [
-        {"center": pk.center, "fwhm": pk.fwhm, "amplitude": pk.amplitude}
+        {
+            "center": pk.center,
+            "fwhm": pk.fwhm,
+            "amplitude": pk.amplitude,
+            "lock_center": pk.lock_center,
+            "lock_fwhm": pk.lock_fwhm,
+            "lock_area": pk.lock_area,
+            "center_min": pk.center_min,
+            "center_max": pk.center_max,
+            "fwhm_min": pk.fwhm_min,
+            "fwhm_max": pk.fwhm_max,
+            "amplitude_max": pk.amplitude_max,
+            "theoretical_center": pk.theoretical_center,
+            "label": pk.label,
+        }
         for pk in req.peaks
     ]
 
+    fit_range = req.fit_range
+    if fit_range is None and req.peaks:
+        centers = np.array([pk.center for pk in req.peaks], dtype=float)
+        fwhms = np.array([max(pk.fwhm, 0.05) for pk in req.peaks], dtype=float)
+        padding = max(3.0, float(np.max(fwhms)) * 6.0)
+        fit_lo = max(float(np.min(x)), float(np.min(centers)) - padding)
+        fit_hi = min(float(np.max(x)), float(np.max(centers)) + padding)
+        fit_range = [fit_lo, fit_hi]
+
+    capped_maxfev = max(1000, min(int(req.maxfev), 8000))
+
     try:
-        result = fit_peaks(x, y, init_peaks, profile=req.profile, maxfev=req.maxfev)
+        result = fit_peaks(x, y, init_peaks, profile=req.profile, maxfev=capped_maxfev, fit_range=fit_range)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"擬合失敗：{exc}") from exc
 
@@ -749,6 +785,168 @@ class XasSampleEdgeResponse(BaseModel):
     edge: str
     energy_range: List[float]
     peaks: List[XasEdgePeak]
+
+
+# ── Fit report (Excel) ────────────────────────────────────────────────────────
+
+class FitReportPeak(BaseModel):
+    name: str
+    center: float
+    fwhm: float
+    area: float
+    height: float
+    area_pct: Optional[float] = None
+
+
+class FitReportRequest(BaseModel):
+    channel: str
+    profile: str
+    r2: float
+    rmse: float
+    chi_red: Optional[float] = None
+    peaks: List[FitReportPeak]
+
+
+@router.post("/fit-report")
+def generate_fit_report(req: FitReportRequest):
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl 未安裝")
+
+    wb = Workbook()
+
+    # ── Sheet 1: 擬合品質 ────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "擬合品質"
+
+    thin = Side(style="thin", color="CCCCCC")
+    border_thin = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def _hdr_font(bold=True, size=11):
+        return Font(name="Arial", bold=bold, size=size, color="FFFFFF")
+
+    def _body_font(bold=False, size=10):
+        return Font(name="Arial", bold=bold, size=size)
+
+    def _fill(hex_color: str):
+        return PatternFill(fill_type="solid", fgColor=hex_color)
+
+    # Title
+    ws1.merge_cells("A1:C1")
+    t = ws1["A1"]
+    t.value = "XAS 峰擬合分析報告"
+    t.font = Font(name="Arial", bold=True, size=13, color="FFFFFF")
+    t.fill = _fill("2D4A6B")
+    t.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.row_dimensions[1].height = 28
+
+    # Section header
+    ws1.merge_cells("A2:C2")
+    s = ws1["A2"]
+    s.value = "擬合參數"
+    s.font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
+    s.fill = _fill("4A7CA8")
+    s.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws1.row_dimensions[2].height = 20
+
+    params_rows = [
+        ("通道", req.channel.upper()),
+        ("峰形", req.profile.upper()),
+        ("峰數量", len(req.peaks)),
+    ]
+    for r_idx, (label, val) in enumerate(params_rows, start=3):
+        ws1.cell(r_idx, 1, label).font = _body_font(bold=True)
+        ws1.cell(r_idx, 1).fill = _fill("EDF3F9")
+        ws1.cell(r_idx, 1).border = border_thin
+        ws1.cell(r_idx, 2, val).font = _body_font()
+        ws1.cell(r_idx, 2).border = border_thin
+        ws1.cell(r_idx, 3).border = border_thin
+
+    # Section header: 擬合品質
+    next_r = 3 + len(params_rows)
+    ws1.merge_cells(f"A{next_r}:C{next_r}")
+    sq = ws1.cell(next_r, 1, "擬合品質指標")
+    sq.font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
+    sq.fill = _fill("4A7CA8")
+    sq.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws1.row_dimensions[next_r].height = 20
+
+    # R² with conditional color
+    r2_val = req.r2
+    if r2_val >= 0.99:
+        r2_fill = "D4EDDA"; r2_txt = "228B22"
+    elif r2_val >= 0.97:
+        r2_fill = "D0E8F5"; r2_txt = "0066AA"
+    elif r2_val >= 0.90:
+        r2_fill = "FFF3CD"; r2_txt = "856404"
+    else:
+        r2_fill = "F8D7DA"; r2_txt = "842029"
+
+    quality_rows: list[tuple] = [
+        ("R²", f"{r2_val:.6f}", r2_fill, r2_txt),
+        ("RMSE", f"{req.rmse:.6f}", "FFFFFF", "000000"),
+    ]
+    if req.chi_red is not None:
+        quality_rows.append(("χ²ᵣ (Reduced χ²)", f"{req.chi_red:.6f}", "FFFFFF", "000000"))
+
+    for q_idx, (label, val, bg, fg) in enumerate(quality_rows, start=next_r + 1):
+        c_label = ws1.cell(q_idx, 1, label)
+        c_label.font = Font(name="Arial", bold=True, size=10, color="000000")
+        c_label.fill = _fill("EDF3F9")
+        c_label.border = border_thin
+        c_val = ws1.cell(q_idx, 2, val)
+        c_val.font = Font(name="Arial", bold=(bg != "FFFFFF"), size=10, color=fg)
+        c_val.fill = _fill(bg)
+        c_val.border = border_thin
+        ws1.cell(q_idx, 3).border = border_thin
+
+    ws1.column_dimensions["A"].width = 24
+    ws1.column_dimensions["B"].width = 18
+    ws1.column_dimensions["C"].width = 4
+
+    # ── Sheet 2: 峰參數 ──────────────────────────────────────────────────
+    ws2 = wb.create_sheet("峰參數")
+
+    col_headers = ["峰名稱", "中心 (eV)", "FWHM (eV)", "面積", "高度", "面積 %"]
+    col_widths = [18, 14, 14, 14, 14, 10]
+    hdr_fill = _fill("2D4A6B")
+
+    for c_idx, (hdr, w) in enumerate(zip(col_headers, col_widths), start=1):
+        cell = ws2.cell(1, c_idx, hdr)
+        cell.font = _hdr_font()
+        cell.fill = hdr_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border_thin
+        ws2.column_dimensions[get_column_letter(c_idx)].width = w
+    ws2.row_dimensions[1].height = 22
+
+    for r_idx, pk in enumerate(req.peaks, start=2):
+        row_bg = "F7FAFD" if r_idx % 2 == 0 else "FFFFFF"
+        values = [pk.name, pk.center, pk.fwhm, pk.area, pk.height, pk.area_pct]
+        for c_idx, val in enumerate(values, start=1):
+            cell = ws2.cell(r_idx, c_idx, val if val is not None else "—")
+            cell.font = _body_font()
+            cell.fill = _fill(row_bg)
+            cell.border = border_thin
+            if c_idx > 1 and isinstance(val, float):
+                cell.number_format = "0.0000" if c_idx <= 5 else "0.00"
+            if c_idx == 1:
+                cell.alignment = Alignment(horizontal="left", indent=1)
+            else:
+                cell.alignment = Alignment(horizontal="right")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=xas_fit_report.xlsx"},
+    )
 
 
 @router.get("/samples", response_model=List[XasSampleListItem])

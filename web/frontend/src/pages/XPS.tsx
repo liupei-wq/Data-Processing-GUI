@@ -7,7 +7,7 @@ import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
-import { calibrateEnergy, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
+import { calibrateEnergy, downloadXpsFitReport, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
 import type {
   CalibrationResult,
   DatasetInput,
@@ -3938,11 +3938,70 @@ export default function XPS({
                     <div className="mt-3 flex flex-col gap-2">
                       {currentFitResult && currentFitResult.peaks.length > 0 ? (
                         <>
-                          <ExportBtnSecondary label="峰擬合結果 CSV" onClick={() => {
-                            const headers = ['Peak', 'Center_eV', 'FWHM_eV', 'Area', 'Area_pct']
-                            const rows: (string | number | null)[][] = currentFitResult.peaks.map(pk => [pk.Peak_Name, pk.Center_eV, pk.FWHM_eV, pk.Area, pk.Area_pct])
-                            downloadFile(toCsv(headers, rows), 'xps_fit.csv', 'text/csv')
+                          {/* 光譜數據 TXT for Origin Pro */}
+                          <ExportBtnSecondary label="峰擬合光譜 TXT（Origin Pro）" onClick={() => {
+                            const peakHeaders = currentFitResult.peaks.map(pk => pk.Peak_Name)
+                            const header = ['Binding_Energy_eV', 'Observed', 'Total_Fit', 'Residuals', ...peakHeaders].join('\t')
+                            const ds = fitTargetDataset
+                            const lines = ds ? ds.x.map((x, i) => {
+                              const obs = ds.y_processed[i] ?? ''
+                              const fit = currentFitResult.y_fit[i] ?? ''
+                              const res = currentFitResult.residuals[i] ?? ''
+                              const pkVals = currentFitResult.y_individual.map(yi => yi[i] ?? '')
+                              return [x, obs, fit, res, ...pkVals].join('\t')
+                            }) : []
+                            downloadFile([header, ...lines].join('\n'), 'xps_fit_spectra.txt', 'text/plain')
                           }} />
+                          {/* 分析報告 Excel (3 sheets) */}
+                          <ExportBtnSecondary label="分析報告 Excel" onClick={() => {
+                            const _y = fitTargetDataset?.y_processed ?? []
+                            const _res = currentFitResult.residuals
+                            const _sres = _res.reduce((s, r) => s + r * r, 0)
+                            const _ymean = _y.length > 0 ? _y.reduce((s, v) => s + v, 0) / _y.length : 0
+                            const _stot = _y.reduce((s, v) => s + (v - _ymean) ** 2, 0)
+                            const _r2 = _stot > 1e-20 ? Math.max(0, 1 - _sres / _stot) : 0
+                            const _rmse = Math.sqrt(_sres / Math.max(_res.length, 1))
+                            const _chiRed = _res.length > currentFitResult.peaks.length * 3
+                              ? _sres / (_res.length - currentFitResult.peaks.length * 3)
+                              : null
+                            const hasRsf = currentRsfRows.some(r => r.rsf != null)
+                            const totalRsfArea = hasRsf
+                              ? currentRsfRows.reduce((acc, r, i) => {
+                                  const a = currentFitResult.peaks[i]?.Area ?? 0
+                                  return acc + (r.rsf ? Math.abs(a) / r.rsf : 0)
+                                }, 0)
+                              : 0
+                            void downloadXpsFitReport({
+                              channel: xpsMode === 'valence_band' ? 'VB' : 'XPS',
+                              profile: fitProfile,
+                              r2: _r2,
+                              rmse: _rmse,
+                              chi_red: _chiRed,
+                              peaks: currentFitResult.peaks.map(pk => ({
+                                name: pk.Peak_Name,
+                                center: pk.Center_eV,
+                                fwhm: pk.FWHM_eV,
+                                area: pk.Area,
+                                height: pk.Height ?? 0,
+                                area_pct: pk.Area_pct,
+                              })),
+                              rsf_rows: hasRsf ? currentRsfRows.map((row, idx) => {
+                                const pk = currentFitResult.peaks[idx]
+                                const rsfArea = row.rsf ? Math.abs(pk?.Area ?? 0) / row.rsf : null
+                                const atomicPct = rsfArea != null && totalRsfArea > 0 ? rsfArea / totalRsfArea * 100 : null
+                                return {
+                                  peak_name: row.peakName,
+                                  element: row.element,
+                                  orbital: row.orbitalLabel,
+                                  area: pk?.Area ?? 0,
+                                  rsf: row.rsf,
+                                  rsf_area: rsfArea,
+                                  atomic_pct: atomicPct,
+                                }
+                              }) : null,
+                            })
+                          }} />
+                          {/* RSF 定量 CSV 保留 */}
                           {currentRsfRows.some(r => r.rsf != null) && (
                             <ExportBtnSecondary label="RSF 定量 CSV" onClick={() => {
                               const totalRsfArea = currentRsfRows.reduce((acc, r, i) => {

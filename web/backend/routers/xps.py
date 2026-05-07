@@ -648,3 +648,196 @@ def get_rsf_values(items: List[RsfItem]):
         rsf, source = get_orbital_rsf(item.element.strip(), item.label.strip())
         results.append(RsfResultRow(element=item.element, label=item.label, rsf=rsf, source=source))
     return results
+
+
+# ── Fit report (Excel, 3-sheet) ───────────────────────────────────────────────
+
+class XpsFitReportPeak(BaseModel):
+    name: str
+    center: float
+    fwhm: float
+    area: float
+    height: float
+    area_pct: Optional[float] = None
+
+
+class XpsRsfReportRow(BaseModel):
+    peak_name: str
+    element: str
+    orbital: str
+    area: float
+    rsf: Optional[float] = None
+    rsf_area: Optional[float] = None
+    atomic_pct: Optional[float] = None
+
+
+class XpsFitReportRequest(BaseModel):
+    channel: str = "XPS"
+    profile: str
+    r2: float
+    rmse: float
+    chi_red: Optional[float] = None
+    peaks: List[XpsFitReportPeak]
+    rsf_rows: Optional[List[XpsRsfReportRow]] = None
+
+
+@router.post("/fit-report")
+def generate_xps_fit_report(req: XpsFitReportRequest):
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl 未安裝")
+
+    from fastapi.responses import StreamingResponse as _SR
+    import io as _io
+
+    wb = Workbook()
+
+    thin = Side(style="thin", color="CCCCCC")
+    border_thin = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def _hdr_font(size=11):
+        return Font(name="Arial", bold=True, size=size, color="FFFFFF")
+
+    def _body_font(bold=False, size=10, color="000000"):
+        return Font(name="Arial", bold=bold, size=size, color=color)
+
+    def _fill(hex_color: str):
+        return PatternFill(fill_type="solid", fgColor=hex_color)
+
+    TITLE_FILL = "2D4A6B"
+    SECTION_FILL = "4A7CA8"
+    ROW_EVEN = "EDF3F9"
+
+    # ── Sheet 1: 擬合品質 ────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "擬合品質"
+
+    ws1.merge_cells("A1:C1")
+    t = ws1["A1"]
+    t.value = "XPS 峰擬合分析報告"
+    t.font = Font(name="Arial", bold=True, size=13, color="FFFFFF")
+    t.fill = _fill(TITLE_FILL)
+    t.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.row_dimensions[1].height = 28
+
+    ws1.merge_cells("A2:C2")
+    s = ws1["A2"]
+    s.value = "擬合參數"
+    s.font = _hdr_font(size=10)
+    s.fill = _fill(SECTION_FILL)
+    s.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws1.row_dimensions[2].height = 20
+
+    params_rows = [
+        ("模式", req.channel),
+        ("峰形", req.profile.upper()),
+        ("峰數量", len(req.peaks)),
+    ]
+    for r_idx, (label, val) in enumerate(params_rows, start=3):
+        c1 = ws1.cell(r_idx, 1, label)
+        c1.font = _body_font(bold=True); c1.fill = _fill(ROW_EVEN); c1.border = border_thin
+        c2 = ws1.cell(r_idx, 2, val)
+        c2.font = _body_font(); c2.border = border_thin
+        ws1.cell(r_idx, 3).border = border_thin
+
+    nr = 3 + len(params_rows)
+    ws1.merge_cells(f"A{nr}:C{nr}")
+    sq = ws1.cell(nr, 1, "擬合品質指標")
+    sq.font = _hdr_font(size=10); sq.fill = _fill(SECTION_FILL)
+    sq.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws1.row_dimensions[nr].height = 20
+
+    r2_val = req.r2
+    if r2_val >= 0.99:
+        r2_bg, r2_fg = "D4EDDA", "228B22"
+    elif r2_val >= 0.97:
+        r2_bg, r2_fg = "D0E8F5", "0066AA"
+    elif r2_val >= 0.90:
+        r2_bg, r2_fg = "FFF3CD", "856404"
+    else:
+        r2_bg, r2_fg = "F8D7DA", "842029"
+
+    quality_rows: list[tuple] = [
+        ("R²", f"{r2_val:.6f}", r2_bg, r2_fg, True),
+        ("RMSE", f"{req.rmse:.6f}", "FFFFFF", "000000", False),
+    ]
+    if req.chi_red is not None:
+        quality_rows.append(("χ²ᵣ (Reduced χ²)", f"{req.chi_red:.6f}", "FFFFFF", "000000", False))
+
+    for q_idx, (label, val, bg, fg, bold) in enumerate(quality_rows, start=nr + 1):
+        c1 = ws1.cell(q_idx, 1, label)
+        c1.font = _body_font(bold=True); c1.fill = _fill(ROW_EVEN); c1.border = border_thin
+        c2 = ws1.cell(q_idx, 2, val)
+        c2.font = _body_font(bold=bold, color=fg); c2.fill = _fill(bg); c2.border = border_thin
+        ws1.cell(q_idx, 3).border = border_thin
+
+    ws1.column_dimensions["A"].width = 24
+    ws1.column_dimensions["B"].width = 18
+    ws1.column_dimensions["C"].width = 4
+
+    # ── Sheet 2: 峰參數 ──────────────────────────────────────────────────
+    ws2 = wb.create_sheet("峰參數")
+    col_headers2 = ["峰名稱", "中心 (eV)", "FWHM (eV)", "面積", "高度", "面積 %"]
+    col_widths2 = [18, 14, 14, 14, 14, 10]
+
+    for c_idx, (hdr, w) in enumerate(zip(col_headers2, col_widths2), start=1):
+        cell = ws2.cell(1, c_idx, hdr)
+        cell.font = _hdr_font(); cell.fill = _fill(TITLE_FILL)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border_thin
+        ws2.column_dimensions[get_column_letter(c_idx)].width = w
+    ws2.row_dimensions[1].height = 22
+
+    for r_idx, pk in enumerate(req.peaks, start=2):
+        row_bg = ROW_EVEN if r_idx % 2 == 0 else "FFFFFF"
+        values = [pk.name, pk.center, pk.fwhm, pk.area, pk.height, pk.area_pct]
+        for c_idx, val in enumerate(values, start=1):
+            cell = ws2.cell(r_idx, c_idx, val if val is not None else "—")
+            cell.font = _body_font(); cell.fill = _fill(row_bg); cell.border = border_thin
+            if c_idx > 1 and isinstance(val, float):
+                cell.number_format = "0.0000" if c_idx <= 5 else "0.00"
+            cell.alignment = Alignment(
+                horizontal="left" if c_idx == 1 else "right",
+                indent=1 if c_idx == 1 else 0,
+            )
+
+    # ── Sheet 3: RSF 定量（可選） ─────────────────────────────────────────
+    if req.rsf_rows:
+        ws3 = wb.create_sheet("RSF 定量")
+        col_headers3 = ["峰名稱", "元素", "軌道", "面積", "RSF", "RSF 面積", "原子 %"]
+        col_widths3 = [18, 10, 10, 14, 10, 14, 10]
+
+        for c_idx, (hdr, w) in enumerate(zip(col_headers3, col_widths3), start=1):
+            cell = ws3.cell(1, c_idx, hdr)
+            cell.font = _hdr_font(); cell.fill = _fill(TITLE_FILL)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border_thin
+            ws3.column_dimensions[get_column_letter(c_idx)].width = w
+        ws3.row_dimensions[1].height = 22
+
+        for r_idx, row in enumerate(req.rsf_rows, start=2):
+            row_bg = ROW_EVEN if r_idx % 2 == 0 else "FFFFFF"
+            values = [row.peak_name, row.element, row.orbital, row.area,
+                      row.rsf, row.rsf_area, row.atomic_pct]
+            for c_idx, val in enumerate(values, start=1):
+                cell = ws3.cell(r_idx, c_idx, val if val is not None else "—")
+                cell.font = _body_font(); cell.fill = _fill(row_bg); cell.border = border_thin
+                if c_idx > 3 and isinstance(val, float):
+                    cell.number_format = "0.0000" if c_idx <= 6 else "0.00"
+                cell.alignment = Alignment(
+                    horizontal="left" if c_idx <= 3 else "right",
+                    indent=1 if c_idx <= 3 else 0,
+                )
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return _SR(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=xps_fit_report.xlsx"},
+    )
