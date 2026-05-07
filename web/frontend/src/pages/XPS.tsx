@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
@@ -326,11 +326,16 @@ function suggestVbmEdgeRange(x: number[], y: number[]) {
     return (smooth[index + 1] - smooth[index - 1]) / Math.max(xs[index + 1] - xs[index - 1], 1e-6)
   })
 
+  // Only search the first 30% of points (low-BE Fermi-edge region).
+  // Interior VB sub-peaks can have steeper gradients than the true Fermi edge;
+  // restricting to the low-BE side avoids picking those wrong regions.
+  const fermiRegionLimit = Math.max(5, Math.floor(points.length * 0.30))
   const candidateIndices = normalized
     .map((value, index) => ({ value, index }))
-    .filter(item => item.value >= 0.15 && item.value <= 0.85)
+    .filter(item => item.index < fermiRegionLimit && item.value >= 0.15 && item.value <= 0.85)
     .map(item => item.index)
-  const searchIndices = candidateIndices.length > 0 ? candidateIndices : gradients.map((_, index) => index)
+  const fermiRegionFallback = Array.from({ length: fermiRegionLimit }, (_, i) => i)
+  const searchIndices = candidateIndices.length > 0 ? candidateIndices : fermiRegionFallback
   if (searchIndices.length === 0) return null
 
   let bestIndex = searchIndices[0]
@@ -385,7 +390,9 @@ function suggestVbmBaselineRange(x: number[], y: number[]) {
   const ySpan = Math.max(yMax - yMin, 1e-9)
   const xSpan = Math.max(xs[xs.length - 1] - xs[0], 1e-6)
 
-  const candidateLimit = Math.max(6, Math.floor(points.length * 0.4))
+  // Restrict to first 20% of points so the baseline stays in the true noise floor
+  // near the Fermi edge, not in the VB leading-edge region.
+  const candidateLimit = Math.max(6, Math.floor(points.length * 0.2))
   const windowSize = Math.max(4, Math.min(candidateLimit, Math.round(points.length * 0.12)))
   let bestScore = Number.POSITIVE_INFINITY
   let bestRange: { start: number; end: number } | null = null
@@ -1558,6 +1565,19 @@ export default function XPS({
   const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, false)
   const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, false)
   const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, false)
+  const activeSessionForProcessing = activeDatasetKey
+    ? {
+        ...(datasetSessions[activeDatasetKey] ?? createDefaultSession()),
+        params: { ...params, average: false },
+        autoInterpPoints,
+        manualEnergyShiftEnabled,
+        selectedElement,
+        fitProfile,
+        peakCandidates,
+        fitResult,
+        rsfRows,
+      }
+    : null
   const overlayPrimaryDataset = getStageDataset(overlayBundle?.final ?? null, 0, overlayState.params.average)
   const overlayAverageDataset = overlayBundle?.final?.average ?? null
   const fitTargetDataset = processingViewMode === 'overlay'
@@ -1586,6 +1606,53 @@ export default function XPS({
   const vbmEdgeExtrema = activeDataset
     ? findSpectrumExtrema(activeDataset.x, activeDataset.y_processed, { start: vbmEdgeLo, end: vbmEdgeHi })
     : null
+
+  // Preview tangent: two anchor points = mean of 20%-neighbourhood around each slider end.
+  // Computed every render so the lines update live as the user drags the sliders.
+  const vbmPreviewTangent = useMemo(() => {
+    if (!activeDataset || xpsMode !== 'valence_band') return null
+    const { x, y_processed } = activeDataset
+    const lo = Math.min(vbmEdgeLo, vbmEdgeHi)
+    const hi = Math.max(vbmEdgeLo, vbmEdgeHi)
+    const hw = Math.max(hi - lo, 0.1) * 0.20
+    let loSX = 0, loSY = 0, loN = 0, hiSX = 0, hiSY = 0, hiN = 0
+    for (let i = 0; i < x.length; i++) {
+      const xi = x[i]; const yi = y_processed[i]
+      if (xi >= lo - hw && xi <= lo + hw) { loSX += xi; loSY += yi; loN++ }
+      if (xi >= hi - hw && xi <= hi + hw) { hiSX += xi; hiSY += yi; hiN++ }
+    }
+    if (loN === 0 || hiN === 0) return null
+    const x1 = loSX / loN, y1 = loSY / loN
+    const x2 = hiSX / hiN, y2 = hiSY / hiN
+    if (Math.abs(x2 - x1) < 1e-10) return null
+    const slope = (y2 - y1) / (x2 - x1)
+    const intercept = y1 - slope * x1
+    return { slope, intercept, a1x: x1, a1y: y1, a2x: x2, a2y: y2 }
+  }, [activeDataset, vbmEdgeLo, vbmEdgeHi, xpsMode])
+
+  // Preview baseline: mean of 20%-neighbourhood around each baseline slider end.
+  const vbmPreviewBaseline = useMemo(() => {
+    if (!activeDataset || xpsMode !== 'valence_band') return null
+    const { x, y_processed } = activeDataset
+    const lo = Math.min(vbmBaselineLo, vbmBaselineHi)
+    const hi = Math.max(vbmBaselineLo, vbmBaselineHi)
+    const hw = Math.max(hi - lo, 0.1) * 0.20
+    let sumY = 0, n = 0
+    for (let i = 0; i < x.length; i++) {
+      const xi = x[i]
+      if ((xi >= lo - hw && xi <= lo + hw) || (xi >= hi - hw && xi <= hi + hw)) { sumY += y_processed[i]; n++ }
+    }
+    return n > 0 ? sumY / n : null
+  }, [activeDataset, vbmBaselineLo, vbmBaselineHi, xpsMode])
+
+  // Preview VBM intersection of tangent line and baseline.
+  const vbmPreviewVbm = useMemo(() => {
+    if (!vbmPreviewTangent || vbmPreviewBaseline === null) return null
+    const { slope, intercept } = vbmPreviewTangent
+    if (Math.abs(slope) < 1e-10) return null
+    const v = (vbmPreviewBaseline - intercept) / slope
+    return Number.isFinite(v) ? v : null
+  }, [vbmPreviewTangent, vbmPreviewBaseline])
   const suggestedVbmEdgeRange = activeDataset
     ? suggestVbmEdgeRange(activeDataset.x, activeDataset.y_processed)
     : null
@@ -1780,7 +1847,9 @@ export default function XPS({
       for (const key of keysToProcess) {
         if (cancelled) return
         const index = rawFileKeys.indexOf(key)
-        const session = datasetSessions[key]
+        const session = key === activeDatasetKey && activeSessionForProcessing
+          ? activeSessionForProcessing
+          : datasetSessions[key]
         if (index < 0 || !session) {
           results.push(null)
           continue
@@ -1883,7 +1952,7 @@ export default function XPS({
     })()
 
     return () => { cancelled = true }
-  }, [processingViewMode, rawFiles, rawFileKeys, datasetSessions, activeDatasetKey])
+  }, [processingViewMode, rawFiles, rawFileKeys, datasetSessions, activeDatasetKey, activeSessionForProcessing])
 
   // process overlay selection with an independent transient state
   useEffect(() => {
@@ -2465,6 +2534,7 @@ export default function XPS({
   const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
   const overlayPreprocessDatasets = getOverlayStageDatasets(overlayBundle?.preprocess ?? null, overlayState.params.average)
   const overlayBackgroundProcessedDatasets = getOverlayProcessedStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
+  const overlayPreprocessProcessedDatasets = getOverlayProcessedStageDatasets(overlayBundle?.preprocess ?? null, overlayState.params.average)
   const overlayMinCount = overlayState.params.average ? 1 : 2
   const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, rawChartActiveIndex, rawSeriesColorKeys)
   const preprocessChartTraces = rawPreview && preprocessDataset
@@ -2475,18 +2545,20 @@ export default function XPS({
         chartLineColors.preprocess,
       )
     : []
-  const backgroundChartTraces = backgroundDataset
+  const backgroundChartInput = preprocessDataset
+  const backgroundChartOutput = backgroundDataset ?? preprocessDataset
+  const backgroundChartTraces = backgroundChartInput && backgroundChartOutput
     ? [
         {
-          x: backgroundDataset.x,
-          y: backgroundDataset.y_raw,
+          x: backgroundChartInput.x,
+          y: backgroundChartInput.y_processed,
           type: 'scatter',
           mode: 'lines',
           name: '背景扣除前',
           line: { color: (LINE_COLOR_PALETTES[chartLineColors.background] ?? LINE_COLOR_PALETTES.orange).secondary, width: 1.4 },
           opacity: 0.82,
         },
-        ...(backgroundDataset.y_background ? [{
+        ...(backgroundDataset?.y_background ? [{
           x: backgroundDataset.x,
           y: backgroundDataset.y_background,
           type: 'scatter' as const,
@@ -2495,8 +2567,8 @@ export default function XPS({
           line: { color: (LINE_COLOR_PALETTES[chartLineColors.background] ?? LINE_COLOR_PALETTES.orange).tertiary, width: 1.3, dash: 'dot' as const },
         }] : []),
         {
-          x: backgroundDataset.x,
-          y: backgroundDataset.y_processed,
+          x: backgroundChartOutput.x,
+          y: backgroundChartOutput.y_processed,
           type: 'scatter',
           mode: 'lines',
           name: '背景扣除後',
@@ -2515,8 +2587,8 @@ export default function XPS({
         usesAreaNormalization ? 'y2' : 'y',
       )
     : []
-  const bgDataXMin = backgroundDataset ? Math.min(...backgroundDataset.x) : beMin
-  const bgDataXMax = backgroundDataset ? Math.max(...backgroundDataset.x) : beMax
+  const bgDataXMin = backgroundChartOutput ? Math.min(...backgroundChartOutput.x) : beMin
+  const bgDataXMax = backgroundChartOutput ? Math.max(...backgroundChartOutput.x) : beMax
   const normDataXMin = normalizationInput ? Math.min(...normalizationInput.x) : beMin
   const normDataXMax = normalizationInput ? Math.max(...normalizationInput.x) : beMax
   const backgroundLayout = {
@@ -3269,16 +3341,25 @@ export default function XPS({
                       <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
                       <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
                     </div>
+                    {vbmPreviewVbm !== null && (
+                      <p className="text-xs text-[var(--text-soft)]">
+                        預覽 VBM ≈ <span className={`font-semibold ${vbmPreviewVbm < 0 ? 'text-amber-400' : 'text-green-400'}`}>{vbmPreviewVbm.toFixed(3)} eV</span>
+                        {vbmPreviewVbm < 0 && <span className="text-amber-400"> ⚠ 負值</span>}
+                      </p>
+                    )}
                     <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
                       className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
                     >
-                      {vbmLoading ? '計算中…' : '計算 VBM'}
+                      {vbmLoading ? '計算中…' : '計算 VBM（後端確認）'}
                     </button>
                     {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
                     {vbmResult?.success && (
                       <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
                         <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
                         <p className="text-[var(--text-soft)]">斜率 = {vbmResult.slope.toFixed(4)} · 基準線 = {vbmResult.baseline_level.toFixed(2)}</p>
+                        {vbmResult.vbm_ev !== null && vbmResult.vbm_ev < 0 && (
+                          <p className="text-amber-400 font-medium">⚠ VBM 為負值（低於費米能階），可能是切線區間未落在 Fermi edge 的線性上升段，請手動調整。</p>
+                        )}
                       </div>
                     )}
                   </Section>
@@ -3453,7 +3534,7 @@ export default function XPS({
             )}
 
             {/* ── overlay: background stage ── */}
-            {overlayPreprocessDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length >= overlayMinCount && (
+            {overlayPreprocessDatasets.length >= overlayMinCount && overlayState.params.bg_enabled && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
                   title={overlayState.params.bg_enabled ? '多筆疊圖：背景扣除後' : '多筆疊圖：背景扣除（未啟用）'}
@@ -3480,7 +3561,12 @@ export default function XPS({
                     : '目前未啟用背景扣除，這一階段直接沿用前處理結果。'}
                 </p>
                 <Plot
-                  data={applyHidden(buildOverlayBackgroundTracesWithSeriesColors(overlayBackgroundProcessedDatasets, getDatasetColorKey, showXpsBgBefore, showBg) as Plotly.Data[], overlayBgHidden)}
+                  data={applyHidden(buildOverlayBackgroundTracesWithSeriesColors(
+                    overlayBackgroundProcessedDatasets.length >= overlayMinCount ? overlayBackgroundProcessedDatasets : overlayPreprocessProcessedDatasets,
+                    getDatasetColorKey,
+                    showXpsBgBefore,
+                    showBg,
+                  ) as Plotly.Data[], overlayBgHidden)}
                   layout={overlayBgLayout as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
@@ -3820,32 +3906,32 @@ export default function XPS({
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推</p>
                 <Plot
-                  data={[
-                    { x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
-                    ...(vbmEdgeExtrema ? [
-                      {
-                        x: [vbmEdgeExtrema.maxPoint.x],
-                        y: [vbmEdgeExtrema.maxPoint.y],
-                        type: 'scatter' as const,
-                        mode: 'markers' as const,
-                        name: '切線區間高點',
-                        marker: { color: '#f97316', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.2 } },
-                      },
-                      {
-                        x: [vbmEdgeExtrema.minPoint.x],
-                        y: [vbmEdgeExtrema.minPoint.y],
-                        type: 'scatter' as const,
-                        mode: 'markers' as const,
-                        name: '切線區間低點',
-                        marker: { color: '#8b5cf6', size: 9, symbol: 'circle' as const, line: { color: '#f5f3ff', width: 1.2 } },
-                      },
-                    ] : []),
-                    ...(vbmResult?.success ? [
-                      { x: vbmResult.x_fit, y: vbmResult.y_fit, type: 'scatter', mode: 'lines', name: '切線 (外推)', line: { color: '#f97316', width: 1.5, dash: 'dash' } },
-                      { x: [beMin, beMax], y: [vbmResult.baseline_level, vbmResult.baseline_level], type: 'scatter', mode: 'lines', name: '基準線', line: { color: '#a855f7', width: 1.2, dash: 'dot' } },
-                    ] : []),
-                    ...(vbmResult?.success && vbmResult.vbm_ev != null ? [{ x: [vbmResult.vbm_ev], y: [vbmResult.baseline_level], type: 'scatter' as const, mode: 'markers' as const, name: 'VBM', marker: { color: '#f97316', size: 10, symbol: 'diamond' as const } }] : []),
-                  ] as Plotly.Data[]}
+                  data={(() => {
+                    // Extend line range to cover the whole spectrum, including the projected VBM point
+                    const xLo = Math.min(beMin, vbmPreviewVbm !== null ? vbmPreviewVbm - 0.5 : beMin) - 0.3
+                    const xHi = beMax + 0.3
+                    const lineXArr = Array.from({ length: 80 }, (_, i) => xLo + (xHi - xLo) * i / 79)
+                    return [
+                      { x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
+                      // Anchor points: mean of 20%-neighbourhood around each slider end
+                      ...(vbmPreviewTangent ? [
+                        { x: [vbmPreviewTangent.a1x], y: [vbmPreviewTangent.a1y], type: 'scatter' as const, mode: 'markers' as const, name: '切線起錨點', marker: { color: '#f97316', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
+                        { x: [vbmPreviewTangent.a2x], y: [vbmPreviewTangent.a2y], type: 'scatter' as const, mode: 'markers' as const, name: '切線終錨點', marker: { color: '#fb923c', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
+                      ] : []),
+                      // Tangent line — always visible, extends across full chart
+                      ...(vbmPreviewTangent ? [
+                        { x: lineXArr, y: lineXArr.map(xi => vbmPreviewTangent.slope * xi + vbmPreviewTangent.intercept), type: 'scatter' as const, mode: 'lines' as const, name: '切線 (外推)', line: { color: '#f97316', width: 2, dash: 'dash' as const } },
+                      ] : []),
+                      // Baseline line — always visible
+                      ...(vbmPreviewBaseline !== null ? [
+                        { x: [xLo, xHi], y: [vbmPreviewBaseline, vbmPreviewBaseline], type: 'scatter' as const, mode: 'lines' as const, name: '基準線', line: { color: '#a855f7', width: 1.8, dash: 'dot' as const } },
+                      ] : []),
+                      // VBM intersection marker — always visible when both lines are defined
+                      ...(vbmPreviewVbm !== null && vbmPreviewBaseline !== null ? [
+                        { x: [vbmPreviewVbm], y: [vbmPreviewBaseline], type: 'scatter' as const, mode: 'markers' as const, name: `VBM ≈ ${vbmPreviewVbm.toFixed(3)} eV`, marker: { color: '#22c55e', size: 11, symbol: 'diamond' as const } },
+                      ] : []),
+                    ] as Plotly.Data[]
+                  })()}
                   layout={{
                     ...(chartLayout() as Plotly.Layout),
                     margin: { l: 60, r: 20, t: 20, b: 50 },
@@ -3856,11 +3942,12 @@ export default function XPS({
                     annotations: [
                       ...buildRegionAnnotations(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '切線區間', '#f97316'),
                       ...buildRegionAnnotations(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '基準線區間', '#a855f7'),
-                      ...(vbmResult?.success && vbmResult.vbm_ev != null ? [{
-                        x: vbmResult.vbm_ev, y: vbmResult.baseline_level,
-                        text: `VBM = ${vbmResult.vbm_ev.toFixed(3)} eV`,
+                      // Show VBM annotation from preview immediately (no API call needed)
+                      ...(vbmPreviewVbm !== null && vbmPreviewBaseline !== null ? [{
+                        x: vbmPreviewVbm, y: vbmPreviewBaseline,
+                        text: `VBM ≈ ${vbmPreviewVbm.toFixed(3)} eV`,
                         showarrow: true, arrowhead: 2, ax: 50, ay: -35,
-                        font: { color: '#f97316', size: 11 }, arrowcolor: '#f97316',
+                        font: { color: '#22c55e', size: 11 }, arrowcolor: '#22c55e',
                       }] : []),
                     ],
                   }}

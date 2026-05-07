@@ -496,22 +496,48 @@ def compute_vbm(req: VbmRequest):
 
     lo_e = min(req.edge_lo, req.edge_hi)
     hi_e = max(req.edge_lo, req.edge_hi)
-    mask_edge = (x >= lo_e) & (x <= hi_e)
-    if mask_edge.sum() < 2:
-        return VbmResponse(vbm_ev=None, slope=0.0, intercept=0.0, baseline_level=0.0,
-                           x_fit=[], y_fit=[], success=False, message="邊緣區域點數不足")
 
-    coeffs = np.polyfit(x[mask_edge], y[mask_edge], 1)
-    slope, intercept = float(coeffs[0]), float(coeffs[1])
+    # Tangent line: use mean of 20%-neighbourhood around each slider endpoint.
+    # This avoids distortion from noisy interior points and matches the frontend preview.
+    edge_hw = max(hi_e - lo_e, 0.1) * 0.20
+    mask_lo = (x >= lo_e - edge_hw) & (x <= lo_e + edge_hw)
+    mask_hi = (x >= hi_e - edge_hw) & (x <= hi_e + edge_hw)
+
+    if mask_lo.sum() >= 1 and mask_hi.sum() >= 1:
+        x_lo_mean = float(np.mean(x[mask_lo]))
+        y_lo_mean = float(np.mean(y[mask_lo]))
+        x_hi_mean = float(np.mean(x[mask_hi]))
+        y_hi_mean = float(np.mean(y[mask_hi]))
+        if abs(x_hi_mean - x_lo_mean) < 1e-10:
+            return VbmResponse(vbm_ev=None, slope=0.0, intercept=0.0, baseline_level=0.0,
+                               x_fit=[], y_fit=[], success=False, message="切線起終兩端過近，無法計算斜率")
+        slope = (y_hi_mean - y_lo_mean) / (x_hi_mean - x_lo_mean)
+        intercept = y_lo_mean - slope * x_lo_mean
+    else:
+        # Fallback: polyfit over the full edge range
+        mask_edge = (x >= lo_e) & (x <= hi_e)
+        if mask_edge.sum() < 2:
+            return VbmResponse(vbm_ev=None, slope=0.0, intercept=0.0, baseline_level=0.0,
+                               x_fit=[], y_fit=[], success=False, message="邊緣區域點數不足")
+        coeffs = np.polyfit(x[mask_edge], y[mask_edge], 1)
+        slope, intercept = float(coeffs[0]), float(coeffs[1])
 
     lo_b = min(req.baseline_lo, req.baseline_hi)
     hi_b = max(req.baseline_lo, req.baseline_hi)
-    mask_bl = (x >= lo_b) & (x <= hi_b)
-    if mask_bl.sum() < 1:
-        return VbmResponse(vbm_ev=None, slope=slope, intercept=intercept, baseline_level=0.0,
-                           x_fit=[], y_fit=[], success=False, message="基準線區域點數不足")
 
-    baseline_level = float(np.mean(y[mask_bl]))
+    # Baseline level: mean of 20%-neighbourhood around each baseline endpoint.
+    bl_hw = max(hi_b - lo_b, 0.1) * 0.20
+    mask_bl_lo = (x >= lo_b - bl_hw) & (x <= lo_b + bl_hw)
+    mask_bl_hi = (x >= hi_b - bl_hw) & (x <= hi_b + bl_hw)
+    combined_bl = np.concatenate([y[mask_bl_lo], y[mask_bl_hi]])
+    if combined_bl.size >= 1:
+        baseline_level = float(np.mean(combined_bl))
+    else:
+        mask_bl = (x >= lo_b) & (x <= hi_b)
+        if mask_bl.sum() < 1:
+            return VbmResponse(vbm_ev=None, slope=slope, intercept=intercept, baseline_level=0.0,
+                               x_fit=[], y_fit=[], success=False, message="基準線區域點數不足")
+        baseline_level = float(np.mean(y[mask_bl]))
 
     vbm_ev = None
     success = False
@@ -520,10 +546,19 @@ def compute_vbm(req: VbmRequest):
         vbm_candidate = (baseline_level - intercept) / slope
         if np.isfinite(vbm_candidate):
             x_range = float(np.max(x) - np.min(x))
-            margin = max(x_range * 2.0, 50.0)
-            if float(np.min(x)) - margin <= vbm_candidate <= float(np.max(x)) + margin:
+            # Upper margin: allow small extrapolation above data maximum
+            upper_margin = max(x_range * 0.3, 3.0)
+            # Lower bound: VBM should not be more than 1 eV below data minimum or below -1 eV
+            lower_bound = min(float(np.min(x)) - 1.0, -1.0)
+            if lower_bound <= vbm_candidate <= float(np.max(x)) + upper_margin:
                 vbm_ev = float(vbm_candidate)
                 success = True
+            elif vbm_candidate < lower_bound:
+                message = (
+                    f"外推 VBM ({vbm_candidate:.2f} eV) 為負值，"
+                    "請確認切線區間是否選在費米邊（Fermi edge）附近的低 BE 線性上升段，"
+                    "而非 VB 內部特徵"
+                )
             else:
                 message = f"外推 VBM ({vbm_candidate:.1f} eV) 超出光譜範圍，請重新選取區間"
         else:
