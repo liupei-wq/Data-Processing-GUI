@@ -1353,6 +1353,62 @@ function getOverlayStageDatasets(stage: ProcessResult | null | undefined, useAve
   return stage.datasets.map(dataset => ({ name: dataset.name, x: dataset.x, y: dataset.y_processed }))
 }
 
+function getOverlayProcessedStageDatasets(stage: ProcessResult | null | undefined, useAverage: boolean) {
+  if (!stage) return []
+  if (useAverage && stage.average) {
+    return [{
+      ...stage.average,
+      name: `${stage.average.name || '平均光譜'}（平均）`,
+    }]
+  }
+  if (useAverage) return []
+  return stage.datasets
+}
+
+function buildOverlayBackgroundTracesWithSeriesColors(
+  datasets: ProcessedDataset[],
+  resolveColorKey: (name: string, index: number) => string,
+  showBefore: boolean,
+  showBackground: boolean,
+): Plotly.Data[] {
+  return datasets.flatMap((dataset, index) => {
+    const paletteKey = resolveColorKey(dataset.name, index)
+    const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+    const traces: Plotly.Data[] = []
+    if (showBefore) {
+      traces.push({
+        x: dataset.x,
+        y: dataset.y_raw,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${dataset.name}｜扣背景前`,
+        line: { color: palette.secondary, width: 1.3, dash: 'dot' },
+        opacity: 0.82,
+      })
+    }
+    if (showBackground && dataset.y_background) {
+      traces.push({
+        x: dataset.x,
+        y: dataset.y_background,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${dataset.name}｜背景線`,
+        line: { color: palette.tertiary, width: 1.25, dash: 'dash' },
+        opacity: 0.94,
+      })
+    }
+    traces.push({
+      x: dataset.x,
+      y: dataset.y_processed,
+      type: 'scatter',
+      mode: 'lines',
+      name: `${dataset.name}｜扣背景後`,
+      line: { color: palette.primary, width: 2 },
+    })
+    return traces
+  })
+}
+
 // ── main component ────────────────────────────────────────────────────────────
 
 export default function XPS({
@@ -2386,6 +2442,7 @@ export default function XPS({
   const overlayBackgroundDatasets = getOverlayStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
   const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
   const overlayPreprocessDatasets = getOverlayStageDatasets(overlayBundle?.preprocess ?? null, overlayState.params.average)
+  const overlayBackgroundProcessedDatasets = getOverlayProcessedStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
   const overlayMinCount = overlayState.params.average ? 1 : 2
   const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, rawChartActiveIndex, rawSeriesColorKeys)
   const preprocessChartTraces = rawPreview && preprocessDataset
@@ -3372,10 +3429,10 @@ export default function XPS({
             )}
 
             {/* ── overlay: background stage ── */}
-            {overlayPreprocessDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length >= overlayMinCount && overlayState.params.bg_enabled && (
+            {overlayPreprocessDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length >= overlayMinCount && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title="多筆疊圖：背景扣除後"
+                  title={overlayState.params.bg_enabled ? '多筆疊圖：背景扣除後' : '多筆疊圖：背景扣除（未啟用）'}
                   colorValue={chartLineColors.overlayBg}
                   onColorChange={value => {
                     setChartLineColors(current => ({ ...current, overlayBg: value }))
@@ -3389,11 +3446,17 @@ export default function XPS({
                     onColorChange={handleSeriesColorChange}
                   />
                 </div>
+                <div className="mb-3 flex items-center gap-3">
+                  <CheckRow label="顯示扣背景前" checked={showXpsBgBefore} onChange={setShowXpsBgBefore} />
+                  <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
+                </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。
+                  {overlayState.params.bg_enabled
+                    ? `${overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。`
+                    : '目前未啟用背景扣除，這一階段直接沿用前處理結果。'}
                 </p>
                 <Plot
-                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayBackgroundDatasets, getDatasetColorKey) as Plotly.Data[], overlayBgHidden)}
+                  data={applyHidden(buildOverlayBackgroundTracesWithSeriesColors(overlayBackgroundProcessedDatasets, getDatasetColorKey, showXpsBgBefore, showBg) as Plotly.Data[], overlayBgHidden)}
                   layout={overlayBgLayout as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
