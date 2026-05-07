@@ -9,6 +9,7 @@ import XAS from './pages/XAS'
 import XES from './pages/XES'
 import XPS from './pages/XPS'
 import XRD from './pages/XRD'
+import PlotFileTool from './pages/PlotFileTool'
 import SingleProcessTool, { type SingleToolKind } from './pages/SingleProcessTool'
 
 type ThemeId =
@@ -26,7 +27,7 @@ type ThemeId =
   | 'christmas'
 type FontId = 'ui' | 'kai' | 'serif'
 type FontScale = 'sm' | 'md' | 'lg'
-type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes' | `tool-${SingleToolKind}`
+type WorkspaceId = 'workflow-raman' | 'workflow-xrd' | 'workflow-xas' | 'workflow-xps' | 'workflow-xes' | 'tool-plot-files' | `tool-${SingleToolKind}`
 
 const THEMES: { id: ThemeId; label: string; tone: string; shape: 'round' | 'soft' | 'square'; palette: [string, string, string] }[] = [
   // Reference set: retained core / moon / spectrum palettes plus eight supplemental modes.
@@ -57,6 +58,7 @@ const FONT_SCALES: { id: FontScale; label: string }[] = [
 ]
 
 const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
+  { id: 'tool-plot-files', label: '繪製圖檔', detail: '投稿圖輸出' },
   { id: 'tool-background', label: '背景扣除', detail: '單一處理' },
   { id: 'tool-normalize', label: '歸一化', detail: '單一處理' },
   { id: 'tool-gaussian', label: '高斯模板扣除', detail: '單一處理' },
@@ -420,6 +422,7 @@ export default function App() {
           {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'tool-plot-files' && <PlotFileTool onModuleSelect={handleModuleSelect} />}
           {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" onOpenPlotPopup={openPlotPopup} />}

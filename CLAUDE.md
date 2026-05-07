@@ -435,3 +435,17 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-06 CST：XAS 模組 Section 4（背景扣除）與 Section 5（歸一化）能量區間改為 XPS 風格雙把手拉桿（`DualRangeInput`，與 index.css `xps-range-slider` 同 CSS）。背景扣除：`bg_x_start/bg_x_end` → 1 個拉桿；歸一化 post_edge：`norm_pre_start/norm_pre_end` 與 `norm_x_start/norm_x_end` 各 1 個拉桿；歸一化 area/min_max：`norm_x_start/norm_x_end` → 1 個拉桿。原本的 NumInput pair 全數移除。前端建置通過。
 
 - 2026-05-06 CST：XAS 模組移除「二階微分」與「XANES 去卷積」兩個功能。① 側欄 Section 8（二階微分）、Section 10（XANES 去卷積）UI 區塊已在前一 session 刪除，Section 9 峰擬合改編號為 8；② 本次完成主內容區：刪除 `{/* second derivative charts */}` 卡片（`tey_d2y / tfy_d2y`）、刪除 `{/* XANES deconvolution result */}` 卡片（`deconvResult?.success`）；③ 更新 `EmptyWorkspaceState description`（移除「XANES 去卷積」，改為「峰擬合」）；④ 清理 `web/frontend/src/api/xas.ts`（移除 `DeconvRequest / DeconvResult` import 與 `deconvXanes` 函式）。影響檔案：`web/frontend/src/pages/XAS.tsx`、`web/frontend/src/api/xas.ts`；前端建置通過（無 TS 錯誤）。
+
+- 2026-05-07 CST：XPS 峰擬合新增 Paper-style 擬合結果圖輸出。完成峰擬合後，主畫面會出現論文風格 component panel 預覽：以處理後光譜為 observed、總擬合為 fit、各 `y_individual` 為 component fill，依正面積積分計算百分比並標註；可在網頁調整原始/總擬合/component 顏色、字體、標籤文字與 X/Y fraction 位置、峰位標線中心、X/Y 範圍、填色透明度、PNG/SVG 匯出尺寸與倍率。後續修正測試頁空白問題：匯出 API 改由 `web/frontend/src/components/PlotlyChart.tsx` 兼容層輸出 `PlotlyApi`，並在 `vite-env.d.ts` 補 `plotly.js/dist/plotly` declaration，避免動態匯入 `plotly.js` 原始包導致 Vite dev server `buffer/` 解析錯誤。影響檔案：`web/frontend/src/pages/XPS.tsx`、`web/frontend/src/components/PlotlyChart.tsx`、`web/frontend/src/vite-env.d.ts`；前端建置通過。
+
+- 2026-05-07 CST：新增獨立「繪製圖檔」工作區並放入右側選單。新增 `web/frontend/src/pages/PlotFileTool.tsx`，目前先啟用 XPS：可上傳多個 fit spectra TXT/CSV（欄位需含 `Binding_Energy_eV`、`Observed`、`Total_Fit` 與任意多個 component 欄位），自動生成多檔垂直 component panels、area ratio 堆疊圖與 component ratio 折線圖；支援 X 軸顯示範圍、X/Y 軸字體大小、刻度/標籤/樣品字體、component 顏色、標籤 X/Y fraction、峰位標線、樣品名稱與 PNG/SVG 匯出尺寸。`web/frontend/src/App.tsx` 新增 workspace `tool-plot-files`，右側選單新增「繪製圖檔」；Raman/XRD/XAS/XES 分頁先保留空狀態供後續擴充；XPS 分析頁原本 paper-style 卡片已移除，繪圖集中到新工作區。前端建置通過。
+
+- 2026-05-07 CST：改善「繪製圖檔」工作區操作性。`web/frontend/src/pages/PlotFileTool.tsx` 版面改為三欄：左側只放檔案上傳/樣品名稱，中間集中顯示 component panels 與 area/ratio 圖，右側 sticky 參數面板集中調整圖面、比例圖、component 樣式與匯出尺寸；component 設定改為 details 展開卡。修正比例圖 Y 軸跑位：summary figure 的 `xaxis/yaxis`、`xaxis2/yaxis2` 明確設定 `anchor`，並加大左右 margin。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔新增軸標題間距控制。`PlotFigureStyle` 新增 `xAxisTitleStandoff`、`yAxisTitleStandoff`，component panels 與 area/ratio summary figure 的 X/Y axis title 皆套用 Plotly `title.standoff`；右側圖面設定新增「X 標題距離」「Y 標題距離」數值欄位（0–120 px）。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔新增框線粗細控制。`PlotFigureStyle` 新增 `axisLineWidth`，右側圖面設定新增「框線粗細」欄位（0.2–8），component panels 與 area/ratio summary figure 所有 X/Y 軸 `linewidth` 改由此值控制。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔 component 標籤支援下標。新增 `formatPlotLabel()`，會將標籤中的 `_{...}` 與 `_word` 轉成 Plotly 支援的 `<sub>...</sub>`；使用者也可直接輸入 HTML `<sub>`。套用於 component panels annotation、summary legend name 與 ratio Y 軸標題，並在 component 標籤輸入框下方新增提示文字。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：修正繪製圖檔下方 area/ratio 比例圖跑位。`buildXpsSummaryFigure()` 中 bar 子圖 domain 調整為 `[0, 0.44]`、ratio 子圖 domain 調整為 `[0.63, 1]`，加大中間間距以容納右圖 Y 軸標題；兩個 X 軸固定 `type: 'category'`、`categoryarray: samples` 保留樣品順序；legend 改放左側 bar 圖內右上角，ratio line 設 `showlegend: false`。前端建置與 `git diff --check` 通過。
