@@ -30,6 +30,10 @@ interface PlotFigureStyle {
   rawColor: string
   fitColor: string
   fixedLineColor: string
+  rawMode: 'markers' | 'lines' | 'lines+markers'
+  rawMarkerSize: number
+  rawMarkerLineWidth: number
+  rawMarkerFillColor: string
   fontFamily: string
   fontSize: number
   xAxisFontSize: number
@@ -70,13 +74,26 @@ const MODULES: { id: PlotModule; label: string; detail: string; enabled: boolean
   { id: 'xes', label: 'XES', detail: '預留：發射光譜比較', enabled: false },
 ]
 
-const DEFAULT_COMPONENT_COLORS = ['#9b59b6', '#1f78b4', '#2ca25f', '#f97316', '#a855f7', '#14b8a6', '#e11d48', '#64748b']
+const DEFAULT_COMPONENT_COLORS = ['#9b59b6', '#18a81f', '#1f78b4', '#f97316', '#a855f7', '#14b8a6', '#e11d48', '#64748b']
+const ROMAN_COMPONENT_LABELS = ['O<sub>Ⅰ</sub>', 'O<sub>Ⅱ</sub>', 'O<sub>Ⅲ</sub>', 'O<sub>Ⅳ</sub>', 'O<sub>Ⅴ</sub>']
+const ROMAN_COMPONENT_COLORS = ['#9b59b6', '#18a81f', '#1f78b4', '#f97316', '#a855f7']
+const ROMAN_COMPONENT_POSITIONS = [
+  { labelX: 0.72, labelY: 0.78 },
+  { labelX: 0.42, labelY: 0.70 },
+  { labelX: 0.28, labelY: 0.42 },
+  { labelX: 0.82, labelY: 0.58 },
+  { labelX: 0.18, labelY: 0.55 },
+]
 
 const DEFAULT_STYLE: PlotFigureStyle = {
   titleLabel: 'O 1s',
-  rawColor: '#d94b4b',
-  fitColor: '#1f1f1f',
+  rawColor: '#111827',
+  fitColor: '#d7191c',
   fixedLineColor: '#555555',
+  rawMode: 'markers',
+  rawMarkerSize: 4.5,
+  rawMarkerLineWidth: 1.0,
+  rawMarkerFillColor: '#ffffff',
   fontFamily: 'Times New Roman, Times, serif',
   fontSize: 18,
   xAxisFontSize: 22,
@@ -401,6 +418,7 @@ function buildXpsPanelFigure(files: FitSpectrumFile[], style: PlotFigureStyle, s
         text: label,
         showarrow: false,
         align: 'center',
+        yanchor: 'bottom',
         font: { color: componentStyle.color, size: style.labelFontSize, family: style.fontFamily },
       })
     })
@@ -411,10 +429,15 @@ function buildXpsPanelFigure(files: FitSpectrumFile[], style: PlotFigureStyle, s
       xaxis: xRef as never,
       yaxis: yRef as never,
       type: 'scatter',
-      mode: 'lines',
+      mode: style.rawMode,
       name: `${file.sampleLabel} Observed`,
       line: { color: style.rawColor, width: style.rawLineWidth },
-      opacity: 0.55,
+      marker: {
+        color: style.rawMarkerFillColor,
+        size: style.rawMarkerSize,
+        line: { color: style.rawColor, width: style.rawMarkerLineWidth },
+      },
+      opacity: style.rawMode === 'markers' ? 1 : 0.65,
       hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
     })
     data.push({
@@ -507,9 +530,9 @@ function buildXpsSummaryFigure(files: FitSpectrumFile[], style: PlotFigureStyle,
     barmode: 'stack',
     showlegend: true,
     legend: {
-      x: 0.44,
+      x: 0.465,
       y: 0.96,
-      xanchor: 'right',
+      xanchor: 'left',
       yanchor: 'top',
       bgcolor: 'rgba(255,255,255,0)',
       font: { size: style.fontSize, family: style.fontFamily, color: '#111827' },
@@ -571,6 +594,317 @@ function buildXpsSummaryFigure(files: FitSpectrumFile[], style: PlotFigureStyle,
       { x: 0.56, y: 1.08, xref: 'paper', yref: 'paper', text: '<b>(c)</b>', showarrow: false, font: { size: style.panelTitleFontSize, color: '#111827', family: style.fontFamily } },
     ] as unknown as Plotly.Layout['annotations'],
   }
+
+  return { data, layout }
+}
+
+function buildXpsCombinedFigure(files: FitSpectrumFile[], style: PlotFigureStyle, styles: Record<string, ComponentStyle>) {
+  const keys = componentKeys(files).filter(key => styles[key]?.show ?? true)
+  const samples = files.map(file => file.sampleLabel)
+  const areaRows = files.map(file => componentAreas(file, keys))
+  const xAll = files.flatMap(file => file.x)
+  const xMin = Math.min(...xAll)
+  const xMax = Math.max(...xAll)
+  const xLeft = Number.isFinite(style.xLeft ?? NaN) ? Number(style.xLeft) : xMax
+  const xRight = Number.isFinite(style.xRight ?? NaN) ? Number(style.xRight) : xMin
+  const yMax = Math.max(style.yMax, 0.3)
+  const data: Plotly.Data[] = []
+  const annotations: Partial<Plotly.Annotations>[] = []
+  const shapes: Partial<Plotly.Shape>[] = []
+  const panelXDomain: [number, number] = [0, 0.56]
+  const rightXDomain: [number, number] = [0.68, 1]
+  const panelBottom = 0.04
+  const panelTop = 0.98
+  const gap = 0.03
+  const n = files.length
+  const panelHeight = (panelTop - panelBottom - gap * Math.max(n - 1, 0)) / Math.max(n, 1)
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    barmode: 'stack',
+    showlegend: true,
+    hovermode: 'closest',
+    margin: { l: 78, r: 76, t: 42, b: 78 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    legend: {
+      x: 1.02,
+      y: 0.94,
+      xanchor: 'left',
+      yanchor: 'top',
+      bgcolor: 'rgba(255,255,255,0)',
+      font: { size: style.fontSize, family: style.fontFamily, color: '#111827' },
+    },
+    annotations: annotations as unknown as Plotly.Layout['annotations'],
+    shapes: shapes as Plotly.Shape[],
+  }
+
+  files.forEach((file, fileIndex) => {
+    const axisSuffix = fileIndex === 0 ? '' : String(fileIndex + 1)
+    const xAxisName = `xaxis${axisSuffix}`
+    const yAxisName = `yaxis${axisSuffix}`
+    const xRef = `x${axisSuffix}`
+    const yRef = `y${axisSuffix}`
+    const yDomainStart = panelTop - (fileIndex + 1) * panelHeight - fileIndex * gap
+    const yDomainEnd = yDomainStart + panelHeight
+    const yMin = percentile(file.totalFit, 0.01)
+    const scaleRaw = Math.max(...file.totalFit.map(value => value - yMin).filter(Number.isFinite), 1)
+    const scale = Math.abs(scaleRaw) > 1e-12 ? scaleRaw : 1
+    const percentages = componentAreas(file, keys)
+
+    ;(layout as Record<string, unknown>)[xAxisName] = {
+      domain: panelXDomain,
+      range: [xLeft, xRight],
+      anchor: yRef,
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      title: fileIndex === n - 1 ? { text: 'Binding Energy (eV)', font: { size: style.xAxisFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff } : undefined,
+      showticklabels: fileIndex === n - 1,
+      minor: { ticks: 'inside' },
+    } as Plotly.Layout['xaxis']
+    ;(layout as Record<string, unknown>)[yAxisName] = {
+      domain: [yDomainStart, yDomainEnd],
+      anchor: xRef,
+      range: [-0.05, yMax],
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: '',
+      showticklabels: false,
+      title: fileIndex === Math.floor(n / 2) ? { text: 'Intensity (a.u.)', font: { size: style.yAxisFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff } : undefined,
+    } as Plotly.Layout['yaxis']
+
+    keys.forEach((key, keyIndex) => {
+      const componentStyle = styles[key] ?? createDefaultComponentStyle(key, keyIndex)
+      const displayLabel = formatPlotLabel(componentStyle.label || key)
+      const component = (file.components[key] ?? file.x.map(() => 0)).map(value => value / scale)
+      data.push({
+        x: file.x,
+        y: component,
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: displayLabel,
+        showlegend: false,
+        line: { color: componentStyle.color, width: style.componentLineWidth },
+        fill: 'tozeroy',
+        fillcolor: hexToRgba(componentStyle.color, clamp(style.fillOpacity, 0, 1)),
+        hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+      })
+
+      const defaultCenter = file.x[component.indexOf(Math.max(...component))] ?? file.x[Math.floor(file.x.length / 2)] ?? 0
+      const markerCenter = Number.isFinite(componentStyle.markerCenter ?? NaN) ? Number(componentStyle.markerCenter) : defaultCenter
+      const markerY = Math.max(interpolateY(file.x, component, markerCenter), 0)
+      const labelX = xLeft - clamp(componentStyle.labelX, 0.02, 0.98) * (xLeft - xRight)
+      const labelY = clamp(componentStyle.labelY, 0, 1) * yMax
+      const label = style.showPercent
+        ? `${displayLabel}<br>(${(percentages[key] ?? 0).toFixed(1)}%)`
+        : displayLabel
+
+      if (style.showVerticalLines) {
+        shapes.push({
+          type: 'line',
+          xref: xRef as Plotly.Shape['xref'],
+          yref: yRef as Plotly.Shape['yref'],
+          x0: markerCenter,
+          x1: markerCenter,
+          y0: 0,
+          y1: markerY * 1.08,
+          line: { color: componentStyle.color, width: 0.9, dash: 'dash' },
+        })
+      }
+      shapes.push({
+        type: 'line',
+        xref: xRef as Plotly.Shape['xref'],
+        yref: yRef as Plotly.Shape['yref'],
+        x0: markerCenter,
+        x1: labelX,
+        y0: markerY * 1.03,
+        y1: labelY,
+        line: { color: componentStyle.color, width: 1.15 },
+      })
+      annotations.push({
+        x: labelX,
+        y: labelY,
+        xref: xRef as Plotly.Annotations['xref'],
+        yref: yRef as Plotly.Annotations['yref'],
+        text: label,
+        showarrow: false,
+        align: 'center',
+        yanchor: 'bottom',
+        font: { color: componentStyle.color, size: style.labelFontSize, family: style.fontFamily },
+      })
+    })
+
+    data.push({
+      x: file.x,
+      y: file.observed.map(value => (value - yMin) / scale),
+      xaxis: xRef as never,
+      yaxis: yRef as never,
+      type: 'scatter',
+      mode: style.rawMode,
+      name: `${file.sampleLabel} Observed`,
+      showlegend: false,
+      line: { color: style.rawColor, width: style.rawLineWidth },
+      marker: {
+        color: style.rawMarkerFillColor,
+        size: style.rawMarkerSize,
+        line: { color: style.rawColor, width: style.rawMarkerLineWidth },
+      },
+      opacity: style.rawMode === 'markers' ? 1 : 0.65,
+      hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+    })
+    data.push({
+      x: file.x,
+      y: file.totalFit.map(value => (value - yMin) / scale),
+      xaxis: xRef as never,
+      yaxis: yRef as never,
+      type: 'scatter',
+      mode: 'lines',
+      name: `${file.sampleLabel} Fit`,
+      showlegend: false,
+      line: { color: style.fitColor, width: style.fitLineWidth },
+      hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+    })
+
+    annotations.push({
+      x: panelXDomain[0] + 0.022,
+      y: yDomainEnd - panelHeight * 0.16,
+      xref: 'paper',
+      yref: 'paper',
+      text: `<b>${style.titleLabel || 'XPS'}</b>`,
+      showarrow: false,
+      xanchor: 'left',
+      yanchor: 'middle',
+      font: { color: '#111827', size: style.panelTitleFontSize, family: style.fontFamily },
+    })
+    annotations.push({
+      x: panelXDomain[1] - 0.012,
+      y: yDomainEnd - panelHeight * 0.12,
+      xref: 'paper',
+      yref: 'paper',
+      text: `<b>${file.sampleLabel}</b>`,
+      showarrow: false,
+      xanchor: 'right',
+      yanchor: 'middle',
+      font: { color: '#111827', size: style.sampleFontSize, family: style.fontFamily },
+    })
+  })
+
+  const barAxisSuffix = String(n + 1)
+  const ratioAxisSuffix = String(n + 2)
+  const barXRef = `x${barAxisSuffix}`
+  const barYRef = `y${barAxisSuffix}`
+  const ratioXRef = `x${ratioAxisSuffix}`
+  const ratioYRef = `y${ratioAxisSuffix}`
+  const numerator = style.ratioNumerator || keys[1] || keys[0] || ''
+  const denominator = style.ratioDenominator || keys[0] || ''
+  const numeratorLabel = formatPlotLabel(styles[numerator]?.label ?? numerator)
+  const denominatorLabel = formatPlotLabel(styles[denominator]?.label ?? denominator)
+  const ratioColor = (styles[numerator] ?? createDefaultComponentStyle(numerator, 1)).color
+  const ratioValues = areaRows.map(row => {
+    const den = row[denominator] ?? 0
+    return den > 0 ? (row[numerator] ?? 0) / den : 0
+  })
+  const ratioMin = Math.min(...ratioValues.filter(Number.isFinite), 0)
+  const ratioMax = Math.max(...ratioValues.filter(Number.isFinite), 1)
+  const ratioPad = Math.max((ratioMax - ratioMin) * 0.12, 0.05)
+
+  keys.forEach((key, index) => {
+    const componentStyle = styles[key] ?? createDefaultComponentStyle(key, index)
+    data.push({
+      x: samples,
+      y: areaRows.map(row => row[key] ?? 0),
+      type: 'bar',
+      name: formatPlotLabel(componentStyle.label || key),
+      marker: { color: componentStyle.color, line: { color: '#111827', width: 1 } },
+      xaxis: barXRef as never,
+      yaxis: barYRef as never,
+      hovertemplate: '%{x}<br>%{y:.2f}%<extra></extra>',
+    })
+  })
+  data.push({
+    x: samples,
+    y: ratioValues,
+    type: 'scatter',
+    mode: 'lines+markers',
+    name: `${numeratorLabel}/${denominatorLabel}`,
+    showlegend: false,
+    line: { color: ratioColor, width: 2.5 },
+    marker: { color: ratioColor, size: 9 },
+    xaxis: ratioXRef as never,
+    yaxis: ratioYRef as never,
+    hovertemplate: '%{x}<br>%{y:.3f}<extra></extra>',
+  })
+
+  ;(layout as Record<string, unknown>)[`xaxis${barAxisSuffix}`] = {
+    domain: rightXDomain,
+    anchor: barYRef,
+    type: 'category',
+    categoryorder: 'array',
+    categoryarray: samples,
+    title: { text: 'Sample', font: { size: style.xAxisFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff },
+    showline: true,
+    mirror: true,
+    linewidth: style.axisLineWidth,
+    linecolor: '#111827',
+    ticks: 'inside',
+    tickfont: { size: style.fontSize, family: style.fontFamily },
+  } as Plotly.Layout['xaxis']
+  ;(layout as Record<string, unknown>)[`yaxis${barAxisSuffix}`] = {
+    domain: [0.58, 0.98],
+    anchor: barXRef,
+    title: { text: 'Area ratio (%)', font: { size: style.yAxisFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff },
+    range: [0, 100],
+    showline: true,
+    mirror: true,
+    linewidth: style.axisLineWidth,
+    linecolor: '#111827',
+    ticks: 'inside',
+    tickfont: { size: style.fontSize, family: style.fontFamily },
+  } as Plotly.Layout['yaxis']
+  ;(layout as Record<string, unknown>)[`xaxis${ratioAxisSuffix}`] = {
+    domain: rightXDomain,
+    anchor: ratioYRef,
+    type: 'category',
+    categoryorder: 'array',
+    categoryarray: samples,
+    title: { text: 'Sample', font: { size: style.xAxisFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff },
+    showline: true,
+    mirror: true,
+    linewidth: style.axisLineWidth,
+    linecolor: '#111827',
+    ticks: 'inside',
+    tickfont: { size: style.fontSize, family: style.fontFamily },
+  } as Plotly.Layout['xaxis']
+  ;(layout as Record<string, unknown>)[`yaxis${ratioAxisSuffix}`] = {
+    domain: [0.05, 0.42],
+    anchor: ratioXRef,
+    title: { text: `${numeratorLabel}/${denominatorLabel} area ratio`, font: { size: style.yAxisFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff },
+    range: [Math.max(0, ratioMin - ratioPad), ratioMax + ratioPad],
+    showline: true,
+    mirror: true,
+    linewidth: style.axisLineWidth,
+    linecolor: '#111827',
+    ticks: 'inside',
+    tickfont: { size: style.fontSize, family: style.fontFamily },
+  } as Plotly.Layout['yaxis']
+
+  annotations.push(
+    { x: panelXDomain[0] - 0.04, y: 1.02, xref: 'paper', yref: 'paper', text: '<b>a</b>', showarrow: false, font: { size: style.panelTitleFontSize + 4, color: '#111827', family: style.fontFamily } },
+    { x: rightXDomain[0] - 0.07, y: 1.02, xref: 'paper', yref: 'paper', text: '<b>b</b>', showarrow: false, font: { size: style.panelTitleFontSize + 4, color: '#111827', family: style.fontFamily } },
+    { x: rightXDomain[0] - 0.07, y: 0.45, xref: 'paper', yref: 'paper', text: '<b>c</b>', showarrow: false, font: { size: style.panelTitleFontSize + 4, color: '#111827', family: style.fontFamily } },
+  )
 
   return { data, layout }
 }
@@ -654,6 +988,33 @@ export default function PlotFileTool({
       return next
     })
     if (errors.length > 0) setError(errors.join('; '))
+  }
+
+  const applyRomanPreset = () => {
+    setComponentStyles(current => {
+      const next = { ...current }
+      keys.forEach((key, index) => {
+        const currentStyle = next[key] ?? createDefaultComponentStyle(key, index)
+        const position = ROMAN_COMPONENT_POSITIONS[index] ?? ROMAN_COMPONENT_POSITIONS[ROMAN_COMPONENT_POSITIONS.length - 1]
+        next[key] = {
+          ...currentStyle,
+          label: ROMAN_COMPONENT_LABELS[index] ?? `O<sub>${index + 1}</sub>`,
+          color: ROMAN_COMPONENT_COLORS[index] ?? currentStyle.color,
+          labelX: position.labelX,
+          labelY: position.labelY,
+        }
+      })
+      return next
+    })
+    setStyle(prev => ({
+      ...prev,
+      ratioDenominator: keys[0] ?? prev.ratioDenominator,
+      ratioNumerator: keys[1] ?? prev.ratioNumerator,
+      rawMode: 'markers',
+      rawColor: '#111827',
+      rawMarkerFillColor: '#ffffff',
+      fitColor: '#d7191c',
+    }))
   }
 
   const exportPlot = async (kind: 'panels' | 'summary', format: 'png' | 'svg') => {
@@ -836,6 +1197,19 @@ export default function PlotFileTool({
                     <ColorInput label="Fit" value={style.fitColor} onChange={value => setStyle(prev => ({ ...prev, fitColor: value }))} />
                     <ColorInput label="標線" value={style.fixedLineColor} onChange={value => setStyle(prev => ({ ...prev, fixedLineColor: value }))} />
                   </div>
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">Raw 顯示方式</span>
+                    <select value={style.rawMode} onChange={event => setStyle(prev => ({ ...prev, rawMode: event.target.value as PlotFigureStyle['rawMode'] }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                      <option value="markers">圓圈</option>
+                      <option value="lines">線</option>
+                      <option value="lines+markers">線 + 圓圈</option>
+                    </select>
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <NumInput label="Raw 圓圈大小" value={style.rawMarkerSize} onChange={value => setStyle(prev => ({ ...prev, rawMarkerSize: clamp(value, 1, 16) }))} min={1} max={16} step={0.5} />
+                    <NumInput label="Raw 圓圈線寬" value={style.rawMarkerLineWidth} onChange={value => setStyle(prev => ({ ...prev, rawMarkerLineWidth: clamp(value, 0, 5) }))} min={0} max={5} step={0.1} />
+                    <ColorInput label="圓圈填色" value={style.rawMarkerFillColor} onChange={value => setStyle(prev => ({ ...prev, rawMarkerFillColor: value }))} />
+                  </div>
                 </div>
               </div>
 
@@ -861,7 +1235,12 @@ export default function PlotFileTool({
 
               {keys.length > 0 && (
                 <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                  <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">Component 樣式</p>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-[var(--text-main)]">Component 樣式</p>
+                    <button type="button" onClick={applyRomanPreset} className="rounded-full border border-[var(--accent-secondary)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-secondary)]">
+                      套用 OⅠ/OⅡ/OⅢ
+                    </button>
+                  </div>
                   <div className="space-y-3">
                     {keys.map((key, index) => {
                       const current = componentStyles[key] ?? createDefaultComponentStyle(key, index)

@@ -449,3 +449,11 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-07 CST：繪製圖檔 component 標籤支援下標。新增 `formatPlotLabel()`，會將標籤中的 `_{...}` 與 `_word` 轉成 Plotly 支援的 `<sub>...</sub>`；使用者也可直接輸入 HTML `<sub>`。套用於 component panels annotation、summary legend name 與 ratio Y 軸標題，並在 component 標籤輸入框下方新增提示文字。前端建置與 `git diff --check` 通過。
 
 - 2026-05-07 CST：修正繪製圖檔下方 area/ratio 比例圖跑位。`buildXpsSummaryFigure()` 中 bar 子圖 domain 調整為 `[0, 0.44]`、ratio 子圖 domain 調整為 `[0.63, 1]`，加大中間間距以容納右圖 Y 軸標題；兩個 X 軸固定 `type: 'category'`、`categoryarray: samples` 保留樣品順序；legend 改放左側 bar 圖內右上角，ratio line 設 `showlegend: false`。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔新增 XPS combined publication figure 輸出。`PlotFileTool.tsx` 新增單張合併投稿圖：左側 a 為多 panel XPS component 圖，右側上方 b 為 area ratio 堆疊圖、右側下方 c 為 component ratio 折線圖；Raw data 可切換線、圓圈、線+圓圈並調整圓圈大小/線寬/填色；Component 樣式新增一鍵套用 `O<sub>Ⅰ</sub>` / `O<sub>Ⅱ</sub>` / `O<sub>Ⅲ</sub>` 標籤、顏色與標籤位置。驗證 `npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔 component 標籤連線位置微調。一般 panels 與 combined publication figure 的 component annotation 改用 `yanchor: 'bottom'`，使連線終點落在 OⅠ/OⅡ/OⅢ 標籤百分比括號下方，而不是標籤文字中央。
+
+- 2026-05-07 CST：取消繪製圖檔 Combined publication figure 入口。`PlotFileTool.tsx` 移除中間欄 `Combined publication figure` 預覽卡與 PNG/SVG 匯出按鈕，匯出流程回到 `panels` 與 `summary` 兩種圖；Raw 圓圈顯示與 OⅠ/OⅡ/OⅢ 標籤 preset 保留。驗證 `npm run build` 通過。
+
+- 2026-05-07 CST：繪製圖檔 summary 圖 b legend 位置調整。`buildXpsSummaryFigure()` 的 legend 從 bar subplot domain 內改到右側空白區（`x: 0.465`, `xanchor: 'left'`），使 OⅠ/OⅡ/OⅢ 標籤欄顯示在圖 b 框線外。

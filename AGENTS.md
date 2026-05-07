@@ -120,3 +120,7 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-07：繪製圖檔新增「框線粗細」控制，套用到 component panels 與 area/ratio 圖所有 X/Y 軸的 Plotly `axis.linewidth`。驗證 `npm run build`、`git diff --check` 通過。
 - 2026-05-07：繪製圖檔 component 標籤文字支援下標；標籤輸入可用 `O_{latt}` 或 `O_latt` 自動轉成 Plotly HTML `<sub>`，也保留直接輸入 `<sub>` 的能力；套用於 panels annotation、summary legend 與 ratio 軸標題。驗證 `npm run build`、`git diff --check` 通過。
 - 2026-05-07：修正繪製圖檔下方比例圖跑版：summary figure 左右 domain 改為 bar `[0, 0.44]`、ratio `[0.63, 1]`，加大中間留白；X 軸固定為 category 並使用 sample 順序；legend 移到左側 bar 圖內，ratio 線不顯示 legend。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：繪製圖檔新增 XPS combined publication figure 輸出，將左側 a 的多 panel XPS 圖與右側 b/c 的 area ratio、component ratio 合併成單張圖；Raw data 可切換線、圓圈、線+圓圈並調整圓圈大小/線寬/填色，Component 樣式新增一鍵套用 `O<sub>Ⅰ</sub>` / `O<sub>Ⅱ</sub>` / `O<sub>Ⅲ</sub>` 標籤、顏色與標籤位置。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：繪製圖檔 component 標籤連線改為指向標籤文字底部，讓 OⅠ/OⅡ/OⅢ 百分比括號下方作為連線終點，而不是標籤文字中央。
+- 2026-05-07：取消繪製圖檔的 Combined publication figure 顯示與匯出入口，保留分開的 XPS component panels 與 Area ratio / component ratio 圖；Raw 圓圈與 OⅠ/OⅡ/OⅢ 標籤控制仍保留。驗證 `npm run build` 通過。
+- 2026-05-07：繪製圖檔 summary 圖 b 的 component legend 從 bar plot 框線內移到框線外右側空白區，避免與柱狀圖重疊。
