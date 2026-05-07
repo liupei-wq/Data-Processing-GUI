@@ -174,7 +174,7 @@ railway.toml               # Railway 設定（builder=DOCKERFILE）
 **Sidebar 流程**
 
 1. 載入：`.xy / .txt / .csv / .vms / .pro / .dat`
-2. 內插：每筆各自 `linspace`，不建立共同 x 軸，`INTERP_POINTS_MIN=50 / MAX=5000`
+2. 內插 / 資料模式：每筆各自 `linspace`，不建立共同 x 軸，`INTERP_POINTS_MIN=50 / MAX=5000`；多檔時單筆 / 疊圖入口整合在同一步
 3. 多筆疊圖 / 多檔平均：疊圖模式預設不平均，會讓多筆資料各自套同一組參數後分階段疊圖；第 3 步可明確啟用「平均所有疊圖數據」，平均前會對齊到同一內插網格
 4. 能量校正：手動位移 + 標準樣品資料庫自動校正（`POST /api/xps/calibrate`）
 5. 背景扣除：Shirley / Tougaard(B=2866,C=1643) / Linear / Polynomial / AsLS / airPLS
@@ -189,7 +189,7 @@ railway.toml               # Railway 設定（builder=DOCKERFILE）
 - 中間欄流程圖：原始光譜 → 前處理後 → 背景扣除 → 歸一化 → 最終/擬合
 - 背景與歸一化圖表有 shaded region 標示區間（橘 / 青綠）
 - 所有圖表支援 legend 點擊隱藏/顯示（`applyHidden` + `makeLegendClick`）
-- 每張圖右上角都有線色下拉（`ChartToolbar`）
+- 疊圖圖卡改為上下堆疊全寬顯示；原始 / 疊圖圖卡都可逐筆調整線色，疊圖圖卡右上角 `ChartToolbar` 可一鍵重排整組色盤
 - 匯出分成三類：研究常用、分析表格、追溯/設定
 
 **資料模式**
@@ -198,6 +198,7 @@ railway.toml               # Railway 設定（builder=DOCKERFILE）
 - 單筆模式：每筆資料各自保存 session（`params / peaks / fitResult / rsfRows`）
 - 疊圖模式：使用獨立 `overlayState`，不共用單筆參數；`average=false` 時顯示每筆 processed dataset，`average=true` 時才產生平均光譜
 - 疊圖不平均模式會鎖定峰擬合與 RSF；需要峰擬合 / RSF 時須先啟用第 3 步多檔平均，或切回單筆資料
+- 中間欄不再提供第二套單筆 / 疊圖切換，避免和 sidebar 重複
 - `overlayDraftSelection` 用來避免勾選中途就觸發處理
 - 入口位於右上角「選擇疊圖資料」按鈕，透過 modal 選取
 
@@ -293,6 +294,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-06 CST：修正 XAS 啟用背景扣除時 `/api/xas/process` 500 錯誤：`apply_background` 參數改為 `bg_x_start/bg_x_end`、回傳值改為接收扣背景後光譜，並在前端尚未寫入區間時使用全譜 fallback；以模擬資料驗證背景扣除 + `mean_region` 與背景扣除 + `post_edge` 均可執行。驗證 `python3 -m py_compile ...`、`cd web/frontend && npm run build`、`git diff --check` 通過。
 - 2026-05-06 CST：讀取 XPS/XAS 多檔處理與疊圖邏輯，確認 XAS 疊圖模式是「多筆資料各自套同一組參數處理後疊圖」，平均只是額外動作；XPS 疊圖模式目前由前端 `overlayState` 預設並固定 `average=true`，因此會先平均成單一光譜再進背景扣除、歸一化、峰擬合與 RSF。後端 XPS 已能在 `average=false` 時回傳每筆 processed dataset，後續若要支援「不平均、多筆疊圖一起處理」，主要需調整 `web/frontend/src/pages/XPS.tsx` 的 overlay UI 與分析流程限制。
 - 2026-05-06 CST：XPS 疊圖處理改為 XAS 風格分支：`createDefaultOverlayState()` 預設 `average=false`，Section 3 改成可切換「平均所有疊圖數據」；不平均疊圖會讓多筆資料各自套用同一組內插、能量校正、背景扣除與歸一化參數並分階段疊圖，峰擬合與 RSF 在此分支鎖定停用；啟用平均後才會使用後端回傳的 `average` 單一光譜做最終圖、峰擬合與 RSF，且避免暫時誤拿第一筆資料當平均光譜。影響檔案：`web/frontend/src/pages/XPS.tsx`；驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+- 2026-05-07 CST：XPS 第 2 步改名並整合為「內插 / 資料模式」，把原本中間欄的單筆 / 疊圖切換搬回 sidebar，互動方式向 XAS 對齊；XPS 圖卡改為上下堆疊顯示，不再左右並排；疊圖各階段改用逐筆獨立線色，並在圖卡上方加入每筆資料的手動改色下拉，右上角 `ChartToolbar` 的線色選單則改為重排整組疊圖色盤。影響檔案：`web/frontend/src/pages/XPS.tsx`；驗證 `cd web/frontend && npm run build` 通過。
 
 ### 2026-05-05
 
@@ -435,3 +437,25 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-06 CST：XAS 模組 Section 4（背景扣除）與 Section 5（歸一化）能量區間改為 XPS 風格雙把手拉桿（`DualRangeInput`，與 index.css `xps-range-slider` 同 CSS）。背景扣除：`bg_x_start/bg_x_end` → 1 個拉桿；歸一化 post_edge：`norm_pre_start/norm_pre_end` 與 `norm_x_start/norm_x_end` 各 1 個拉桿；歸一化 area/min_max：`norm_x_start/norm_x_end` → 1 個拉桿。原本的 NumInput pair 全數移除。前端建置通過。
 
 - 2026-05-06 CST：XAS 模組移除「二階微分」與「XANES 去卷積」兩個功能。① 側欄 Section 8（二階微分）、Section 10（XANES 去卷積）UI 區塊已在前一 session 刪除，Section 9 峰擬合改編號為 8；② 本次完成主內容區：刪除 `{/* second derivative charts */}` 卡片（`tey_d2y / tfy_d2y`）、刪除 `{/* XANES deconvolution result */}` 卡片（`deconvResult?.success`）；③ 更新 `EmptyWorkspaceState description`（移除「XANES 去卷積」，改為「峰擬合」）；④ 清理 `web/frontend/src/api/xas.ts`（移除 `DeconvRequest / DeconvResult` import 與 `deconvXanes` 函式）。影響檔案：`web/frontend/src/pages/XAS.tsx`、`web/frontend/src/api/xas.ts`；前端建置通過（無 TS 錯誤）。
+
+- 2026-05-07 CST：XAS 背景扣除 / 歸一化區間改為 TEY 與 TFY 完全獨立。`web/backend/routers/xas.py` 的 `ProcessParams` 與處理流程改用 `bg_tey_* / bg_tfy_* / norm_tey_* / norm_tfy_*` 欄位，移除背景扣除 `bg_channel` 共用通道邏輯；`web/frontend/src/types/xas.ts` 同步更新型別；`web/frontend/src/pages/XAS.tsx` 將背景與歸一化 sidebar 改為保留 TEY/TFY 各自的數值輸入，並把雙把手拉桿搬到中間欄各自圖卡下方，讓 TEY / TFY 各有自己的背景與歸一化控制，同時圖上的 shaded region 也依通道獨立顯示。額外調整：拉桿範圍改跟隨各階段目前顯示資料的能量範圍，避免能量位移或疊圖時區間跑出圖外。驗證 `python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/core/*.py`、`cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：XAS popup 與 White Line 互動修正。`web/frontend/src/hooks/usePlotPopups.ts` 新增 `updatePlotPopup()`，`web/frontend/src/App.tsx` 將其傳入 XAS；`web/frontend/src/pages/XAS.tsx` 針對各分階段圖卡加入 popup content resolver 與 id 同步機制，讓放大預覽開啟後仍會跟著背景/歸一化拉桿、資料模式與圖表內容更新；同時修正 White Line 預設只顯示 fallback 值、實際未送入後端的問題，現在載入資料後會自動以目前能量範圍初始化搜尋區間，最終光譜上除了垂直線外也會額外標出峰頂點，讓結果更明顯。驗證 `python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/core/*.py`、`cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：XAS 新增輕量版 White Line 結果卡。`web/frontend/src/pages/XAS.tsx` 在 summary cards 下方加入獨立的 `White Line 結果` 卡片，集中顯示目前搜尋區間、TEY / TFY 結果與「顯示圖上標記」開關；最終光譜的 White Line 垂直線與峰頂 marker 現在受此開關控制，方便暫時隱藏標記但保留計算結果。疊圖模式下結果卡改顯示引導文字，避免誤導成單一數值。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：右側工作區切換選單改版，避免擋住中間欄圖表。`web/frontend/src/App.tsx` 新增 `workspaceLauncherPreview` 與 `workspaceLauncherDocked` 狀態，將入口改成兩段式互動：滑鼠移入只先展開縮小的半圓膠囊入口，點擊後才打開完整選項面板；同時加入捲動感應，頁面未捲動時入口位於右側中間，捲動超過門檻後平滑滑到右上角。`web/frontend/src/index.css` 重做 `.workspace-launcher`、`__tab`、`__panel` 樣式，移除原本直立大方條，改為水平膠囊入口與 docked 對位規則，手機尺寸也同步縮小。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：調整 XAS sidebar 步驟順序，將 `高斯模板扣除` 與 `White Line 搜尋` 對調。`web/frontend/src/pages/XAS.tsx` 現在第 6 步為高斯模板扣除、第 7 步為 White Line 搜尋，第 8 步峰擬合維持不變；僅調整前端顯示順序與編號，不變動後端處理流程。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：調整 XAS 峰擬合步驟顯示邏輯。`web/frontend/src/pages/XAS.tsx` 移除原本 `result && ...` 的條件渲染，讓第 8 步峰擬合在未載入資料時也會顯示；目前改為依狀態呈現三種內容：未載入/未完成處理時顯示提示卡、疊圖模式時顯示停用提示、單筆且有 active dataset 時才顯示完整擬合控制。`onOpen` 的樣品資料庫載入也改成只在可擬合狀態下觸發。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：XPS Valence Band / VBM 區塊新增 leading edge 高低點提示。`web/frontend/src/pages/XPS.tsx` 新增 `findSpectrumExtrema()` helper，在第 8 步 `VBM 線性外推` 區塊上方加入提示卡，顯示目前單筆光譜的全域最高點/最低點，以及目前切線區間內的最高點/最低點（同時附帶對應強度）；下方 VBM 主圖也新增兩個 marker，直接標出「切線區間高點 / 低點」，幫助使用者在外推前先定位 leading edge。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：XPS VBM 新增「自動建議切線區間」。`web/frontend/src/pages/XPS.tsx` 新增 `suggestVbmEdgeRange()` helper，會根據目前單筆處理後光譜的平滑強度與 leading edge 的斜率，自動估計一段較合理的切線區間；當使用者切進 `Valence Band` 或資料/前處理結果變動時，系統會自動套用一次建議區間，同時在 leading edge 提示卡中顯示建議值，並提供 `自動建議切線區間` 按鈕讓使用者手動重套。為避免覆蓋手動調整，前端新增 `lastAutoSuggestedVbmKeyRef` 與 suggestion key，只在光譜內容真的變化時自動更新。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：XPS VBM 再新增「自動建議基準線區間」。`web/frontend/src/pages/XPS.tsx` 新增 `suggestVbmBaselineRange()` helper，優先在低 BE 側尋找低強度、低起伏且斜率平緩的區段，作為 baseline 的建議範圍；leading edge 提示卡現在同時顯示建議切線區間與建議基準線區間，並新增 `自動建議基準線區間` 按鈕。前端另外加入 `lastAutoSuggestedBaselineKeyRef`，讓資料或處理後光譜真正變化時才自動更新 baseline 建議，避免覆蓋使用者手動調整。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：XPS 的 range slider 依 XAS 交互方式搬到中間圖下方。`web/frontend/src/pages/XPS.tsx` 保留 sidebar 的方法選擇、啟用開關與數值輸入，但移除背景扣除、歸一化、VBM 切線 / 基準線原本放在 sidebar 的 `DualRangeInput`；新增 `renderRangeControlCard()`，把背景區間、歸一化區間、多筆疊圖共用區間，以及 VBM 的切線 / 基準線區間拉桿移到各自對應的圖卡下方，讓使用者可以直接看著圖調整區間。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：統一 XPS / XAS 的玻璃啟用框與停用後的圖卡行為。`web/frontend/src/pages/XPS.tsx`：替歸一化新增 `TogglePill`，加入單筆/疊圖各自的上次歸一化方法記憶，關閉時改為 `norm_method='none'`、重新開啟時恢復前次方法；同時讓背景扣除與歸一化圖卡在停用後仍保留，改顯示「直接沿用上一階段結果」說明，並隱藏區間拉桿，疊圖最終圖也改為固定顯示。`web/frontend/src/pages/XAS.tsx`：新增本地 `TogglePill`，將內插、背景扣除、歸一化、高斯模板扣除、White Line 搜尋改成玻璃啟用框；歸一化同樣記住上次非 `none` 方法；White Line 補上真正的 `whiteLineEnabled` 前端狀態，停用時不再送出搜尋區間、最終圖 marker 與結果卡同步顯示未啟用；背景扣除與歸一化的分階段圖改成固定顯示並標註未啟用狀態，最終光譜步號固定為第 5 步；高斯模板扣除對比卡在單筆模式下也改為保留，停用時顯示「直接沿用歸一化後結果」提示。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。

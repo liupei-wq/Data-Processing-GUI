@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
-import type { PlotPopupRequest } from '../hooks/usePlotPopups'
+import type { PlotPopupRequest, PlotPopupUpdate } from '../hooks/usePlotPopups'
 import { fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
@@ -32,19 +32,24 @@ const DEFAULT_PARAMS: ProcessParams = {
   average: false,
   energy_shift: 0,
   bg_enabled: false,
-  bg_channel: 'both',
   bg_method: 'linear',
-  bg_x_start: null,
-  bg_x_end: null,
+  bg_tey_start: null,
+  bg_tey_end: null,
+  bg_tfy_start: null,
+  bg_tfy_end: null,
   bg_poly_deg: 3,
   bg_baseline_lambda: 1e5,
   bg_baseline_p: 0.01,
   bg_baseline_iter: 20,
   norm_method: 'none',
-  norm_x_start: null,
-  norm_x_end: null,
-  norm_pre_start: null,
-  norm_pre_end: null,
+  norm_tey_start: null,
+  norm_tey_end: null,
+  norm_tfy_start: null,
+  norm_tfy_end: null,
+  norm_tey_pre_start: null,
+  norm_tey_pre_end: null,
+  norm_tfy_pre_start: null,
+  norm_tfy_pre_end: null,
   white_line_start: null,
   white_line_end: null,
   gauss_enabled: false,
@@ -70,6 +75,9 @@ const CHANNEL_COLORS: Record<'TEY' | 'TFY', string> = {
   TFY: '#a78bfa',
 }
 
+type XasChannel = 'TEY' | 'TFY'
+type RangeBounds = { min: number; max: number }
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
@@ -92,6 +100,39 @@ function getFileStats(file: ParsedXasFile) {
   const nPts = finite.length
   const step = span / Math.max(nPts - 1, 1)
   return { xStart, xEnd, span, nPts, step }
+}
+
+function getBoundsFromArrays(arrays: number[][]): RangeBounds {
+  const finite = arrays.flat().filter(Number.isFinite)
+  if (finite.length === 0) return { min: 440, max: 490 }
+  return {
+    min: Math.min(...finite),
+    max: Math.max(...finite),
+  }
+}
+
+function getDatasetBounds(datasets: Array<{ x: number[] } | null | undefined>): RangeBounds {
+  const arrays = datasets
+    .map(dataset => dataset?.x ?? [])
+    .filter(values => values.length > 0)
+  return getBoundsFromArrays(arrays)
+}
+
+function getWhiteLinePoint(x: number[], y: number[], whiteLine: number | null | undefined) {
+  if (whiteLine == null || x.length === 0 || y.length === 0) return null
+  let nearestIdx = 0
+  let nearestDelta = Number.POSITIVE_INFINITY
+  x.forEach((value, index) => {
+    const delta = Math.abs(value - whiteLine)
+    if (delta < nearestDelta) {
+      nearestDelta = delta
+      nearestIdx = index
+    }
+  })
+  return {
+    x: x[nearestIdx],
+    y: y[nearestIdx],
+  }
 }
 
 function estimateInterpolationPoints(files: ParsedXasFile[]) {
@@ -152,7 +193,7 @@ function getChannelAfterGaussian(dataset: ProcessedDataset, channel: 'TEY' | 'TF
   return channel === 'TEY' ? dataset.tey_after_gauss : dataset.tfy_after_gauss
 }
 
-function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw: boolean): Plotly.Data[] {
+function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw: boolean, showWhiteLineMarkers: boolean): Plotly.Data[] {
   const raw = getChannelRaw(dataset, channel)
   const processed = getChannelProcessed(dataset, channel)
   const traces: Plotly.Data[] = []
@@ -161,7 +202,8 @@ function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw:
   }
   traces.push({ x: dataset.x, y: processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: CHANNEL_COLORS[channel], width: 2.0 } })
   const wl = channel === 'TEY' ? dataset.white_line_tey : dataset.white_line_tfy
-  if (wl != null) {
+  if (wl != null && showWhiteLineMarkers) {
+    const point = getWhiteLinePoint(dataset.x, processed, wl)
     traces.push({
       x: [wl, wl],
       y: [Math.min(...processed), Math.max(...processed)],
@@ -170,6 +212,17 @@ function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw:
       name: `White Line ${wl.toFixed(2)} eV`,
       line: { color: '#f97316', width: 1.4, dash: 'dash' },
     })
+    if (point) {
+      traces.push({
+        x: [point.x],
+        y: [point.y],
+        type: 'scatter',
+        mode: 'markers',
+        name: `${channel} White Line`,
+        marker: { color: '#f97316', size: 9, line: { color: '#fff7ed', width: 1.5 } },
+        showlegend: false,
+      })
+    }
   }
   return traces
 }
@@ -218,7 +271,7 @@ function buildComparisonTraces(
   return traces
 }
 
-function buildMultiTraces(datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', showRaw: boolean): Plotly.Data[] {
+function buildMultiTraces(datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', showRaw: boolean, showWhiteLineMarkers: boolean): Plotly.Data[] {
   const traces: Plotly.Data[] = []
   datasets.forEach((ds, i) => {
     const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
@@ -239,7 +292,8 @@ function buildMultiTraces(datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', 
       line: { color, width: 2.0 },
     })
     const wl = channel === 'TEY' ? ds.white_line_tey : ds.white_line_tfy
-    if (wl != null) {
+    if (wl != null && showWhiteLineMarkers) {
+      const point = getWhiteLinePoint(ds.x, processed, wl)
       traces.push({
         x: [wl, wl],
         y: [Math.min(...processed), Math.max(...processed)],
@@ -248,6 +302,17 @@ function buildMultiTraces(datasets: ProcessedDataset[], channel: 'TEY' | 'TFY', 
         line: { color, width: 1.2, dash: 'dash' },
         showlegend: false,
       })
+      if (point) {
+        traces.push({
+          x: [point.x],
+          y: [point.y],
+          type: 'scatter',
+          mode: 'markers',
+          name: `${shortName} WL 點`,
+          marker: { color, size: 7, line: { color: '#e2e8f0', width: 1.2 } },
+          showlegend: false,
+        })
+      }
     }
   })
   return traces
@@ -546,6 +611,40 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
   )
 }
 
+function TogglePill({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={[
+        'flex w-full items-center justify-between gap-3 rounded-[14px] px-4 py-2.5 text-sm font-medium transition-all duration-150',
+        checked
+          ? [
+              'bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)]',
+              'text-[var(--accent-secondary)]',
+              '[box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent),0_2px_12px_-2px_color-mix(in_srgb,var(--accent-secondary)_30%,transparent)]',
+            ].join(' ')
+          : [
+              'bg-[color:color-mix(in_srgb,var(--card-bg)_70%,transparent)]',
+              'text-[var(--text-soft)]',
+              '[box-shadow:inset_0_0_0_1px_var(--card-border)]',
+              'hover:text-[var(--text-main)] hover:[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--accent-secondary)_40%,var(--card-border))]',
+            ].join(' '),
+      ].join(' ')}
+    >
+      <span>{label}</span>
+      <span
+        className={[
+          'h-3.5 w-3.5 shrink-0 rounded-full transition-all duration-150',
+          checked
+            ? 'bg-[var(--accent-secondary)] [box-shadow:0_0_8px_color-mix(in_srgb,var(--accent-secondary)_75%,transparent)]'
+            : 'border border-[var(--card-border)]',
+        ].join(' ')}
+      />
+    </button>
+  )
+}
+
 // ── Peak fitting helpers ──────────────────────────────────────────────────────
 
 function createPeakId() { return `XA${Math.random().toString(36).slice(2, 7)}` }
@@ -561,9 +660,11 @@ interface XasPeakCandidate extends XasInitPeak {
 export default function XAS({
   onModuleSelect,
   onOpenPlotPopup,
+  onUpdatePlotPopup,
 }: {
   onModuleSelect?: (m: AnalysisModuleId) => void
-  onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+  onOpenPlotPopup?: (popup: PlotPopupRequest) => string
+  onUpdatePlotPopup?: (id: string, update: PlotPopupUpdate) => void
 }) {
   const moduleContent = MODULE_CONTENT.xas
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -582,11 +683,15 @@ export default function XAS({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
+  const [showWhiteLineMarkers, setShowWhiteLineMarkers] = useState(true)
+  const [whiteLineEnabled, setWhiteLineEnabled] = useState(true)
   const [autoInterpPoints, setAutoInterpPoints] = useState(true)
   const [viewMode, setViewMode] = useState<'single' | 'overlay'>('single')
   const [overlaySelectedNames, setOverlaySelectedNames] = useState<string[]>([])
   const [showOverlayModal, setShowOverlayModal] = useState(false)
   const [selectedSingleIdx, setSelectedSingleIdx] = useState(0)
+  const popupIdsRef = useRef<Record<string, string>>({})
+  const popupResolversRef = useRef<Record<string, () => PlotPopupRequest>>({})
 
   // ── Peak fitting state ────────────────────────────────────────────────────
   const [fitChannel, setFitChannel] = useState<'TEY' | 'TFY'>('TEY')
@@ -618,6 +723,7 @@ export default function XAS({
   const overlayDatasets = getOverlayDatasets(result)
   const overlayPreprocessDatasets = getOverlayDatasets(preprocessResult)
   const overlayPreNormalizationDatasets = getOverlayDatasets(preNormalizationResult)
+  const lastEnabledNormMethodRef = useRef<Exclude<ProcessParams['norm_method'], 'none'>>('post_edge')
   const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
   const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
   const interpolationEnabled = params.interpolate
@@ -628,6 +734,8 @@ export default function XAS({
       setResult(null)
       setPreprocessResult(null)
       setPreNormalizationResult(null)
+      popupIdsRef.current = {}
+      popupResolversRef.current = {}
       return
     }
     let cancelled = false
@@ -636,15 +744,23 @@ export default function XAS({
     const effectiveParams: ProcessParams = {
       ...params,
       n_points: effectiveNPoints,
+      ...(whiteLineEnabled ? {} : {
+        white_line_start: null,
+        white_line_end: null,
+      }),
     }
     const preprocessParams: ProcessParams = {
       ...effectiveParams,
       bg_enabled: false,
       norm_method: 'none',
-      norm_x_start: null,
-      norm_x_end: null,
-      norm_pre_start: null,
-      norm_pre_end: null,
+      norm_tey_start: null,
+      norm_tey_end: null,
+      norm_tfy_start: null,
+      norm_tfy_end: null,
+      norm_tey_pre_start: null,
+      norm_tey_pre_end: null,
+      norm_tfy_pre_start: null,
+      norm_tfy_pre_end: null,
       white_line_start: null,
       white_line_end: null,
       gauss_enabled: false,
@@ -653,10 +769,14 @@ export default function XAS({
     const preNormalizationParams: ProcessParams = {
       ...effectiveParams,
       norm_method: 'none',
-      norm_x_start: null,
-      norm_x_end: null,
-      norm_pre_start: null,
-      norm_pre_end: null,
+      norm_tey_start: null,
+      norm_tey_end: null,
+      norm_tfy_start: null,
+      norm_tfy_end: null,
+      norm_tey_pre_start: null,
+      norm_tey_pre_end: null,
+      norm_tfy_pre_start: null,
+      norm_tfy_pre_end: null,
       white_line_start: null,
       white_line_end: null,
     }
@@ -675,7 +795,13 @@ export default function XAS({
       .catch(e => { if (!cancelled) setError(String(e.message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
-  }, [rawFiles, params, effectiveNPoints])
+  }, [rawFiles, params, effectiveNPoints, whiteLineEnabled])
+
+  useEffect(() => {
+    if (params.norm_method !== 'none') {
+      lastEnabledNormMethodRef.current = params.norm_method
+    }
+  }, [params.norm_method])
 
   // sidebar resize
   useEffect(() => {
@@ -781,46 +907,63 @@ export default function XAS({
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
 
-  const energyMin = rawFiles.length > 0 ? Math.min(...rawFiles.map(f => f.x[0])) : 440
-  const energyMax = rawFiles.length > 0 ? Math.max(...rawFiles.map(f => f.x[f.x.length - 1])) : 490
+  const energyBounds = getDatasetBounds(rawFiles)
+  const preprocessBounds = getDatasetBounds(isOverlayMode ? overlayPreprocessDatasets : [preprocessDataset])
+  const backgroundBounds = getDatasetBounds(isOverlayMode ? overlayPreNormalizationDatasets : [preNormalizationDataset])
+  const normalizationBounds = getDatasetBounds(isOverlayMode ? overlayDatasets : [activeDataset])
+  const whiteLineBounds = normalizationBounds
+  const energyMin = energyBounds.min
+  const energyMax = energyBounds.max
 
   const sidebarStyle: CSSProperties = sidebarCollapsed
     ? { width: SIDEBAR_COLLAPSED_PEEK, minWidth: SIDEBAR_COLLAPSED_PEEK, overflow: 'hidden' }
     : { width: sidebarWidth, minWidth: SIDEBAR_MIN_WIDTH, maxWidth: SIDEBAR_MAX_WIDTH }
 
-  const backgroundRegions = [{
-    start: params.bg_x_start ?? energyMin,
-    end: params.bg_x_end ?? energyMax,
-    label: '背景區間',
-    color: '#f59e0b',
-  }]
-  const normalizationRegions = params.norm_method === 'post_edge'
-    ? [
-        {
-          start: params.norm_pre_start ?? energyMin,
-          end: params.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3),
-          label: 'Pre-edge 區間',
-          color: '#f97316',
-        },
-        {
-          start: params.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7),
-          end: params.norm_x_end ?? energyMax,
-          label: 'Post-edge 區間',
-          color: '#14b8a6',
-        },
+  const getBackgroundRange = useCallback((channel: XasChannel, bounds: RangeBounds) => ({
+    start: channel === 'TEY' ? (params.bg_tey_start ?? bounds.min) : (params.bg_tfy_start ?? bounds.min),
+    end: channel === 'TEY' ? (params.bg_tey_end ?? bounds.max) : (params.bg_tfy_end ?? bounds.max),
+  }), [params.bg_tey_end, params.bg_tey_start, params.bg_tfy_end, params.bg_tfy_start])
+  const getNormalizationRange = useCallback((channel: XasChannel, bounds: RangeBounds) => ({
+    start: channel === 'TEY' ? (params.norm_tey_start ?? bounds.min) : (params.norm_tfy_start ?? bounds.min),
+    end: channel === 'TEY' ? (params.norm_tey_end ?? bounds.max) : (params.norm_tfy_end ?? bounds.max),
+  }), [params.norm_tey_end, params.norm_tey_start, params.norm_tfy_end, params.norm_tfy_start])
+  const getPreEdgeRange = useCallback((channel: XasChannel, bounds: RangeBounds) => ({
+    start: channel === 'TEY'
+      ? (params.norm_tey_pre_start ?? bounds.min)
+      : (params.norm_tfy_pre_start ?? bounds.min),
+    end: channel === 'TEY'
+      ? (params.norm_tey_pre_end ?? (bounds.min + (bounds.max - bounds.min) * 0.3))
+      : (params.norm_tfy_pre_end ?? (bounds.min + (bounds.max - bounds.min) * 0.3)),
+  }), [params.norm_tey_pre_end, params.norm_tey_pre_start, params.norm_tfy_pre_end, params.norm_tfy_pre_start])
+  const getNormalizationRegions = useCallback((channel: XasChannel, bounds: RangeBounds) => {
+    if (params.norm_method === 'post_edge') {
+      const pre = getPreEdgeRange(channel, bounds)
+      const post = {
+        start: channel === 'TEY'
+          ? (params.norm_tey_start ?? (bounds.min + (bounds.max - bounds.min) * 0.7))
+          : (params.norm_tfy_start ?? (bounds.min + (bounds.max - bounds.min) * 0.7)),
+        end: channel === 'TEY'
+          ? (params.norm_tey_end ?? bounds.max)
+          : (params.norm_tfy_end ?? bounds.max),
+      }
+      return [
+        { ...pre, label: 'Pre-edge 區間', color: '#f97316' },
+        { ...post, label: 'Post-edge 區間', color: '#14b8a6' },
       ]
-    : [{
-        start: params.norm_x_start ?? energyMin,
-        end: params.norm_x_end ?? energyMax,
-        label: params.norm_method === 'mean_region' ? 'Mean Region' : '歸一化區間',
-        color: '#14b8a6',
-      }]
+    }
+    const range = getNormalizationRange(channel, bounds)
+    return [{
+      ...range,
+      label: params.norm_method === 'mean_region' ? 'Mean Region' : '歸一化區間',
+      color: '#14b8a6',
+    }]
+  }, [getNormalizationRange, getPreEdgeRange, params.norm_method, params.norm_tey_end, params.norm_tey_start, params.norm_tfy_end, params.norm_tfy_start])
   const plainTeyLayout = chartLayout('Energy (eV)', 'TEY Intensity')
   const plainTfyLayout = chartLayout('Energy (eV)', 'TFY Intensity')
-  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', backgroundRegions)
-  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', backgroundRegions)
-  const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', normalizationRegions)
-  const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', normalizationRegions)
+  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', [{ ...getBackgroundRange('TEY', backgroundBounds), label: '背景區間', color: '#f59e0b' }])
+  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', [{ ...getBackgroundRange('TFY', backgroundBounds), label: '背景區間', color: '#f59e0b' }])
+  const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', getNormalizationRegions('TEY', normalizationBounds))
+  const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', getNormalizationRegions('TFY', normalizationBounds))
 
   const rawStageSource = preprocessDataset ?? activeDataset
   const rawOverlaySource = overlayPreprocessDatasets.length > 0 ? overlayPreprocessDatasets : overlayDatasets
@@ -829,6 +972,8 @@ export default function XAS({
   )
   const hasBackgroundStage = params.bg_enabled && Boolean(preNormalizationDataset || overlayPreNormalizationDatasets.length > 0)
   const hasNormalizationStage = params.norm_method !== 'none' && Boolean(activeDataset || overlayDatasets.length > 0)
+  const whiteLineRangeLabel = `${(params.white_line_start ?? whiteLineBounds.min).toFixed(1)} – ${(params.white_line_end ?? whiteLineBounds.max).toFixed(1)} eV`
+  const hasWhiteLineResult = Boolean(activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null)
   const renderStagePlot = (data: Plotly.Data[], layout: Partial<Plotly.Layout>, height = 310) => (
     <Plot
       data={data}
@@ -842,31 +987,46 @@ export default function XAS({
     data: Plotly.Data[],
     layout: Partial<Plotly.Layout>,
     popupTitle: string,
-  ) => (
-    <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
-        {onOpenPlotPopup && (
-          <button
-            type="button"
-            className="chart-popup-button"
-            onClick={() => onOpenPlotPopup({
-              title: popupTitle,
-              content: renderStagePlot(data, layout, 440),
-            })}
-            aria-label="彈出圖表"
-          />
-        )}
+    footer?: ReactNode,
+  ) => {
+    popupResolversRef.current[popupTitle] = () => ({
+      title: popupTitle,
+      content: renderStagePlot(data, layout, 440),
+    })
+    return (
+      <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
+          {onOpenPlotPopup && (
+            <button
+              type="button"
+              className="chart-popup-button"
+              onClick={() => {
+                const popup = popupResolversRef.current[popupTitle]?.() ?? {
+                  title: popupTitle,
+                  content: renderStagePlot(data, layout, 440),
+                }
+                const popupId = onOpenPlotPopup(popup)
+                popupIdsRef.current[popupTitle] = popupId
+              }}
+              aria-label="彈出圖表"
+            />
+          )}
+        </div>
+        {renderStagePlot(data, layout)}
+        {footer ? <div className="mt-3">{footer}</div> : null}
       </div>
-      {renderStagePlot(data, layout)}
-    </div>
-  )
+    )
+  }
   const renderStagePair = (
     title: string,
     teyData: Plotly.Data[],
     tfyData: Plotly.Data[],
     teyLayout: Partial<Plotly.Layout>,
     tfyLayout: Partial<Plotly.Layout>,
+    teyFooter?: ReactNode,
+    tfyFooter?: ReactNode,
+    description?: ReactNode,
   ) => {
     if (teyData.length === 0 && tfyData.length === 0) return null
     return (
@@ -874,11 +1034,206 @@ export default function XAS({
         <div className="mb-2 flex items-center justify-between gap-3">
           <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
         </div>
+        {description ? <p className="mb-3 text-xs text-[var(--text-soft)]">{description}</p> : null}
         <div className="grid gap-4 md:grid-cols-2">
-          {renderStageCard('TEY（Total Electron Yield）', teyData, teyLayout, `${title} · TEY`)}
-          {renderStageCard('TFY（Total Fluorescence Yield）', tfyData, tfyLayout, `${title} · TFY`)}
+          {renderStageCard('TEY（Total Electron Yield）', teyData, teyLayout, `${title} · TEY`, teyFooter)}
+          {renderStageCard('TFY（Total Fluorescence Yield）', tfyData, tfyLayout, `${title} · TFY`, tfyFooter)}
         </div>
       </section>
+    )
+  }
+
+  useEffect(() => {
+    if (!whiteLineEnabled || rawFiles.length === 0) return
+    if (rawFiles.length === 0) return
+    if (params.white_line_start != null && params.white_line_end != null) return
+    setParams(current => {
+      if (current.white_line_start != null && current.white_line_end != null) return current
+      return {
+        ...current,
+        white_line_start: current.white_line_start ?? whiteLineBounds.min,
+        white_line_end: current.white_line_end ?? whiteLineBounds.max,
+      }
+    })
+  }, [params.white_line_end, params.white_line_start, rawFiles.length, whiteLineBounds.max, whiteLineBounds.min, whiteLineEnabled])
+
+  useEffect(() => {
+    if (!onUpdatePlotPopup) return
+    Object.entries(popupIdsRef.current).forEach(([key, id]) => {
+      const resolver = popupResolversRef.current[key]
+      if (!resolver) return
+      onUpdatePlotPopup(id, resolver())
+    })
+  }, [
+    onUpdatePlotPopup,
+    activeDataset,
+    overlayDatasets,
+    preprocessDataset,
+    overlayPreprocessDatasets,
+    preNormalizationDataset,
+    overlayPreNormalizationDatasets,
+    params,
+    showRaw,
+    viewMode,
+  ])
+
+  const renderBackgroundSidebarInputs = (channel: XasChannel) => {
+    const range = getBackgroundRange(channel, backgroundBounds)
+    return (
+      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
+        <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{channel} 區間</p>
+        <div className="grid grid-cols-2 gap-2">
+          <NumInput
+            label="起始 (eV)"
+            value={range.start}
+            onChange={value => setParams(current => ({
+              ...current,
+              ...(channel === 'TEY' ? { bg_tey_start: value } : { bg_tfy_start: value }),
+            }))}
+            step={0.1}
+          />
+          <NumInput
+            label="結束 (eV)"
+            value={range.end}
+            onChange={value => setParams(current => ({
+              ...current,
+              ...(channel === 'TEY' ? { bg_tey_end: value } : { bg_tfy_end: value }),
+            }))}
+            step={0.1}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  const renderNormalizationSidebarInputs = (channel: XasChannel) => {
+    const range = getNormalizationRange(channel, normalizationBounds)
+    const preRange = getPreEdgeRange(channel, normalizationBounds)
+    return (
+      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
+        <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{channel} 區間</p>
+        {params.norm_method === 'post_edge' ? (
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <NumInput
+                label="Pre-edge 起始"
+                value={preRange.start}
+                onChange={value => setParams(current => ({
+                  ...current,
+                  ...(channel === 'TEY' ? { norm_tey_pre_start: value } : { norm_tfy_pre_start: value }),
+                }))}
+                step={0.1}
+              />
+              <NumInput
+                label="Pre-edge 結束"
+                value={preRange.end}
+                onChange={value => setParams(current => ({
+                  ...current,
+                  ...(channel === 'TEY' ? { norm_tey_pre_end: value } : { norm_tfy_pre_end: value }),
+                }))}
+                step={0.1}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <NumInput
+                label="Post-edge 起始"
+                value={range.start}
+                onChange={value => setParams(current => ({
+                  ...current,
+                  ...(channel === 'TEY' ? { norm_tey_start: value } : { norm_tfy_start: value }),
+                }))}
+                step={0.1}
+              />
+              <NumInput
+                label="Post-edge 結束"
+                value={range.end}
+                onChange={value => setParams(current => ({
+                  ...current,
+                  ...(channel === 'TEY' ? { norm_tey_end: value } : { norm_tfy_end: value }),
+                }))}
+                step={0.1}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <NumInput
+              label="起始 (eV)"
+              value={range.start}
+              onChange={value => setParams(current => ({
+                ...current,
+                ...(channel === 'TEY' ? { norm_tey_start: value } : { norm_tfy_start: value }),
+              }))}
+              step={0.1}
+            />
+            <NumInput
+              label="結束 (eV)"
+              value={range.end}
+              onChange={value => setParams(current => ({
+                ...current,
+                ...(channel === 'TEY' ? { norm_tey_end: value } : { norm_tfy_end: value }),
+              }))}
+              step={0.1}
+            />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderBackgroundChartControls = (channel: XasChannel) => {
+    const range = getBackgroundRange(channel, backgroundBounds)
+    return (
+      <DualRangeInput
+        label={`${channel} 背景扣除區間`}
+        min={backgroundBounds.min}
+        max={backgroundBounds.max}
+        start={range.start}
+        end={range.end}
+        onChange={({ start, end }) => setParams(current => ({
+          ...current,
+          ...(channel === 'TEY'
+            ? { bg_tey_start: start, bg_tey_end: end }
+            : { bg_tfy_start: start, bg_tfy_end: end }),
+        }))}
+      />
+    )
+  }
+
+  const renderNormalizationChartControls = (channel: XasChannel) => {
+    const range = getNormalizationRange(channel, normalizationBounds)
+    const preRange = getPreEdgeRange(channel, normalizationBounds)
+    return (
+      <div className="space-y-3">
+        {params.norm_method === 'post_edge' && (
+          <DualRangeInput
+            label={`${channel} Pre-edge 區間`}
+            min={normalizationBounds.min}
+            max={normalizationBounds.max}
+            start={preRange.start}
+            end={preRange.end}
+            onChange={({ start, end }) => setParams(current => ({
+              ...current,
+              ...(channel === 'TEY'
+                ? { norm_tey_pre_start: start, norm_tey_pre_end: end }
+                : { norm_tfy_pre_start: start, norm_tfy_pre_end: end }),
+            }))}
+          />
+        )}
+        <DualRangeInput
+          label={`${channel} ${params.norm_method === 'post_edge' ? 'Post-edge' : params.norm_method === 'mean_region' ? 'Mean Region' : '歸一化'} 區間`}
+          min={normalizationBounds.min}
+          max={normalizationBounds.max}
+          start={range.start}
+          end={range.end}
+          onChange={({ start, end }) => setParams(current => ({
+            ...current,
+            ...(channel === 'TEY'
+              ? { norm_tey_start: start, norm_tey_end: end }
+              : { norm_tfy_start: start, norm_tfy_end: end }),
+          }))}
+        />
+      </div>
     )
   }
 
@@ -930,7 +1285,7 @@ export default function XAS({
 
               {/* 2. 內插與資料模式 */}
               <Section step={2} title="內插 / 資料模式" hint="多檔：單筆 / 疊圖 / 平均" defaultOpen={false}>
-                <CheckRow label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
+                <TogglePill label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
                 {params.interpolate && (
                   <>
                     <CheckRow label="自動調整點數" checked={autoInterpPoints} onChange={setAutoInterpPoints} />
@@ -1058,25 +1413,19 @@ export default function XAS({
 
               {/* 4. 背景扣除 */}
               <Section step={4} title="背景扣除" hint="Linear / Polynomial / AsLS" defaultOpen={false}>
-                <CheckRow label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
+                <TogglePill label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
                 {params.bg_enabled && (
                   <>
-                    <SelectInput label="套用通道" value={params.bg_channel} onChange={v => set('bg_channel')(v as ProcessParams['bg_channel'])}
-                      options={[{ value: 'both', label: 'TEY + TFY' }, { value: 'TEY', label: '僅 TEY' }, { value: 'TFY', label: '僅 TFY' }]}
-                    />
                     <SelectInput label="方法" value={params.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
                       options={[{ value: 'linear', label: 'Linear' }, { value: 'polynomial', label: 'Polynomial' }, { value: 'asls', label: 'AsLS' }, { value: 'airpls', label: 'airPLS' }]}
                     />
                     <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
                       {BACKGROUND_METHOD_HELP[params.bg_method as Exclude<ProcessParams['bg_method'], 'none'>]}
                     </div>
-                    <DualRangeInput
-                      label="背景扣除區間"
-                      min={energyMin} max={energyMax}
-                      start={params.bg_x_start ?? energyMin}
-                      end={params.bg_x_end ?? energyMax}
-                      onChange={({ start, end }) => setParams(p => ({ ...p, bg_x_start: start, bg_x_end: end }))}
-                    />
+                    <div className="space-y-2">
+                      {renderBackgroundSidebarInputs('TEY')}
+                      {renderBackgroundSidebarInputs('TFY')}
+                    </div>
                     {params.bg_method === 'polynomial' && (
                       <NumInput label="多項式次數" value={params.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />
                     )}
@@ -1086,87 +1435,101 @@ export default function XAS({
 
               {/* 5. 歸一化 */}
               <Section step={5} title="歸一化" hint="Post-edge Step / Mean Region / Min-Max" defaultOpen={false}>
-                <SelectInput label="方法" value={params.norm_method} onChange={v => {
-                  const method = v as ProcessParams['norm_method']
-                  setParams(p => {
-                    if (method === 'post_edge') {
+                <TogglePill
+                  label="啟用歸一化"
+                  checked={params.norm_method !== 'none'}
+                  onChange={enabled => {
+                    if (!enabled) {
+                      setParams(current => ({ ...current, norm_method: 'none' }))
+                      return
+                    }
+                    const method = lastEnabledNormMethodRef.current
+                    setParams(p => {
+                      if (method === 'post_edge') {
+                        const min = normalizationBounds.min
+                        const max = normalizationBounds.max
+                        return {
+                          ...p,
+                          norm_method: method,
+                          norm_tey_pre_start: p.norm_tey_pre_start ?? min,
+                          norm_tey_pre_end: p.norm_tey_pre_end ?? (min + (max - min) * 0.3),
+                          norm_tey_start: p.norm_tey_start ?? (min + (max - min) * 0.7),
+                          norm_tey_end: p.norm_tey_end ?? max,
+                          norm_tfy_pre_start: p.norm_tfy_pre_start ?? min,
+                          norm_tfy_pre_end: p.norm_tfy_pre_end ?? (min + (max - min) * 0.3),
+                          norm_tfy_start: p.norm_tfy_start ?? (min + (max - min) * 0.7),
+                          norm_tfy_end: p.norm_tfy_end ?? max,
+                        }
+                      }
+                      const min = normalizationBounds.min
+                      const max = normalizationBounds.max
                       return {
                         ...p,
                         norm_method: method,
-                        norm_pre_start: p.norm_pre_start ?? energyMin,
-                        norm_pre_end: p.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3),
-                        norm_x_start: p.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7),
-                        norm_x_end: p.norm_x_end ?? energyMax,
+                        norm_tey_start: p.norm_tey_start ?? min,
+                        norm_tey_end: p.norm_tey_end ?? max,
+                        norm_tfy_start: p.norm_tfy_start ?? min,
+                        norm_tfy_end: p.norm_tfy_end ?? max,
                       }
-                    }
-                    if (method === 'min_max' || method === 'max' || method === 'area' || method === 'mean_region') {
-                      return {
-                        ...p,
-                        norm_method: method,
-                        norm_x_start: p.norm_x_start ?? energyMin,
-                        norm_x_end: p.norm_x_end ?? energyMax,
-                      }
-                    }
-                    return { ...p, norm_method: method }
-                  })
-                }}
-                  options={[
-                    { value: 'none', label: '不歸一化' },
-                    { value: 'min_max', label: 'Min–Max' },
-                    { value: 'max', label: 'Max' },
-                    { value: 'area', label: 'Area' },
-                    { value: 'post_edge', label: 'Post-edge Step' },
-                    { value: 'mean_region', label: 'Mean Region' },
-                  ]}
+                    })
+                  }}
                 />
-                {params.norm_method === 'post_edge' && (
+                {params.norm_method !== 'none' && (
                   <>
-                    <DualRangeInput
-                      label="Pre-edge 區間"
-                      min={energyMin} max={energyMax}
-                      start={params.norm_pre_start ?? energyMin}
-                      end={params.norm_pre_end ?? (energyMin + (energyMax - energyMin) * 0.3)}
-                      onChange={({ start, end }) => setParams(p => ({ ...p, norm_pre_start: start, norm_pre_end: end }))}
+                    <SelectInput label="方法" value={params.norm_method} onChange={v => {
+                      const method = v as ProcessParams['norm_method']
+                      setParams(p => {
+                        if (method === 'post_edge') {
+                          const min = normalizationBounds.min
+                          const max = normalizationBounds.max
+                          return {
+                            ...p,
+                            norm_method: method,
+                            norm_tey_pre_start: p.norm_tey_pre_start ?? min,
+                            norm_tey_pre_end: p.norm_tey_pre_end ?? (min + (max - min) * 0.3),
+                            norm_tey_start: p.norm_tey_start ?? (min + (max - min) * 0.7),
+                            norm_tey_end: p.norm_tey_end ?? max,
+                            norm_tfy_pre_start: p.norm_tfy_pre_start ?? min,
+                            norm_tfy_pre_end: p.norm_tfy_pre_end ?? (min + (max - min) * 0.3),
+                            norm_tfy_start: p.norm_tfy_start ?? (min + (max - min) * 0.7),
+                            norm_tfy_end: p.norm_tfy_end ?? max,
+                          }
+                        }
+                        if (method === 'min_max' || method === 'max' || method === 'area' || method === 'mean_region') {
+                          const min = normalizationBounds.min
+                          const max = normalizationBounds.max
+                          return {
+                            ...p,
+                            norm_method: method,
+                            norm_tey_start: p.norm_tey_start ?? min,
+                            norm_tey_end: p.norm_tey_end ?? max,
+                            norm_tfy_start: p.norm_tfy_start ?? min,
+                            norm_tfy_end: p.norm_tfy_end ?? max,
+                          }
+                        }
+                        return { ...p, norm_method: method }
+                      })
+                    }}
+                      options={[
+                        { value: 'none', label: '不歸一化' },
+                        { value: 'min_max', label: 'Min–Max' },
+                        { value: 'max', label: 'Max' },
+                        { value: 'area', label: 'Area' },
+                        { value: 'post_edge', label: 'Post-edge Step' },
+                        { value: 'mean_region', label: 'Mean Region' },
+                      ]}
                     />
-                    <DualRangeInput
-                      label="Post-edge 區間"
-                      min={energyMin} max={energyMax}
-                      start={params.norm_x_start ?? (energyMin + (energyMax - energyMin) * 0.7)}
-                      end={params.norm_x_end ?? energyMax}
-                      onChange={({ start, end }) => setParams(p => ({ ...p, norm_x_start: start, norm_x_end: end }))}
-                    />
+                    <div className="space-y-2">
+                      {renderNormalizationSidebarInputs('TEY')}
+                      {renderNormalizationSidebarInputs('TFY')}
+                    </div>
                   </>
                 )}
-                {(params.norm_method === 'area' || params.norm_method === 'min_max' || params.norm_method === 'max' || params.norm_method === 'mean_region') && (
-                  <DualRangeInput
-                    label="歸一化區間"
-                    min={energyMin} max={energyMax}
-                    start={params.norm_x_start ?? energyMin}
-                    end={params.norm_x_end ?? energyMax}
-                    onChange={({ start, end }) => setParams(p => ({ ...p, norm_x_start: start, norm_x_end: end }))}
-                  />
-                )}
               </Section>
 
-              {/* 6. White Line */}
-              <Section step={6} title="White Line 搜尋" hint="自動找最高點能量" defaultOpen={false}>
-                <p className="text-[10px] text-[var(--text-soft)]">設定搜尋區間，自動找到最高點能量。</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <NumInput label="起始 (eV)" value={params.white_line_start ?? energyMin} onChange={v => set('white_line_start')(v)} step={0.1} />
-                  <NumInput label="結束 (eV)" value={params.white_line_end ?? energyMax} onChange={v => set('white_line_end')(v)} step={0.1} />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setParams(p => ({ ...p, white_line_start: energyMin, white_line_end: energyMax }))}
-                  className="text-[10px] text-[var(--accent-strong)] hover:underline"
-                >
-                  重設為全範圍
-                </button>
-              </Section>
-
-              {/* 7. 高斯模板扣除 */}
-              <Section step={7} title="高斯模板扣除" hint="扣除已知雜散峰" defaultOpen={false}>
-                <CheckRow label="啟用高斯模板扣除" checked={params.gauss_enabled} onChange={set('gauss_enabled')} />
+              {/* 6. 高斯模板扣除 */}
+              <Section step={6} title="高斯模板扣除" hint="扣除已知雜散峰" defaultOpen={false}>
+                <TogglePill label="啟用高斯模板扣除" checked={params.gauss_enabled} onChange={set('gauss_enabled')} />
                 {params.gauss_enabled && (
                   <>
                     <SelectInput
@@ -1248,14 +1611,45 @@ export default function XAS({
                 )}
               </Section>
 
+              {/* 7. White Line */}
+              <Section step={7} title="White Line 搜尋" hint="自動找最高點能量" defaultOpen={false}>
+                <TogglePill label="啟用 White Line 搜尋" checked={whiteLineEnabled} onChange={setWhiteLineEnabled} />
+                {whiteLineEnabled && (
+                  <>
+                    <p className="text-[10px] text-[var(--text-soft)]">設定搜尋區間，自動找到最高點能量。</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="起始 (eV)" value={params.white_line_start ?? whiteLineBounds.min} onChange={v => set('white_line_start')(v)} step={0.1} />
+                      <NumInput label="結束 (eV)" value={params.white_line_end ?? whiteLineBounds.max} onChange={v => set('white_line_end')(v)} step={0.1} />
+                    </div>
+                    <p className="text-[10px] text-[var(--accent-strong)]">
+                      目前搜尋範圍內會直接在最終光譜標示 White Line 垂直線與峰頂位置。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setParams(p => ({ ...p, white_line_start: whiteLineBounds.min, white_line_end: whiteLineBounds.max }))}
+                      className="text-[10px] text-[var(--accent-strong)] hover:underline"
+                    >
+                      重設為全範圍
+                    </button>
+                  </>
+                )}
+              </Section>
+
               {/* 8. 峰擬合 */}
-              {result && (
-                <Section step={8} title={isOverlayMode ? '峰擬合（疊圖模式停用）' : '峰擬合'} hint="Voigt / Gaussian / Lorentzian" defaultOpen={false}
-                  onOpen={isOverlayMode ? undefined : loadSamplesList}
-                >
-                  {isOverlayMode ? (
-                    <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下不可用。請切回單筆模式，或先平均數據後再擬合。</p>
-                  ) : (<>
+              <Section
+                step={8}
+                title={isOverlayMode ? '峰擬合（疊圖模式停用）' : '峰擬合'}
+                hint="Voigt / Gaussian / Lorentzian"
+                defaultOpen={false}
+                onOpen={!isOverlayMode && activeDataset ? loadSamplesList : undefined}
+              >
+                {!activeDataset ? (
+                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3 text-[10px] leading-6 text-[var(--text-soft)]">
+                    請先載入資料並完成處理後，再使用峰擬合。
+                  </div>
+                ) : isOverlayMode ? (
+                  <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下不可用。請切回單筆模式，或先平均數據後再擬合。</p>
+                ) : (<>
                   <SelectInput label="擬合通道" value={fitChannel}
                     onChange={v => { setFitChannel(v as 'TEY' | 'TFY'); setFitResult(null) }}
                     options={[{ value: 'TEY', label: 'TEY' }, { value: 'TFY', label: 'TFY' }]}
@@ -1359,8 +1753,7 @@ export default function XAS({
                   )}
                   {fitError && <p className="text-[10px] text-rose-400">{fitError}</p>}
                   </>)}
-                </Section>
-              )}
+              </Section>
 
               </div>
             </div>
@@ -1387,7 +1780,7 @@ export default function XAS({
             { label: `資料量 ${rawFiles.length}` },
             { label: `內插 ${params.interpolate ? `${effectiveNPoints} 點` : '未啟用'}` },
             { label: `平均 ${params.average ? '開啟' : '關閉'}` },
-            { label: `White Line ${activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null ? '已計算' : '未設定'}` },
+            { label: `White Line ${!whiteLineEnabled ? '關閉' : activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null ? '已計算' : '未設定'}` },
           ]}
         />
 
@@ -1455,17 +1848,67 @@ export default function XAS({
                 {activeDataset ? (
                   <>
                     <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
-                      {activeDataset.white_line_tey != null
+                      {!whiteLineEnabled
+                        ? '未啟用'
+                        : activeDataset.white_line_tey != null
                         ? `TEY ${activeDataset.white_line_tey.toFixed(2)} eV`
                         : '未設定搜尋範圍'}
                     </p>
-                    {activeDataset.white_line_tfy != null && (
+                    {whiteLineEnabled && activeDataset.white_line_tfy != null && (
                       <p className="text-xs text-[var(--text-soft)]">TFY {activeDataset.white_line_tfy.toFixed(2)} eV</p>
                     )}
                   </>
                 ) : (
                   <p className="mt-1 text-xs text-[var(--text-soft)]">疊圖模式</p>
                 )}
+              </div>
+            </div>
+
+            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-4 shadow-[var(--card-shadow-soft)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">White Line 結果</p>
+                  <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">
+                    {!whiteLineEnabled ? '目前已停用 White Line 搜尋。' : isOverlayMode ? '疊圖模式下顯示各筆資料自己的 White Line 標記。' : hasWhiteLineResult ? '目前結果已套用到最終光譜。' : '尚未建立 White Line 結果。'}
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--text-soft)]">{whiteLineEnabled ? `搜尋區間：${whiteLineRangeLabel}` : '重新啟用後會沿用目前搜尋區間。'}</p>
+                </div>
+                <label className="inline-flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                  <input
+                    type="checkbox"
+                    checked={showWhiteLineMarkers && whiteLineEnabled}
+                    disabled={!whiteLineEnabled}
+                    onChange={event => setShowWhiteLineMarkers(event.target.checked)}
+                    className="accent-[var(--accent-strong)]"
+                  />
+                  顯示圖上標記
+                </label>
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">TEY</p>
+                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
+                    {!whiteLineEnabled
+                      ? '未啟用'
+                      : isOverlayMode
+                      ? '請看最終疊圖'
+                      : activeDataset?.white_line_tey != null
+                        ? `${activeDataset.white_line_tey.toFixed(2)} eV`
+                        : '尚未找到'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">TFY</p>
+                  <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
+                    {!whiteLineEnabled
+                      ? '未啟用'
+                      : isOverlayMode
+                      ? '請看最終疊圖'
+                      : activeDataset?.white_line_tfy != null
+                        ? `${activeDataset.white_line_tfy.toFixed(2)} eV`
+                        : '尚未找到'}
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -1498,8 +1941,8 @@ export default function XAS({
               plainTfyLayout,
             )}
 
-            {hasBackgroundStage && renderStagePair(
-              '3. 背景扣除',
+            {renderStagePair(
+              params.bg_enabled ? '3. 背景扣除' : '3. 背景扣除（未啟用）',
               isOverlayMode
                 ? buildOverlayBackgroundComparisonTraces(overlayPreprocessDatasets, overlayPreNormalizationDatasets, 'TEY')
                 : preNormalizationDataset ? buildComparisonTraces(
@@ -1522,10 +1965,13 @@ export default function XAS({
                 ) : [],
               backgroundTeyLayout,
               backgroundTfyLayout,
+              params.bg_enabled ? renderBackgroundChartControls('TEY') : undefined,
+              params.bg_enabled ? renderBackgroundChartControls('TFY') : undefined,
+              params.bg_enabled ? '這一步會把背景扣除前後的差異直接疊在同一張圖上。' : '目前未啟用背景扣除，這一階段直接沿用前處理結果。',
             )}
 
-            {hasNormalizationStage && renderStagePair(
-              `${hasBackgroundStage ? 4 : 3}. 歸一化`,
+            {renderStagePair(
+              params.norm_method !== 'none' ? '4. 歸一化' : '4. 歸一化（未啟用）',
               isOverlayMode
                 ? buildOverlayComparisonTraces(overlayPreNormalizationDatasets, overlayDatasets, 'TEY', getChannelProcessed, getChannelProcessed, '歸一化前', '歸一化後')
                 : activeDataset && preNormalizationDataset ? buildComparisonTraces(
@@ -1548,16 +1994,19 @@ export default function XAS({
                 ) : [],
               normalizationTeyLayout,
               normalizationTfyLayout,
+              params.norm_method !== 'none' ? renderNormalizationChartControls('TEY') : undefined,
+              params.norm_method !== 'none' ? renderNormalizationChartControls('TFY') : undefined,
+              params.norm_method !== 'none' ? '綠色區間代表目前採樣的歸一化範圍。' : '目前未啟用歸一化，這一階段直接沿用上一階段結果。',
             )}
 
             {renderStagePair(
-              `${hasNormalizationStage ? (hasBackgroundStage ? 5 : 4) : (hasBackgroundStage ? 4 : 3)}. 最終光譜`,
+              '5. 最終光譜',
               isOverlayMode
-                ? buildMultiTraces(overlayDatasets, 'TEY', showRaw)
-                : activeDataset ? buildTraces(activeDataset, 'TEY', showRaw) : [],
+                ? buildMultiTraces(overlayDatasets, 'TEY', showRaw, showWhiteLineMarkers && whiteLineEnabled)
+                : activeDataset ? buildTraces(activeDataset, 'TEY', showRaw, showWhiteLineMarkers && whiteLineEnabled) : [],
               isOverlayMode
-                ? buildMultiTraces(overlayDatasets, 'TFY', showRaw)
-                : activeDataset ? buildTraces(activeDataset, 'TFY', showRaw) : [],
+                ? buildMultiTraces(overlayDatasets, 'TFY', showRaw, showWhiteLineMarkers && whiteLineEnabled)
+                : activeDataset ? buildTraces(activeDataset, 'TFY', showRaw, showWhiteLineMarkers && whiteLineEnabled) : [],
               plainTeyLayout,
               plainTfyLayout,
             )}
@@ -1565,9 +2014,16 @@ export default function XAS({
             {/* Single-mode only sections */}
             {activeDataset && (<>
             {/* Gaussian subtraction comparison chart */}
-            {(activeDataset.tey_gaussian != null || activeDataset.tfy_gaussian != null) && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">高斯模板扣除對比</p>
+            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+              <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">
+                {params.gauss_enabled ? '高斯模板扣除對比' : '高斯模板扣除（未啟用）'}
+              </p>
+              {!params.gauss_enabled ? (
+                <p className="text-xs text-[var(--text-soft)]">目前未啟用高斯模板扣除，這一步會直接沿用歸一化後的結果。</p>
+              ) : activeDataset.tey_gaussian == null && activeDataset.tfy_gaussian == null ? (
+                <p className="text-xs text-[var(--text-soft)]">已啟用高斯模板扣除，但目前尚未建立可套用的模板峰。</p>
+              ) : (
+                <>
                 {activeDataset.tey_gaussian != null && (
                   <>
                     <p className="mb-1 text-xs text-[var(--text-soft)]">TEY</p>
@@ -1598,8 +2054,9 @@ export default function XAS({
                     />
                   </>
                 )}
-              </div>
-            )}
+                </>
+              )}
+            </div>
 
             {/* Peak fitting result */}
             {fitResult && (

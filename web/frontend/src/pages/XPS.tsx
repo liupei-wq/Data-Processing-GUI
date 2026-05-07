@@ -163,7 +163,7 @@ function estimateInterpolationPoints(files: ParsedFile[]) {
   return clamp(target || INTERP_POINTS_DEFAULT, INTERP_POINTS_MIN, INTERP_POINTS_MAX)
 }
 
-const DEFAULT_SERIES_PALETTE_KEYS = ['blue', 'teal', 'orange', 'rose', 'violet']
+const DEFAULT_SERIES_PALETTE_KEYS = ['blue', 'orange', 'rose', 'teal', 'violet']
 
 function buildRawFileTraces(files: ParsedFile[], activeIndex: number, fileColorKeys: string[]): Plotly.Data[] {
   return files.map((file, index) => {
@@ -267,6 +267,158 @@ function buildRegionAnnotations(start: number | null | undefined, end: number | 
     showarrow: false,
     font: { size: 11, color },
   }]
+}
+
+function findSpectrumExtrema(
+  x: number[],
+  y: number[],
+  range?: { start: number; end: number },
+) {
+  if (x.length === 0 || y.length === 0 || x.length !== y.length) return null
+  const low = range ? Math.min(range.start, range.end) : Number.NEGATIVE_INFINITY
+  const high = range ? Math.max(range.start, range.end) : Number.POSITIVE_INFINITY
+  const candidates: Array<{ x: number; y: number }> = []
+  for (let i = 0; i < x.length; i += 1) {
+    const xi = x[i]
+    const yi = y[i]
+    if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue
+    if (xi < low || xi > high) continue
+    candidates.push({ x: xi, y: yi })
+  }
+  if (candidates.length === 0) return null
+  let maxPoint = candidates[0]
+  let minPoint = candidates[0]
+  for (const point of candidates) {
+    if (point.y > maxPoint.y) maxPoint = point
+    if (point.y < minPoint.y) minPoint = point
+  }
+  return { maxPoint, minPoint }
+}
+
+function suggestVbmEdgeRange(x: number[], y: number[]) {
+  if (x.length < 5 || y.length < 5 || x.length !== y.length) return null
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 5) return null
+
+  const xs = points.map(point => point.x)
+  const ys = points.map(point => point.y)
+  const yMin = Math.min(...ys)
+  const yMax = Math.max(...ys)
+  const ySpan = yMax - yMin
+  const xSpan = Math.max(xs[xs.length - 1] - xs[0], 1e-6)
+  if (!Number.isFinite(ySpan) || ySpan <= 1e-9) return null
+
+  const windowRadius = Math.min(3, Math.floor(points.length / 6))
+  const smooth = ys.map((_, index) => {
+    const start = Math.max(0, index - windowRadius)
+    const end = Math.min(ys.length - 1, index + windowRadius)
+    let total = 0
+    for (let i = start; i <= end; i += 1) total += ys[i]
+    return total / (end - start + 1)
+  })
+  const normalized = smooth.map(value => (value - yMin) / ySpan)
+  const gradients = smooth.map((value, index) => {
+    if (index === 0) return (smooth[1] - value) / Math.max(xs[1] - xs[0], 1e-6)
+    if (index === smooth.length - 1) return (value - smooth[index - 1]) / Math.max(xs[index] - xs[index - 1], 1e-6)
+    return (smooth[index + 1] - smooth[index - 1]) / Math.max(xs[index + 1] - xs[index - 1], 1e-6)
+  })
+
+  const candidateIndices = normalized
+    .map((value, index) => ({ value, index }))
+    .filter(item => item.value >= 0.15 && item.value <= 0.85)
+    .map(item => item.index)
+  const searchIndices = candidateIndices.length > 0 ? candidateIndices : gradients.map((_, index) => index)
+  if (searchIndices.length === 0) return null
+
+  let bestIndex = searchIndices[0]
+  let bestScore = Math.abs(gradients[bestIndex])
+  for (const index of searchIndices) {
+    const score = Math.abs(gradients[index])
+    if (score > bestScore) {
+      bestIndex = index
+      bestScore = score
+    }
+  }
+
+  let left = bestIndex
+  let right = bestIndex
+  while (left > 0 && normalized[left - 1] >= 0.12 && normalized[left - 1] <= 0.82) left -= 1
+  while (right < normalized.length - 1 && normalized[right + 1] >= 0.18 && normalized[right + 1] <= 0.88) right += 1
+
+  let start = xs[left]
+  let end = xs[right]
+  if (!Number.isFinite(start) || !Number.isFinite(end) || Math.abs(end - start) < xSpan * 0.02) {
+    const center = xs[bestIndex]
+    const halfWidth = Math.min(Math.max(xSpan * 0.08, 0.35), 1.5)
+    start = center - halfWidth
+    end = center + halfWidth
+  }
+
+  const minWidth = Math.min(Math.max(xSpan * 0.05, 0.3), 1.2)
+  if (Math.abs(end - start) < minWidth) {
+    const center = (start + end) / 2
+    start = center - minWidth / 2
+    end = center + minWidth / 2
+  }
+
+  return {
+    start: Math.max(xs[0], Math.min(start, end)),
+    end: Math.min(xs[xs.length - 1], Math.max(start, end)),
+  }
+}
+
+function suggestVbmBaselineRange(x: number[], y: number[]) {
+  if (x.length < 6 || y.length < 6 || x.length !== y.length) return null
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 6) return null
+
+  const xs = points.map(point => point.x)
+  const ys = points.map(point => point.y)
+  const yMin = Math.min(...ys)
+  const yMax = Math.max(...ys)
+  const ySpan = Math.max(yMax - yMin, 1e-9)
+  const xSpan = Math.max(xs[xs.length - 1] - xs[0], 1e-6)
+
+  const candidateLimit = Math.max(6, Math.floor(points.length * 0.4))
+  const windowSize = Math.max(4, Math.min(candidateLimit, Math.round(points.length * 0.12)))
+  let bestScore = Number.POSITIVE_INFINITY
+  let bestRange: { start: number; end: number } | null = null
+
+  for (let startIndex = 0; startIndex <= candidateLimit - windowSize; startIndex += 1) {
+    const window = points.slice(startIndex, startIndex + windowSize)
+    const windowYs = window.map(point => point.y)
+    const mean = windowYs.reduce((sum, value) => sum + value, 0) / windowYs.length
+    const variance = windowYs.reduce((sum, value) => sum + (value - mean) ** 2, 0) / windowYs.length
+    const std = Math.sqrt(Math.max(variance, 0))
+    const slope = Math.abs((window[window.length - 1].y - window[0].y) / Math.max(window[window.length - 1].x - window[0].x, 1e-6))
+    const normalizedMean = Math.max(0, (mean - yMin) / ySpan)
+    const positionBias = (window[0].x - xs[0]) / xSpan
+    const score = std / ySpan + slope / ySpan + normalizedMean * 0.35 + positionBias * 0.12
+    if (score < bestScore) {
+      bestScore = score
+      bestRange = {
+        start: window[0].x,
+        end: window[window.length - 1].x,
+      }
+    }
+  }
+
+  if (!bestRange) return null
+  const minWidth = Math.min(Math.max(xSpan * 0.04, 0.35), 1.4)
+  if (Math.abs(bestRange.end - bestRange.start) < minWidth) {
+    const center = (bestRange.start + bestRange.end) / 2
+    return {
+      start: Math.max(xs[0], center - minWidth / 2),
+      end: Math.min(xs[xs.length - 1], center + minWidth / 2),
+    }
+  }
+  return bestRange
 }
 
 function chartLayout(xReversed = true, yAxisTitle = 'Intensity (a.u.)', secondaryYAxisTitle?: string): Partial<Plotly.Layout> {
@@ -714,6 +866,52 @@ function ChartToolbar({
   )
 }
 
+function SeriesColorControls({
+  items,
+  colorKeys,
+  onColorChange,
+  activeName,
+}: {
+  items: Array<{ key: string; label: string }>
+  colorKeys: string[]
+  onColorChange: (key: string, value: string) => void
+  activeName?: string | null
+}) {
+  if (items.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((item, index) => {
+        const colorKey = colorKeys[index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
+        const palette = LINE_COLOR_PALETTES[colorKey] ?? LINE_COLOR_PALETTES.blue
+        const isActive = activeName === item.key
+        return (
+          <div
+            key={item.key}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1"
+          >
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: palette.primary, opacity: isActive == null || isActive ? 1 : 0.72 }}
+            />
+            <span className={`max-w-[112px] truncate text-[10px] ${isActive == null || isActive ? 'font-semibold text-[var(--text-main)]' : 'text-[var(--text-soft)]'}`}>
+              {item.label}
+            </span>
+            <select
+              value={colorKey}
+              onChange={e => onColorChange(item.key, e.target.value)}
+              className="rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1 py-0.5 text-[10px] text-[var(--input-text)] focus:outline-none"
+            >
+              {LINE_COLOR_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisModuleId; onSelect?: (m: AnalysisModuleId) => void }) {
   const [open, setOpen] = useState(false)
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
@@ -1098,19 +1296,25 @@ function getBundleDataset(bundle: DatasetPipelineBundle | null | undefined, inde
   return getStageDataset(bundle?.final, index, useAverage)
 }
 
-function buildOverlayTraces(datasets: { name: string; x: number[]; y: number[] }[], paletteKey: string): Plotly.Data[] {
-  const colors = (LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue).series
-  return datasets.map((dataset, index) => ({
-    x: dataset.x,
-    y: dataset.y,
-    type: 'scatter',
-    mode: 'lines',
-    name: dataset.name,
-    line: {
-      color: colors[index % colors.length],
-      width: 2,
-    },
-  }))
+function buildOverlayTracesWithSeriesColors(
+  datasets: { name: string; x: number[]; y: number[] }[],
+  resolveColorKey: (name: string, index: number) => string,
+): Plotly.Data[] {
+  return datasets.map((dataset, index) => {
+    const paletteKey = resolveColorKey(dataset.name, index)
+    const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+    return {
+      x: dataset.x,
+      y: dataset.y,
+      type: 'scatter',
+      mode: 'lines',
+      name: dataset.name,
+      line: {
+        color: palette.primary,
+        width: 2,
+      },
+    }
+  })
 }
 
 function getStageDisplayLabel(params: ProcessParams) {
@@ -1261,6 +1465,10 @@ export default function XPS({
   const [boClAInt, setBoClAInt] = useState(0.0)
   const [boClBInt, setBoClBInt] = useState(0.0)
   const [bandOffsetResult, setBandOffsetResult] = useState<{ deltaEv: number; sigmaEv: number } | null>(null)
+  const lastAutoSuggestedVbmKeyRef = useRef<string | null>(null)
+  const lastAutoSuggestedBaselineKeyRef = useRef<string | null>(null)
+  const singleNormMethodRef = useRef<Exclude<ProcessParams['norm_method'], 'none'>>('max')
+  const overlayNormMethodRef = useRef<Exclude<ProcessParams['norm_method'], 'none'>>('max')
 
   // RSF quantification
   const [rsfRows, setRsfRows] = useState<{ peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]>([])
@@ -1312,6 +1520,30 @@ export default function XPS({
   const beMax = processingViewMode === 'overlay'
     ? (overlayPrimaryDataset ? Math.max(...overlayPrimaryDataset.x) : 1000)
     : (activeDataset ? Math.max(...activeDataset.x) : 1000)
+  const vbmGlobalExtrema = activeDataset
+    ? findSpectrumExtrema(activeDataset.x, activeDataset.y_processed)
+    : null
+  const vbmEdgeExtrema = activeDataset
+    ? findSpectrumExtrema(activeDataset.x, activeDataset.y_processed, { start: vbmEdgeLo, end: vbmEdgeHi })
+    : null
+  const suggestedVbmEdgeRange = activeDataset
+    ? suggestVbmEdgeRange(activeDataset.x, activeDataset.y_processed)
+    : null
+  const suggestedVbmBaselineRange = activeDataset
+    ? suggestVbmBaselineRange(activeDataset.x, activeDataset.y_processed)
+    : null
+  const currentVbmSuggestionKey = activeDataset
+    ? [
+        currentReportFileName,
+        activeDataset.x.length,
+        activeDataset.x[0] ?? '',
+        activeDataset.x[activeDataset.x.length - 1] ?? '',
+        vbmGlobalExtrema?.maxPoint.x ?? '',
+        vbmGlobalExtrema?.maxPoint.y ?? '',
+        vbmGlobalExtrema?.minPoint.x ?? '',
+        vbmGlobalExtrema?.minPoint.y ?? '',
+      ].join('::')
+    : null
   const estimatedInterpPoints = estimateInterpolationPoints(processingViewMode === 'overlay' && overlayFiles.length > 0 ? overlayFiles : rawFiles)
   const effectiveNPoints = currentAutoInterpPoints ? estimatedInterpPoints : currentParams.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
@@ -1323,6 +1555,18 @@ export default function XPS({
   const rawPreview = processingViewMode === 'overlay'
     ? (overlayFiles[0] ?? null)
     : (rawFiles[activeDatasetIdx] ?? rawFiles[0] ?? null)
+
+  useEffect(() => {
+    if (params.norm_method !== 'none') {
+      singleNormMethodRef.current = params.norm_method
+    }
+  }, [params.norm_method])
+
+  useEffect(() => {
+    if (overlayState.params.norm_method !== 'none') {
+      overlayNormMethodRef.current = overlayState.params.norm_method
+    }
+  }, [overlayState.params.norm_method])
 
   useEffect(() => {
     datasetBundlesRef.current = datasetBundles
@@ -1338,6 +1582,22 @@ export default function XPS({
       return next.slice(0, rawFiles.length)
     })
   }, [rawFiles.length])
+
+  useEffect(() => {
+    if (processingViewMode !== 'single' || xpsMode !== 'valence_band' || !activeDataset || !suggestedVbmEdgeRange || !currentVbmSuggestionKey) return
+    if (lastAutoSuggestedVbmKeyRef.current === currentVbmSuggestionKey) return
+    lastAutoSuggestedVbmKeyRef.current = currentVbmSuggestionKey
+    setVbmEdgeLo(suggestedVbmEdgeRange.start)
+    setVbmEdgeHi(suggestedVbmEdgeRange.end)
+  }, [activeDataset, currentVbmSuggestionKey, processingViewMode, suggestedVbmEdgeRange, xpsMode])
+
+  useEffect(() => {
+    if (processingViewMode !== 'single' || xpsMode !== 'valence_band' || !activeDataset || !suggestedVbmBaselineRange || !currentVbmSuggestionKey) return
+    if (lastAutoSuggestedBaselineKeyRef.current === currentVbmSuggestionKey) return
+    lastAutoSuggestedBaselineKeyRef.current = currentVbmSuggestionKey
+    setVbmBaselineLo(suggestedVbmBaselineRange.start)
+    setVbmBaselineHi(suggestedVbmBaselineRange.end)
+  }, [activeDataset, currentVbmSuggestionKey, processingViewMode, suggestedVbmBaselineRange, xpsMode])
 
   useEffect(() => {
     overlayBundleRef.current = overlayBundle
@@ -1832,6 +2092,38 @@ export default function XPS({
     setParams(p => ({ ...p, [key]: val }))
   }
 
+  const applyNormalizationMethod = (method: Exclude<ProcessParams['norm_method'], 'none'>) => {
+    const nextNormStart = currentParams.norm_x_start ?? beMin
+    const nextNormEnd = currentParams.norm_x_end ?? beMax
+    if (processingViewMode === 'overlay') {
+      setOverlayState(current => ({
+        ...current,
+        params: {
+          ...current.params,
+          norm_method: method,
+          norm_x_start: current.params.norm_x_start ?? nextNormStart,
+          norm_x_end: current.params.norm_x_end ?? nextNormEnd,
+        },
+      }))
+      return
+    }
+    setParams(current => ({
+      ...current,
+      norm_method: method,
+      norm_x_start: current.norm_x_start ?? nextNormStart,
+      norm_x_end: current.norm_x_end ?? nextNormEnd,
+    }))
+  }
+
+  const setNormalizationEnabled = (enabled: boolean) => {
+    if (!enabled) {
+      set('norm_method')('none')
+      return
+    }
+    const fallbackMethod = processingViewMode === 'overlay' ? overlayNormMethodRef.current : singleNormMethodRef.current
+    applyNormalizationMethod(fallbackMethod)
+  }
+
   const setCurrentAutoInterpPoints = (value: boolean) => {
     if (processingViewMode === 'overlay') {
       setOverlayState(current => ({ ...current, autoInterpPoints: value }))
@@ -1894,6 +2186,24 @@ export default function XPS({
       setCalibrationLoading(false)
     }
   }
+
+  const applySuggestedVbmEdgeRange = useCallback(() => {
+    if (!suggestedVbmEdgeRange) return
+    setVbmEdgeLo(suggestedVbmEdgeRange.start)
+    setVbmEdgeHi(suggestedVbmEdgeRange.end)
+    if (currentVbmSuggestionKey) {
+      lastAutoSuggestedVbmKeyRef.current = currentVbmSuggestionKey
+    }
+  }, [currentVbmSuggestionKey, suggestedVbmEdgeRange])
+
+  const applySuggestedVbmBaselineRange = useCallback(() => {
+    if (!suggestedVbmBaselineRange) return
+    setVbmBaselineLo(suggestedVbmBaselineRange.start)
+    setVbmBaselineHi(suggestedVbmBaselineRange.end)
+    if (currentVbmSuggestionKey) {
+      lastAutoSuggestedBaselineKeyRef.current = currentVbmSuggestionKey
+    }
+  }, [currentVbmSuggestionKey, suggestedVbmBaselineRange])
 
   const computeVbmFn = async () => {
     if (!activeDataset) return
@@ -2004,12 +2314,20 @@ export default function XPS({
     finally { setIsFitting(false) }
   }
 
-  const datasetTabs = rawFiles
   const stageDisplayLabel = getStageDisplayLabel(currentParams)
   const rawChartSourceFiles = processingViewMode === 'overlay'
     ? overlayFiles
     : rawFiles
   const rawChartActiveIndex = processingViewMode === 'overlay' ? 0 : activeDatasetIdx
+  const getDatasetColorKey = (name: string, fallbackIndex: number) => {
+    const globalIdx = rawFiles.findIndex(file => file.name === name)
+    if (globalIdx >= 0) return rawFileColors[globalIdx] ?? DEFAULT_SERIES_PALETTE_KEYS[globalIdx % DEFAULT_SERIES_PALETTE_KEYS.length]
+    return rawFileColors[fallbackIndex] ?? DEFAULT_SERIES_PALETTE_KEYS[fallbackIndex % DEFAULT_SERIES_PALETTE_KEYS.length]
+  }
+  const rawSeriesItems = rawChartSourceFiles.map(file => ({ key: file.name, label: file.name }))
+  const rawSeriesColorKeys = rawChartSourceFiles.map((file, index) => getDatasetColorKey(file.name, index))
+  const overlaySeriesItems = overlayFiles.map(file => ({ key: file.name, label: file.name }))
+  const overlaySeriesColorKeys = overlayFiles.map((file, index) => getDatasetColorKey(file.name, index))
   const rawStageDatasets = rawChartSourceFiles.map(file => ({ name: file.name, x: file.x, y: file.y }))
   const preprocessStageDatasets = rawPreview && preprocessDataset
     ? [{ name: preprocessDataset.name, x: preprocessDataset.x, y: preprocessDataset.y_processed }]
@@ -2064,17 +2382,7 @@ export default function XPS({
   const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
   const overlayPreprocessDatasets = getOverlayStageDatasets(overlayBundle?.preprocess ?? null, overlayState.params.average)
   const overlayMinCount = overlayState.params.average ? 1 : 2
-  const overlayStage = overlayNormalizationDatasets.length >= overlayMinCount
-    ? { title: '多筆疊圖比較：歸一化後', description: '這裡疊的是各筆資料經過各自設定的歸一化結果。', datasets: overlayNormalizationDatasets }
-    : overlayBackgroundDatasets.length >= overlayMinCount
-      ? { title: '多筆疊圖比較：背景扣除後', description: '這裡疊的是各筆資料經過各自設定的背景扣除結果。', datasets: overlayBackgroundDatasets }
-      : overlayPreprocessDatasets.length >= overlayMinCount
-        ? { title: '多筆疊圖比較：內插 / 平均 / 校正後', description: '這裡疊的是各筆資料在進入背景扣除前的前處理結果。', datasets: overlayPreprocessDatasets }
-        : overlayFinalDatasets.length >= overlayMinCount
-          ? { title: '多筆疊圖比較：最終處理後', description: '這裡疊的是各筆資料目前最新的處理結果。', datasets: overlayFinalDatasets }
-          : null
-  const isOverlayView = processingViewMode === 'overlay' && overlaySelection.length >= 2
-  const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, rawChartActiveIndex, rawFileColors)
+  const rawChartTraces = buildRawFileTraces(rawChartSourceFiles, rawChartActiveIndex, rawSeriesColorKeys)
   const preprocessChartTraces = rawPreview && preprocessDataset
     ? buildPipelineOverlayTraces(
         { x: rawPreview.x, y: rawPreview.y, name: `${rawPreview.name} 原始` },
@@ -2149,6 +2457,52 @@ export default function XPS({
     shapes: buildRegionShapes(overlayState.params.norm_x_start ?? beMin, overlayState.params.norm_x_end ?? beMax, '#14b8a6'),
     annotations: buildRegionAnnotations(overlayState.params.norm_x_start ?? beMin, overlayState.params.norm_x_end ?? beMax, '歸一化區間', '#14b8a6'),
   }
+  const renderRangeControlCard = (
+    label: string,
+    accentText: string,
+    min: number,
+    max: number,
+    start: number,
+    end: number,
+    onChange: (next: { start: number; end: number }) => void,
+  ) => (
+    <div className="mt-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] font-medium text-[var(--text-main)]">{label}</p>
+        <span className="text-[10px] text-[var(--text-soft)]">{accentText}</span>
+      </div>
+      <DualRangeInput
+        label={label}
+        min={min}
+        max={max}
+        start={start}
+        end={end}
+        step={0.1}
+        onChange={onChange}
+      />
+    </div>
+  )
+  const handleSeriesColorChange = (targetName: string, value: string) => {
+    const targetIdx = rawFiles.findIndex(file => file.name === targetName)
+    if (targetIdx < 0) return
+    setRawFileColors(prev => {
+      const next = [...prev]
+      next[targetIdx] = value
+      return next
+    })
+  }
+  const applyOverlayPalette = (baseKey: string) => {
+    if (overlayFiles.length === 0) return
+    const orderedKeys = [baseKey, ...DEFAULT_SERIES_PALETTE_KEYS.filter(key => key !== baseKey)]
+    setRawFileColors(prev => {
+      const next = [...prev]
+      overlayFiles.forEach((file, index) => {
+        const targetIdx = rawFiles.findIndex(rawFile => rawFile.name === file.name)
+        if (targetIdx >= 0) next[targetIdx] = orderedKeys[index % orderedKeys.length]
+      })
+      return next
+    })
+  }
 
   const sidebarStyle: CSSProperties = sidebarCollapsed
     ? { width: SIDEBAR_COLLAPSED_PEEK, minWidth: SIDEBAR_COLLAPSED_PEEK, overflow: 'hidden' }
@@ -2207,7 +2561,7 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={2} title="內插" hint="對每筆資料各自重新取樣 x 軸" defaultOpen={false} infoContent={
+                <Section step={2} title="內插 / 資料模式" hint="多檔：單筆 / 疊圖 / 平均" defaultOpen={false} infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">內插說明</p>
                     <p>
@@ -2346,6 +2700,47 @@ export default function XPS({
                         <NumInput label="點數" value={currentParams.n_points} onChange={set('n_points')} min={50} max={5000} step={10} />
                       )}
                     </>
+                  )}
+
+                  {rawFiles.length > 1 && (
+                    <div className="space-y-2 pt-1">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">資料模式</p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => enterSingleMode(activeDatasetIdx)}
+                          className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${processingViewMode === 'single' ? 'bg-[var(--accent-strong)] text-white' : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]'}`}
+                        >
+                          單筆
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProcessingViewMode('overlay')
+                            setOverlaySelectorOpen(true)
+                          }}
+                          className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${processingViewMode === 'overlay' ? 'bg-[var(--accent-strong)] text-white' : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]'}`}
+                        >
+                          疊圖
+                        </button>
+                      </div>
+                      {processingViewMode === 'overlay' ? (
+                        <button
+                          type="button"
+                          onClick={() => setOverlaySelectorOpen(true)}
+                          className="w-full rounded-lg border border-[var(--accent-soft)] py-1.5 text-xs text-[var(--accent-strong)] transition-colors hover:bg-[var(--accent-soft)]"
+                        >
+                          選擇疊圖資料（{overlaySelection.length} 筆）
+                        </button>
+                      ) : (
+                        <CustomSelect
+                          label="顯示資料"
+                          value={String(activeDatasetIdx)}
+                          onChange={value => enterSingleMode(Number(value))}
+                          options={rawFiles.map((file, index) => ({ value: String(index), label: file.name }))}
+                        />
+                      )}
+                    </div>
                   )}
                 </Section>
 
@@ -2499,18 +2894,6 @@ export default function XPS({
                         <NumInput label="起始 BE (eV)" value={currentParams.bg_x_start ?? beMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
                         <NumInput label="結束 BE (eV)" value={currentParams.bg_x_end ?? beMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
                       </div>
-                      <DualRangeInput
-                        label="背景區間拉桿"
-                        min={beMin}
-                        max={beMax}
-                        start={currentParams.bg_x_start ?? beMin}
-                        end={currentParams.bg_x_end ?? beMax}
-                        step={0.1}
-                        onChange={({ start, end }) => {
-                          set('bg_x_start')(start)
-                          set('bg_x_end')(end)
-                        }}
-                      />
                       {currentParams.bg_method === 'polynomial' && <NumInput label="多項式次數" value={currentParams.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />}
                       {currentParams.bg_method === 'tougaard' && (
                         <div className="grid grid-cols-2 gap-2">
@@ -2533,33 +2916,21 @@ export default function XPS({
                     <p className="mt-1 text-[var(--text-soft)]">注意：歸一化後的強度不再具有物理意義的絕對值，RSF 定量分析應在歸一化前進行，或確保各組資料採用相同歸一化條件。</p>
                   </div>
                 }>
-                  <CustomSelect label="方法" value={currentParams.norm_method} onChange={v => set('norm_method')(v as ProcessParams['norm_method'])}
-                    options={[
-                      { value: 'none', label: '不歸一化' },
-                      { value: 'min_max', label: 'Min–Max' },
-                      { value: 'max', label: 'Max' },
-                      { value: 'area', label: 'Area' },
-                      { value: 'mean_region', label: 'Mean Region' },
-                    ]}
-                  />
-                  {(currentParams.norm_method === 'min_max' || currentParams.norm_method === 'max' || currentParams.norm_method === 'area' || currentParams.norm_method === 'mean_region') && (
+                  <TogglePill label="啟用歸一化" checked={hasNormalizationStage} onChange={setNormalizationEnabled} />
+                  {hasNormalizationStage && (
                     <>
+                      <CustomSelect label="方法" value={currentParams.norm_method} onChange={v => applyNormalizationMethod(v as Exclude<ProcessParams['norm_method'], 'none'>)}
+                        options={[
+                          { value: 'min_max', label: 'Min–Max' },
+                          { value: 'max', label: 'Max' },
+                          { value: 'area', label: 'Area' },
+                          { value: 'mean_region', label: 'Mean Region' },
+                        ]}
+                      />
                       <div className="grid grid-cols-2 gap-2">
                         <NumInput label="起始 (eV)" value={currentParams.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
                         <NumInput label="結束 (eV)" value={currentParams.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
                       </div>
-                      <DualRangeInput
-                        label="歸一化區間拉桿"
-                        min={beMin}
-                        max={beMax}
-                        start={currentParams.norm_x_start ?? beMin}
-                        end={currentParams.norm_x_end ?? beMax}
-                        step={0.1}
-                        onChange={({ start, end }) => {
-                          set('norm_x_start')(start)
-                          set('norm_x_end')(end)
-                        }}
-                      />
                     </>
                   )}
                 </Section>
@@ -2724,32 +3095,75 @@ export default function XPS({
                 {xpsMode === 'valence_band' && (
                   <Section step={8} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
                     <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
+                    {activeDataset ? (
+                      <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-[var(--text-main)]">Leading edge 提示</p>
+                            {suggestedVbmEdgeRange && (
+                              <p className="mt-1 text-[var(--accent-secondary)]">
+                                建議切線區間：{suggestedVbmEdgeRange.start.toFixed(3)} – {suggestedVbmEdgeRange.end.toFixed(3)} eV
+                              </p>
+                            )}
+                            {suggestedVbmBaselineRange && (
+                              <p className="mt-1 text-[var(--text-soft)]">
+                                建議基準線區間：{suggestedVbmBaselineRange.start.toFixed(3)} – {suggestedVbmBaselineRange.end.toFixed(3)} eV
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={applySuggestedVbmEdgeRange}
+                              disabled={!suggestedVbmEdgeRange}
+                              className="rounded-lg border border-[var(--accent-strong)] px-3 py-1.5 text-[11px] font-medium text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 pressable"
+                            >
+                              自動建議切線區間
+                            </button>
+                            <button
+                              type="button"
+                              onClick={applySuggestedVbmBaselineRange}
+                              disabled={!suggestedVbmBaselineRange}
+                              className="rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-[11px] font-medium text-[var(--text-main)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] disabled:opacity-50 pressable"
+                            >
+                              自動建議基準線區間
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2">
+                            <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">全域光譜</p>
+                            <p className="mt-1 text-[var(--text-main)]">
+                              最高點：{vbmGlobalExtrema ? `${vbmGlobalExtrema.maxPoint.x.toFixed(3)} eV / ${vbmGlobalExtrema.maxPoint.y.toFixed(2)}` : 'N/A'}
+                            </p>
+                            <p className="text-[var(--text-soft)]">
+                              最低點：{vbmGlobalExtrema ? `${vbmGlobalExtrema.minPoint.x.toFixed(3)} eV / ${vbmGlobalExtrema.minPoint.y.toFixed(2)}` : 'N/A'}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2">
+                            <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">切線區間內</p>
+                            <p className="mt-1 text-[var(--text-main)]">
+                              最高點：{vbmEdgeExtrema ? `${vbmEdgeExtrema.maxPoint.x.toFixed(3)} eV / ${vbmEdgeExtrema.maxPoint.y.toFixed(2)}` : '區間內無有效點'}
+                            </p>
+                            <p className="text-[var(--text-soft)]">
+                              最低點：{vbmEdgeExtrema ? `${vbmEdgeExtrema.minPoint.x.toFixed(3)} eV / ${vbmEdgeExtrema.minPoint.y.toFixed(2)}` : '區間內無有效點'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs text-[var(--text-soft)]">
+                        請先載入單筆 Valence Band 光譜，系統才會提示 leading edge 的高低點。
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       <NumInput label="切線起 (eV)" value={vbmEdgeLo} onChange={setVbmEdgeLo} step={0.1} />
                       <NumInput label="切線終 (eV)" value={vbmEdgeHi} onChange={setVbmEdgeHi} step={0.1} />
                     </div>
-                    <DualRangeInput
-                      label="切線區間拉桿"
-                      min={beMin}
-                      max={beMax}
-                      start={vbmEdgeLo}
-                      end={vbmEdgeHi}
-                      step={0.1}
-                      onChange={({ start, end }) => { setVbmEdgeLo(start); setVbmEdgeHi(end) }}
-                    />
                     <div className="grid grid-cols-2 gap-2">
                       <NumInput label="基準起 (eV)" value={vbmBaselineLo} onChange={setVbmBaselineLo} step={0.1} />
                       <NumInput label="基準終 (eV)" value={vbmBaselineHi} onChange={setVbmBaselineHi} step={0.1} />
                     </div>
-                    <DualRangeInput
-                      label="基準線區間拉桿"
-                      min={beMin}
-                      max={beMax}
-                      start={vbmBaselineLo}
-                      end={vbmBaselineHi}
-                      step={0.1}
-                      onChange={({ start, end }) => { setVbmBaselineLo(start); setVbmBaselineHi(end) }}
-                    />
                     <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
                       className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
                     >
@@ -2868,91 +3282,17 @@ export default function XPS({
 
         {rawFiles.length > 0 && (
           <>
-            {datasetTabs.length > 1 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">單筆資料處理</p>
-                      {isOverlayView && (
-                        <span className="rounded-full border border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_14%,transparent)] px-2.5 py-0.5 text-[10px] font-medium text-[var(--accent-secondary)]">
-                          目前顯示疊圖模式
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {datasetTabs.map((ds, idx) => (
-                        <button key={ds.name} type="button" onClick={() => enterSingleMode(idx)}
-                          className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors pressable',
-                            !isOverlayView && idx === activeDatasetIdx
-                              ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
-                              : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
-                        >{ds.name}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="shrink-0 lg:pl-4">
-                    <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">多筆疊圖處理</p>
-                    <button
-                      type="button"
-                      onClick={() => setOverlaySelectorOpen(true)}
-                      className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-left transition-colors hover:border-[var(--accent-secondary)] hover:bg-[color:color-mix(in_srgb,var(--accent-secondary)_10%,transparent)] pressable"
-                    >
-                      <span className="block text-sm font-semibold text-[var(--text-main)]">選擇疊圖資料</span>
-                      <span className="mt-1 block text-xs text-[var(--text-soft)]">
-                        {processingViewMode === 'overlay' ? `目前疊圖模式獨立計算${overlayState.params.average ? '，已啟用平均。' : '，不平均。'}` : ''}
-                        {processingViewMode === 'overlay' ? ' ' : ''}
-                        已選 {overlaySelection.length} 筆
-                        {overlaySelection.length >= 2 ? '，可直接看中間欄疊圖結果' : '，至少選 2 筆才會顯示疊圖'}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ── Stage 1+2: Raw + Preprocess side by side ── */}
-            <div className="mb-4 flex flex-col gap-4 md:flex-row">
             {rawChartTraces.length > 0 && (
-              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
                 {rawChartSourceFiles.length > 0 && (
-                  <div className="mb-3 flex flex-wrap gap-2">
-                    {rawChartSourceFiles.map((file, idx) => {
-                      const globalIdx = processingViewMode === 'overlay'
-                        ? rawFiles.indexOf(file)
-                        : idx
-                      const colorKey = rawFileColors[globalIdx >= 0 ? globalIdx : idx] ?? DEFAULT_SERIES_PALETTE_KEYS[idx % DEFAULT_SERIES_PALETTE_KEYS.length]
-                      const palette = LINE_COLOR_PALETTES[colorKey] ?? LINE_COLOR_PALETTES.blue
-                      const isActive = idx === rawChartActiveIndex
-                      return (
-                        <div key={`${file.name}-${idx}`} className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1">
-                          <span
-                            className="h-2.5 w-2.5 shrink-0 rounded-full"
-                            style={{ backgroundColor: palette.primary, opacity: isActive ? 1 : 0.65 }}
-                          />
-                          <span className={`max-w-[100px] truncate text-[10px] ${isActive ? 'font-semibold text-[var(--text-main)]' : 'text-[var(--text-soft)]'}`}>
-                            {file.name}
-                          </span>
-                          <select
-                            value={colorKey}
-                            onChange={e => {
-                              const targetIdx = globalIdx >= 0 ? globalIdx : idx
-                              setRawFileColors(prev => {
-                                const next = [...prev]
-                                next[targetIdx] = e.target.value
-                                return next
-                              })
-                            }}
-                            className="rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1 py-0.5 text-[10px] text-[var(--input-text)] focus:outline-none"
-                          >
-                            {LINE_COLOR_OPTIONS.map(opt => (
-                              <option key={opt.value} value={opt.value}>{opt.label}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )
-                    })}
+                  <div className="mb-3">
+                    <SeriesColorControls
+                      items={rawSeriesItems}
+                      colorKeys={rawSeriesColorKeys}
+                      onColorChange={handleSeriesColorChange}
+                      activeName={rawChartSourceFiles[rawChartActiveIndex]?.name ?? null}
+                    />
                   </div>
                 )}
                 <Plot
@@ -2974,17 +3314,27 @@ export default function XPS({
 
             {/* ── overlay: preprocess stage ── */}
             {overlayPreprocessDatasets.length >= overlayMinCount && (overlayState.params.interpolate || overlayState.params.average || Math.abs(overlayState.params.energy_shift) > 1e-8) && (
-              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
                   title={overlayState.params.average ? '多筆疊圖：內插 / 平均 / 校正後' : '多筆疊圖：內插 / 校正後'}
                   colorValue={chartLineColors.overlay}
-                  onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
+                  onColorChange={value => {
+                    setChartLineColors(current => ({ ...current, overlay: value }))
+                    applyOverlayPalette(value)
+                  }}
                 />
+                <div className="mb-3">
+                  <SeriesColorControls
+                    items={overlaySeriesItems}
+                    colorKeys={overlaySeriesColorKeys}
+                    onColorChange={handleSeriesColorChange}
+                  />
+                </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
                   {overlayState.params.average ? '多檔平均光譜在背景扣除前的前處理結果。' : '各筆資料在背景扣除前的前處理結果疊圖。'}
                 </p>
                 <Plot
-                  data={applyHidden(buildOverlayTraces(overlayPreprocessDatasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
+                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayPreprocessDatasets, getDatasetColorKey) as Plotly.Data[], overlayHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
@@ -2998,24 +3348,54 @@ export default function XPS({
             )}
 
             {/* ── overlay: background stage ── */}
-            {overlayBackgroundDatasets.length >= overlayMinCount && (
+            {overlayPreprocessDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length >= overlayMinCount && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title="多筆疊圖：背景扣除後"
+                  title={overlayState.params.bg_enabled ? '多筆疊圖：背景扣除後' : '多筆疊圖：背景扣除（未啟用）'}
                   colorValue={chartLineColors.overlayBg}
-                  onColorChange={value => setChartLineColors(current => ({ ...current, overlayBg: value }))}
+                  onColorChange={value => {
+                    setChartLineColors(current => ({ ...current, overlayBg: value }))
+                    applyOverlayPalette(value)
+                  }}
                 />
+                <div className="mb-3">
+                  <SeriesColorControls
+                    items={overlaySeriesItems}
+                    colorKeys={overlaySeriesColorKeys}
+                    onColorChange={handleSeriesColorChange}
+                  />
+                </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。
+                  {overlayState.params.bg_enabled
+                    ? `${overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。`
+                    : '目前未啟用背景扣除，這一階段直接沿用前處理結果。'}
                 </p>
                 <Plot
-                  data={applyHidden(buildOverlayTraces(overlayBackgroundDatasets, chartLineColors.overlayBg) as Plotly.Data[], overlayBgHidden)}
+                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayBackgroundDatasets, getDatasetColorKey) as Plotly.Data[], overlayBgHidden)}
                   layout={overlayBgLayout as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                   onLegendClick={makeLegendClick(setOverlayBgHidden) as never}
                   onLegendDoubleClick={() => false}
                 />
+                {overlayState.params.bg_enabled && renderRangeControlCard(
+                  '背景區間',
+                  '看著疊圖調整共用背景範圍',
+                  beMin,
+                  beMax,
+                  overlayState.params.bg_x_start ?? beMin,
+                  overlayState.params.bg_x_end ?? beMax,
+                  ({ start, end }) => {
+                    setOverlayState(current => ({
+                      ...current,
+                      params: {
+                        ...current.params,
+                        bg_x_start: start,
+                        bg_x_end: end,
+                      },
+                    }))
+                  },
+                )}
                 <div className="mt-3 flex justify-start">
                   <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayBackgroundDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_bg.csv', 'text/csv')} />
                 </div>
@@ -3023,43 +3403,83 @@ export default function XPS({
             )}
 
             {/* ── overlay: normalization stage ── */}
-            {overlayNormalizationDatasets.length >= overlayMinCount && (
+            {overlayFinalDatasets.length >= overlayMinCount && overlayNormalizationDatasets.length >= overlayMinCount && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title="多筆疊圖：歸一化後"
+                  title={hasNormalizationStage ? '多筆疊圖：歸一化後' : '多筆疊圖：歸一化（未啟用）'}
                   colorValue={chartLineColors.overlayNorm}
-                  onColorChange={value => setChartLineColors(current => ({ ...current, overlayNorm: value }))}
+                  onColorChange={value => {
+                    setChartLineColors(current => ({ ...current, overlayNorm: value }))
+                    applyOverlayPalette(value)
+                  }}
                 />
+                <div className="mb-3">
+                  <SeriesColorControls
+                    items={overlaySeriesItems}
+                    colorKeys={overlaySeriesColorKeys}
+                    onColorChange={handleSeriesColorChange}
+                  />
+                </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {overlayState.params.average ? '多檔平均光譜歸一化後的結果。' : '各筆資料歸一化後的結果疊圖。'}綠色區塊是目前設定的歸一化區間。
+                  {hasNormalizationStage
+                    ? `${overlayState.params.average ? '多檔平均光譜歸一化後的結果。' : '各筆資料歸一化後的結果疊圖。'}綠色區塊是目前設定的歸一化區間。`
+                    : '目前未啟用歸一化，這一階段直接沿用上一階段結果。'}
                 </p>
                 <Plot
-                  data={applyHidden(buildOverlayTraces(overlayNormalizationDatasets, chartLineColors.overlayNorm) as Plotly.Data[], overlayNormHidden)}
+                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayNormalizationDatasets, getDatasetColorKey) as Plotly.Data[], overlayNormHidden)}
                   layout={overlayNormLayout as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
                   onLegendClick={makeLegendClick(setOverlayNormHidden) as never}
                   onLegendDoubleClick={() => false}
                 />
+                {hasNormalizationStage && renderRangeControlCard(
+                  '歸一化區間',
+                  '共用這組區間套用到所有疊圖資料',
+                  beMin,
+                  beMax,
+                  overlayState.params.norm_x_start ?? beMin,
+                  overlayState.params.norm_x_end ?? beMax,
+                  ({ start, end }) => {
+                    setOverlayState(current => ({
+                      ...current,
+                      params: {
+                        ...current.params,
+                        norm_x_start: start,
+                        norm_x_end: end,
+                      },
+                    }))
+                  },
+                )}
                 <div className="mt-3 flex justify-start">
                   <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayNormalizationDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_norm.csv', 'text/csv')} />
                 </div>
               </div>
             )}
 
-            {/* ── overlay: final (shown only when no bg/norm stages active) ── */}
-            {overlayFinalDatasets.length >= overlayMinCount && overlayBackgroundDatasets.length < overlayMinCount && overlayNormalizationDatasets.length < overlayMinCount && (
+            {/* ── overlay: final ── */}
+            {overlayFinalDatasets.length >= overlayMinCount && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
                   title="多筆疊圖比較：最終結果"
                   colorValue={chartLineColors.overlay}
-                  onColorChange={value => setChartLineColors(current => ({ ...current, overlay: value }))}
+                  onColorChange={value => {
+                    setChartLineColors(current => ({ ...current, overlay: value }))
+                    applyOverlayPalette(value)
+                  }}
                 />
+                <div className="mb-3">
+                  <SeriesColorControls
+                    items={overlaySeriesItems}
+                    colorKeys={overlaySeriesColorKeys}
+                    onColorChange={handleSeriesColorChange}
+                  />
+                </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
                   {overlayState.params.average ? '多檔平均光譜目前最新的處理結果。' : '各筆資料目前最新的處理結果疊圖。'}
                 </p>
                 <Plot
-                  data={applyHidden(buildOverlayTraces(overlayFinalDatasets, chartLineColors.overlay) as Plotly.Data[], overlayHidden)}
+                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayFinalDatasets, getDatasetColorKey) as Plotly.Data[], overlayHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 340 }}
@@ -3073,7 +3493,7 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
-              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
                   title={`2. ${stageDisplayLabel ? `${stageDisplayLabel}後` : '前處理後'}`}
                   colorValue={chartLineColors.preprocess}
@@ -3096,24 +3516,21 @@ export default function XPS({
                 </div>
               </div>
             )}
-
-            </div>{/* end flex row 1: raw + preprocess */}
-
-            {/* ── Stage 3+4: Background + Normalization side by side ── */}
-            <div className="mb-4 flex flex-col gap-4 md:flex-row">
-            {processingViewMode === 'single' && hasBackgroundStage && backgroundChartTraces.length > 0 && (
-              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            {processingViewMode === 'single' && backgroundChartTraces.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <ChartToolbar
-                      title="3. 背景扣除"
+                      title={hasBackgroundStage ? '3. 背景扣除' : '3. 背景扣除（未啟用）'}
                       colorValue={chartLineColors.background}
                       onColorChange={value => setChartLineColors(current => ({ ...current, background: value }))}
                     />
                   </div>
                   <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
                 </div>
-                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {hasBackgroundStage ? '輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。' : '目前未啟用背景扣除，這一階段直接沿用前一階段結果。'}
+                </p>
                 <Plot
                   data={applyHidden((showBg ? backgroundChartTraces : backgroundChartTraces.filter(trace => trace.name !== '背景線')) as Plotly.Data[], bgHidden)}
                   layout={backgroundLayout as Plotly.Layout}
@@ -3122,6 +3539,18 @@ export default function XPS({
                   onLegendClick={makeLegendClick(setBgHidden) as never}
                   onLegendDoubleClick={() => false}
                 />
+                {hasBackgroundStage && renderRangeControlCard(
+                  '背景區間',
+                  '看著背景線與前後對照調整範圍',
+                  bgDataXMin,
+                  bgDataXMax,
+                  currentParams.bg_x_start ?? bgDataXMin,
+                  currentParams.bg_x_end ?? bgDataXMax,
+                  ({ start, end }) => {
+                    set('bg_x_start')(start)
+                    set('bg_x_end')(end)
+                  },
+                )}
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
                     label="下載此步驟 CSV"
@@ -3131,14 +3560,16 @@ export default function XPS({
               </div>
             )}
 
-            {processingViewMode === 'single' && hasNormalizationStage && normalizationChartTraces.length > 0 && (
-              <div className="min-w-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            {processingViewMode === 'single' && normalizationChartTraces.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title="4. 歸一化"
+                  title={hasNormalizationStage ? '4. 歸一化' : '4. 歸一化（未啟用）'}
                   colorValue={chartLineColors.normalization}
                   onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
                 />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {hasNormalizationStage ? '輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。' : '目前未啟用歸一化，這一階段直接沿用上一階段結果。'}
+                </p>
                 <Plot
                   data={applyHidden(normalizationChartTraces as Plotly.Data[], normHidden)}
                   layout={normalizationLayout as Plotly.Layout}
@@ -3147,6 +3578,18 @@ export default function XPS({
                   onLegendClick={makeLegendClick(setNormHidden) as never}
                   onLegendDoubleClick={() => false}
                 />
+                {hasNormalizationStage && renderRangeControlCard(
+                  '歸一化區間',
+                  '直接在圖下微調要採樣的能量範圍',
+                  normDataXMin,
+                  normDataXMax,
+                  currentParams.norm_x_start ?? normDataXMin,
+                  currentParams.norm_x_end ?? normDataXMax,
+                  ({ start, end }) => {
+                    set('norm_x_start')(start)
+                    set('norm_x_end')(end)
+                  },
+                )}
                 <div className="mt-3 flex justify-start">
                   <ExportBtn
                     label="下載此步驟 CSV"
@@ -3155,8 +3598,6 @@ export default function XPS({
                 </div>
               </div>
             )}
-
-            </div>{/* end flex row 2: background + normalization */}
 
             {currentDisplayDataset && (processingViewMode === 'single' ? result : fitTargetDataset) && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
@@ -3242,6 +3683,24 @@ export default function XPS({
                 <Plot
                   data={[
                     { x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
+                    ...(vbmEdgeExtrema ? [
+                      {
+                        x: [vbmEdgeExtrema.maxPoint.x],
+                        y: [vbmEdgeExtrema.maxPoint.y],
+                        type: 'scatter' as const,
+                        mode: 'markers' as const,
+                        name: '切線區間高點',
+                        marker: { color: '#f97316', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.2 } },
+                      },
+                      {
+                        x: [vbmEdgeExtrema.minPoint.x],
+                        y: [vbmEdgeExtrema.minPoint.y],
+                        type: 'scatter' as const,
+                        mode: 'markers' as const,
+                        name: '切線區間低點',
+                        marker: { color: '#8b5cf6', size: 9, symbol: 'circle' as const, line: { color: '#f5f3ff', width: 1.2 } },
+                      },
+                    ] : []),
                     ...(vbmResult?.success ? [
                       { x: vbmResult.x_fit, y: vbmResult.y_fit, type: 'scatter', mode: 'lines', name: '切線 (外推)', line: { color: '#f97316', width: 1.5, dash: 'dash' } },
                       { x: [beMin, beMax], y: [vbmResult.baseline_level, vbmResult.baseline_level], type: 'scatter', mode: 'lines', name: '基準線', line: { color: '#a855f7', width: 1.2, dash: 'dot' } },
@@ -3269,6 +3728,32 @@ export default function XPS({
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 280 }}
                 />
+                <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                  {renderRangeControlCard(
+                    '切線區間',
+                    '看著 leading edge 直接微調切線範圍',
+                    beMin,
+                    beMax,
+                    vbmEdgeLo,
+                    vbmEdgeHi,
+                    ({ start, end }) => {
+                      setVbmEdgeLo(start)
+                      setVbmEdgeHi(end)
+                    },
+                  )}
+                  {renderRangeControlCard(
+                    '基準線區間',
+                    '在圖下調整 baseline 採樣範圍',
+                    beMin,
+                    beMax,
+                    vbmBaselineLo,
+                    vbmBaselineHi,
+                    ({ start, end }) => {
+                      setVbmBaselineLo(start)
+                      setVbmBaselineHi(end)
+                    },
+                  )}
+                </div>
               </div>
             )}
 

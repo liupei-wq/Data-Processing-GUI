@@ -31,19 +31,24 @@ export interface ProcessParams {
   average: boolean
   energy_shift: number
   bg_enabled: boolean
-  bg_channel: 'both' | 'TEY' | 'TFY'
   bg_method: 'linear' | 'polynomial' | 'asls' | 'airpls'
-  bg_x_start: number | null
-  bg_x_end: number | null
+  bg_tey_start: number | null
+  bg_tey_end: number | null
+  bg_tfy_start: number | null
+  bg_tfy_end: number | null
   bg_poly_deg: number
   bg_baseline_lambda: number
   bg_baseline_p: number
   bg_baseline_iter: number
   norm_method: 'none' | 'min_max' | 'max' | 'area' | 'post_edge' | 'mean_region'
-  norm_x_start: number | null
-  norm_x_end: number | null
-  norm_pre_start: number | null
-  norm_pre_end: number | null
+  norm_tey_start: number | null
+  norm_tey_end: number | null
+  norm_tfy_start: number | null
+  norm_tfy_end: number | null
+  norm_tey_pre_start: number | null
+  norm_tey_pre_end: number | null
+  norm_tfy_pre_start: number | null
+  norm_tfy_pre_end: number | null
   white_line_start: number | null
   white_line_end: number | null
   gauss_enabled: boolean

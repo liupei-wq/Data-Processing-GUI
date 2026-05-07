@@ -7,6 +7,7 @@ export type PlotPopupItem = {
 }
 
 export type PlotPopupRequest = Omit<PlotPopupItem, 'id'>
+export type PlotPopupUpdate = Partial<PlotPopupRequest>
 
 function createPlotPopupId() {
   return `plot-popup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -25,6 +26,18 @@ export function usePlotPopups() {
     setPopupPlots(current => current.filter(item => item.id !== id))
   }, [])
 
+  const updatePlotPopup = useCallback((id: string, update: PlotPopupUpdate) => {
+    setPopupPlots(current => current.map(item => (
+      item.id === id
+        ? {
+            ...item,
+            ...(update.title !== undefined ? { title: update.title } : {}),
+            ...(update.content !== undefined ? { content: update.content } : {}),
+          }
+        : item
+    )))
+  }, [])
+
   const closeAllPlotPopups = useCallback(() => {
     setPopupPlots([])
   }, [])
@@ -32,6 +45,7 @@ export function usePlotPopups() {
   return {
     popupPlots,
     openPlotPopup,
+    updatePlotPopup,
     closePlotPopup,
     closeAllPlotPopups,
   }

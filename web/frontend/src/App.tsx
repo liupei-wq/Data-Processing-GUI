@@ -117,8 +117,10 @@ class WorkspaceErrorBoundary extends Component<
 
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>('workflow-raman')
-  const { popupPlots, openPlotPopup, closePlotPopup, closeAllPlotPopups } = usePlotPopups()
+  const { popupPlots, openPlotPopup, updatePlotPopup, closePlotPopup, closeAllPlotPopups } = usePlotPopups()
   const [workspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false)
+  const [workspaceLauncherPreview, setWorkspaceLauncherPreview] = useState(false)
+  const [workspaceLauncherDocked, setWorkspaceLauncherDocked] = useState(false)
   const [theme, setTheme] = useState<ThemeId>(() => {
     const saved = localStorage.getItem('nigiro-theme') as ThemeId | 'midnight' | null
     if (saved === 'midnight') return 'apricot'
@@ -165,12 +167,14 @@ export default function App() {
     const handlePointerDown = (event: PointerEvent) => {
       if (!workspaceLauncherRef.current?.contains(event.target as Node)) {
         setWorkspaceLauncherOpen(false)
+        setWorkspaceLauncherPreview(false)
       }
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setWorkspaceLauncherOpen(false)
+        setWorkspaceLauncherPreview(false)
         closeAllPlotPopups()
       }
     }
@@ -183,20 +187,45 @@ export default function App() {
     }
   }, [closeAllPlotPopups])
 
-  const openWorkspaceLauncher = () => {
+  useEffect(() => {
+    const updateLauncherDocked = (scrollTop: number) => {
+      setWorkspaceLauncherDocked(scrollTop > 96)
+    }
+
+    const handleScroll = (event: Event) => {
+      const target = event.target
+      if (target instanceof Element) {
+        updateLauncherDocked(target.scrollTop)
+        return
+      }
+      if (target === document) {
+        updateLauncherDocked(document.documentElement.scrollTop || document.body.scrollTop || window.scrollY)
+        return
+      }
+      updateLauncherDocked(window.scrollY)
+    }
+
+    updateLauncherDocked(document.documentElement.scrollTop || document.body.scrollTop || window.scrollY)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => window.removeEventListener('scroll', handleScroll, true)
+  }, [])
+
+  const openWorkspaceLauncherPreview = () => {
     if (workspaceLauncherCloseTimerRef.current != null) {
       window.clearTimeout(workspaceLauncherCloseTimerRef.current)
       workspaceLauncherCloseTimerRef.current = null
     }
-    setWorkspaceLauncherOpen(true)
+    setWorkspaceLauncherPreview(true)
   }
 
-  const closeWorkspaceLauncher = () => {
+  const closeWorkspaceLauncherPreview = () => {
     if (workspaceLauncherCloseTimerRef.current != null) {
       window.clearTimeout(workspaceLauncherCloseTimerRef.current)
     }
     workspaceLauncherCloseTimerRef.current = window.setTimeout(() => {
-      setWorkspaceLauncherOpen(false)
+      if (!workspaceLauncherOpen) {
+        setWorkspaceLauncherPreview(false)
+      }
       workspaceLauncherCloseTimerRef.current = null
     }, 180)
   }
@@ -206,6 +235,7 @@ export default function App() {
       window.clearTimeout(workspaceLauncherCloseTimerRef.current)
       workspaceLauncherCloseTimerRef.current = null
     }
+    setWorkspaceLauncherPreview(true)
     setWorkspaceLauncherOpen(current => !current)
   }
 
@@ -216,6 +246,11 @@ export default function App() {
     if (module === 'xps') setWorkspace('workflow-xps')
     if (module === 'xes') setWorkspace('workflow-xes')
   }
+
+  const currentWorkspaceGroup = workspace.startsWith('tool-') ? '單一處理' : '分析模組'
+  const currentWorkspaceLabel = workspace.startsWith('tool-')
+    ? (TOOL_WORKSPACES.find(item => item.id === workspace)?.label ?? '單一處理')
+    : (ANALYSIS_MODULES.find(item => `workflow-${item.id}` === workspace)?.label ?? '分析模組')
 
   const themeLauncher = (
     <div className="theme-launcher">
@@ -342,18 +377,22 @@ export default function App() {
       <div
         ref={workspaceLauncherRef}
         className={[
-          'workspace-launcher fixed right-0 top-1/2 z-30 -translate-y-1/2 pr-3 sm:pr-4',
+          'workspace-launcher fixed right-0 z-30 pr-3 sm:pr-4',
+          workspaceLauncherDocked ? 'top-4 translate-y-0 sm:top-5' : 'top-1/2 -translate-y-1/2',
+          workspaceLauncherPreview ? 'workspace-launcher--preview' : '',
           workspaceLauncherOpen ? 'workspace-launcher--open' : '',
+          workspaceLauncherDocked ? 'workspace-launcher--docked' : '',
         ].join(' ')}
-        onMouseEnter={openWorkspaceLauncher}
+        onMouseEnter={openWorkspaceLauncherPreview}
         onMouseLeave={() => {
-          if (workspaceLauncherOpen) closeWorkspaceLauncher()
+          closeWorkspaceLauncherPreview()
         }}
-        onFocusCapture={openWorkspaceLauncher}
+        onFocusCapture={openWorkspaceLauncherPreview}
         onBlurCapture={event => {
           const nextFocused = event.relatedTarget
           if (!event.currentTarget.contains(nextFocused as Node | null)) {
-            closeWorkspaceLauncher()
+            setWorkspaceLauncherOpen(false)
+            closeWorkspaceLauncherPreview()
           }
         }}
       >
@@ -370,6 +409,7 @@ export default function App() {
                     onClick={() => {
                       setWorkspace(wsId)
                       setWorkspaceLauncherOpen(false)
+                      setWorkspaceLauncherPreview(false)
                     }}
                     className="workspace-launcher__item pressable"
                   >
@@ -389,6 +429,7 @@ export default function App() {
                   onClick={() => {
                     setWorkspace(item.id)
                     setWorkspaceLauncherOpen(false)
+                    setWorkspaceLauncherPreview(false)
                   }}
                   className="workspace-launcher__item pressable"
                 >
@@ -409,7 +450,11 @@ export default function App() {
             toggleWorkspaceLauncher()
           }}
         >
-          選單
+          <span className="workspace-launcher__tab-icon" aria-hidden="true">≡</span>
+          <span className="workspace-launcher__tab-copy">
+            <span className="workspace-launcher__tab-label">選單</span>
+            <span className="workspace-launcher__tab-detail">{currentWorkspaceGroup} · {currentWorkspaceLabel}</span>
+          </span>
         </button>
       </div>
 
@@ -417,7 +462,7 @@ export default function App() {
         <WorkspaceErrorBoundary workspace={workspace}>
           {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} onUpdatePlotPopup={updatePlotPopup} />}
           {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} />}

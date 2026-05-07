@@ -230,19 +230,24 @@ class ProcessParams(BaseModel):
     average: bool = False
     energy_shift: float = 0.0
     bg_enabled: bool = False
-    bg_channel: str = "both"          # both | TEY | TFY
     bg_method: str = "linear"         # linear | polynomial | asls | airpls
-    bg_x_start: Optional[float] = None
-    bg_x_end: Optional[float] = None
+    bg_tey_start: Optional[float] = None
+    bg_tey_end: Optional[float] = None
+    bg_tfy_start: Optional[float] = None
+    bg_tfy_end: Optional[float] = None
     bg_poly_deg: int = 3
     bg_baseline_lambda: float = 1e5
     bg_baseline_p: float = 0.01
     bg_baseline_iter: int = 20
     norm_method: str = "none"         # none | min_max | max | area | post_edge | mean_region
-    norm_x_start: Optional[float] = None
-    norm_x_end: Optional[float] = None
-    norm_pre_start: Optional[float] = None  # for post_edge: pre-edge region start
-    norm_pre_end: Optional[float] = None    # for post_edge: pre-edge region end
+    norm_tey_start: Optional[float] = None
+    norm_tey_end: Optional[float] = None
+    norm_tfy_start: Optional[float] = None
+    norm_tfy_end: Optional[float] = None
+    norm_tey_pre_start: Optional[float] = None  # for post_edge: pre-edge region start
+    norm_tey_pre_end: Optional[float] = None    # for post_edge: pre-edge region end
+    norm_tfy_pre_start: Optional[float] = None
+    norm_tfy_pre_end: Optional[float] = None
     white_line_start: Optional[float] = None
     white_line_end: Optional[float] = None
     gauss_enabled: bool = False
@@ -375,21 +380,29 @@ def process_xas(req: ProcessRequest):
 
         # background subtraction
         if p.bg_enabled:
-            bg_start = p.bg_x_start if p.bg_x_start is not None else float(np.min(x_out))
-            bg_end = p.bg_x_end if p.bg_x_end is not None else float(np.max(x_out))
-            bg_kwargs: dict[str, Any] = {
+            x_min = float(np.min(x_out))
+            x_max = float(np.max(x_out))
+            bg_common_kwargs: dict[str, Any] = {
                 "method": p.bg_method,
-                "bg_x_start": bg_start,
-                "bg_x_end": bg_end,
                 "poly_deg": p.bg_poly_deg,
                 "baseline_lambda": p.bg_baseline_lambda,
                 "baseline_p": p.bg_baseline_p,
                 "baseline_iter": p.bg_baseline_iter,
             }
-            if p.bg_channel in ("both", "TEY"):
-                tey_proc, _ = apply_background(x_out, tey_proc, **bg_kwargs)
-            if p.bg_channel in ("both", "TFY"):
-                tfy_proc, _ = apply_background(x_out, tfy_proc, **bg_kwargs)
+            tey_proc, _ = apply_background(
+                x_out,
+                tey_proc,
+                bg_x_start=p.bg_tey_start if p.bg_tey_start is not None else x_min,
+                bg_x_end=p.bg_tey_end if p.bg_tey_end is not None else x_max,
+                **bg_common_kwargs,
+            )
+            tfy_proc, _ = apply_background(
+                x_out,
+                tfy_proc,
+                bg_x_start=p.bg_tfy_start if p.bg_tfy_start is not None else x_min,
+                bg_x_end=p.bg_tfy_end if p.bg_tfy_end is not None else x_max,
+                **bg_common_kwargs,
+            )
 
         # normalization
         edge_step_tey: float | None = None
@@ -399,12 +412,26 @@ def process_xas(req: ProcessRequest):
             x_min = float(np.min(x_out))
             x_max = float(np.max(x_out))
             x_span = max(x_max - x_min, 1e-12)
-            pre_start = p.norm_pre_start if p.norm_pre_start is not None else x_min
-            pre_end = p.norm_pre_end if p.norm_pre_end is not None else x_min + x_span * 0.3
-            norm_start = p.norm_x_start if p.norm_x_start is not None else x_min + x_span * 0.7
-            norm_end = p.norm_x_end if p.norm_x_end is not None else x_max
-            tey_proc, step_t = _normalize_post_edge(x_out, tey_proc, (pre_start, pre_end), (norm_start, norm_end))
-            tfy_proc, step_f = _normalize_post_edge(x_out, tfy_proc, (pre_start, pre_end), (norm_start, norm_end))
+            tey_pre_start = p.norm_tey_pre_start if p.norm_tey_pre_start is not None else x_min
+            tey_pre_end = p.norm_tey_pre_end if p.norm_tey_pre_end is not None else x_min + x_span * 0.3
+            tey_norm_start = p.norm_tey_start if p.norm_tey_start is not None else x_min + x_span * 0.7
+            tey_norm_end = p.norm_tey_end if p.norm_tey_end is not None else x_max
+            tfy_pre_start = p.norm_tfy_pre_start if p.norm_tfy_pre_start is not None else x_min
+            tfy_pre_end = p.norm_tfy_pre_end if p.norm_tfy_pre_end is not None else x_min + x_span * 0.3
+            tfy_norm_start = p.norm_tfy_start if p.norm_tfy_start is not None else x_min + x_span * 0.7
+            tfy_norm_end = p.norm_tfy_end if p.norm_tfy_end is not None else x_max
+            tey_proc, step_t = _normalize_post_edge(
+                x_out,
+                tey_proc,
+                (tey_pre_start, tey_pre_end),
+                (tey_norm_start, tey_norm_end),
+            )
+            tfy_proc, step_f = _normalize_post_edge(
+                x_out,
+                tfy_proc,
+                (tfy_pre_start, tfy_pre_end),
+                (tfy_norm_start, tfy_norm_end),
+            )
             edge_step_tey = float(step_t)
             edge_step_tfy = float(step_f)
         elif p.norm_method != "none" and p.norm_method != "post_edge":
@@ -412,15 +439,15 @@ def process_xas(req: ProcessRequest):
                 x_out,
                 tey_proc,
                 norm_method=p.norm_method,
-                norm_x_start=p.norm_x_start,
-                norm_x_end=p.norm_x_end,
+                norm_x_start=p.norm_tey_start,
+                norm_x_end=p.norm_tey_end,
             )
             tfy_proc = apply_normalization(
                 x_out,
                 tfy_proc,
                 norm_method=p.norm_method,
-                norm_x_start=p.norm_x_start,
-                norm_x_end=p.norm_x_end,
+                norm_x_start=p.norm_tfy_start,
+                norm_x_end=p.norm_tfy_end,
             )
 
         # white line
