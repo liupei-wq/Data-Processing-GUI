@@ -478,15 +478,123 @@ class VbmRequest(BaseModel):
     baseline_hi: float
 
 
+class VbmLinePoint(BaseModel):
+    x: float
+    y: float
+
+
+class VbmLineFit(BaseModel):
+    slope: float
+    intercept: float
+    point_count: int
+    start_window_point_count: int
+    end_window_point_count: int
+    candidate_pair_count: int
+    anchor_start_point: VbmLinePoint
+    anchor_end_point: VbmLinePoint
+    start_point: VbmLinePoint
+    end_point: VbmLinePoint
+
+
 class VbmResponse(BaseModel):
     vbm_ev: Optional[float]
     slope: float
     intercept: float
     baseline_level: float
-    x_fit: List[float]
-    y_fit: List[float]
+    baseline_slope: float
+    baseline_intercept: float
+    edge_line: Optional[VbmLineFit] = None
+    baseline_line: Optional[VbmLineFit] = None
     success: bool
     message: str = ""
+
+
+def _fit_vbm_line(x: np.ndarray, y: np.ndarray, lo: float, hi: float, mode: str) -> Optional[VbmLineFit]:
+    mask = np.isfinite(x) & np.isfinite(y)
+    if int(np.sum(mask)) < 2:
+        return None
+
+    xs = x[mask]
+    ys = y[mask]
+    order = np.argsort(xs)
+    xs = xs[order]
+    ys = ys[order]
+
+    def nearest_point(target_x: float) -> tuple[int, float, float]:
+        idx = int(np.argmin(np.abs(xs - target_x)))
+        return idx, float(xs[idx]), float(ys[idx])
+
+    anchor_start_idx, anchor_start_x, anchor_start_y = nearest_point(lo)
+    anchor_end_idx, anchor_end_x, anchor_end_y = nearest_point(hi)
+    span_points = max(abs(anchor_end_idx - anchor_start_idx) + 1, 5)
+    window_point_count = max(3, min(int(xs.size), int(round(span_points * 0.2))))
+
+    def build_window(anchor_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        start_idx = max(0, min(int(xs.size) - window_point_count, anchor_idx - window_point_count // 2))
+        end_idx = start_idx + window_point_count
+        return xs[start_idx:end_idx], ys[start_idx:end_idx]
+
+    start_xs, start_ys = build_window(anchor_start_idx)
+    end_xs, end_ys = build_window(anchor_end_idx)
+
+    best = None
+    candidate_pair_count = 0
+    for sx0, sy0 in zip(start_xs, start_ys):
+        for ex0, ey0 in zip(end_xs, end_ys):
+            dx = float(ex0 - sx0)
+            if dx <= 1e-10:
+                continue
+            slope = float((ey0 - sy0) / dx)
+            span = abs(dx)
+            mean_y = float((sy0 + ey0) / 2.0)
+            candidate_pair_count += 1
+            candidate = {
+                "start_x": float(sx0),
+                "start_y": float(sy0),
+                "end_x": float(ex0),
+                "end_y": float(ey0),
+                "slope": slope,
+                "span": span,
+                "mean_y": mean_y,
+            }
+            if best is None:
+                best = candidate
+                continue
+
+            if mode == "tangent":
+                if slope > best["slope"] + 1e-10 or (abs(slope - best["slope"]) <= 1e-10 and span > best["span"]):
+                    best = candidate
+            else:
+                abs_slope = abs(slope)
+                best_abs_slope = abs(best["slope"])
+                if (
+                    abs_slope < best_abs_slope - 1e-10
+                    or (abs(abs_slope - best_abs_slope) <= 1e-10 and mean_y < best["mean_y"] - 1e-10)
+                    or (
+                        abs(abs_slope - best_abs_slope) <= 1e-10
+                        and abs(mean_y - best["mean_y"]) <= 1e-10
+                        and span > best["span"]
+                    )
+                ):
+                    best = candidate
+
+    if best is None:
+        return None
+
+    slope = float(best["slope"])
+    intercept = float(best["start_y"] - slope * best["start_x"])
+    return VbmLineFit(
+        slope=slope,
+        intercept=intercept,
+        point_count=int(start_xs.size + end_xs.size),
+        start_window_point_count=int(start_xs.size),
+        end_window_point_count=int(end_xs.size),
+        candidate_pair_count=candidate_pair_count,
+        anchor_start_point=VbmLinePoint(x=anchor_start_x, y=anchor_start_y),
+        anchor_end_point=VbmLinePoint(x=anchor_end_x, y=anchor_end_y),
+        start_point=VbmLinePoint(x=float(best["start_x"]), y=float(best["start_y"])),
+        end_point=VbmLinePoint(x=float(best["end_x"]), y=float(best["end_y"])),
+    )
 
 
 @router.post("/vbm", response_model=VbmResponse)
@@ -496,54 +604,51 @@ def compute_vbm(req: VbmRequest):
 
     lo_e = min(req.edge_lo, req.edge_hi)
     hi_e = max(req.edge_lo, req.edge_hi)
-
-    # Tangent line: use mean of 20%-neighbourhood around each slider endpoint.
-    # This avoids distortion from noisy interior points and matches the frontend preview.
-    edge_hw = max(hi_e - lo_e, 0.1) * 0.20
-    mask_lo = (x >= lo_e - edge_hw) & (x <= lo_e + edge_hw)
-    mask_hi = (x >= hi_e - edge_hw) & (x <= hi_e + edge_hw)
-
-    if mask_lo.sum() >= 1 and mask_hi.sum() >= 1:
-        x_lo_mean = float(np.mean(x[mask_lo]))
-        y_lo_mean = float(np.mean(y[mask_lo]))
-        x_hi_mean = float(np.mean(x[mask_hi]))
-        y_hi_mean = float(np.mean(y[mask_hi]))
-        if abs(x_hi_mean - x_lo_mean) < 1e-10:
-            return VbmResponse(vbm_ev=None, slope=0.0, intercept=0.0, baseline_level=0.0,
-                               x_fit=[], y_fit=[], success=False, message="切線起終兩端過近，無法計算斜率")
-        slope = (y_hi_mean - y_lo_mean) / (x_hi_mean - x_lo_mean)
-        intercept = y_lo_mean - slope * x_lo_mean
-    else:
-        # Fallback: polyfit over the full edge range
-        mask_edge = (x >= lo_e) & (x <= hi_e)
-        if mask_edge.sum() < 2:
-            return VbmResponse(vbm_ev=None, slope=0.0, intercept=0.0, baseline_level=0.0,
-                               x_fit=[], y_fit=[], success=False, message="邊緣區域點數不足")
-        coeffs = np.polyfit(x[mask_edge], y[mask_edge], 1)
-        slope, intercept = float(coeffs[0]), float(coeffs[1])
+    edge_line = _fit_vbm_line(x, y, lo_e, hi_e, "tangent")
+    if edge_line is None:
+        return VbmResponse(
+            vbm_ev=None,
+            slope=0.0,
+            intercept=0.0,
+            baseline_level=0.0,
+            baseline_slope=0.0,
+            baseline_intercept=0.0,
+            edge_line=None,
+            baseline_line=None,
+            success=False,
+            message="切線區間有效點數不足，至少需要 2 個點",
+        )
 
     lo_b = min(req.baseline_lo, req.baseline_hi)
     hi_b = max(req.baseline_lo, req.baseline_hi)
+    baseline_line = _fit_vbm_line(x, y, lo_b, hi_b, "baseline")
+    if baseline_line is None:
+        return VbmResponse(
+            vbm_ev=None,
+            slope=edge_line.slope,
+            intercept=edge_line.intercept,
+            baseline_level=0.0,
+            baseline_slope=0.0,
+            baseline_intercept=0.0,
+            edge_line=edge_line,
+            baseline_line=None,
+            success=False,
+            message="基準線區間有效點數不足，至少需要 2 個點",
+        )
 
-    # Baseline level: mean of 20%-neighbourhood around each baseline endpoint.
-    bl_hw = max(hi_b - lo_b, 0.1) * 0.20
-    mask_bl_lo = (x >= lo_b - bl_hw) & (x <= lo_b + bl_hw)
-    mask_bl_hi = (x >= hi_b - bl_hw) & (x <= hi_b + bl_hw)
-    combined_bl = np.concatenate([y[mask_bl_lo], y[mask_bl_hi]])
-    if combined_bl.size >= 1:
-        baseline_level = float(np.mean(combined_bl))
-    else:
-        mask_bl = (x >= lo_b) & (x <= hi_b)
-        if mask_bl.sum() < 1:
-            return VbmResponse(vbm_ev=None, slope=slope, intercept=intercept, baseline_level=0.0,
-                               x_fit=[], y_fit=[], success=False, message="基準線區域點數不足")
-        baseline_level = float(np.mean(y[mask_bl]))
+    mask_bl = np.isfinite(x) & np.isfinite(y) & (x >= lo_b) & (x <= hi_b)
+    baseline_level = float(np.mean(y[mask_bl])) if int(np.sum(mask_bl)) > 0 else 0.0
 
     vbm_ev = None
     success = False
     message = ""
-    if abs(slope) > 1e-10:
-        vbm_candidate = (baseline_level - intercept) / slope
+    slope = edge_line.slope
+    intercept = edge_line.intercept
+    baseline_slope = baseline_line.slope
+    baseline_intercept = baseline_line.intercept
+    slope_delta = slope - baseline_slope
+    if abs(slope_delta) > 1e-10:
+        vbm_candidate = (baseline_intercept - intercept) / slope_delta
         if np.isfinite(vbm_candidate):
             x_range = float(np.max(x) - np.min(x))
             # Upper margin: allow small extrapolation above data maximum
@@ -564,24 +669,17 @@ def compute_vbm(req: VbmRequest):
         else:
             message = "VBM 計算結果非有限值，請重新選取區間"
     else:
-        message = "斜率接近零，無法外推 VBM"
-
-    x_margin = max((hi_e - lo_e) * 0.25, 0.5)
-    x_candidates = [lo_e, hi_e, lo_b, hi_b]
-    if vbm_ev is not None and np.isfinite(vbm_ev):
-        x_candidates.extend([float(vbm_ev) - x_margin, float(vbm_ev) + x_margin])
-    x_lo_plot = min(x_candidates)
-    x_hi_plot = max(x_candidates)
-    x_fit_arr = np.linspace(x_lo_plot, x_hi_plot, 80)
-    y_fit_arr = slope * x_fit_arr + intercept
+        message = "切線與基準線斜率過於接近，無法穩定求交點"
 
     return VbmResponse(
         vbm_ev=vbm_ev,
         slope=slope,
         intercept=intercept,
         baseline_level=baseline_level,
-        x_fit=x_fit_arr.tolist(),
-        y_fit=y_fit_arr.tolist(),
+        baseline_slope=baseline_slope,
+        baseline_intercept=baseline_intercept,
+        edge_line=edge_line,
+        baseline_line=baseline_line,
         success=success,
         message=message,
     )

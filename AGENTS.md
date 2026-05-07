@@ -115,3 +115,7 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-06：XAS 內插新增像 XPS 的自動偵測點數；前端依 energy 軸 median step 估算有效點數（200–10000），側欄顯示自動建議與每檔步距變化，所有分階段處理共用同一個 `effectiveNPoints`。
 - 2026-05-06：XPS 疊圖模式改為預設不平均，多筆資料會各自處理後分階段疊圖；Section 3 可明確啟用「平均所有疊圖數據」，啟用後才用後端 `average` 單一光譜做峰擬合與 RSF。不平均疊圖分支會鎖定峰擬合 / RSF。驗證 `npm run build`、`git diff --check` 通過。
 - 2026-05-07：XPS 第 2 步改為「內插 / 資料模式」，把中間欄的單筆 / 疊圖入口搬回 sidebar；XPS 圖卡改為上下堆疊顯示；疊圖各階段改用逐筆獨立線色，圖卡上方可手動改每筆線色，右上角色盤選單可重排整組疊圖色盤。驗證 `npm run build` 通過。
+- 2026-05-07：XPS VBM 算法再改為更貼近使用者操作的版本：先把兩個輸入 x 值映射到實際光譜點，再以各點附近 20% 搜尋窗組候選點對；切線取最大正斜率，基準線取最平斜率，兩條線交點作為 VBM。前端中間欄明確顯示輸入對應點（空心 marker）、實際選點（實心 marker）、兩條線與 VBM，Sidebar / TXT / JSON 也同步顯示搜尋窗與選點資訊。驗證 `py_compile`、`npm run build`、`git diff --check` 通過。
+- 2026-05-07：確認 XPS「VBM 控制有出現，但中間欄圖卡沒出現」的主因是 render 條件不一致：Step 8 sidebar 在 overlay 模式也會顯示，但中間欄 `VBM 線性外推圖` 仍硬鎖 `processingViewMode === 'single'`。已改為統一使用 `vbmDataset`（single 用 `activeDataset`，overlay 用 `overlayPrimaryDataset`），讓 VBM 預覽、建議區間、計算按鈕與圖卡都跟同一筆資料走；疊圖模式會明確提示目前使用哪筆資料畫線。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：XPS `VBM 線性外推圖` 改為局部視窗顯示。根因是切線 / 基準線原本沿整張光譜寬度外推，導致 Plotly 的 y 軸 autoscale 被遠端外推值撐爆，原始光譜幾乎看不見；現已在 `web/frontend/src/pages/XPS.tsx` 新增 `buildVbmPreviewWindow()`，依切線區間、基準線區間、實際選點與 VBM 交點動態決定局部 x/y 範圍，並讓兩條線只在這個局部範圍內繪製。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：依使用者回饋精簡 XPS `Leading edge 提示`。已移除 `建議切線區間 / 建議基準線區間` 文案、兩顆 `自動建議...` 按鈕，以及背後整套自動建議 helper / effect / callback，避免畫面雜訊與系統自動改動手動區間；目前僅保留全域光譜與切線區間內的高低點資訊。驗證 `npm run build`、`git diff --check` 通過。

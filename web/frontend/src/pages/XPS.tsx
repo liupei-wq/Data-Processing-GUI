@@ -20,6 +20,7 @@ import type {
   ProcessParams,
   ProcessResult,
   ProcessedDataset,
+  VbmLineFit,
   VbmResult,
   RsfRequestItem,
   RsfResultRow,
@@ -118,6 +119,190 @@ function cssVar(name: string, fallback: string) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
+}
+
+function fitVbmLine(x: number[], y: number[], start: number, end: number, mode: 'tangent' | 'baseline'): VbmLineFit | null {
+  if (x.length !== y.length) return null
+  const lo = Math.min(start, end)
+  const hi = Math.max(start, end)
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 2) return null
+
+  const nearestPoint = (targetX: number) => {
+    let bestIndex = 0
+    let bestDistance = Infinity
+    for (let i = 0; i < points.length; i += 1) {
+      const distance = Math.abs(points[i].x - targetX)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = i
+      }
+    }
+    return { index: bestIndex, point: points[bestIndex] }
+  }
+
+  const anchorStart = nearestPoint(lo)
+  const anchorEnd = nearestPoint(hi)
+  const spanPoints = Math.max(Math.abs(anchorEnd.index - anchorStart.index) + 1, 5)
+  const windowPointCount = Math.max(3, Math.min(points.length, Math.round(spanPoints * 0.2)))
+  const buildWindow = (anchorIndex: number) => {
+    const startIndex = Math.max(0, Math.min(points.length - windowPointCount, anchorIndex - Math.floor(windowPointCount / 2)))
+    return points.slice(startIndex, startIndex + windowPointCount)
+  }
+
+  const startWindow = buildWindow(anchorStart.index)
+  const endWindow = buildWindow(anchorEnd.index)
+
+  let bestPair: { startPoint: VbmLineFit['start_point']; endPoint: VbmLineFit['end_point']; slope: number; span: number; meanY: number } | null = null
+  let candidatePairCount = 0
+  for (const startPoint of startWindow) {
+    for (const endPoint of endWindow) {
+      const dx = endPoint.x - startPoint.x
+      if (dx <= 1e-10) continue
+      const slope = (endPoint.y - startPoint.y) / dx
+      const span = Math.abs(dx)
+      const meanY = (startPoint.y + endPoint.y) / 2
+      candidatePairCount += 1
+      if (!bestPair) {
+        bestPair = { startPoint, endPoint, slope, span, meanY }
+        continue
+      }
+
+      if (mode === 'tangent') {
+        if (slope > bestPair.slope + 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span)) {
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+        }
+      } else {
+        const absSlope = Math.abs(slope)
+        const bestAbsSlope = Math.abs(bestPair.slope)
+        if (
+          absSlope < bestAbsSlope - 1e-10
+          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && meanY < bestPair.meanY - 1e-10)
+          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && Math.abs(meanY - bestPair.meanY) <= 1e-10 && span > bestPair.span)
+        ) {
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+        }
+      }
+    }
+  }
+
+  if (!bestPair) return null
+  const intercept = bestPair.startPoint.y - bestPair.slope * bestPair.startPoint.x
+  return {
+    slope: bestPair.slope,
+    intercept,
+    point_count: startWindow.length + endWindow.length,
+    start_window_point_count: startWindow.length,
+    end_window_point_count: endWindow.length,
+    candidate_pair_count: candidatePairCount,
+    anchor_start_point: anchorStart.point,
+    anchor_end_point: anchorEnd.point,
+    start_point: bestPair.startPoint,
+    end_point: bestPair.endPoint,
+  }
+}
+
+function intersectVbmLines(edgeLine: VbmLineFit | null, baselineLine: VbmLineFit | null) {
+  if (!edgeLine || !baselineLine) return null
+  const slopeDelta = edgeLine.slope - baselineLine.slope
+  if (Math.abs(slopeDelta) < 1e-10) return null
+  const x = (baselineLine.intercept - edgeLine.intercept) / slopeDelta
+  if (!Number.isFinite(x)) return null
+  const y = edgeLine.slope * x + edgeLine.intercept
+  if (!Number.isFinite(y)) return null
+  return { x, y }
+}
+
+function buildVbmPreviewWindow(
+  x: number[],
+  y: number[],
+  tangentLine: VbmLineFit | null,
+  baselineLine: VbmLineFit | null,
+  vbmPoint: { x: number; y: number } | null,
+  edgeRange: { start: number; end: number },
+  baselineRange: { start: number; end: number },
+) {
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length === 0) return null
+
+  const datasetMinX = points[0].x
+  const datasetMaxX = points[points.length - 1].x
+  const finiteValues = (values: Array<number | null | undefined>) => values.filter((value): value is number => Number.isFinite(value))
+
+  const coreXs = finiteValues([
+    edgeRange.start,
+    edgeRange.end,
+    baselineRange.start,
+    baselineRange.end,
+    tangentLine?.anchor_start_point.x,
+    tangentLine?.anchor_end_point.x,
+    tangentLine?.start_point.x,
+    tangentLine?.end_point.x,
+    baselineLine?.anchor_start_point.x,
+    baselineLine?.anchor_end_point.x,
+    baselineLine?.start_point.x,
+    baselineLine?.end_point.x,
+  ])
+  const seedXs = coreXs.length > 0 ? coreXs : [datasetMinX, datasetMaxX]
+  let focusMinX = Math.min(...seedXs)
+  let focusMaxX = Math.max(...seedXs)
+  const coreSpanX = Math.max(focusMaxX - focusMinX, 0.4)
+
+  if (vbmPoint && Number.isFinite(vbmPoint.x)) {
+    const vbmAllowance = Math.max(coreSpanX * 1.2, 0.8)
+    if (vbmPoint.x >= focusMinX - vbmAllowance && vbmPoint.x <= focusMaxX + vbmAllowance) {
+      focusMinX = Math.min(focusMinX, vbmPoint.x)
+      focusMaxX = Math.max(focusMaxX, vbmPoint.x)
+    }
+  }
+
+  const xPadding = Math.max(coreSpanX * 0.22, 0.25)
+  let xWindowMin = Math.max(datasetMinX, focusMinX - xPadding)
+  let xWindowMax = Math.min(datasetMaxX, focusMaxX + xPadding)
+  if (xWindowMax - xWindowMin < 0.35) {
+    const center = (xWindowMin + xWindowMax) / 2
+    const halfWidth = 0.175
+    xWindowMin = Math.max(datasetMinX, center - halfWidth)
+    xWindowMax = Math.min(datasetMaxX, center + halfWidth)
+  }
+
+  const lineX = Array.from({ length: 80 }, (_, index) => xWindowMin + (xWindowMax - xWindowMin) * index / 79)
+  const spectrumWindowY = points
+    .filter(point => point.x >= xWindowMin - 1e-9 && point.x <= xWindowMax + 1e-9)
+    .map(point => point.y)
+  const markerY = finiteValues([
+    tangentLine?.anchor_start_point.y,
+    tangentLine?.anchor_end_point.y,
+    tangentLine?.start_point.y,
+    tangentLine?.end_point.y,
+    baselineLine?.anchor_start_point.y,
+    baselineLine?.anchor_end_point.y,
+    baselineLine?.start_point.y,
+    baselineLine?.end_point.y,
+    vbmPoint?.y,
+  ])
+  const lineY = [
+    ...(tangentLine ? lineX.map(xi => tangentLine.slope * xi + tangentLine.intercept) : []),
+    ...(baselineLine ? lineX.map(xi => baselineLine.slope * xi + baselineLine.intercept) : []),
+  ].filter(value => Number.isFinite(value))
+  const yValues = [...spectrumWindowY, ...markerY, ...lineY]
+  const fallbackY = points.map(point => point.y)
+  const minY = Math.min(...(yValues.length > 0 ? yValues : fallbackY))
+  const maxY = Math.max(...(yValues.length > 0 ? yValues : fallbackY))
+  const ySpan = Math.max(maxY - minY, 1e-3)
+  const yPadding = Math.max(ySpan * 0.16, Math.max(Math.abs(minY), Math.abs(maxY), 1) * 0.04)
+
+  return {
+    lineX,
+    xAxisRange: [xWindowMax, xWindowMin] as [number, number],
+    yAxisRange: [minY - yPadding, maxY + yPadding] as [number, number],
+  }
 }
 
 function median(values: number[]) {
@@ -293,139 +478,6 @@ function findSpectrumExtrema(
     if (point.y < minPoint.y) minPoint = point
   }
   return { maxPoint, minPoint }
-}
-
-function suggestVbmEdgeRange(x: number[], y: number[]) {
-  if (x.length < 5 || y.length < 5 || x.length !== y.length) return null
-  const points = x
-    .map((xi, index) => ({ x: xi, y: y[index] }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
-    .sort((a, b) => a.x - b.x)
-  if (points.length < 5) return null
-
-  const xs = points.map(point => point.x)
-  const ys = points.map(point => point.y)
-  const yMin = Math.min(...ys)
-  const yMax = Math.max(...ys)
-  const ySpan = yMax - yMin
-  const xSpan = Math.max(xs[xs.length - 1] - xs[0], 1e-6)
-  if (!Number.isFinite(ySpan) || ySpan <= 1e-9) return null
-
-  const windowRadius = Math.min(3, Math.floor(points.length / 6))
-  const smooth = ys.map((_, index) => {
-    const start = Math.max(0, index - windowRadius)
-    const end = Math.min(ys.length - 1, index + windowRadius)
-    let total = 0
-    for (let i = start; i <= end; i += 1) total += ys[i]
-    return total / (end - start + 1)
-  })
-  const normalized = smooth.map(value => (value - yMin) / ySpan)
-  const gradients = smooth.map((value, index) => {
-    if (index === 0) return (smooth[1] - value) / Math.max(xs[1] - xs[0], 1e-6)
-    if (index === smooth.length - 1) return (value - smooth[index - 1]) / Math.max(xs[index] - xs[index - 1], 1e-6)
-    return (smooth[index + 1] - smooth[index - 1]) / Math.max(xs[index + 1] - xs[index - 1], 1e-6)
-  })
-
-  // Only search the first 30% of points (low-BE Fermi-edge region).
-  // Interior VB sub-peaks can have steeper gradients than the true Fermi edge;
-  // restricting to the low-BE side avoids picking those wrong regions.
-  const fermiRegionLimit = Math.max(5, Math.floor(points.length * 0.30))
-  const candidateIndices = normalized
-    .map((value, index) => ({ value, index }))
-    .filter(item => item.index < fermiRegionLimit && item.value >= 0.15 && item.value <= 0.85)
-    .map(item => item.index)
-  const fermiRegionFallback = Array.from({ length: fermiRegionLimit }, (_, i) => i)
-  const searchIndices = candidateIndices.length > 0 ? candidateIndices : fermiRegionFallback
-  if (searchIndices.length === 0) return null
-
-  let bestIndex = searchIndices[0]
-  let bestScore = Math.abs(gradients[bestIndex])
-  for (const index of searchIndices) {
-    const score = Math.abs(gradients[index])
-    if (score > bestScore) {
-      bestIndex = index
-      bestScore = score
-    }
-  }
-
-  let left = bestIndex
-  let right = bestIndex
-  while (left > 0 && normalized[left - 1] >= 0.12 && normalized[left - 1] <= 0.82) left -= 1
-  while (right < normalized.length - 1 && normalized[right + 1] >= 0.18 && normalized[right + 1] <= 0.88) right += 1
-
-  let start = xs[left]
-  let end = xs[right]
-  if (!Number.isFinite(start) || !Number.isFinite(end) || Math.abs(end - start) < xSpan * 0.02) {
-    const center = xs[bestIndex]
-    const halfWidth = Math.min(Math.max(xSpan * 0.08, 0.35), 1.5)
-    start = center - halfWidth
-    end = center + halfWidth
-  }
-
-  const minWidth = Math.min(Math.max(xSpan * 0.05, 0.3), 1.2)
-  if (Math.abs(end - start) < minWidth) {
-    const center = (start + end) / 2
-    start = center - minWidth / 2
-    end = center + minWidth / 2
-  }
-
-  return {
-    start: Math.max(xs[0], Math.min(start, end)),
-    end: Math.min(xs[xs.length - 1], Math.max(start, end)),
-  }
-}
-
-function suggestVbmBaselineRange(x: number[], y: number[]) {
-  if (x.length < 6 || y.length < 6 || x.length !== y.length) return null
-  const points = x
-    .map((xi, index) => ({ x: xi, y: y[index] }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
-    .sort((a, b) => a.x - b.x)
-  if (points.length < 6) return null
-
-  const xs = points.map(point => point.x)
-  const ys = points.map(point => point.y)
-  const yMin = Math.min(...ys)
-  const yMax = Math.max(...ys)
-  const ySpan = Math.max(yMax - yMin, 1e-9)
-  const xSpan = Math.max(xs[xs.length - 1] - xs[0], 1e-6)
-
-  // Restrict to first 20% of points so the baseline stays in the true noise floor
-  // near the Fermi edge, not in the VB leading-edge region.
-  const candidateLimit = Math.max(6, Math.floor(points.length * 0.2))
-  const windowSize = Math.max(4, Math.min(candidateLimit, Math.round(points.length * 0.12)))
-  let bestScore = Number.POSITIVE_INFINITY
-  let bestRange: { start: number; end: number } | null = null
-
-  for (let startIndex = 0; startIndex <= candidateLimit - windowSize; startIndex += 1) {
-    const window = points.slice(startIndex, startIndex + windowSize)
-    const windowYs = window.map(point => point.y)
-    const mean = windowYs.reduce((sum, value) => sum + value, 0) / windowYs.length
-    const variance = windowYs.reduce((sum, value) => sum + (value - mean) ** 2, 0) / windowYs.length
-    const std = Math.sqrt(Math.max(variance, 0))
-    const slope = Math.abs((window[window.length - 1].y - window[0].y) / Math.max(window[window.length - 1].x - window[0].x, 1e-6))
-    const normalizedMean = Math.max(0, (mean - yMin) / ySpan)
-    const positionBias = (window[0].x - xs[0]) / xSpan
-    const score = std / ySpan + slope / ySpan + normalizedMean * 0.35 + positionBias * 0.12
-    if (score < bestScore) {
-      bestScore = score
-      bestRange = {
-        start: window[0].x,
-        end: window[window.length - 1].x,
-      }
-    }
-  }
-
-  if (!bestRange) return null
-  const minWidth = Math.min(Math.max(xSpan * 0.04, 0.35), 1.4)
-  if (Math.abs(bestRange.end - bestRange.start) < minWidth) {
-    const center = (bestRange.start + bestRange.end) / 2
-    return {
-      start: Math.max(xs[0], center - minWidth / 2),
-      end: Math.min(xs[xs.length - 1], center + minWidth / 2),
-    }
-  }
-  return bestRange
 }
 
 function chartLayout(xReversed = true, yAxisTitle = 'Intensity (a.u.)', secondaryYAxisTitle?: string): Partial<Plotly.Layout> {
@@ -1513,7 +1565,7 @@ export default function XPS({
   // VBM extrapolation
   const [vbmEdgeLo, setVbmEdgeLo] = useState(1.0)
   const [vbmEdgeHi, setVbmEdgeHi] = useState(3.0)
-  const [vbmBaselineLo, setVbmBaselineLo] = useState(-1.0)
+  const [vbmBaselineLo, setVbmBaselineLo] = useState(0.0)
   const [vbmBaselineHi, setVbmBaselineHi] = useState(0.5)
   const [vbmResult, setVbmResult] = useState<VbmResult | null>(null)
   const [vbmLoading, setVbmLoading] = useState(false)
@@ -1532,8 +1584,6 @@ export default function XPS({
   const [boClAInt, setBoClAInt] = useState(0.0)
   const [boClBInt, setBoClBInt] = useState(0.0)
   const [bandOffsetResult, setBandOffsetResult] = useState<{ deltaEv: number; sigmaEv: number } | null>(null)
-  const lastAutoSuggestedVbmKeyRef = useRef<string | null>(null)
-  const lastAutoSuggestedBaselineKeyRef = useRef<string | null>(null)
   const singleNormMethodRef = useRef<Exclude<ProcessParams['norm_method'], 'none'>>('max')
   const overlayNormMethodRef = useRef<Exclude<ProcessParams['norm_method'], 'none'>>('max')
 
@@ -1589,6 +1639,9 @@ export default function XPS({
   const currentFitResult = processingViewMode === 'overlay' ? (overlayState.params.average ? overlayFitResult : null) : fitResult
   const currentRsfRows = processingViewMode === 'overlay' ? (overlayState.params.average ? overlayRsfRows : []) : rsfRows
   const currentDisplayDataset = processingViewMode === 'overlay' ? (overlayState.params.average ? fitTargetDataset : null) : activeDataset
+  const vbmDataset = processingViewMode === 'overlay'
+    ? overlayPrimaryDataset
+    : activeDataset
   const currentReportFileName = processingViewMode === 'overlay'
     ? (overlayFiles.length > 0
       ? `${overlayState.params.average ? 'overlay_average' : 'overlay'}__${overlayFiles.map(file => file.name).join('__')}`
@@ -1600,77 +1653,48 @@ export default function XPS({
   const beMax = processingViewMode === 'overlay'
     ? (overlayPrimaryDataset ? Math.max(...overlayPrimaryDataset.x) : 1000)
     : (activeDataset ? Math.max(...activeDataset.x) : 1000)
-  const vbmGlobalExtrema = activeDataset
-    ? findSpectrumExtrema(activeDataset.x, activeDataset.y_processed)
+  const vbmGlobalExtrema = vbmDataset
+    ? findSpectrumExtrema(vbmDataset.x, vbmDataset.y_processed)
     : null
-  const vbmEdgeExtrema = activeDataset
-    ? findSpectrumExtrema(activeDataset.x, activeDataset.y_processed, { start: vbmEdgeLo, end: vbmEdgeHi })
+  const vbmEdgeExtrema = vbmDataset
+    ? findSpectrumExtrema(vbmDataset.x, vbmDataset.y_processed, { start: vbmEdgeLo, end: vbmEdgeHi })
     : null
 
-  // Preview tangent: two anchor points = mean of 20%-neighbourhood around each slider end.
-  // Computed every render so the lines update live as the user drags the sliders.
   const vbmPreviewTangent = useMemo(() => {
-    if (!activeDataset || xpsMode !== 'valence_band') return null
-    const { x, y_processed } = activeDataset
-    const lo = Math.min(vbmEdgeLo, vbmEdgeHi)
-    const hi = Math.max(vbmEdgeLo, vbmEdgeHi)
-    const hw = Math.max(hi - lo, 0.1) * 0.20
-    let loSX = 0, loSY = 0, loN = 0, hiSX = 0, hiSY = 0, hiN = 0
-    for (let i = 0; i < x.length; i++) {
-      const xi = x[i]; const yi = y_processed[i]
-      if (xi >= lo - hw && xi <= lo + hw) { loSX += xi; loSY += yi; loN++ }
-      if (xi >= hi - hw && xi <= hi + hw) { hiSX += xi; hiSY += yi; hiN++ }
-    }
-    if (loN === 0 || hiN === 0) return null
-    const x1 = loSX / loN, y1 = loSY / loN
-    const x2 = hiSX / hiN, y2 = hiSY / hiN
-    if (Math.abs(x2 - x1) < 1e-10) return null
-    const slope = (y2 - y1) / (x2 - x1)
-    const intercept = y1 - slope * x1
-    return { slope, intercept, a1x: x1, a1y: y1, a2x: x2, a2y: y2 }
-  }, [activeDataset, vbmEdgeLo, vbmEdgeHi, xpsMode])
+    if (!vbmDataset || xpsMode !== 'valence_band') return null
+    return fitVbmLine(vbmDataset.x, vbmDataset.y_processed, vbmEdgeLo, vbmEdgeHi, 'tangent')
+  }, [vbmDataset, vbmEdgeLo, vbmEdgeHi, xpsMode])
 
-  // Preview baseline: mean of 20%-neighbourhood around each baseline slider end.
-  const vbmPreviewBaseline = useMemo(() => {
-    if (!activeDataset || xpsMode !== 'valence_band') return null
-    const { x, y_processed } = activeDataset
-    const lo = Math.min(vbmBaselineLo, vbmBaselineHi)
-    const hi = Math.max(vbmBaselineLo, vbmBaselineHi)
-    const hw = Math.max(hi - lo, 0.1) * 0.20
-    let sumY = 0, n = 0
-    for (let i = 0; i < x.length; i++) {
-      const xi = x[i]
-      if ((xi >= lo - hw && xi <= lo + hw) || (xi >= hi - hw && xi <= hi + hw)) { sumY += y_processed[i]; n++ }
-    }
-    return n > 0 ? sumY / n : null
-  }, [activeDataset, vbmBaselineLo, vbmBaselineHi, xpsMode])
+  const vbmPreviewBaselineLine = useMemo(() => {
+    if (!vbmDataset || xpsMode !== 'valence_band') return null
+    return fitVbmLine(vbmDataset.x, vbmDataset.y_processed, vbmBaselineLo, vbmBaselineHi, 'baseline')
+  }, [vbmDataset, vbmBaselineLo, vbmBaselineHi, xpsMode])
 
-  // Preview VBM intersection of tangent line and baseline.
   const vbmPreviewVbm = useMemo(() => {
-    if (!vbmPreviewTangent || vbmPreviewBaseline === null) return null
-    const { slope, intercept } = vbmPreviewTangent
-    if (Math.abs(slope) < 1e-10) return null
-    const v = (vbmPreviewBaseline - intercept) / slope
-    return Number.isFinite(v) ? v : null
-  }, [vbmPreviewTangent, vbmPreviewBaseline])
-  const suggestedVbmEdgeRange = activeDataset
-    ? suggestVbmEdgeRange(activeDataset.x, activeDataset.y_processed)
-    : null
-  const suggestedVbmBaselineRange = activeDataset
-    ? suggestVbmBaselineRange(activeDataset.x, activeDataset.y_processed)
-    : null
-  const currentVbmSuggestionKey = activeDataset
-    ? [
-        currentReportFileName,
-        activeDataset.x.length,
-        activeDataset.x[0] ?? '',
-        activeDataset.x[activeDataset.x.length - 1] ?? '',
-        vbmGlobalExtrema?.maxPoint.x ?? '',
-        vbmGlobalExtrema?.maxPoint.y ?? '',
-        vbmGlobalExtrema?.minPoint.x ?? '',
-        vbmGlobalExtrema?.minPoint.y ?? '',
-      ].join('::')
-    : null
+    return intersectVbmLines(vbmPreviewTangent, vbmPreviewBaselineLine)
+  }, [vbmPreviewTangent, vbmPreviewBaselineLine])
+  const vbmPreviewWindow = useMemo(() => {
+    if (!vbmDataset || xpsMode !== 'valence_band') return null
+    return buildVbmPreviewWindow(
+      vbmDataset.x,
+      vbmDataset.y_processed,
+      vbmPreviewTangent,
+      vbmPreviewBaselineLine,
+      vbmPreviewVbm,
+      { start: vbmEdgeLo, end: vbmEdgeHi },
+      { start: vbmBaselineLo, end: vbmBaselineHi },
+    )
+  }, [
+    vbmDataset,
+    vbmPreviewTangent,
+    vbmPreviewBaselineLine,
+    vbmPreviewVbm,
+    vbmEdgeLo,
+    vbmEdgeHi,
+    vbmBaselineLo,
+    vbmBaselineHi,
+    xpsMode,
+  ])
   const estimatedInterpPoints = estimateInterpolationPoints(processingViewMode === 'overlay' && overlayFiles.length > 0 ? overlayFiles : rawFiles)
   const effectiveNPoints = currentAutoInterpPoints ? estimatedInterpPoints : currentParams.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
@@ -1711,20 +1735,9 @@ export default function XPS({
   }, [rawFiles.length])
 
   useEffect(() => {
-    if (processingViewMode !== 'single' || xpsMode !== 'valence_band' || !activeDataset || !suggestedVbmEdgeRange || !currentVbmSuggestionKey) return
-    if (lastAutoSuggestedVbmKeyRef.current === currentVbmSuggestionKey) return
-    lastAutoSuggestedVbmKeyRef.current = currentVbmSuggestionKey
-    setVbmEdgeLo(suggestedVbmEdgeRange.start)
-    setVbmEdgeHi(suggestedVbmEdgeRange.end)
-  }, [activeDataset, currentVbmSuggestionKey, processingViewMode, suggestedVbmEdgeRange, xpsMode])
-
-  useEffect(() => {
-    if (processingViewMode !== 'single' || xpsMode !== 'valence_band' || !activeDataset || !suggestedVbmBaselineRange || !currentVbmSuggestionKey) return
-    if (lastAutoSuggestedBaselineKeyRef.current === currentVbmSuggestionKey) return
-    lastAutoSuggestedBaselineKeyRef.current = currentVbmSuggestionKey
-    setVbmBaselineLo(suggestedVbmBaselineRange.start)
-    setVbmBaselineHi(suggestedVbmBaselineRange.end)
-  }, [activeDataset, currentVbmSuggestionKey, processingViewMode, suggestedVbmBaselineRange, xpsMode])
+    setVbmResult(null)
+    setVbmError(null)
+  }, [vbmDataset, processingViewMode, xpsMode, vbmEdgeLo, vbmEdgeHi, vbmBaselineLo, vbmBaselineHi])
 
   useEffect(() => {
     overlayBundleRef.current = overlayBundle
@@ -2338,29 +2351,11 @@ export default function XPS({
     }
   }
 
-  const applySuggestedVbmEdgeRange = useCallback(() => {
-    if (!suggestedVbmEdgeRange) return
-    setVbmEdgeLo(suggestedVbmEdgeRange.start)
-    setVbmEdgeHi(suggestedVbmEdgeRange.end)
-    if (currentVbmSuggestionKey) {
-      lastAutoSuggestedVbmKeyRef.current = currentVbmSuggestionKey
-    }
-  }, [currentVbmSuggestionKey, suggestedVbmEdgeRange])
-
-  const applySuggestedVbmBaselineRange = useCallback(() => {
-    if (!suggestedVbmBaselineRange) return
-    setVbmBaselineLo(suggestedVbmBaselineRange.start)
-    setVbmBaselineHi(suggestedVbmBaselineRange.end)
-    if (currentVbmSuggestionKey) {
-      lastAutoSuggestedBaselineKeyRef.current = currentVbmSuggestionKey
-    }
-  }, [currentVbmSuggestionKey, suggestedVbmBaselineRange])
-
   const computeVbmFn = async () => {
-    if (!activeDataset) return
+    if (!vbmDataset) return
     setVbmLoading(true); setVbmError(null)
     try {
-      const res = await computeVbm(activeDataset.x, activeDataset.y_processed, vbmEdgeLo, vbmEdgeHi, vbmBaselineLo, vbmBaselineHi)
+      const res = await computeVbm(vbmDataset.x, vbmDataset.y_processed, vbmEdgeLo, vbmEdgeHi, vbmBaselineLo, vbmBaselineHi)
       setVbmResult(res)
       if (!res.success) setVbmError(res.message || '計算失敗')
     } catch (e: unknown) { setVbmError((e as Error).message) }
@@ -3270,43 +3265,16 @@ export default function XPS({
                 </Section>
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={8} title="VBM 線性外推" hint="外推至基準線水平" defaultOpen={false}>
-                    <p className="text-[10px] text-[var(--text-soft)]">在 VB 邊緣區做線性擬合，外推至基準線水平即為 VBM。</p>
-                    {activeDataset ? (
+                  <Section step={8} title="VBM 線性外推" hint="切線 x 基準線交點" defaultOpen={false}>
+                    <p className="text-[10px] text-[var(--text-soft)]">先把你輸入的兩個 x 值映射到光譜點，再以各點附近 20% 搜尋窗挑選切線與基準線用點；切線取最大正斜率，基準線取最平斜率，兩條線交點就是 VBM。</p>
+                    {vbmDataset ? (
                       <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="font-semibold text-[var(--text-main)]">Leading edge 提示</p>
-                            {suggestedVbmEdgeRange && (
-                              <p className="mt-1 text-[var(--accent-secondary)]">
-                                建議切線區間：{suggestedVbmEdgeRange.start.toFixed(3)} – {suggestedVbmEdgeRange.end.toFixed(3)} eV
-                              </p>
-                            )}
-                            {suggestedVbmBaselineRange && (
-                              <p className="mt-1 text-[var(--text-soft)]">
-                                建議基準線區間：{suggestedVbmBaselineRange.start.toFixed(3)} – {suggestedVbmBaselineRange.end.toFixed(3)} eV
-                              </p>
-                            )}
+                        {processingViewMode === 'overlay' && (
+                          <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-[11px] text-[var(--text-soft)]">
+                            疊圖模式下，VBM 線性外推目前會使用{overlayState.params.average ? '平均後光譜' : '第一筆疊圖資料'}做預覽與畫線。
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={applySuggestedVbmEdgeRange}
-                              disabled={!suggestedVbmEdgeRange}
-                              className="rounded-lg border border-[var(--accent-strong)] px-3 py-1.5 text-[11px] font-medium text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 pressable"
-                            >
-                              自動建議切線區間
-                            </button>
-                            <button
-                              type="button"
-                              onClick={applySuggestedVbmBaselineRange}
-                              disabled={!suggestedVbmBaselineRange}
-                              className="rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-[11px] font-medium text-[var(--text-main)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] disabled:opacity-50 pressable"
-                            >
-                              自動建議基準線區間
-                            </button>
-                          </div>
-                        </div>
+                        )}
+                        <p className="font-semibold text-[var(--text-main)]">Leading edge 提示</p>
                         <div className="grid gap-2 md:grid-cols-2">
                           <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2">
                             <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">全域光譜</p>
@@ -3330,7 +3298,7 @@ export default function XPS({
                       </div>
                     ) : (
                       <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs text-[var(--text-soft)]">
-                        請先載入單筆 Valence Band 光譜，系統才會提示 leading edge 的高低點。
+                        請先載入可用的 Valence Band 光譜，系統才會提示 leading edge 的高低點並畫出切線/基準線。
                       </div>
                     )}
                     <div className="grid grid-cols-2 gap-2">
@@ -3343,20 +3311,72 @@ export default function XPS({
                     </div>
                     {vbmPreviewVbm !== null && (
                       <p className="text-xs text-[var(--text-soft)]">
-                        預覽 VBM ≈ <span className={`font-semibold ${vbmPreviewVbm < 0 ? 'text-amber-400' : 'text-green-400'}`}>{vbmPreviewVbm.toFixed(3)} eV</span>
-                        {vbmPreviewVbm < 0 && <span className="text-amber-400"> ⚠ 負值</span>}
+                        預覽 VBM ≈ <span className={`font-semibold ${vbmPreviewVbm.x < 0 ? 'text-amber-400' : 'text-green-400'}`}>{vbmPreviewVbm.x.toFixed(3)} eV</span>
+                        {vbmPreviewVbm.x < 0 && <span className="text-amber-400"> ⚠ 負值</span>}
                       </p>
                     )}
-                    <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !activeDataset}
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {[
+                        { label: '切線擬合', tone: '#f97316', slopeLabel: '最大正斜率', line: vbmPreviewTangent },
+                        { label: '基準線擬合', tone: '#a855f7', slopeLabel: '最平斜率', line: vbmPreviewBaselineLine },
+                      ].map(item => (
+                        <div key={item.label} className="rounded-xl border border-[var(--card-border)] bg-black/10 p-3 text-[11px]">
+                          <p className="font-semibold" style={{ color: item.tone }}>{item.label}</p>
+                          {item.line ? (
+                            <div className="mt-1 space-y-1 text-[var(--text-soft)]">
+                              <p>{item.slopeLabel}：{item.line.slope.toFixed(5)}</p>
+                              <p>輸入點對應：({item.line.anchor_start_point.x.toFixed(3)}, {item.line.anchor_start_point.y.toFixed(3)}) → ({item.line.anchor_end_point.x.toFixed(3)}, {item.line.anchor_end_point.y.toFixed(3)})</p>
+                              <p>實際選點：({item.line.start_point.x.toFixed(3)}, {item.line.start_point.y.toFixed(3)}) → ({item.line.end_point.x.toFixed(3)}, {item.line.end_point.y.toFixed(3)})</p>
+                              <p>搜尋窗：起點 {item.line.start_window_point_count} 點 / 終點 {item.line.end_window_point_count} 點</p>
+                              <p>候選組合：{item.line.candidate_pair_count} 組</p>
+                            </div>
+                          ) : (
+                            <p className="mt-1 text-[var(--text-soft)]">區間內有效點數不足</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !vbmDataset}
                       className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
                     >
                       {vbmLoading ? '計算中…' : '計算 VBM（後端確認）'}
                     </button>
                     {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
                     {vbmResult?.success && (
-                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-1">
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-2">
                         <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
-                        <p className="text-[var(--text-soft)]">斜率 = {vbmResult.slope.toFixed(4)} · 基準線 = {vbmResult.baseline_level.toFixed(2)}</p>
+                        <p className="text-[var(--text-soft)]">
+                          交點算法：輸入點附近 20% 搜尋窗選點後，以切線最大正斜率 x 基準線最平斜率聯立
+                        </p>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="rounded-lg border border-[var(--card-border)] bg-black/10 p-2">
+                            <p className="font-medium text-[var(--text-main)]">切線</p>
+                            <p className="text-[var(--text-soft)]">最大正斜率：{vbmResult.slope.toFixed(5)}</p>
+                            <p className="text-[var(--text-soft)]">
+                              輸入點對應：{vbmResult.edge_line ? `(${vbmResult.edge_line.anchor_start_point.x.toFixed(3)}, ${vbmResult.edge_line.anchor_start_point.y.toFixed(3)}) -> (${vbmResult.edge_line.anchor_end_point.x.toFixed(3)}, ${vbmResult.edge_line.anchor_end_point.y.toFixed(3)})` : 'N/A'}
+                            </p>
+                            <p className="text-[var(--text-soft)]">
+                              實際選點：{vbmResult.edge_line ? `(${vbmResult.edge_line.start_point.x.toFixed(3)}, ${vbmResult.edge_line.start_point.y.toFixed(3)}) -> (${vbmResult.edge_line.end_point.x.toFixed(3)}, ${vbmResult.edge_line.end_point.y.toFixed(3)})` : 'N/A'}
+                            </p>
+                            <p className="text-[var(--text-soft)]">
+                              搜尋窗：{vbmResult.edge_line ? `${vbmResult.edge_line.start_window_point_count} / ${vbmResult.edge_line.end_window_point_count} 點` : 'N/A'}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-[var(--card-border)] bg-black/10 p-2">
+                            <p className="font-medium text-[var(--text-main)]">基準線</p>
+                            <p className="text-[var(--text-soft)]">最平斜率：{vbmResult.baseline_slope.toFixed(5)}</p>
+                            <p className="text-[var(--text-soft)]">平均強度：{vbmResult.baseline_level.toFixed(3)}</p>
+                            <p className="text-[var(--text-soft)]">
+                              輸入點對應：{vbmResult.baseline_line ? `(${vbmResult.baseline_line.anchor_start_point.x.toFixed(3)}, ${vbmResult.baseline_line.anchor_start_point.y.toFixed(3)}) -> (${vbmResult.baseline_line.anchor_end_point.x.toFixed(3)}, ${vbmResult.baseline_line.anchor_end_point.y.toFixed(3)})` : 'N/A'}
+                            </p>
+                            <p className="text-[var(--text-soft)]">
+                              實際選點：{vbmResult.baseline_line ? `(${vbmResult.baseline_line.start_point.x.toFixed(3)}, ${vbmResult.baseline_line.start_point.y.toFixed(3)}) -> (${vbmResult.baseline_line.end_point.x.toFixed(3)}, ${vbmResult.baseline_line.end_point.y.toFixed(3)})` : 'N/A'}
+                            </p>
+                            <p className="text-[var(--text-soft)]">
+                              搜尋窗：{vbmResult.baseline_line ? `${vbmResult.baseline_line.start_window_point_count} / ${vbmResult.baseline_line.end_window_point_count} 點` : 'N/A'}
+                            </p>
+                          </div>
+                        </div>
                         {vbmResult.vbm_ev !== null && vbmResult.vbm_ev < 0 && (
                           <p className="text-amber-400 font-medium">⚠ VBM 為負值（低於費米能階），可能是切線區間未落在 Fermi edge 的線性上升段，請手動調整。</p>
                         )}
@@ -3902,57 +3922,71 @@ export default function XPS({
               )
             })()}
 
-            {processingViewMode === 'single' && xpsMode === 'valence_band' && activeDataset && (
+            {xpsMode === 'valence_band' && vbmDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推</p>
+                <p className="mb-1 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推圖</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">空心 marker 是你輸入 x 值對應到的光譜點，實心 marker 是在附近 20% 搜尋窗中實際被拿來畫線的點。</p>
                 <Plot
                   data={(() => {
-                    // Extend line range to cover the whole spectrum, including the projected VBM point
-                    const xLo = Math.min(beMin, vbmPreviewVbm !== null ? vbmPreviewVbm - 0.5 : beMin) - 0.3
-                    const xHi = beMax + 0.3
-                    const lineXArr = Array.from({ length: 80 }, (_, i) => xLo + (xHi - xLo) * i / 79)
+                    const lineXArr = vbmPreviewWindow?.lineX ?? [beMin, beMax]
                     return [
-                      { x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
-                      // Anchor points: mean of 20%-neighbourhood around each slider end
+                      { x: vbmDataset.x, y: vbmDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
                       ...(vbmPreviewTangent ? [
-                        { x: [vbmPreviewTangent.a1x], y: [vbmPreviewTangent.a1y], type: 'scatter' as const, mode: 'markers' as const, name: '切線起錨點', marker: { color: '#f97316', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
-                        { x: [vbmPreviewTangent.a2x], y: [vbmPreviewTangent.a2y], type: 'scatter' as const, mode: 'markers' as const, name: '切線終錨點', marker: { color: '#fb923c', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
+                        { x: [vbmPreviewTangent.anchor_start_point.x], y: [vbmPreviewTangent.anchor_start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線輸入起點', marker: { color: '#f97316', size: 11, symbol: 'circle-open' as const, line: { color: '#f97316', width: 2 } } },
+                        { x: [vbmPreviewTangent.anchor_end_point.x], y: [vbmPreviewTangent.anchor_end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線輸入終點', marker: { color: '#fb923c', size: 11, symbol: 'circle-open' as const, line: { color: '#fb923c', width: 2 } } },
+                        { x: [vbmPreviewTangent.start_point.x], y: [vbmPreviewTangent.start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線實際起點', marker: { color: '#f97316', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
+                        { x: [vbmPreviewTangent.end_point.x], y: [vbmPreviewTangent.end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線實際終點', marker: { color: '#fb923c', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
                       ] : []),
-                      // Tangent line — always visible, extends across full chart
                       ...(vbmPreviewTangent ? [
                         { x: lineXArr, y: lineXArr.map(xi => vbmPreviewTangent.slope * xi + vbmPreviewTangent.intercept), type: 'scatter' as const, mode: 'lines' as const, name: '切線 (外推)', line: { color: '#f97316', width: 2, dash: 'dash' as const } },
                       ] : []),
-                      // Baseline line — always visible
-                      ...(vbmPreviewBaseline !== null ? [
-                        { x: [xLo, xHi], y: [vbmPreviewBaseline, vbmPreviewBaseline], type: 'scatter' as const, mode: 'lines' as const, name: '基準線', line: { color: '#a855f7', width: 1.8, dash: 'dot' as const } },
+                      ...(vbmPreviewBaselineLine ? [
+                        { x: [vbmPreviewBaselineLine.anchor_start_point.x], y: [vbmPreviewBaselineLine.anchor_start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準輸入起點', marker: { color: '#a855f7', size: 11, symbol: 'square-open' as const, line: { color: '#a855f7', width: 2 } } },
+                        { x: [vbmPreviewBaselineLine.anchor_end_point.x], y: [vbmPreviewBaselineLine.anchor_end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準輸入終點', marker: { color: '#c084fc', size: 11, symbol: 'square-open' as const, line: { color: '#c084fc', width: 2 } } },
+                        { x: [vbmPreviewBaselineLine.start_point.x], y: [vbmPreviewBaselineLine.start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準實際起點', marker: { color: '#a855f7', size: 9, symbol: 'square' as const, line: { color: '#f5f3ff', width: 1.5 } } },
+                        { x: [vbmPreviewBaselineLine.end_point.x], y: [vbmPreviewBaselineLine.end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準實際終點', marker: { color: '#c084fc', size: 9, symbol: 'square' as const, line: { color: '#f5f3ff', width: 1.5 } } },
+                        { x: lineXArr, y: lineXArr.map(xi => vbmPreviewBaselineLine.slope * xi + vbmPreviewBaselineLine.intercept), type: 'scatter' as const, mode: 'lines' as const, name: '基準線', line: { color: '#a855f7', width: 1.8, dash: 'dot' as const } },
                       ] : []),
-                      // VBM intersection marker — always visible when both lines are defined
-                      ...(vbmPreviewVbm !== null && vbmPreviewBaseline !== null ? [
-                        { x: [vbmPreviewVbm], y: [vbmPreviewBaseline], type: 'scatter' as const, mode: 'markers' as const, name: `VBM ≈ ${vbmPreviewVbm.toFixed(3)} eV`, marker: { color: '#22c55e', size: 11, symbol: 'diamond' as const } },
+                      ...(vbmPreviewVbm !== null ? [
+                        { x: [vbmPreviewVbm.x], y: [vbmPreviewVbm.y], type: 'scatter' as const, mode: 'markers' as const, name: `VBM ≈ ${vbmPreviewVbm.x.toFixed(3)} eV`, marker: { color: '#22c55e', size: 11, symbol: 'diamond' as const } },
                       ] : []),
                     ] as Plotly.Data[]
                   })()}
-                  layout={{
-                    ...(chartLayout() as Plotly.Layout),
-                    margin: { l: 60, r: 20, t: 20, b: 50 },
-                    shapes: [
-                      ...buildRegionShapes(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '#f97316'),
-                      ...buildRegionShapes(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '#a855f7'),
-                    ] as unknown as Plotly.Shape[],
-                    annotations: [
-                      ...buildRegionAnnotations(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '切線區間', '#f97316'),
-                      ...buildRegionAnnotations(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '基準線區間', '#a855f7'),
-                      // Show VBM annotation from preview immediately (no API call needed)
-                      ...(vbmPreviewVbm !== null && vbmPreviewBaseline !== null ? [{
-                        x: vbmPreviewVbm, y: vbmPreviewBaseline,
-                        text: `VBM ≈ ${vbmPreviewVbm.toFixed(3)} eV`,
-                        showarrow: true, arrowhead: 2, ax: 50, ay: -35,
-                        font: { color: '#22c55e', size: 11 }, arrowcolor: '#22c55e',
-                      }] : []),
-                    ],
-                  }}
+                  layout={(() => {
+                    const baseLayout = chartLayout() as Plotly.Layout
+                    return {
+                      ...baseLayout,
+                      margin: { l: 60, r: 20, t: 20, b: 50 },
+                      ...(vbmPreviewWindow ? {
+                        xaxis: {
+                          ...(baseLayout.xaxis ?? {}),
+                          autorange: false,
+                          range: vbmPreviewWindow.xAxisRange,
+                        },
+                        yaxis: {
+                          ...(baseLayout.yaxis ?? {}),
+                          autorange: false,
+                          range: vbmPreviewWindow.yAxisRange,
+                        },
+                      } : {}),
+                      shapes: [
+                        ...buildRegionShapes(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '#f97316'),
+                        ...buildRegionShapes(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '#a855f7'),
+                      ] as unknown as Plotly.Shape[],
+                      annotations: [
+                        ...buildRegionAnnotations(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '切線區間', '#f97316'),
+                        ...buildRegionAnnotations(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '基準線區間', '#a855f7'),
+                        ...(vbmPreviewVbm !== null ? [{
+                          x: vbmPreviewVbm.x, y: vbmPreviewVbm.y,
+                          text: `VBM ≈ ${vbmPreviewVbm.x.toFixed(3)} eV`,
+                          showarrow: true, arrowhead: 2, ax: 50, ay: -35,
+                          font: { color: '#22c55e', size: 11 }, arrowcolor: '#22c55e',
+                        }] : []),
+                      ],
+                    }
+                  })()}
                   config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 280 }}
+                  style={{ width: '100%', height: 340 }}
                 />
                 <div className="mt-3 grid gap-3 xl:grid-cols-2">
                   {renderRangeControlCard(
@@ -4200,9 +4234,17 @@ export default function XPS({
                         <ExportBtnSecondary label="VBM 結果 TXT" onClick={() => {
                           const lines = [
                             `VBM = ${vbmResult.vbm_ev?.toFixed(4) ?? 'N/A'} eV`,
-                            `Baseline level = ${vbmResult.baseline_level?.toFixed(4) ?? 'N/A'}`,
+                            `Tangent slope = ${vbmResult.slope.toFixed(6)}`,
+                            `Baseline slope = ${vbmResult.baseline_slope.toFixed(6)}`,
+                            `Baseline mean intensity = ${vbmResult.baseline_level?.toFixed(4) ?? 'N/A'}`,
                             `Edge region: ${vbmEdgeLo} – ${vbmEdgeHi} eV`,
                             `Baseline region: ${vbmBaselineLo} – ${vbmBaselineHi} eV`,
+                            `Tangent anchor points: ${vbmResult.edge_line ? `${vbmResult.edge_line.anchor_start_point.x.toFixed(4)}, ${vbmResult.edge_line.anchor_start_point.y.toFixed(4)} -> ${vbmResult.edge_line.anchor_end_point.x.toFixed(4)}, ${vbmResult.edge_line.anchor_end_point.y.toFixed(4)}` : 'N/A'}`,
+                            `Tangent start point: ${vbmResult.edge_line ? `${vbmResult.edge_line.start_point.x.toFixed(4)}, ${vbmResult.edge_line.start_point.y.toFixed(4)}` : 'N/A'}`,
+                            `Tangent end point: ${vbmResult.edge_line ? `${vbmResult.edge_line.end_point.x.toFixed(4)}, ${vbmResult.edge_line.end_point.y.toFixed(4)}` : 'N/A'}`,
+                            `Baseline anchor points: ${vbmResult.baseline_line ? `${vbmResult.baseline_line.anchor_start_point.x.toFixed(4)}, ${vbmResult.baseline_line.anchor_start_point.y.toFixed(4)} -> ${vbmResult.baseline_line.anchor_end_point.x.toFixed(4)}, ${vbmResult.baseline_line.anchor_end_point.y.toFixed(4)}` : 'N/A'}`,
+                            `Baseline start point: ${vbmResult.baseline_line ? `${vbmResult.baseline_line.start_point.x.toFixed(4)}, ${vbmResult.baseline_line.start_point.y.toFixed(4)}` : 'N/A'}`,
+                            `Baseline end point: ${vbmResult.baseline_line ? `${vbmResult.baseline_line.end_point.x.toFixed(4)}, ${vbmResult.baseline_line.end_point.y.toFixed(4)}` : 'N/A'}`,
                           ]
                           downloadFile(lines.join('\n'), 'xps_vbm.txt', 'text/plain')
                         }} />
@@ -4228,10 +4270,14 @@ export default function XPS({
                           fit_result: currentFitResult ? { peaks: currentFitResult.peaks } : null,
                           vbm: vbmResult?.success ? {
                             vbm_ev: vbmResult.vbm_ev,
+                            tangent_slope: vbmResult.slope,
+                            baseline_slope: vbmResult.baseline_slope,
                             edge_lo: vbmEdgeLo,
                             edge_hi: vbmEdgeHi,
                             baseline_lo: vbmBaselineLo,
                             baseline_hi: vbmBaselineHi,
+                            edge_line: vbmResult.edge_line,
+                            baseline_line: vbmResult.baseline_line,
                           } : null,
                           rsf: currentRsfRows.some(r => r.rsf != null) ? currentRsfRows : null,
                         }

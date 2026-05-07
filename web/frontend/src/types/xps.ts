@@ -135,13 +135,33 @@ export interface FitResult {
   peaks: FitPeakRow[]
 }
 
+export interface VbmLinePoint {
+  x: number
+  y: number
+}
+
+export interface VbmLineFit {
+  slope: number
+  intercept: number
+  point_count: number
+  start_window_point_count: number
+  end_window_point_count: number
+  candidate_pair_count: number
+  anchor_start_point: VbmLinePoint
+  anchor_end_point: VbmLinePoint
+  start_point: VbmLinePoint
+  end_point: VbmLinePoint
+}
+
 export interface VbmResult {
   vbm_ev: number | null
   slope: number
   intercept: number
   baseline_level: number
-  x_fit: number[]
-  y_fit: number[]
+  baseline_slope: number
+  baseline_intercept: number
+  edge_line: VbmLineFit | null
+  baseline_line: VbmLineFit | null
   success: boolean
   message: string
 }
