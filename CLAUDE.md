@@ -548,3 +548,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-08 CST：繪製圖檔工作區新增獨立 XPS `VBM 線性外推` 子模式。`web/frontend/src/pages/PlotFileTool.tsx` 在 XPS 繪圖內新增「XPS 峰擬合圖 / VBM 線性外推」切換，VBM 模式獨立匯入多個 CSV/TXT/TSV，前端自動判斷 Binding Energy 與 intensity 欄位、最大值歸一化、不做背景扣除，依各樣品 baseline / tangent 區間計算 VBM；可預覽與匯出 stacked 線性外推圖、每組單張外推圖、VBM summary 圖，並輸出 CSV/TXT summary。右側參數面板支援字體、顏色、軸範圍、線寬、區間透明度與匯出尺寸。驗證 `npm run build` 通過。
 
 - 2026-05-08 CST：繪製圖檔 XPS `VBM 線性外推` 補上 VBM 標籤位置控制。`VbmFigureStyle` 新增 `labelOffsetX` / `labelOffsetY`，右側 VBM 圖面設定新增「標籤 X 偏移」「標籤 Y 偏移」，可用像素偏移調整 `VBM = ... eV` annotation 位置；stacked 圖與每組單張外推圖共用此設定。
+
+- 2026-05-08 CST：繪製圖檔 XPS `VBM 線性外推` 算法同步 XPS 分析區。`PlotFileTool.tsx` 新增與 `XPS.tsx` 相同的 VBM 選點 helper：使用者輸入的 baseline/tangent 起終值先映射到最近資料點，各自建立 20% 搜尋窗；tangent 取最大正斜率候選點對，baseline 取最平斜率候選點對，兩條線交點作為 VBM。圖上的 baseline 由水平平均線改為實際基準線斜率，VBM marker/annotation 改放在兩線交點；CSV/TXT summary 補上 tangent/baseline slope、intercept 與實際選點。

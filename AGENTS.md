@@ -137,3 +137,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-08：改善右側選單入口可見性；「分析模組」與「工具」改為同時顯示，並標示目前 workspace，讓「繪製圖檔」固定出現在右側選單的工具區，避免進入「繪製圖檔」或單一處理工具後看不到工具入口；選單面板新增最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。
 - 2026-05-08：繪製圖檔工作區新增獨立 XPS `VBM 線性外推` 子模式，與既有 XPS 峰擬合圖分開；可匯入多個 VBM CSV/TXT/TSV，前端自動判斷 Binding Energy / intensity 欄位、最大值歸一化、依各樣品 baseline / tangent 區間計算 VBM，並輸出 stacked 外推圖、單張外推圖、VBM summary 圖與 CSV/TXT summary；支援圖面顏色、字體、軸範圍、線寬、區間透明度、匯出尺寸與 PNG/SVG 匯出。驗證 `npm run build` 通過。
 - 2026-05-08：繪製圖檔 XPS `VBM 線性外推` 新增 VBM 標籤位置控制；右側 VBM 圖面設定可調整 `VBM = ... eV` 標註的 X/Y 像素偏移，並同步套用到 stacked 圖與每組單張外推圖。
+- 2026-05-08：繪製圖檔 XPS `VBM 線性外推` 算法改為與 XPS 分析區一致：輸入範圍先映射到最近光譜點，起終點附近各取 20% 搜尋窗；切線選最大正斜率候選點對，基準線選最平斜率候選點對，兩線交點作為 VBM。圖上的 baseline 改為斜率線而非水平平均線，CSV/TXT summary 同步輸出切線與基準線 slope/intercept/實際選點。

@@ -110,10 +110,28 @@ interface VbmFitResult {
   file: VbmSpectrumFile
   x: number[]
   yNorm: number[]
-  baselineY: number
+  vbmY: number
+  tangentLine: VbmLineFit
+  baselineLine: VbmLineFit
+  vbm: number
+}
+
+interface VbmLinePoint {
+  x: number
+  y: number
+}
+
+interface VbmLineFit {
   slope: number
   intercept: number
-  vbm: number
+  pointCount: number
+  startWindowPointCount: number
+  endWindowPointCount: number
+  candidatePairCount: number
+  anchorStartPoint: VbmLinePoint
+  anchorEndPoint: VbmLinePoint
+  startPoint: VbmLinePoint
+  endPoint: VbmLinePoint
 }
 
 type PlotlyExportApi = {
@@ -292,26 +310,6 @@ function interpolateY(x: number[], y: number[], targetX: number) {
   return points[points.length - 1].y
 }
 
-function linearRegression(x: number[], y: number[]) {
-  const n = Math.min(x.length, y.length)
-  if (n < 2) throw new Error('線性擬合至少需要兩個資料點')
-  let sumX = 0
-  let sumY = 0
-  let sumXY = 0
-  let sumXX = 0
-  for (let i = 0; i < n; i += 1) {
-    sumX += x[i]
-    sumY += y[i]
-    sumXY += x[i] * y[i]
-    sumXX += x[i] * x[i]
-  }
-  const denominator = n * sumXX - sumX * sumX
-  if (Math.abs(denominator) < 1e-15) throw new Error('切線區間 x 值變化太小，無法擬合')
-  const slope = (n * sumXY - sumX * sumY) / denominator
-  const intercept = (sumY - slope * sumX) / n
-  return { slope, intercept }
-}
-
 function splitDelimitedLine(line: string, delimiter: string) {
   if (delimiter === 'whitespace') return line.trim().split(/\s+/)
   const out: string[] = []
@@ -468,6 +466,89 @@ function componentAreas(file: FitSpectrumFile, keys: string[]) {
   return Object.fromEntries(keys.map(key => [key, total > 0 ? areas[key] / total * 100 : 0]))
 }
 
+function fitVbmPlotLine(x: number[], y: number[], start: number, end: number, mode: 'tangent' | 'baseline'): VbmLineFit | null {
+  if (x.length !== y.length) return null
+  const lo = Math.min(start, end)
+  const hi = Math.max(start, end)
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 2) return null
+
+  const nearestPoint = (targetX: number) => {
+    let bestIndex = 0
+    let bestDistance = Infinity
+    for (let i = 0; i < points.length; i += 1) {
+      const distance = Math.abs(points[i].x - targetX)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = i
+      }
+    }
+    return { index: bestIndex, point: points[bestIndex] }
+  }
+
+  const anchorStart = nearestPoint(lo)
+  const anchorEnd = nearestPoint(hi)
+  const spanPoints = Math.max(Math.abs(anchorEnd.index - anchorStart.index) + 1, 5)
+  const windowPointCount = Math.max(3, Math.min(points.length, Math.round(spanPoints * 0.2)))
+  const buildWindow = (anchorIndex: number) => {
+    const startIndex = Math.max(0, Math.min(points.length - windowPointCount, anchorIndex - Math.floor(windowPointCount / 2)))
+    return points.slice(startIndex, startIndex + windowPointCount)
+  }
+
+  const startWindow = buildWindow(anchorStart.index)
+  const endWindow = buildWindow(anchorEnd.index)
+  let bestPair: { startPoint: VbmLinePoint; endPoint: VbmLinePoint; slope: number; span: number; meanY: number } | null = null
+  let candidatePairCount = 0
+  for (const startPoint of startWindow) {
+    for (const endPoint of endWindow) {
+      const dx = endPoint.x - startPoint.x
+      if (dx <= 1e-10) continue
+      const slope = (endPoint.y - startPoint.y) / dx
+      const span = Math.abs(dx)
+      const meanY = (startPoint.y + endPoint.y) / 2
+      candidatePairCount += 1
+      if (!bestPair) {
+        bestPair = { startPoint, endPoint, slope, span, meanY }
+        continue
+      }
+
+      if (mode === 'tangent') {
+        if (slope > bestPair.slope + 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span)) {
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+        }
+      } else {
+        const absSlope = Math.abs(slope)
+        const bestAbsSlope = Math.abs(bestPair.slope)
+        if (
+          absSlope < bestAbsSlope - 1e-10
+          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && meanY < bestPair.meanY - 1e-10)
+          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && Math.abs(meanY - bestPair.meanY) <= 1e-10 && span > bestPair.span)
+        ) {
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+        }
+      }
+    }
+  }
+
+  if (!bestPair) return null
+  const intercept = bestPair.startPoint.y - bestPair.slope * bestPair.startPoint.x
+  return {
+    slope: bestPair.slope,
+    intercept,
+    pointCount: startWindow.length + endWindow.length,
+    startWindowPointCount: startWindow.length,
+    endWindowPointCount: endWindow.length,
+    candidatePairCount,
+    anchorStartPoint: anchorStart.point,
+    anchorEndPoint: anchorEnd.point,
+    startPoint: bestPair.startPoint,
+    endPoint: bestPair.endPoint,
+  }
+}
+
 function calculateVbm(file: VbmSpectrumFile): VbmFitResult {
   const validPoints = file.x
     .map((xValue, index) => ({ x: xValue, y: file.y[index] }))
@@ -477,34 +558,36 @@ function calculateVbm(file: VbmSpectrumFile): VbmFitResult {
   if (!Number.isFinite(maxY) || Math.abs(maxY) < 1e-15) throw new Error(`${file.sampleLabel}: intensity 最大值無法使用`)
   const x = validPoints.map(point => point.x)
   const yNorm = validPoints.map(point => point.y / maxY)
-  const [baselineMin, baselineMax] = [Math.min(file.baselineStart, file.baselineEnd), Math.max(file.baselineStart, file.baselineEnd)]
-  const [tangentMin, tangentMax] = [Math.min(file.tangentStart, file.tangentEnd), Math.max(file.tangentStart, file.tangentEnd)]
-  const baselinePoints = x.map((xValue, index) => ({ x: xValue, y: yNorm[index] })).filter(point => point.x >= baselineMin && point.x <= baselineMax)
-  const tangentPoints = x.map((xValue, index) => ({ x: xValue, y: yNorm[index] })).filter(point => point.x >= tangentMin && point.x <= tangentMax)
-  if (baselinePoints.length < 2) throw new Error(`${file.sampleLabel}: baseline 區間內資料點不足`)
-  if (tangentPoints.length < 2) throw new Error(`${file.sampleLabel}: tangent 區間內資料點不足`)
-  const baselineY = baselinePoints.reduce((sum, point) => sum + point.y, 0) / baselinePoints.length
-  const { slope, intercept } = linearRegression(tangentPoints.map(point => point.x), tangentPoints.map(point => point.y))
-  if (Math.abs(slope) < 1e-15) throw new Error(`${file.sampleLabel}: 切線斜率太小，無法計算 VBM`)
+  const tangentLine = fitVbmPlotLine(x, yNorm, file.tangentStart, file.tangentEnd, 'tangent')
+  const baselineLine = fitVbmPlotLine(x, yNorm, file.baselineStart, file.baselineEnd, 'baseline')
+  if (!tangentLine) throw new Error(`${file.sampleLabel}: tangent 區間內資料點不足`)
+  if (!baselineLine) throw new Error(`${file.sampleLabel}: baseline 區間內資料點不足`)
+  const slopeDelta = tangentLine.slope - baselineLine.slope
+  if (Math.abs(slopeDelta) < 1e-10) throw new Error(`${file.sampleLabel}: 切線與基準線斜率過於接近，無法穩定計算 VBM`)
+  const vbm = (baselineLine.intercept - tangentLine.intercept) / slopeDelta
+  const vbmY = tangentLine.slope * vbm + tangentLine.intercept
+  if (!Number.isFinite(vbm) || !Number.isFinite(vbmY)) throw new Error(`${file.sampleLabel}: VBM 計算結果非有限值`)
   return {
     file,
     x,
     yNorm,
-    baselineY,
-    slope,
-    intercept,
-    vbm: (baselineY - intercept) / slope,
+    vbmY,
+    tangentLine,
+    baselineLine,
+    vbm,
   }
 }
 
-function vbmTangentLine(result: VbmFitResult, points = 500) {
+function vbmLinePoints(result: VbmFitResult, line: VbmLineFit, points = 500) {
   const xMin = Math.min(...result.x)
   const xMax = Math.max(...result.x)
   const xLine = Array.from({ length: points }, (_, index) => xMin + (xMax - xMin) * (index / Math.max(points - 1, 1)))
-  return { x: xLine, y: xLine.map(value => result.slope * value + result.intercept) }
+  return { x: xLine, y: xLine.map(value => line.slope * value + line.intercept) }
 }
 
 function buildVbmSingleFigure(result: VbmFitResult, style: VbmFigureStyle) {
+  const baselineLine = vbmLinePoints(result, result.baselineLine)
+  const tangentLine = vbmLinePoints(result, result.tangentLine)
   const data: Plotly.Data[] = [
     {
       x: result.x,
@@ -517,17 +600,17 @@ function buildVbmSingleFigure(result: VbmFitResult, style: VbmFigureStyle) {
       hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
     },
     {
-      x: result.x,
-      y: result.x.map(() => result.baselineY),
+      x: baselineLine.x,
+      y: baselineLine.y,
       type: 'scatter',
       mode: 'lines',
-      name: 'Baseline',
+      name: 'Baseline fit',
       line: { color: style.baselineColor, width: style.fitLineWidth, dash: 'dot' },
       hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
     },
     {
-      x: vbmTangentLine(result).x,
-      y: vbmTangentLine(result).y,
+      x: tangentLine.x,
+      y: tangentLine.y,
       type: 'scatter',
       mode: 'lines',
       name: 'Tangent fit',
@@ -536,7 +619,7 @@ function buildVbmSingleFigure(result: VbmFitResult, style: VbmFigureStyle) {
     },
     {
       x: [result.vbm],
-      y: [result.baselineY],
+      y: [result.vbmY],
       type: 'scatter',
       mode: 'markers',
       name: `VBM = ${result.vbm.toFixed(3)} eV`,
@@ -607,7 +690,7 @@ function buildVbmSingleFigure(result: VbmFitResult, style: VbmFigureStyle) {
     annotations: [
       { x: 0.03, y: 0.88, xref: 'paper', yref: 'paper', text: `<b>${style.titleLabel || 'VB'}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
       { x: 0.97, y: 0.88, xref: 'paper', yref: 'paper', text: `<b>${result.file.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color: '#111827' } },
-      { x: result.vbm, y: result.baselineY, xref: 'x', yref: 'y', text: `VBM = ${result.vbm.toFixed(3)} eV`, showarrow: true, ax: style.labelOffsetX, ay: style.labelOffsetY, arrowcolor: style.vbmColor, font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.vbm, y: result.vbmY, xref: 'x', yref: 'y', text: `VBM = ${result.vbm.toFixed(3)} eV`, showarrow: true, ax: style.labelOffsetX, ay: style.labelOffsetY, arrowcolor: style.vbmColor, font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
     ] as unknown as Plotly.Layout['annotations'],
   }
   return { data, layout }
@@ -640,7 +723,8 @@ function buildVbmStackedFigure(results: VbmFitResult[], style: VbmFigureStyle) {
     const yRef = `y${axisSuffix}`
     const yDomainStart = 1 - (resultIndex + 1) * panelHeight - resultIndex * gap
     const yDomainEnd = yDomainStart + panelHeight
-    const line = vbmTangentLine(result)
+    const baselineLine = vbmLinePoints(result, result.baselineLine)
+    const tangentLine = vbmLinePoints(result, result.tangentLine)
 
     ;(layout as Record<string, unknown>)[xAxisName] = {
       range: [style.xLeft, style.xRight],
@@ -692,19 +776,19 @@ function buildVbmStackedFigure(results: VbmFitResult[], style: VbmFigureStyle) {
         hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
       },
       {
-        x: result.x,
-        y: result.x.map(() => result.baselineY),
+        x: baselineLine.x,
+        y: baselineLine.y,
         xaxis: xRef as never,
         yaxis: yRef as never,
         type: 'scatter',
         mode: 'lines',
-        name: 'Baseline',
+        name: 'Baseline fit',
         line: { color: style.baselineColor, width: style.fitLineWidth, dash: 'dot' },
         hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
       },
       {
-        x: line.x,
-        y: line.y,
+        x: tangentLine.x,
+        y: tangentLine.y,
         xaxis: xRef as never,
         yaxis: yRef as never,
         type: 'scatter',
@@ -715,7 +799,7 @@ function buildVbmStackedFigure(results: VbmFitResult[], style: VbmFigureStyle) {
       },
       {
         x: [result.vbm],
-        y: [result.baselineY],
+        y: [result.vbmY],
         xaxis: xRef as never,
         yaxis: yRef as never,
         type: 'scatter',
@@ -729,7 +813,7 @@ function buildVbmStackedFigure(results: VbmFitResult[], style: VbmFigureStyle) {
     annotations.push(
       { x: 0.03, y: yDomainEnd - panelHeight * 0.16, xref: 'paper', yref: 'paper', text: `<b>${style.titleLabel || 'VB'}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
       { x: 0.97, y: yDomainEnd - panelHeight * 0.16, xref: 'paper', yref: 'paper', text: `<b>${result.file.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color: '#111827' } },
-      { x: result.vbm, y: result.baselineY, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `VBM = ${result.vbm.toFixed(3)} eV`, showarrow: true, ax: style.labelOffsetX, ay: style.labelOffsetY, arrowcolor: style.vbmColor, font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.vbm, y: result.vbmY, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `VBM = ${result.vbm.toFixed(3)} eV`, showarrow: true, ax: style.labelOffsetX, ay: style.labelOffsetY, arrowcolor: style.vbmColor, font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
     )
   })
 
@@ -1610,11 +1694,17 @@ export default function PlotFileTool({
       Baseline_range_eV: `${result.file.baselineStart}-${result.file.baselineEnd}`,
       Tangent_range_eV: `${result.file.tangentStart}-${result.file.tangentEnd}`,
       VBM_EF_minus_EVBM_eV: result.vbm.toFixed(6),
-      Baseline_y: result.baselineY.toFixed(6),
-      Slope: result.slope.toFixed(6),
-      Intercept: result.intercept.toFixed(6),
+      VBM_y: result.vbmY.toFixed(6),
+      Tangent_slope: result.tangentLine.slope.toFixed(6),
+      Tangent_intercept: result.tangentLine.intercept.toFixed(6),
+      Tangent_start_x: result.tangentLine.startPoint.x.toFixed(6),
+      Tangent_end_x: result.tangentLine.endPoint.x.toFixed(6),
+      Baseline_slope: result.baselineLine.slope.toFixed(6),
+      Baseline_intercept: result.baselineLine.intercept.toFixed(6),
+      Baseline_start_x: result.baselineLine.startPoint.x.toFixed(6),
+      Baseline_end_x: result.baselineLine.endPoint.x.toFixed(6),
     }))
-    const headers = ['Sample', 'File', 'X_column', 'Y_column', 'Baseline_range_eV', 'Tangent_range_eV', 'VBM_EF_minus_EVBM_eV', 'Baseline_y', 'Slope', 'Intercept']
+    const headers = ['Sample', 'File', 'X_column', 'Y_column', 'Baseline_range_eV', 'Tangent_range_eV', 'VBM_EF_minus_EVBM_eV', 'VBM_y', 'Tangent_slope', 'Tangent_intercept', 'Tangent_start_x', 'Tangent_end_x', 'Baseline_slope', 'Baseline_intercept', 'Baseline_start_x', 'Baseline_end_x']
     const csv = [
       headers.join(','),
       ...rows.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(',')),
@@ -1627,7 +1717,9 @@ export default function PlotFileTool({
       'XPS VBM linear extrapolation results',
       'No background subtraction; normalized to max = 1',
       '',
-      ...vbmResults.results.map(result => `${result.file.sampleLabel}: baseline=${result.file.baselineStart}-${result.file.baselineEnd} eV, tangent=${result.file.tangentStart}-${result.file.tangentEnd} eV, VBM=${result.vbm.toFixed(3)} eV`),
+      'Algorithm: same as XPS analysis VBM preview; tangent uses max positive slope candidate pair, baseline uses flattest candidate pair.',
+      '',
+      ...vbmResults.results.map(result => `${result.file.sampleLabel}: baseline=${result.file.baselineStart}-${result.file.baselineEnd} eV, tangent=${result.file.tangentStart}-${result.file.tangentEnd} eV, VBM=${result.vbm.toFixed(3)} eV, tangent_slope=${result.tangentLine.slope.toFixed(6)}, baseline_slope=${result.baselineLine.slope.toFixed(6)}`),
     ]
     downloadTextFile(lines.join('\n'), 'VBM_results_summary.txt')
   }
@@ -1957,7 +2049,7 @@ export default function PlotFileTool({
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-[var(--text-main)]">VBM stacked 線性外推圖</p>
-                    <p className="mt-1 text-xs text-[var(--text-soft)]">每個樣品各自套用 baseline / tangent 區間，光譜歸一化到最大值 1。</p>
+                    <p className="mt-1 text-xs text-[var(--text-soft)]">每個樣品各自套用 XPS 分析區同款 VBM 選點法；切線取最大正斜率，基準線取最平斜率。</p>
                   </div>
                   <div className="flex gap-2">
                     <button type="button" disabled={!vbmStackedFigure || exporting} onClick={() => { void exportPlot('vbm-stacked', 'png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">PNG</button>
