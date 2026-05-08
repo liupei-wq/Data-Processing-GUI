@@ -402,6 +402,8 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 ### 2026-05-08
 
+- 2026-05-08 CST：XPS/XAS 峰擬合三項修正與改版：① 修正 R²/RMSE/χ²ᵣ 計算來源：後端 `_metric_values` 補入 `chi_red = SS_res/(n-n_params)`，`FitResponse`/`XasFitResponse` 新增 `r_squared/rmse/chi_red` 欄位（計算範圍限 fit_range，不含 fit_range 外的全段偏差），前端 `FitResult`/`XasFitResult` 型別同步更新，XPS/XAS 兩處前端自算 R² 全換成後端值；② 新增多起始點擬合（Multi-start）：`peak_fitting.py` 新增 `perturb_init_peaks()`（隨機擾動未鎖定的 center/fwhm/amplitude ±20-25%），`FitRequest`/`XasFitRequest` 新增 `n_restarts`（1–10），後端多次嘗試回傳 SS_res 最小的結果；③ 前端 XPS/XAS 峰擬合 Section 加入嘗試次數 pill（1/3/5），`isFitting` 時按鈕顯示最大嘗試次數；影響檔案：`peak_fitting.py`、`routers/xps.py`、`routers/xas.py`、`types/xps.ts`、`types/xas.ts`、`api/xps.ts`、`api/xas.ts`、`pages/XPS.tsx`、`pages/XAS.tsx`；後端語法全部通過。
+
 - 2026-05-08 CST：XPS 手動新增峰的名稱欄位改為可編輯（`sourceType==='manual'` 時 header 列改成 text input，資料庫峰保持唯讀）；Ni 3p 資料庫完整化：加入 `3p3/2 Ni⁰`（66.2 eV）/ `3p1/2 Ni⁰`（67.9 eV）並調整 Ni²⁺ 主峰至 67.3/69.0 eV；ORBITAL_RSF 補入 `Ni 3p`（1.80）/ `Ni 3p3/2`（1.20）/ `Ni 3p1/2`（0.60）；後端語法驗證通過，前端 JSX 結構正確。
 
 - 2026-05-08 CST：在 XPS 資料庫 Ni 條目新增 Ni 3p 四個峰：`3p3/2 Ni²⁺ (NiO)` 67.2 eV / `3p1/2 Ni²⁺ (NiO)` 68.9 eV / `3p Ni³⁺ defect` 69.5 eV / `3p satellite` 72.0 eV；依 spin-orbit splitting ~1.7 eV 與 3p₃/₂:3p₁/₂ 面積比 2:1 設定，FWHM 主峰 2.5 eV、衛星峰 3.5 eV；影響檔案：`web/backend/db/xps_database.py`；後端語法檢查通過。

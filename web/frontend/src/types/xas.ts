@@ -113,6 +113,9 @@ export interface XasFitResult {
   y_individual: number[][]
   residuals: number[]
   peaks: XasFitPeakRow[]
+  r_squared: number
+  rmse: number
+  chi_red: number | null
 }
 
 // ── XAS sample database types ───────────────────────────────────────────────

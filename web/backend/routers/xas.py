@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from core.parsers import looks_like_excel, numeric_excel_table
-from core.peak_fitting import fit_peaks
+from core.peak_fitting import fit_peaks, perturb_init_peaks
 from core.processing import apply_background, apply_normalization
 from core.spectrum_ops import interpolate_spectrum_to_grid, mean_spectrum_arrays
 from db.xas_database import get_sample_edge_peaks, list_samples
@@ -670,6 +670,7 @@ class XasFitRequest(BaseModel):
     maxfev: int = 6000
     peak_labels: Optional[List[str]] = None
     fit_range: Optional[List[float]] = None
+    n_restarts: int = 1
 
 
 class XasFitPeakRow(BaseModel):
@@ -686,6 +687,9 @@ class XasFitResponse(BaseModel):
     y_individual: List[List[float]]
     residuals: List[float]
     peaks: List[XasFitPeakRow]
+    r_squared: float = 0.0
+    rmse: float = 0.0
+    chi_red: Optional[float] = None
 
 
 @router.post("/fit", response_model=XasFitResponse)
@@ -725,14 +729,28 @@ def fit_xas_peaks(req: XasFitRequest):
         fit_range = [fit_lo, fit_hi]
 
     capped_maxfev = max(1000, min(int(req.maxfev), 8000))
+    n_restarts = max(1, min(int(req.n_restarts), 10))
+    rng = np.random.default_rng() if n_restarts > 1 else None
 
-    try:
-        result = fit_peaks(x, y, init_peaks, profile=req.profile, maxfev=capped_maxfev, fit_range=fit_range)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"擬合失敗：{exc}") from exc
+    best_result: dict | None = None
+    best_ss_res = float("inf")
+    for restart_idx in range(n_restarts):
+        current_peaks = init_peaks if restart_idx == 0 else perturb_init_peaks(init_peaks, rng)
+        try:
+            candidate = fit_peaks(x, y, current_peaks, profile=req.profile,
+                                  maxfev=capped_maxfev, fit_range=fit_range)
+        except Exception:
+            continue
+        if not candidate.get("success", False):
+            continue
+        cand_ss = candidate.get("ss_res", float("inf"))
+        if cand_ss < best_ss_res:
+            best_result = candidate
+            best_ss_res = cand_ss
 
-    if not result.get("success", False):
-        raise HTTPException(status_code=422, detail=result.get("message", "擬合失敗"))
+    if best_result is None:
+        raise HTTPException(status_code=422, detail="擬合失敗（全部嘗試均未收斂）")
+    result = best_result
 
     raw_peaks = result.get("peaks", [])
     total_area = sum(abs(pk.get("area", 0)) for pk in raw_peaks)
@@ -762,6 +780,9 @@ def fit_xas_peaks(req: XasFitRequest):
         y_individual=[_to_list(yi) for yi in result.get("y_individual", [])],
         residuals=_to_list(result.get("residuals", [])),
         peaks=rows,
+        r_squared=float(result.get("r_squared", 0.0)),
+        rmse=float(result.get("rmse", 0.0)),
+        chi_red=result.get("chi_red"),
     )
 
 

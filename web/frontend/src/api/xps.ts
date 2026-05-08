@@ -111,6 +111,7 @@ export async function fitPeaks(
   options?: {
     maxfev?: number
     fitRange?: [number, number]
+    nRestarts?: number
   },
 ): Promise<FitResult> {
   const body: Record<string, unknown> = {
@@ -119,6 +120,7 @@ export async function fitPeaks(
     peaks,
     profile,
     maxfev: options?.maxfev ?? 6000,
+    n_restarts: options?.nRestarts ?? 1,
   }
   if (peakLabels) body.peak_labels = peakLabels
   if (options?.fitRange) body.fit_range = options.fitRange
