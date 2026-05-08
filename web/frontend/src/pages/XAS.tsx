@@ -837,6 +837,7 @@ export default function XAS({
   // ── Peak fitting state ────────────────────────────────────────────────────
   const [fitChannel, setFitChannel] = useState<'TEY' | 'TFY'>('TEY')
   const [fitProfile, setFitProfile] = useState<string>('voigt')
+  const [fitNRestarts, setFitNRestarts] = useState<number>(1)
   const [fitPeakCandidates, setFitPeakCandidates] = useState<XasPeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<XasFitResult | null>(null)
   const [isFitting, setIsFitting] = useState(false)
@@ -1052,7 +1053,7 @@ export default function XAS({
       const y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
       const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
       const initPeaks = buildXasFitPeakPayloads(activePeaks, datasetMax)
-      const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label))
+      const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label), fitNRestarts)
       setFitResult(res)
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setIsFitting(false) }
@@ -2088,13 +2089,25 @@ export default function XAS({
                       {fitPeakCandidates.length > 1 && (
                         <button type="button" onClick={() => setFitPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
                       )}
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)] shrink-0">嘗試次數</span>
+                        {([1, 3, 5] as const).map(n => (
+                          <button key={n} type="button" onClick={() => setFitNRestarts(n)}
+                            className={['rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                              fitNRestarts === n
+                                ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                                : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]'
+                            ].join(' ')}
+                          >{n}</button>
+                        ))}
+                      </div>
                       <button
                         type="button"
                         onClick={() => void handleFit()}
                         disabled={isFitting || !activeDataset}
                         className="w-full rounded-lg bg-[var(--accent-strong)] py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
                       >
-                        {isFitting ? '擬合中…' : '執行峰擬合'}
+                        {isFitting ? `擬合中… ${fitNRestarts > 1 ? `(最多 ${fitNRestarts} 次)` : ''}` : '執行峰擬合'}
                       </button>
                     </>
                   )}
@@ -2381,16 +2394,9 @@ export default function XAS({
 
             {/* Peak fitting result */}
             {fitResult && activeDataset && (() => {
-              const _y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
-              const _res = fitResult.residuals
-              const _sres = _res.reduce((s, r) => s + r * r, 0)
-              const _ymean = _y.length > 0 ? _y.reduce((s, v) => s + v, 0) / _y.length : 0
-              const _stot = _y.reduce((s, v) => s + (v - _ymean) ** 2, 0)
-              const r2 = _stot > 1e-20 ? Math.max(0, 1 - _sres / _stot) : 0
-              const rmse = Math.sqrt(_sres / Math.max(_res.length, 1))
-              const chiRed = _res.length > fitResult.peaks.length * 3
-                ? _sres / (_res.length - fitResult.peaks.length * 3)
-                : null
+              const r2 = fitResult.r_squared ?? 0
+              const rmse = fitResult.rmse ?? 0
+              const chiRed = fitResult.chi_red ?? null
               return (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
                 <div className="mb-2 flex items-center justify-between flex-wrap gap-2">

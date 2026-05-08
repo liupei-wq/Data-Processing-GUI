@@ -157,6 +157,8 @@ def _metric_values(y_true: np.ndarray, y_pred: np.ndarray, n_params: int) -> dic
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     adj = 1.0 - (1.0 - r2) * (n - 1) / max(n - n_params - 1, 1) if n > 1 else r2
     rmse = float(np.sqrt(ss_res / max(n, 1)))
+    dof = max(n - n_params, 1)
+    chi_red = float(ss_res / dof)
     variance = max(ss_res / max(n, 1), 1e-300)
     aic = float(n * np.log(variance) + 2 * n_params) if n else 0.0
     bic = float(n * np.log(variance) + np.log(max(n, 1)) * n_params) if n else 0.0
@@ -164,10 +166,35 @@ def _metric_values(y_true: np.ndarray, y_pred: np.ndarray, n_params: int) -> dic
         "r_squared": float(r2),
         "adjusted_r_squared": float(adj),
         "rmse": rmse,
+        "chi_red": chi_red,
         "aic": aic,
         "bic": bic,
         "ss_res": ss_res,
     }
+
+
+def perturb_init_peaks(init_peaks: list, rng) -> list:
+    """Return a copy with randomised unlocked parameters for multi-start fitting."""
+    out = []
+    for pk in init_peaks:
+        p = dict(pk)
+        if not pk.get("lock_area", True):
+            amp = max(float(pk.get("amplitude", 1.0)), 1.0)
+            p["amplitude"] = max(amp * (1.0 + float(rng.uniform(-0.25, 0.25))), 1.0)
+        if not pk.get("lock_fwhm", True):
+            fwhm = float(pk.get("fwhm", 1.5))
+            new_fwhm = fwhm * (1.0 + float(rng.uniform(-0.20, 0.20)))
+            lo = float(pk.get("fwhm_min") or 0.05)
+            hi = float(pk.get("fwhm_max") or fwhm * 4.0)
+            p["fwhm"] = max(lo, min(hi, new_fwhm))
+        if not pk.get("lock_center", True):
+            center = float(pk.get("center", 0.0))
+            c_min = float(pk.get("center_min") if pk.get("center_min") is not None else center - 2.0)
+            c_max = float(pk.get("center_max") if pk.get("center_max") is not None else center + 2.0)
+            spread = min(0.4, (c_max - c_min) * 0.25)
+            p["center"] = max(c_min, min(c_max, center + float(rng.uniform(-spread, spread))))
+        out.append(p)
+    return out
 
 
 # ── Main fitting routine ──────────────────────────────────────────────────────

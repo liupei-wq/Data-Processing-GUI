@@ -1553,6 +1553,7 @@ export default function XPS({
 
   // fitting
   const [fitProfile, setFitProfile] = useState<string>('voigt')
+  const [fitNRestarts, setFitNRestarts] = useState<number>(1)
   const [peakCandidates, setPeakCandidates] = useState<PeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [overlayFitResult, setOverlayFitResult] = useState<FitResult | null>(null)
@@ -2450,7 +2451,7 @@ export default function XPS({
         initPeaks,
         fitProfile,
         peakLabels,
-        { maxfev: 8000 },
+        { maxfev: 8000, nRestarts: fitNRestarts },
       )
       if (processingViewMode === 'overlay') {
         setOverlayFitResult(res)
@@ -3264,10 +3265,22 @@ export default function XPS({
                       {peakCandidates.length > 1 && (
                         <button type="button" onClick={() => setPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
                       )}
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)] shrink-0">嘗試次數</span>
+                        {([1, 3, 5] as const).map(n => (
+                          <button key={n} type="button" onClick={() => setFitNRestarts(n)}
+                            className={['rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors',
+                              fitNRestarts === n
+                                ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                                : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]'
+                            ].join(' ')}
+                          >{n}</button>
+                        ))}
+                      </div>
                       <button type="button" onClick={handleFit} disabled={isFitting}
                         className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50"
                       >
-                        {isFitting ? '擬合中…' : '執行擬合'}
+                        {isFitting ? `擬合中… ${fitNRestarts > 1 ? `(最多 ${fitNRestarts} 次)` : ''}` : '執行擬合'}
                       </button>
                     </>
                   )}
@@ -3875,16 +3888,9 @@ export default function XPS({
             )}
 
             {currentFitResult && currentFitResult.peaks.length > 0 && (() => {
-              const _y = fitTargetDataset?.y_processed ?? []
-              const _res = currentFitResult.residuals
-              const _sres = _res.reduce((s, r) => s + r * r, 0)
-              const _ymean = _y.length > 0 ? _y.reduce((s, v) => s + v, 0) / _y.length : 0
-              const _stot = _y.reduce((s, v) => s + (v - _ymean) ** 2, 0)
-              const r2 = _stot > 1e-20 ? Math.max(0, 1 - _sres / _stot) : 0
-              const rmse = Math.sqrt(_sres / Math.max(_res.length, 1))
-              const chiRed = _res.length > currentFitResult.peaks.length * 3
-                ? _sres / (_res.length - currentFitResult.peaks.length * 3)
-                : null
+              const r2 = currentFitResult.r_squared ?? 0
+              const rmse = currentFitResult.rmse ?? 0
+              const chiRed = currentFitResult.chi_red ?? null
               return (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -4173,16 +4179,9 @@ export default function XPS({
                           }} />
                           {/* 分析報告 Excel (3 sheets) */}
                           <ExportBtnSecondary label="分析報告 Excel" onClick={() => {
-                            const _y = fitTargetDataset?.y_processed ?? []
-                            const _res = currentFitResult.residuals
-                            const _sres = _res.reduce((s, r) => s + r * r, 0)
-                            const _ymean = _y.length > 0 ? _y.reduce((s, v) => s + v, 0) / _y.length : 0
-                            const _stot = _y.reduce((s, v) => s + (v - _ymean) ** 2, 0)
-                            const _r2 = _stot > 1e-20 ? Math.max(0, 1 - _sres / _stot) : 0
-                            const _rmse = Math.sqrt(_sres / Math.max(_res.length, 1))
-                            const _chiRed = _res.length > currentFitResult.peaks.length * 3
-                              ? _sres / (_res.length - currentFitResult.peaks.length * 3)
-                              : null
+                            const _r2 = currentFitResult.r_squared ?? 0
+                            const _rmse = currentFitResult.rmse ?? 0
+                            const _chiRed = currentFitResult.chi_red ?? null
                             const hasRsf = currentRsfRows.some(r => r.rsf != null)
                             const totalRsfArea = hasRsf
                               ? currentRsfRows.reduce((acc, r, i) => {

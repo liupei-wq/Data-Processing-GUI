@@ -133,6 +133,9 @@ export interface FitResult {
   y_individual: number[][]
   residuals: number[]
   peaks: FitPeakRow[]
+  r_squared: number
+  rmse: number
+  chi_red: number | null
 }
 
 export interface VbmLinePoint {

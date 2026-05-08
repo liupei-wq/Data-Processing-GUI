@@ -41,8 +41,9 @@ export async function fitXasPeaks(
   peaks: XasInitPeak[],
   profile: string,
   peakLabels?: string[],
+  nRestarts?: number,
 ): Promise<XasFitResult> {
-  const body: Record<string, unknown> = { x, y, peaks, profile }
+  const body: Record<string, unknown> = { x, y, peaks, profile, n_restarts: nRestarts ?? 1 }
   if (peakLabels) body.peak_labels = peakLabels
   const res = await fetch(`${BASE}/fit`, {
     method: 'POST',
