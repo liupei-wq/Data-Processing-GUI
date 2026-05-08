@@ -458,4 +458,4 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 - 2026-05-07 CST：繪製圖檔 summary 圖 b legend 位置調整。`buildXpsSummaryFigure()` 的 legend 從 bar subplot domain 內改到右側空白區（`x: 0.465`, `xanchor: 'left'`），使 OⅠ/OⅡ/OⅢ 標籤欄顯示在圖 b 框線外。
 
-- 2026-05-08 CST：改善右側 workspace 選單入口可見性。`web/frontend/src/App.tsx` 的右側「選單」改為固定同時顯示「分析模組」與「工具」，並對目前 workspace 套用 active 樣式，避免進入「繪製圖檔」或單一處理工具後工具入口被切換隱藏；`web/frontend/src/index.css` 為兩段選單新增分隔線、最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-08 CST：改善右側 workspace 選單入口可見性。`web/frontend/src/App.tsx` 的右側「選單」改為固定同時顯示「分析模組」與「工具」，並對目前 workspace 套用 active 樣式，讓「繪製圖檔」固定出現在工具區，避免進入「繪製圖檔」或單一處理工具後工具入口被切換隱藏；`web/frontend/src/index.css` 為兩段選單新增分隔線、最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。

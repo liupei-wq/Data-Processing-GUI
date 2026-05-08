@@ -124,4 +124,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-07：繪製圖檔 component 標籤連線改為指向標籤文字底部，讓 OⅠ/OⅡ/OⅢ 百分比括號下方作為連線終點，而不是標籤文字中央。
 - 2026-05-07：取消繪製圖檔的 Combined publication figure 顯示與匯出入口，保留分開的 XPS component panels 與 Area ratio / component ratio 圖；Raw 圓圈與 OⅠ/OⅡ/OⅢ 標籤控制仍保留。驗證 `npm run build` 通過。
 - 2026-05-07：繪製圖檔 summary 圖 b 的 component legend 從 bar plot 框線內移到框線外右側空白區，避免與柱狀圖重疊。
-- 2026-05-08：改善右側選單入口可見性；「分析模組」與「工具」改為同時顯示，並標示目前 workspace，避免進入「繪製圖檔」或單一處理工具後看不到工具入口；選單面板新增最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-08：改善右側選單入口可見性；「分析模組」與「工具」改為同時顯示，並標示目前 workspace，讓「繪製圖檔」固定出現在右側選單的工具區，避免進入「繪製圖檔」或單一處理工具後看不到工具入口；選單面板新增最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。
