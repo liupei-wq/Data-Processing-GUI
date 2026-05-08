@@ -360,46 +360,50 @@ export default function App() {
         }}
       >
         <div className="workspace-launcher__panel">
-          {workspace.startsWith('tool-') ? (
-            <div className="workspace-launcher__section">
-              <div className="workspace-launcher__title">分析模組</div>
-              {ANALYSIS_MODULES.map(item => {
-                const wsId = `workflow-${item.id}` as WorkspaceId
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setWorkspace(wsId)
-                      setWorkspaceLauncherOpen(false)
-                    }}
-                    className="workspace-launcher__item pressable"
-                  >
-                    <span className="workspace-launcher__item-label">{item.label}</span>
-                    <span className="workspace-launcher__item-detail">{item.detail}</span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="workspace-launcher__section">
-              <div className="workspace-launcher__title">單一處理</div>
-              {TOOL_WORKSPACES.map(item => (
+          <div className="workspace-launcher__section">
+            <div className="workspace-launcher__title">分析模組</div>
+            {ANALYSIS_MODULES.map(item => {
+              const wsId = `workflow-${item.id}` as WorkspaceId
+              return (
                 <button
-                  key={item.id}
+                  key={wsId}
                   type="button"
                   onClick={() => {
-                    setWorkspace(item.id)
+                    setWorkspace(wsId)
                     setWorkspaceLauncherOpen(false)
                   }}
-                  className="workspace-launcher__item pressable"
+                  className={[
+                    'workspace-launcher__item pressable',
+                    workspace === wsId ? 'workspace-launcher__item--active' : '',
+                  ].join(' ')}
                 >
                   <span className="workspace-launcher__item-label">{item.label}</span>
                   <span className="workspace-launcher__item-detail">{item.detail}</span>
                 </button>
-              ))}
-            </div>
-          )}
+              )
+            })}
+          </div>
+
+          <div className="workspace-launcher__section">
+            <div className="workspace-launcher__title">工具</div>
+            {TOOL_WORKSPACES.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  setWorkspace(item.id)
+                  setWorkspaceLauncherOpen(false)
+                }}
+                className={[
+                  'workspace-launcher__item pressable',
+                  workspace === item.id ? 'workspace-launcher__item--active' : '',
+                ].join(' ')}
+              >
+                <span className="workspace-launcher__item-label">{item.label}</span>
+                <span className="workspace-launcher__item-detail">{item.detail}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <button
           type="button"
