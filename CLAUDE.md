@@ -521,3 +521,26 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-07 CST：開始處理 `main` 與 `origin/main` 的合併與提交需求；先確認工作樹乾淨、本地 `HEAD=ba0c349 (op.21.7)`、遠端額外有 `7ff68bf` 與 `4e037d8` 兩個 commit。
 - 2026-05-07 CST：執行 `git fetch origin` 成功更新遠端追蹤資訊；嘗試 `git merge --no-edit origin/main` 後，確認只有 `CLAUDE.md` 與 `AGENTS.md` 發生內容衝突，程式碼檔僅新增來自遠端的 `web/backend/db/xps_database.py` 變更，無程式碼衝突。
 - 2026-05-07 CST：已手動解決 `CLAUDE.md` / `AGENTS.md` 的 merge conflict，保留遠端 XPS 資料庫更新紀錄與本地 VBM/UI 修正紀錄；驗證 `python3 -m py_compile web/backend/db/xps_database.py`、`git diff --check` 通過，準備建立 merge commit 並推送。
+- 2026-05-07 CST：XPS 峰擬合新增 Paper-style 擬合結果圖輸出。完成峰擬合後，主畫面會出現論文風格 component panel 預覽：以處理後光譜為 observed、總擬合為 fit、各 `y_individual` 為 component fill，依正面積積分計算百分比並標註；可在網頁調整原始/總擬合/component 顏色、字體、標籤文字與 X/Y fraction 位置、峰位標線中心、X/Y 範圍、填色透明度、PNG/SVG 匯出尺寸與倍率。後續修正測試頁空白問題：匯出 API 改由 `web/frontend/src/components/PlotlyChart.tsx` 兼容層輸出 `PlotlyApi`，並在 `vite-env.d.ts` 補 `plotly.js/dist/plotly` declaration，避免動態匯入 `plotly.js` 原始包導致 Vite dev server `buffer/` 解析錯誤。影響檔案：`web/frontend/src/pages/XPS.tsx`、`web/frontend/src/components/PlotlyChart.tsx`、`web/frontend/src/vite-env.d.ts`；前端建置通過。
+
+- 2026-05-07 CST：新增獨立「繪製圖檔」工作區並放入右側選單。新增 `web/frontend/src/pages/PlotFileTool.tsx`，目前先啟用 XPS：可上傳多個 fit spectra TXT/CSV（欄位需含 `Binding_Energy_eV`、`Observed`、`Total_Fit` 與任意多個 component 欄位），自動生成多檔垂直 component panels、area ratio 堆疊圖與 component ratio 折線圖；支援 X 軸顯示範圍、X/Y 軸字體大小、刻度/標籤/樣品字體、component 顏色、標籤 X/Y fraction、峰位標線、樣品名稱與 PNG/SVG 匯出尺寸。`web/frontend/src/App.tsx` 新增 workspace `tool-plot-files`，右側選單新增「繪製圖檔」；Raman/XRD/XAS/XES 分頁先保留空狀態供後續擴充；XPS 分析頁原本 paper-style 卡片已移除，繪圖集中到新工作區。前端建置通過。
+
+- 2026-05-07 CST：改善「繪製圖檔」工作區操作性。`web/frontend/src/pages/PlotFileTool.tsx` 版面改為三欄：左側只放檔案上傳/樣品名稱，中間集中顯示 component panels 與 area/ratio 圖，右側 sticky 參數面板集中調整圖面、比例圖、component 樣式與匯出尺寸；component 設定改為 details 展開卡。修正比例圖 Y 軸跑位：summary figure 的 `xaxis/yaxis`、`xaxis2/yaxis2` 明確設定 `anchor`，並加大左右 margin。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔新增軸標題間距控制。`PlotFigureStyle` 新增 `xAxisTitleStandoff`、`yAxisTitleStandoff`，component panels 與 area/ratio summary figure 的 X/Y axis title 皆套用 Plotly `title.standoff`；右側圖面設定新增「X 標題距離」「Y 標題距離」數值欄位（0–120 px）。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔新增框線粗細控制。`PlotFigureStyle` 新增 `axisLineWidth`，右側圖面設定新增「框線粗細」欄位（0.2–8），component panels 與 area/ratio summary figure 所有 X/Y 軸 `linewidth` 改由此值控制。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔 component 標籤支援下標。新增 `formatPlotLabel()`，會將標籤中的 `_{...}` 與 `_word` 轉成 Plotly 支援的 `<sub>...</sub>`；使用者也可直接輸入 HTML `<sub>`。套用於 component panels annotation、summary legend name 與 ratio Y 軸標題，並在 component 標籤輸入框下方新增提示文字。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：修正繪製圖檔下方 area/ratio 比例圖跑位。`buildXpsSummaryFigure()` 中 bar 子圖 domain 調整為 `[0, 0.44]`、ratio 子圖 domain 調整為 `[0.63, 1]`，加大中間間距以容納右圖 Y 軸標題；兩個 X 軸固定 `type: 'category'`、`categoryarray: samples` 保留樣品順序；legend 改放左側 bar 圖內右上角，ratio line 設 `showlegend: false`。前端建置與 `git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔新增 XPS combined publication figure 輸出。`PlotFileTool.tsx` 新增單張合併投稿圖：左側 a 為多 panel XPS component 圖，右側上方 b 為 area ratio 堆疊圖、右側下方 c 為 component ratio 折線圖；Raw data 可切換線、圓圈、線+圓圈並調整圓圈大小/線寬/填色；Component 樣式新增一鍵套用 `O<sub>Ⅰ</sub>` / `O<sub>Ⅱ</sub>` / `O<sub>Ⅲ</sub>` 標籤、顏色與標籤位置。驗證 `npm run build`、`git diff --check` 通過。
+
+- 2026-05-07 CST：繪製圖檔 component 標籤連線位置微調。一般 panels 與 combined publication figure 的 component annotation 改用 `yanchor: 'bottom'`，使連線終點落在 OⅠ/OⅡ/OⅢ 標籤百分比括號下方，而不是標籤文字中央。
+
+- 2026-05-07 CST：取消繪製圖檔 Combined publication figure 入口。`PlotFileTool.tsx` 移除中間欄 `Combined publication figure` 預覽卡與 PNG/SVG 匯出按鈕，匯出流程回到 `panels` 與 `summary` 兩種圖；Raw 圓圈顯示與 OⅠ/OⅡ/OⅢ 標籤 preset 保留。驗證 `npm run build` 通過。
+
+- 2026-05-07 CST：繪製圖檔 summary 圖 b legend 位置調整。`buildXpsSummaryFigure()` 的 legend 從 bar subplot domain 內改到右側空白區（`x: 0.465`, `xanchor: 'left'`），使 OⅠ/OⅡ/OⅢ 標籤欄顯示在圖 b 框線外。
+
+- 2026-05-08 CST：改善右側 workspace 選單入口可見性。`web/frontend/src/App.tsx` 的右側「選單」改為固定同時顯示「分析模組」與「工具」，並對目前 workspace 套用 active 樣式，讓「繪製圖檔」固定出現在工具區，避免進入「繪製圖檔」或單一處理工具後工具入口被切換隱藏；`web/frontend/src/index.css` 為兩段選單新增分隔線、最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。

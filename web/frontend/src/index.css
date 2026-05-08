@@ -1235,6 +1235,8 @@
     right: calc(100% + 0.45rem);
     top: 50%;
     width: min(17rem, calc(100vw - 4rem));
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
     transform: translate(1rem, -50%) scale(0.98);
     transform-origin: right center;
     opacity: 0;
@@ -1272,6 +1274,12 @@
     letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--text-soft);
+  }
+
+  .workspace-launcher__section + .workspace-launcher__section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--card-divider);
   }
 
   .workspace-launcher__item {

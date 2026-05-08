@@ -123,3 +123,15 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-07：XPS `VBM 線性外推圖` 改為局部視窗顯示。根因是切線 / 基準線原本沿整張光譜寬度外推，導致 Plotly 的 y 軸 autoscale 被遠端外推值撐爆，原始光譜幾乎看不見；現已在 `web/frontend/src/pages/XPS.tsx` 新增 `buildVbmPreviewWindow()`，依切線區間、基準線區間、實際選點與 VBM 交點動態決定局部 x/y 範圍，並讓兩條線只在這個局部範圍內繪製。驗證 `npm run build`、`git diff --check` 通過。
 - 2026-05-07：依使用者回饋精簡 XPS `Leading edge 提示`。已移除 `建議切線區間 / 建議基準線區間` 文案、兩顆 `自動建議...` 按鈕，以及背後整套自動建議 helper / effect / callback，避免畫面雜訊與系統自動改動手動區間；目前僅保留全域光譜與切線區間內的高低點資訊。驗證 `npm run build`、`git diff --check` 通過。
 - 2026-05-07：合併 `origin/main` 時僅 `CLAUDE.md` 與 `AGENTS.md` 發生衝突，已手動整理為同時保留遠端 XPS 資料庫更新紀錄與本地 VBM/UI 修正紀錄；另確認 `web/backend/db/xps_database.py` 無衝突，驗證 `python3 -m py_compile web/backend/db/xps_database.py` 與 `git diff --check` 通過。
+- 2026-05-07：XPS 峰擬合新增 Paper-style 擬合結果圖輸出；完成擬合後可在網頁預覽論文風格 component panel，調整原始/總擬合/component 顏色、字體、標籤位置、峰位標線、X/Y 範圍與 PNG/SVG 匯出尺寸。後續修正 dev 空白頁：匯出 API 改由 `PlotlyChart.tsx` 兼容層提供 `PlotlyApi`，避免動態匯入 `plotly.js` 原始包造成 Vite `buffer/` 解析錯誤。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：新增右側「選單 → 繪製圖檔」工作區，先啟用 XPS 多檔 fit spectra 繪圖：可匯入多個含 `Binding_Energy_eV` / `Observed` / `Total_Fit` / component 欄位的 TXT/CSV，輸出多 panel component figure、area ratio 堆疊圖與 component ratio 折線圖；支援 X 軸範圍、X/Y 軸字體大小、標籤位置、component 顏色、樣品名稱與 PNG/SVG 匯出設定。Raman/XRD/XAS/XES 分頁已預留。XPS 分析頁原本 paper-style 卡片改集中到此工作區。驗證 `npm run build` 通過。
+- 2026-05-07：調整「繪製圖檔」介面為三欄：左側檔案清單、中間圖表預覽、右側 sticky 參數面板；component 樣式改為可展開細項，減少橫向表單壓縮。修正比例圖 subplot：`xaxis/yaxis` 與 `xaxis2/yaxis2` 明確 anchor，並加大左右 margin，避免 ratio 圖 Y 軸 title 跑位。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：繪製圖檔新增 X/Y 軸標題與軸線間距控制，對 component panels 與 area/ratio 圖的軸 title 套用 Plotly `title.standoff`；右側圖面設定新增「X 標題距離」「Y 標題距離」。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：繪製圖檔新增「框線粗細」控制，套用到 component panels 與 area/ratio 圖所有 X/Y 軸的 Plotly `axis.linewidth`。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：繪製圖檔 component 標籤文字支援下標；標籤輸入可用 `O_{latt}` 或 `O_latt` 自動轉成 Plotly HTML `<sub>`，也保留直接輸入 `<sub>` 的能力；套用於 panels annotation、summary legend 與 ratio 軸標題。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：修正繪製圖檔下方比例圖跑版：summary figure 左右 domain 改為 bar `[0, 0.44]`、ratio `[0.63, 1]`，加大中間留白；X 軸固定為 category 並使用 sample 順序；legend 移到左側 bar 圖內，ratio 線不顯示 legend。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：繪製圖檔新增 XPS combined publication figure 輸出，將左側 a 的多 panel XPS 圖與右側 b/c 的 area ratio、component ratio 合併成單張圖；Raw data 可切換線、圓圈、線+圓圈並調整圓圈大小/線寬/填色，Component 樣式新增一鍵套用 `O<sub>Ⅰ</sub>` / `O<sub>Ⅱ</sub>` / `O<sub>Ⅲ</sub>` 標籤、顏色與標籤位置。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-07：繪製圖檔 component 標籤連線改為指向標籤文字底部，讓 OⅠ/OⅡ/OⅢ 百分比括號下方作為連線終點，而不是標籤文字中央。
+- 2026-05-07：取消繪製圖檔的 Combined publication figure 顯示與匯出入口，保留分開的 XPS component panels 與 Area ratio / component ratio 圖；Raw 圓圈與 OⅠ/OⅡ/OⅢ 標籤控制仍保留。驗證 `npm run build` 通過。
+- 2026-05-07：繪製圖檔 summary 圖 b 的 component legend 從 bar plot 框線內移到框線外右側空白區，避免與柱狀圖重疊。
+- 2026-05-08：改善右側選單入口可見性；「分析模組」與「工具」改為同時顯示，並標示目前 workspace，讓「繪製圖檔」固定出現在右側選單的工具區，避免進入「繪製圖檔」或單一處理工具後看不到工具入口；選單面板新增最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。
