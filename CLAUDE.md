@@ -542,3 +542,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-07 CST：繪製圖檔 summary 圖 b legend 位置調整。`buildXpsSummaryFigure()` 的 legend 從 bar subplot domain 內改到右側空白區（`x: 0.465`, `xanchor: 'left'`），使 OⅠ/OⅡ/OⅢ 標籤欄顯示在圖 b 框線外。
 
 - 2026-05-08 CST：改善右側 workspace 選單入口可見性。`web/frontend/src/App.tsx` 的右側「選單」改為固定同時顯示「分析模組」與「工具」，並對目前 workspace 套用 active 樣式，讓「繪製圖檔」固定出現在工具區，避免進入「繪製圖檔」或單一處理工具後工具入口被切換隱藏；`web/frontend/src/index.css` 為兩段選單新增分隔線、最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。
+
+- 2026-05-08 CST：繪製圖檔工作區新增獨立 XPS `VBM 線性外推` 子模式。`web/frontend/src/pages/PlotFileTool.tsx` 在 XPS 繪圖內新增「XPS 峰擬合圖 / VBM 線性外推」切換，VBM 模式獨立匯入多個 CSV/TXT/TSV，前端自動判斷 Binding Energy 與 intensity 欄位、最大值歸一化、不做背景扣除，依各樣品 baseline / tangent 區間計算 VBM；可預覽與匯出 stacked 線性外推圖、每組單張外推圖、VBM summary 圖，並輸出 CSV/TXT summary。右側參數面板支援字體、顏色、軸範圍、線寬、區間透明度與匯出尺寸。驗證 `npm run build` 通過。
+
+- 2026-05-08 CST：繪製圖檔 XPS `VBM 線性外推` 補上 VBM 標籤位置控制。`VbmFigureStyle` 新增 `labelOffsetX` / `labelOffsetY`，右側 VBM 圖面設定新增「標籤 X 偏移」「標籤 Y 偏移」，可用像素偏移調整 `VBM = ... eV` annotation 位置；stacked 圖與每組單張外推圖共用此設定。

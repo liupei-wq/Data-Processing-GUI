@@ -135,3 +135,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-07：取消繪製圖檔的 Combined publication figure 顯示與匯出入口，保留分開的 XPS component panels 與 Area ratio / component ratio 圖；Raw 圓圈與 OⅠ/OⅡ/OⅢ 標籤控制仍保留。驗證 `npm run build` 通過。
 - 2026-05-07：繪製圖檔 summary 圖 b 的 component legend 從 bar plot 框線內移到框線外右側空白區，避免與柱狀圖重疊。
 - 2026-05-08：改善右側選單入口可見性；「分析模組」與「工具」改為同時顯示，並標示目前 workspace，讓「繪製圖檔」固定出現在右側選單的工具區，避免進入「繪製圖檔」或單一處理工具後看不到工具入口；選單面板新增最大高度與內部滾動。驗證 `npm run build`、`git diff --check` 通過。
+- 2026-05-08：繪製圖檔工作區新增獨立 XPS `VBM 線性外推` 子模式，與既有 XPS 峰擬合圖分開；可匯入多個 VBM CSV/TXT/TSV，前端自動判斷 Binding Energy / intensity 欄位、最大值歸一化、依各樣品 baseline / tangent 區間計算 VBM，並輸出 stacked 外推圖、單張外推圖、VBM summary 圖與 CSV/TXT summary；支援圖面顏色、字體、軸範圍、線寬、區間透明度、匯出尺寸與 PNG/SVG 匯出。驗證 `npm run build` 通過。
+- 2026-05-08：繪製圖檔 XPS `VBM 線性外推` 新增 VBM 標籤位置控制；右側 VBM 圖面設定可調整 `VBM = ... eV` 標註的 X/Y 像素偏移，並同步套用到 stacked 圖與每組單張外推圖。

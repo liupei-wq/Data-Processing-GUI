@@ -16,6 +16,20 @@ interface FitSpectrumFile {
   components: Record<string, number[]>
 }
 
+interface VbmSpectrumFile {
+  id: string
+  name: string
+  sampleLabel: string
+  xColumn: string
+  yColumn: string
+  x: number[]
+  y: number[]
+  baselineStart: number
+  baselineEnd: number
+  tangentStart: number
+  tangentEnd: number
+}
+
 interface ComponentStyle {
   label: string
   color: string
@@ -60,6 +74,48 @@ interface PlotFigureStyle {
   ratioDenominator: string
 }
 
+interface VbmFigureStyle {
+  titleLabel: string
+  fontFamily: string
+  fontSize: number
+  xAxisFontSize: number
+  yAxisFontSize: number
+  xAxisTitleStandoff: number
+  yAxisTitleStandoff: number
+  axisLineWidth: number
+  panelTitleFontSize: number
+  sampleFontSize: number
+  annotationFontSize: number
+  spectrumColor: string
+  spectrumEdgeColor: string
+  tangentColor: string
+  baselineColor: string
+  vbmColor: string
+  spectrumLineWidth: number
+  fitLineWidth: number
+  markerSize: number
+  markerLineWidth: number
+  regionOpacity: number
+  labelOffsetX: number
+  labelOffsetY: number
+  yMax: number
+  xLeft: number
+  xRight: number
+  exportWidth: number
+  exportHeight: number
+  exportScale: number
+}
+
+interface VbmFitResult {
+  file: VbmSpectrumFile
+  x: number[]
+  yNorm: number[]
+  baselineY: number
+  slope: number
+  intercept: number
+  vbm: number
+}
+
 type PlotlyExportApi = {
   newPlot: (root: HTMLDivElement, data: Plotly.Data[], layout: Partial<Plotly.Layout>, config?: Partial<Plotly.Config>) => Promise<unknown>
   toImage: (root: HTMLDivElement, opts: { format: string; width: number; height: number; scale?: number }) => Promise<string>
@@ -67,7 +123,7 @@ type PlotlyExportApi = {
 }
 
 const MODULES: { id: PlotModule; label: string; detail: string; enabled: boolean }[] = [
-  { id: 'xps', label: 'XPS', detail: 'fit spectra / component panels', enabled: true },
+  { id: 'xps', label: 'XPS', detail: 'fit spectra / VBM', enabled: true },
   { id: 'raman', label: 'Raman', detail: '預留：峰型與多譜比較', enabled: false },
   { id: 'xrd', label: 'XRD', detail: '預留：繞射峰與 stacked patterns', enabled: false },
   { id: 'xas', label: 'XAS', detail: '預留：TEY / TFY 與 edge 圖', enabled: false },
@@ -120,6 +176,38 @@ const DEFAULT_STYLE: PlotFigureStyle = {
   ratioDenominator: '',
 }
 
+const DEFAULT_VBM_STYLE: VbmFigureStyle = {
+  titleLabel: 'VB',
+  fontFamily: 'Times New Roman, Times, serif',
+  fontSize: 16,
+  xAxisFontSize: 22,
+  yAxisFontSize: 22,
+  xAxisTitleStandoff: 18,
+  yAxisTitleStandoff: 18,
+  axisLineWidth: 1.4,
+  panelTitleFontSize: 24,
+  sampleFontSize: 22,
+  annotationFontSize: 16,
+  spectrumColor: '#1f77b4',
+  spectrumEdgeColor: '#0b4a8b',
+  tangentColor: '#f28e2b',
+  baselineColor: '#7e3fb2',
+  vbmColor: '#00a65a',
+  spectrumLineWidth: 1.4,
+  fitLineWidth: 1.2,
+  markerSize: 5,
+  markerLineWidth: 0.8,
+  regionOpacity: 0.14,
+  labelOffsetX: -70,
+  labelOffsetY: -48,
+  yMax: 1.18,
+  xLeft: 7,
+  xRight: 0,
+  exportWidth: 980,
+  exportHeight: 920,
+  exportScale: 3,
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
@@ -133,6 +221,16 @@ function downloadDataUrl(dataUrl: string, name: string) {
   anchor.href = dataUrl
   anchor.download = name
   anchor.click()
+}
+
+function downloadTextFile(text: string, name: string, mime = 'text/plain;charset=utf-8') {
+  const blob = new Blob([text], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -194,6 +292,26 @@ function interpolateY(x: number[], y: number[], targetX: number) {
   return points[points.length - 1].y
 }
 
+function linearRegression(x: number[], y: number[]) {
+  const n = Math.min(x.length, y.length)
+  if (n < 2) throw new Error('線性擬合至少需要兩個資料點')
+  let sumX = 0
+  let sumY = 0
+  let sumXY = 0
+  let sumXX = 0
+  for (let i = 0; i < n; i += 1) {
+    sumX += x[i]
+    sumY += y[i]
+    sumXY += x[i] * y[i]
+    sumXX += x[i] * x[i]
+  }
+  const denominator = n * sumXX - sumX * sumX
+  if (Math.abs(denominator) < 1e-15) throw new Error('切線區間 x 值變化太小，無法擬合')
+  const slope = (n * sumXY - sumX * sumY) / denominator
+  const intercept = (sumY - slope * sumX) / n
+  return { slope, intercept }
+}
+
 function splitDelimitedLine(line: string, delimiter: string) {
   if (delimiter === 'whitespace') return line.trim().split(/\s+/)
   const out: string[] = []
@@ -212,6 +330,64 @@ function splitDelimitedLine(line: string, delimiter: string) {
   }
   out.push(current.trim())
   return out
+}
+
+function chooseVbmColumns(headers: string[], rows: string[][], fileName: string) {
+  const valuesByColumn = headers.map((_, columnIndex) => rows
+    .map(row => Number(row[columnIndex]))
+    .filter(Number.isFinite))
+  const numericIndexes = valuesByColumn
+    .map((values, index) => ({ index, count: values.length }))
+    .filter(item => item.count >= 2)
+    .sort((a, b) => b.count - a.count)
+    .map(item => item.index)
+  if (numericIndexes.length < 2) throw new Error(`${fileName}: 資料檔內至少需要兩欄數值資料`)
+
+  const normal = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '')
+  const normalizedHeaders = headers.map(normal)
+  const xIndex = numericIndexes.find(index => ['bindingenergyev', 'bindingenergy', 'energyev', 'energy', 'be'].some(key => normalizedHeaders[index].includes(key))) ?? numericIndexes[0]
+  const yPriority = ['intensityprocessed', 'processedintensity', 'normalizedintensity', 'intensitynormalized', 'intensity', 'counts', 'signal']
+  const yIndex = numericIndexes.find(index => index !== xIndex && yPriority.some(key => normalizedHeaders[index].includes(key)))
+    ?? numericIndexes.find(index => index !== xIndex)
+  if (yIndex === undefined) throw new Error(`${fileName}: 找不到可用的 intensity 欄位`)
+  return { xIndex, yIndex }
+}
+
+function parseVbmSpectrumText(text: string, fileName: string): VbmSpectrumFile {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  if (lines.length < 3) throw new Error(`${fileName}: 資料列不足`)
+  const headerLine = lines[0].replace(/^\uFEFF/, '')
+  const delimiter = headerLine.includes('\t') ? '\t' : (headerLine.includes(',') ? ',' : 'whitespace')
+  const firstCells = splitDelimitedLine(headerLine, delimiter)
+  const firstRowIsNumeric = firstCells.length >= 2 && firstCells.filter(cell => Number.isFinite(Number(cell))).length >= 2
+  const headers = firstRowIsNumeric ? firstCells.map((_, index) => `Column ${index + 1}`) : firstCells
+  const dataLines = firstRowIsNumeric ? lines : lines.slice(1)
+  const rows = dataLines.map(line => splitDelimitedLine(line, delimiter))
+  const { xIndex, yIndex } = chooseVbmColumns(headers, rows, fileName)
+  const x: number[] = []
+  const y: number[] = []
+  rows.forEach(row => {
+    const xv = Number(row[xIndex])
+    const yv = Number(row[yIndex])
+    if (!Number.isFinite(xv) || !Number.isFinite(yv)) return
+    x.push(xv)
+    y.push(yv)
+  })
+  if (x.length < 3) throw new Error(`${fileName}: 有效資料點不足`)
+  const stem = safeFileStem(fileName.replace(/\s*VBM\s*/i, ' '))
+  return {
+    id: `${fileName}-${Math.random().toString(36).slice(2, 8)}`,
+    name: fileName,
+    sampleLabel: stem,
+    xColumn: headers[xIndex] ?? `Column ${xIndex + 1}`,
+    yColumn: headers[yIndex] ?? `Column ${yIndex + 1}`,
+    x,
+    y,
+    baselineStart: 0.6,
+    baselineEnd: 1.6,
+    tangentStart: 4.2,
+    tangentEnd: 5.2,
+  }
 }
 
 function parseFitSpectrumText(text: string, fileName: string): FitSpectrumFile {
@@ -290,6 +466,329 @@ function componentAreas(file: FitSpectrumFile, keys: string[]) {
   const areas = Object.fromEntries(keys.map(key => [key, positiveTrapzArea(file.x, file.components[key] ?? [])]))
   const total = Object.values(areas).reduce((sum, value) => sum + value, 0)
   return Object.fromEntries(keys.map(key => [key, total > 0 ? areas[key] / total * 100 : 0]))
+}
+
+function calculateVbm(file: VbmSpectrumFile): VbmFitResult {
+  const validPoints = file.x
+    .map((xValue, index) => ({ x: xValue, y: file.y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+  if (validPoints.length < 3) throw new Error(`${file.sampleLabel}: 有效資料點不足`)
+  const maxY = Math.max(...validPoints.map(point => point.y))
+  if (!Number.isFinite(maxY) || Math.abs(maxY) < 1e-15) throw new Error(`${file.sampleLabel}: intensity 最大值無法使用`)
+  const x = validPoints.map(point => point.x)
+  const yNorm = validPoints.map(point => point.y / maxY)
+  const [baselineMin, baselineMax] = [Math.min(file.baselineStart, file.baselineEnd), Math.max(file.baselineStart, file.baselineEnd)]
+  const [tangentMin, tangentMax] = [Math.min(file.tangentStart, file.tangentEnd), Math.max(file.tangentStart, file.tangentEnd)]
+  const baselinePoints = x.map((xValue, index) => ({ x: xValue, y: yNorm[index] })).filter(point => point.x >= baselineMin && point.x <= baselineMax)
+  const tangentPoints = x.map((xValue, index) => ({ x: xValue, y: yNorm[index] })).filter(point => point.x >= tangentMin && point.x <= tangentMax)
+  if (baselinePoints.length < 2) throw new Error(`${file.sampleLabel}: baseline 區間內資料點不足`)
+  if (tangentPoints.length < 2) throw new Error(`${file.sampleLabel}: tangent 區間內資料點不足`)
+  const baselineY = baselinePoints.reduce((sum, point) => sum + point.y, 0) / baselinePoints.length
+  const { slope, intercept } = linearRegression(tangentPoints.map(point => point.x), tangentPoints.map(point => point.y))
+  if (Math.abs(slope) < 1e-15) throw new Error(`${file.sampleLabel}: 切線斜率太小，無法計算 VBM`)
+  return {
+    file,
+    x,
+    yNorm,
+    baselineY,
+    slope,
+    intercept,
+    vbm: (baselineY - intercept) / slope,
+  }
+}
+
+function vbmTangentLine(result: VbmFitResult, points = 500) {
+  const xMin = Math.min(...result.x)
+  const xMax = Math.max(...result.x)
+  const xLine = Array.from({ length: points }, (_, index) => xMin + (xMax - xMin) * (index / Math.max(points - 1, 1)))
+  return { x: xLine, y: xLine.map(value => result.slope * value + result.intercept) }
+}
+
+function buildVbmSingleFigure(result: VbmFitResult, style: VbmFigureStyle) {
+  const data: Plotly.Data[] = [
+    {
+      x: result.x,
+      y: result.yNorm,
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: result.file.sampleLabel,
+      line: { color: style.spectrumColor, width: style.spectrumLineWidth },
+      marker: { color: '#ffffff', size: style.markerSize, line: { color: style.spectrumEdgeColor, width: style.markerLineWidth } },
+      hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+    },
+    {
+      x: result.x,
+      y: result.x.map(() => result.baselineY),
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Baseline',
+      line: { color: style.baselineColor, width: style.fitLineWidth, dash: 'dot' },
+      hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+    },
+    {
+      x: vbmTangentLine(result).x,
+      y: vbmTangentLine(result).y,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Tangent fit',
+      line: { color: style.tangentColor, width: style.fitLineWidth, dash: 'dash' },
+      hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+    },
+    {
+      x: [result.vbm],
+      y: [result.baselineY],
+      type: 'scatter',
+      mode: 'markers',
+      name: `VBM = ${result.vbm.toFixed(3)} eV`,
+      marker: { color: style.vbmColor, size: 11, symbol: 'diamond' },
+      hovertemplate: 'VBM %{x:.3f} eV<extra></extra>',
+    },
+  ]
+
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    showlegend: false,
+    margin: { l: 88, r: 34, t: 34, b: 78 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    xaxis: {
+      range: [style.xLeft, style.xRight],
+      title: { text: 'Binding Energy (eV)', font: { size: style.xAxisFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff },
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      minor: { ticks: 'inside' },
+    },
+    yaxis: {
+      range: [-0.05, Math.max(style.yMax, 0.3)],
+      title: { text: 'Normalized intensity (a.u.)', font: { size: style.yAxisFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff },
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      minor: { ticks: 'inside' },
+    },
+    shapes: [
+      {
+        type: 'rect',
+        xref: 'x',
+        yref: 'y',
+        x0: result.file.baselineStart,
+        x1: result.file.baselineEnd,
+        y0: -0.05,
+        y1: Math.max(style.yMax, 0.3),
+        fillcolor: hexToRgba(style.baselineColor, style.regionOpacity),
+        line: { width: 0 },
+        layer: 'below',
+      },
+      {
+        type: 'rect',
+        xref: 'x',
+        yref: 'y',
+        x0: result.file.tangentStart,
+        x1: result.file.tangentEnd,
+        y0: -0.05,
+        y1: Math.max(style.yMax, 0.3),
+        fillcolor: hexToRgba(style.tangentColor, style.regionOpacity),
+        line: { width: 0 },
+        layer: 'below',
+      },
+    ] as Plotly.Shape[],
+    annotations: [
+      { x: 0.03, y: 0.88, xref: 'paper', yref: 'paper', text: `<b>${style.titleLabel || 'VB'}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
+      { x: 0.97, y: 0.88, xref: 'paper', yref: 'paper', text: `<b>${result.file.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color: '#111827' } },
+      { x: result.vbm, y: result.baselineY, xref: 'x', yref: 'y', text: `VBM = ${result.vbm.toFixed(3)} eV`, showarrow: true, ax: style.labelOffsetX, ay: style.labelOffsetY, arrowcolor: style.vbmColor, font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
+    ] as unknown as Plotly.Layout['annotations'],
+  }
+  return { data, layout }
+}
+
+function buildVbmStackedFigure(results: VbmFitResult[], style: VbmFigureStyle) {
+  const data: Plotly.Data[] = []
+  const annotations: Partial<Plotly.Annotations>[] = []
+  const shapes: Partial<Plotly.Shape>[] = []
+  const gap = 0.035
+  const n = results.length
+  const panelHeight = (1 - gap * Math.max(n - 1, 0)) / Math.max(n, 1)
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    showlegend: false,
+    hovermode: 'closest',
+    margin: { l: 88, r: 34, t: 28, b: 78 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    annotations: annotations as unknown as Plotly.Layout['annotations'],
+    shapes: shapes as Plotly.Shape[],
+  }
+
+  results.forEach((result, resultIndex) => {
+    const axisSuffix = resultIndex === 0 ? '' : String(resultIndex + 1)
+    const xAxisName = `xaxis${axisSuffix}`
+    const yAxisName = `yaxis${axisSuffix}`
+    const xRef = `x${axisSuffix}`
+    const yRef = `y${axisSuffix}`
+    const yDomainStart = 1 - (resultIndex + 1) * panelHeight - resultIndex * gap
+    const yDomainEnd = yDomainStart + panelHeight
+    const line = vbmTangentLine(result)
+
+    ;(layout as Record<string, unknown>)[xAxisName] = {
+      range: [style.xLeft, style.xRight],
+      anchor: yRef,
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      title: resultIndex === n - 1 ? { text: 'Binding Energy (eV)', font: { size: style.xAxisFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff } : undefined,
+      showticklabels: resultIndex === n - 1,
+      minor: { ticks: 'inside' },
+    } as Plotly.Layout['xaxis']
+    ;(layout as Record<string, unknown>)[yAxisName] = {
+      domain: [yDomainStart, yDomainEnd],
+      anchor: xRef,
+      range: [-0.05, Math.max(style.yMax, 0.3)],
+      title: resultIndex === Math.floor(n / 2) ? { text: 'Intensity (a.u.)', font: { size: style.yAxisFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff } : undefined,
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      showticklabels: false,
+      minor: { ticks: 'inside' },
+    } as Plotly.Layout['yaxis']
+
+    shapes.push(
+      { type: 'rect', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.file.baselineStart, x1: result.file.baselineEnd, y0: -0.05, y1: Math.max(style.yMax, 0.3), fillcolor: hexToRgba(style.baselineColor, style.regionOpacity), line: { width: 0 }, layer: 'below' },
+      { type: 'rect', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.file.tangentStart, x1: result.file.tangentEnd, y0: -0.05, y1: Math.max(style.yMax, 0.3), fillcolor: hexToRgba(style.tangentColor, style.regionOpacity), line: { width: 0 }, layer: 'below' },
+    )
+
+    data.push(
+      {
+        x: result.x,
+        y: result.yNorm,
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines+markers',
+        name: result.file.sampleLabel,
+        line: { color: style.spectrumColor, width: style.spectrumLineWidth },
+        marker: { color: '#ffffff', size: style.markerSize, line: { color: style.spectrumEdgeColor, width: style.markerLineWidth } },
+        hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+      },
+      {
+        x: result.x,
+        y: result.x.map(() => result.baselineY),
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Baseline',
+        line: { color: style.baselineColor, width: style.fitLineWidth, dash: 'dot' },
+        hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+      },
+      {
+        x: line.x,
+        y: line.y,
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Tangent fit',
+        line: { color: style.tangentColor, width: style.fitLineWidth, dash: 'dash' },
+        hovertemplate: '%{x:.3f} eV<br>%{y:.4f}<extra></extra>',
+      },
+      {
+        x: [result.vbm],
+        y: [result.baselineY],
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'markers',
+        name: `VBM = ${result.vbm.toFixed(3)} eV`,
+        marker: { color: style.vbmColor, size: 10, symbol: 'diamond' },
+        hovertemplate: 'VBM %{x:.3f} eV<extra></extra>',
+      },
+    )
+
+    annotations.push(
+      { x: 0.03, y: yDomainEnd - panelHeight * 0.16, xref: 'paper', yref: 'paper', text: `<b>${style.titleLabel || 'VB'}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
+      { x: 0.97, y: yDomainEnd - panelHeight * 0.16, xref: 'paper', yref: 'paper', text: `<b>${result.file.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color: '#111827' } },
+      { x: result.vbm, y: result.baselineY, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `VBM = ${result.vbm.toFixed(3)} eV`, showarrow: true, ax: style.labelOffsetX, ay: style.labelOffsetY, arrowcolor: style.vbmColor, font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
+    )
+  })
+
+  return { data, layout }
+}
+
+function buildVbmSummaryFigure(results: VbmFitResult[], style: VbmFigureStyle) {
+  const samples = results.map(result => result.file.sampleLabel)
+  const values = results.map(result => result.vbm)
+  const finiteValues = values.filter(Number.isFinite)
+  const yMin = Math.min(...finiteValues, 0)
+  const yMax = Math.max(...finiteValues, 1)
+  const pad = Math.max((yMax - yMin) * 0.16, 0.05)
+  const data: Plotly.Data[] = [
+    {
+      x: samples,
+      y: values,
+      type: 'scatter',
+      mode: 'text+lines+markers',
+      text: values.map(value => value.toFixed(3)),
+      textposition: 'top center',
+      textfont: { size: style.annotationFontSize, family: style.fontFamily, color: '#111827' },
+      line: { color: style.spectrumColor, width: 2 },
+      marker: { color: style.spectrumColor, size: 9 },
+      hovertemplate: '%{x}<br>VBM %{y:.4f} eV<extra></extra>',
+    },
+  ]
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    showlegend: false,
+    margin: { l: 96, r: 28, t: 44, b: 78 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    xaxis: {
+      type: 'category',
+      categoryorder: 'array',
+      categoryarray: samples,
+      title: { text: 'Sample', font: { size: style.xAxisFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff },
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+    },
+    yaxis: {
+      range: [yMin - pad, yMax + pad],
+      title: { text: 'VBM, E<sub>F</sub> - E<sub>VBM</sub> (eV)', font: { size: style.yAxisFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff },
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      minor: { ticks: 'inside' },
+    },
+  }
+  return { data, layout }
 }
 
 function buildXpsPanelFigure(files: FitSpectrumFile[], style: PlotFigureStyle, styles: Record<string, ComponentStyle>) {
@@ -948,15 +1447,32 @@ export default function PlotFileTool({
   onModuleSelect?: (module: AnalysisModuleId) => void
 }) {
   const [activeModule, setActiveModule] = useState<PlotModule>('xps')
+  const [xpsPlotMode, setXpsPlotMode] = useState<'fit' | 'vbm'>('fit')
   const [files, setFiles] = useState<FitSpectrumFile[]>([])
   const [style, setStyle] = useState<PlotFigureStyle>(DEFAULT_STYLE)
   const [componentStyles, setComponentStyles] = useState<Record<string, ComponentStyle>>({})
+  const [vbmFiles, setVbmFiles] = useState<VbmSpectrumFile[]>([])
+  const [vbmStyle, setVbmStyle] = useState<VbmFigureStyle>(DEFAULT_VBM_STYLE)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
 
   const keys = useMemo(() => componentKeys(files), [files])
   const panelFigure = useMemo(() => files.length > 0 ? buildXpsPanelFigure(files, style, componentStyles) : null, [files, style, componentStyles])
   const summaryFigure = useMemo(() => files.length > 0 ? buildXpsSummaryFigure(files, style, componentStyles) : null, [files, style, componentStyles])
+  const vbmResults = useMemo(() => {
+    const results: VbmFitResult[] = []
+    const errors: string[] = []
+    vbmFiles.forEach(file => {
+      try {
+        results.push(calculateVbm(file))
+      } catch (fitError: unknown) {
+        errors.push(String((fitError as Error).message ?? fitError))
+      }
+    })
+    return { results, errors }
+  }, [vbmFiles])
+  const vbmStackedFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmStackedFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
+  const vbmSummaryFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmSummaryFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
 
   const importFiles = async (fileList: FileList | null) => {
     if (!fileList) return
@@ -990,6 +1506,23 @@ export default function PlotFileTool({
     if (errors.length > 0) setError(errors.join('; '))
   }
 
+  const importVbmFiles = async (fileList: FileList | null) => {
+    if (!fileList) return
+    setError(null)
+    const imported: VbmSpectrumFile[] = []
+    const errors: string[] = []
+    for (const file of Array.from(fileList)) {
+      try {
+        const text = await file.text()
+        imported.push(parseVbmSpectrumText(text, file.name))
+      } catch (importError: unknown) {
+        errors.push(String((importError as Error).message ?? importError))
+      }
+    }
+    setVbmFiles(current => [...current, ...imported])
+    if (errors.length > 0) setError(errors.join('; '))
+  }
+
   const applyRomanPreset = () => {
     setComponentStyles(current => {
       const next = { ...current }
@@ -1017,14 +1550,34 @@ export default function PlotFileTool({
     }))
   }
 
-  const exportPlot = async (kind: 'panels' | 'summary', format: 'png' | 'svg') => {
-    const figure = kind === 'panels' ? panelFigure : summaryFigure
+  const exportPlot = async (kind: 'panels' | 'summary' | 'vbm-stacked' | 'vbm-summary' | `vbm-single:${string}`, format: 'png' | 'svg') => {
+    const singleVbmId = kind.startsWith('vbm-single:') ? kind.slice('vbm-single:'.length) : ''
+    const singleVbmResult = singleVbmId ? vbmResults.results.find(result => result.file.id === singleVbmId) : null
+    const figure = kind === 'panels'
+      ? panelFigure
+      : kind === 'summary'
+        ? summaryFigure
+        : kind === 'vbm-stacked'
+          ? vbmStackedFigure
+          : kind === 'vbm-summary'
+            ? vbmSummaryFigure
+            : singleVbmResult
+              ? buildVbmSingleFigure(singleVbmResult, vbmStyle)
+              : null
     if (!figure) return
     setExporting(true)
     setError(null)
     const container = document.createElement('div')
-    const width = kind === 'panels' ? style.exportWidth : Math.max(style.exportWidth, 1200)
-    const height = kind === 'panels' ? style.exportHeight : Math.max(420, Math.round(style.exportHeight * 0.42))
+    const width = kind.startsWith('vbm')
+      ? vbmStyle.exportWidth
+      : kind === 'panels'
+        ? style.exportWidth
+        : Math.max(style.exportWidth, 1200)
+    const height = kind.startsWith('vbm')
+      ? (kind === 'vbm-summary' ? Math.max(420, Math.round(vbmStyle.exportHeight * 0.45)) : vbmStyle.exportHeight)
+      : kind === 'panels'
+        ? style.exportHeight
+        : Math.max(420, Math.round(style.exportHeight * 0.42))
     container.style.position = 'fixed'
     container.style.left = '-10000px'
     container.style.top = '0'
@@ -1034,8 +1587,11 @@ export default function PlotFileTool({
     try {
       const plotly = PlotlyApi as unknown as PlotlyExportApi
       await plotly.newPlot(container, figure.data, { ...figure.layout, autosize: false, width, height }, { staticPlot: true, displayModeBar: false, responsive: false })
-      const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? style.exportScale : 1 })
-      downloadDataUrl(dataUrl, `xps_${kind}_figure.${format}`)
+      const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? (kind.startsWith('vbm') ? vbmStyle.exportScale : style.exportScale) : 1 })
+      const exportName = kind.startsWith('vbm-single:')
+        ? `xps_vbm_${safeFileStem(singleVbmResult?.file.sampleLabel ?? 'single')}.${format}`
+        : `xps_${kind.replace('-', '_')}_figure.${format}`
+      downloadDataUrl(dataUrl, exportName)
       plotly.purge(container)
     } catch (exportError: unknown) {
       setError(String((exportError as Error).message ?? exportError))
@@ -1045,16 +1601,48 @@ export default function PlotFileTool({
     }
   }
 
+  const exportVbmSummaryCsv = () => {
+    const rows = vbmResults.results.map(result => ({
+      Sample: result.file.sampleLabel,
+      File: result.file.name,
+      X_column: result.file.xColumn,
+      Y_column: result.file.yColumn,
+      Baseline_range_eV: `${result.file.baselineStart}-${result.file.baselineEnd}`,
+      Tangent_range_eV: `${result.file.tangentStart}-${result.file.tangentEnd}`,
+      VBM_EF_minus_EVBM_eV: result.vbm.toFixed(6),
+      Baseline_y: result.baselineY.toFixed(6),
+      Slope: result.slope.toFixed(6),
+      Intercept: result.intercept.toFixed(6),
+    }))
+    const headers = ['Sample', 'File', 'X_column', 'Y_column', 'Baseline_range_eV', 'Tangent_range_eV', 'VBM_EF_minus_EVBM_eV', 'Baseline_y', 'Slope', 'Intercept']
+    const csv = [
+      headers.join(','),
+      ...rows.map(row => headers.map(header => `"${String(row[header as keyof typeof row]).replace(/"/g, '""')}"`).join(',')),
+    ].join('\n')
+    downloadTextFile(csv, 'VBM_results_summary.csv', 'text/csv;charset=utf-8')
+  }
+
+  const exportVbmSummaryTxt = () => {
+    const lines = [
+      'XPS VBM linear extrapolation results',
+      'No background subtraction; normalized to max = 1',
+      '',
+      ...vbmResults.results.map(result => `${result.file.sampleLabel}: baseline=${result.file.baselineStart}-${result.file.baselineEnd} eV, tangent=${result.file.tangentStart}-${result.file.tangentEnd} eV, VBM=${result.vbm.toFixed(3)} eV`),
+    ]
+    downloadTextFile(lines.join('\n'), 'VBM_results_summary.txt')
+  }
+
   return (
     <div className="flex min-h-screen flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
       <ModuleTopBar
         title="繪製圖檔"
         subtitle="Publication Figure Builder"
-        description="集中管理 Raman、XRD、XPS、XAS、XES 的投稿圖輸出；目前先啟用 XPS peak fitting component panels 與面積比例比較圖。"
+        description="集中管理 Raman、XRD、XPS、XAS、XES 的投稿圖輸出；目前啟用 XPS 峰擬合圖與獨立 VBM 線性外推圖。"
         chips={[
           { label: `目前 ${activeModule.toUpperCase()}` },
-          { label: `檔案 ${files.length}` },
-          { label: `Components ${keys.length}` },
+          { label: xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖' },
+          { label: `檔案 ${xpsPlotMode === 'vbm' ? vbmFiles.length : files.length}` },
+          { label: xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}` },
         ]}
       />
 
@@ -1090,6 +1678,29 @@ export default function PlotFileTool({
         </div>
       ) : (
         <>
+          <div className="mb-4 flex flex-wrap gap-2 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2">
+            {[
+              { id: 'fit' as const, label: 'XPS 峰擬合圖', detail: 'Component panels / ratio' },
+              { id: 'vbm' as const, label: 'VBM 線性外推', detail: 'VB linear extrapolation' },
+            ].map(mode => (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => setXpsPlotMode(mode.id)}
+                className={[
+                  'min-w-[180px] flex-1 rounded-xl border px-4 py-3 text-left transition-colors pressable sm:flex-none',
+                  xpsPlotMode === mode.id
+                    ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
+                    : 'border-transparent bg-[var(--card-ghost)] text-[var(--text-main)] hover:border-[var(--accent-secondary)]',
+                ].join(' ')}
+              >
+                <span className="block text-sm font-semibold">{mode.label}</span>
+                <span className="mt-1 block text-[11px] text-[var(--text-soft)]">{mode.detail}</span>
+              </button>
+            ))}
+          </div>
+
+          {xpsPlotMode === 'fit' ? (
           <div className="mb-4 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)_380px]">
             <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
@@ -1292,6 +1903,178 @@ export default function PlotFileTool({
               </div>
             </aside>
           </div>
+          ) : (
+          <div className="mb-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
+            <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="text-sm font-semibold text-[var(--text-main)]">XPS VBM 數據檔</p>
+                <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">支援 CSV/TXT/TSV；至少兩欄數值。會自動尋找 Binding Energy 與 intensity 欄位，只做最大值歸一化，不做背景扣除。</p>
+                <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
+                  上傳 VBM CSV/TXT
+                  <input type="file" multiple accept=".csv,.txt,.dat,.tsv" className="hidden" onChange={event => { void importVbmFiles(event.target.files); event.target.value = '' }} />
+                </label>
+                {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
+                {vbmResults.errors.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    {vbmResults.errors.map(item => <p key={item} className="text-xs text-amber-400">{item}</p>)}
+                  </div>
+                )}
+                {vbmFiles.length > 0 && (
+                  <div className="mt-3 space-y-3">
+                    {vbmFiles.map(file => {
+                      const update = (patch: Partial<VbmSpectrumFile>) => setVbmFiles(current => current.map(item => item.id === file.id ? { ...item, ...patch } : item))
+                      const result = vbmResults.results.find(item => item.file.id === file.id)
+                      return (
+                        <div key={file.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                          <input
+                            value={file.sampleLabel}
+                            onChange={event => update({ sampleLabel: event.target.value })}
+                            className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs font-semibold text-[var(--input-text)] focus:outline-none"
+                          />
+                          <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--text-soft)]">
+                            <span className="truncate">{file.name}</span>
+                            <button type="button" onClick={() => setVbmFiles(current => current.filter(item => item.id !== file.id))} className="text-rose-400">移除</button>
+                          </div>
+                          <p className="mt-2 text-[10px] leading-4 text-[var(--text-soft)]">X: {file.xColumn} / Y: {file.yColumn}</p>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <NumInput label="Baseline 起" value={file.baselineStart} onChange={value => update({ baselineStart: value })} step={0.05} />
+                            <NumInput label="Baseline 迄" value={file.baselineEnd} onChange={value => update({ baselineEnd: value })} step={0.05} />
+                            <NumInput label="Tangent 起" value={file.tangentStart} onChange={value => update({ tangentStart: value })} step={0.05} />
+                            <NumInput label="Tangent 迄" value={file.tangentEnd} onChange={value => update({ tangentEnd: value })} step={0.05} />
+                          </div>
+                          {result && <p className="mt-2 text-xs font-semibold text-[var(--accent-secondary)]">VBM = {result.vbm.toFixed(3)} eV</p>}
+                        </div>
+                      )
+                    })}
+                    <button type="button" onClick={() => setVbmFiles([])} className="text-xs text-rose-400">清除全部</button>
+                  </div>
+                )}
+              </div>
+            </aside>
+
+            <section className="space-y-4">
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-[var(--text-main)]">VBM stacked 線性外推圖</p>
+                    <p className="mt-1 text-xs text-[var(--text-soft)]">每個樣品各自套用 baseline / tangent 區間，光譜歸一化到最大值 1。</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" disabled={!vbmStackedFigure || exporting} onClick={() => { void exportPlot('vbm-stacked', 'png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">PNG</button>
+                    <button type="button" disabled={!vbmStackedFigure || exporting} onClick={() => { void exportPlot('vbm-stacked', 'svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">SVG</button>
+                  </div>
+                </div>
+                {vbmStackedFigure ? (
+                  <Plot data={vbmStackedFigure.data} layout={vbmStackedFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: Math.max(420, 280 * vbmResults.results.length) }} />
+                ) : (
+                  <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">上傳 VBM CSV/TXT 後預覽圖會顯示在這裡。</div>
+                )}
+              </div>
+
+              {vbmResults.results.map(result => {
+                const singleFigure = buildVbmSingleFigure(result, vbmStyle)
+                return (
+                  <div key={result.file.id} className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-[var(--text-main)]">{result.file.sampleLabel} 單張 VBM 圖</p>
+                      <div className="flex gap-2">
+                        <button type="button" disabled={exporting} onClick={() => { void exportPlot(`vbm-single:${result.file.id}`, 'png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">PNG</button>
+                        <button type="button" disabled={exporting} onClick={() => { void exportPlot(`vbm-single:${result.file.id}`, 'svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">SVG</button>
+                      </div>
+                    </div>
+                    <Plot data={singleFigure.data} layout={singleFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: 420 }} />
+                  </div>
+                )
+              })}
+
+              {vbmSummaryFigure && (
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-[var(--text-main)]">VBM summary</p>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={exporting} onClick={() => { void exportPlot('vbm-summary', 'png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">PNG</button>
+                      <button type="button" disabled={exporting} onClick={() => { void exportPlot('vbm-summary', 'svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">SVG</button>
+                      <button type="button" onClick={exportVbmSummaryCsv} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)]">CSV</button>
+                      <button type="button" onClick={exportVbmSummaryTxt} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)]">TXT</button>
+                    </div>
+                  </div>
+                  <Plot data={vbmSummaryFigure.data} layout={vbmSummaryFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: 420 }} />
+                </div>
+              )}
+            </section>
+
+            <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">VBM 圖面設定</p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">Panel 標題</span>
+                    <input value={vbmStyle.titleLabel} onChange={event => setVbmStyle(prev => ({ ...prev, titleLabel: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">字體</span>
+                    <select value={vbmStyle.fontFamily} onChange={event => setVbmStyle(prev => ({ ...prev, fontFamily: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                      <option value="Times New Roman, Times, serif">Times / Serif</option>
+                      <option value="Arial, Helvetica, sans-serif">Arial / Sans</option>
+                      <option value="Georgia, serif">Georgia</option>
+                    </select>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="X 左端(eV)" value={vbmStyle.xLeft} onChange={value => setVbmStyle(prev => ({ ...prev, xLeft: value }))} step={0.1} />
+                    <NumInput label="X 右端(eV)" value={vbmStyle.xRight} onChange={value => setVbmStyle(prev => ({ ...prev, xRight: value }))} step={0.1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="X 軸字體" value={vbmStyle.xAxisFontSize} onChange={value => setVbmStyle(prev => ({ ...prev, xAxisFontSize: value }))} min={8} max={42} step={1} />
+                    <NumInput label="Y 軸字體" value={vbmStyle.yAxisFontSize} onChange={value => setVbmStyle(prev => ({ ...prev, yAxisFontSize: value }))} min={8} max={42} step={1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="X 標題距離" value={vbmStyle.xAxisTitleStandoff} onChange={value => setVbmStyle(prev => ({ ...prev, xAxisTitleStandoff: clamp(value, 0, 120) }))} min={0} max={120} step={1} />
+                    <NumInput label="Y 標題距離" value={vbmStyle.yAxisTitleStandoff} onChange={value => setVbmStyle(prev => ({ ...prev, yAxisTitleStandoff: clamp(value, 0, 120) }))} min={0} max={120} step={1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="刻度字體" value={vbmStyle.fontSize} onChange={value => setVbmStyle(prev => ({ ...prev, fontSize: value }))} min={8} max={34} step={1} />
+                    <NumInput label="標註字體" value={vbmStyle.annotationFontSize} onChange={value => setVbmStyle(prev => ({ ...prev, annotationFontSize: value }))} min={8} max={36} step={1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="標籤 X 偏移" value={vbmStyle.labelOffsetX} onChange={value => setVbmStyle(prev => ({ ...prev, labelOffsetX: clamp(value, -240, 240) }))} min={-240} max={240} step={2} />
+                    <NumInput label="標籤 Y 偏移" value={vbmStyle.labelOffsetY} onChange={value => setVbmStyle(prev => ({ ...prev, labelOffsetY: clamp(value, -240, 240) }))} min={-240} max={240} step={2} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="Y 軸上限" value={vbmStyle.yMax} onChange={value => setVbmStyle(prev => ({ ...prev, yMax: Math.max(0.2, value) }))} min={0.2} max={3} step={0.02} />
+                    <NumInput label="區間透明度" value={vbmStyle.regionOpacity} onChange={value => setVbmStyle(prev => ({ ...prev, regionOpacity: clamp(value, 0, 0.6) }))} min={0} max={0.6} step={0.02} />
+                  </div>
+                  <NumInput label="框線粗細" value={vbmStyle.axisLineWidth} onChange={value => setVbmStyle(prev => ({ ...prev, axisLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                  <div className="grid grid-cols-3 gap-2">
+                    <ColorInput label="光譜" value={vbmStyle.spectrumColor} onChange={value => setVbmStyle(prev => ({ ...prev, spectrumColor: value }))} />
+                    <ColorInput label="Baseline" value={vbmStyle.baselineColor} onChange={value => setVbmStyle(prev => ({ ...prev, baselineColor: value }))} />
+                    <ColorInput label="Tangent" value={vbmStyle.tangentColor} onChange={value => setVbmStyle(prev => ({ ...prev, tangentColor: value }))} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <ColorInput label="VBM" value={vbmStyle.vbmColor} onChange={value => setVbmStyle(prev => ({ ...prev, vbmColor: value }))} />
+                    <ColorInput label="圓圈線" value={vbmStyle.spectrumEdgeColor} onChange={value => setVbmStyle(prev => ({ ...prev, spectrumEdgeColor: value }))} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="光譜線寬" value={vbmStyle.spectrumLineWidth} onChange={value => setVbmStyle(prev => ({ ...prev, spectrumLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                    <NumInput label="擬合線寬" value={vbmStyle.fitLineWidth} onChange={value => setVbmStyle(prev => ({ ...prev, fitLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="圓圈大小" value={vbmStyle.markerSize} onChange={value => setVbmStyle(prev => ({ ...prev, markerSize: clamp(value, 1, 16) }))} min={1} max={16} step={0.5} />
+                    <NumInput label="圓圈線寬" value={vbmStyle.markerLineWidth} onChange={value => setVbmStyle(prev => ({ ...prev, markerLineWidth: clamp(value, 0, 5) }))} min={0} max={5} step={0.1} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出尺寸</p>
+                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                  <NumInput label="圖寬(px)" value={vbmStyle.exportWidth} onChange={value => setVbmStyle(prev => ({ ...prev, exportWidth: Math.max(420, value) }))} min={420} max={3000} step={20} />
+                  <NumInput label="圖高(px)" value={vbmStyle.exportHeight} onChange={value => setVbmStyle(prev => ({ ...prev, exportHeight: Math.max(320, value) }))} min={320} max={4000} step={20} />
+                  <NumInput label="PNG 倍率" value={vbmStyle.exportScale} onChange={value => setVbmStyle(prev => ({ ...prev, exportScale: clamp(value, 1, 6) }))} min={1} max={6} step={0.5} />
+                </div>
+              </div>
+            </aside>
+          </div>
+          )}
         </>
       )}
     </div>
