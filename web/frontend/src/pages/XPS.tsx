@@ -3151,7 +3151,8 @@ export default function XPS({
                           type="button"
                           onClick={() => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, enabled: !p.enabled } : p))}
                           className={[
-                            'flex flex-1 items-center gap-2 text-xs font-medium transition-colors duration-150',
+                            'flex items-center gap-2 text-xs font-medium transition-colors duration-150',
+                            pk.sourceType === 'manual' ? 'shrink-0' : 'flex-1',
                             pk.enabled ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-soft)] hover:text-[var(--text-main)]',
                           ].join(' ')}
                         >
@@ -3161,8 +3162,18 @@ export default function XPS({
                               ? 'bg-[var(--accent-secondary)] [box-shadow:0_0_6px_color-mix(in_srgb,var(--accent-secondary)_70%,transparent)]'
                               : 'border border-[var(--card-border)]',
                           ].join(' ')} />
-                          {pk.label}
+                          {pk.sourceType !== 'manual' && pk.label}
                         </button>
+                        {pk.sourceType === 'manual' && (
+                          <input
+                            type="text"
+                            value={pk.label}
+                            onChange={e => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, label: e.target.value } : p))}
+                            disabled={pk.cardLocked}
+                            placeholder="峰名稱"
+                            className="flex-1 min-w-0 rounded border border-[var(--input-border)] bg-transparent px-2 py-0.5 text-xs font-medium text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-secondary)] disabled:opacity-40"
+                          />
+                        )}
                         <button
                           type="button"
                           title={pk.cardLocked ? '點擊解鎖以編輯約束條件' : '點擊鎖定（防止誤觸）'}
