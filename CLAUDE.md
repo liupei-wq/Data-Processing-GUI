@@ -400,6 +400,10 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 - 2026-05-05：讀取 CLAUDE.md 後以 Unicode escape 精確檢查 Raman 背景拉桿 JSX，確認 label/unit/onChange 等新增屬性語法完整。
 
+### 2026-05-08
+
+- 2026-05-08 CST：在 XPS 資料庫 Ni 條目新增 Ni 3p 四個峰：`3p3/2 Ni²⁺ (NiO)` 67.2 eV / `3p1/2 Ni²⁺ (NiO)` 68.9 eV / `3p Ni³⁺ defect` 69.5 eV / `3p satellite` 72.0 eV；依 spin-orbit splitting ~1.7 eV 與 3p₃/₂:3p₁/₂ 面積比 2:1 設定，FWHM 主峰 2.5 eV、衛星峰 3.5 eV；影響檔案：`web/backend/db/xps_database.py`；後端語法檢查通過。
+
 ### 2026-05-05（下午）
 
 - 2026-05-05 CST：XPS 新增 `.asc` 檔案類型支援；修改 `web/frontend/src/pages/XPS.tsx` 兩處 FileUpload 的 accept 屬性加入 `.asc`，同時更新 Section hint 從 "XY / VMS / TXT / CSV" 改為 "XY / VMS / TXT / CSV / ASC"；後端 parser 已支援，無需修改；驗證 grep 確認修改已生效。
