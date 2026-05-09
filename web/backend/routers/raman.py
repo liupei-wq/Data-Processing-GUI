@@ -10,6 +10,8 @@ from typing import List, Optional
 import numpy as np
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from scipy.optimize import least_squares
+from scipy.special import voigt_profile
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.peak_fitting import fit_peaks
@@ -40,6 +42,20 @@ class ProcessParams(BaseModel):
     norm_method: str = "none"         # none | min_max | max | area | range_max | range_area | si_520_height | si_520_fitted_area | mean_region
     norm_x_start: Optional[float] = None
     norm_x_end: Optional[float] = None
+    si_subtraction_enabled: bool = False
+    si_subtraction_method: str = "reference_fit"  # reference_fit | fit_si_peak
+    si_reference_name: Optional[str] = None
+    si_fit_x_start: float = 500.0
+    si_fit_x_end: float = 540.0
+    si_shift_min: float = -3.0
+    si_shift_max: float = 3.0
+    si_scale_min: float = 0.0
+    si_scale_max: float = 2.0
+    si_negative_threshold_ratio: float = 0.02
+    si_peak_center_min: float = 518.0
+    si_peak_center_max: float = 523.0
+    si_peak_fwhm_min: float = 3.0
+    si_peak_fwhm_max: float = 15.0
 
 
 class NormalizationDiagnostics(BaseModel):
@@ -59,13 +75,30 @@ class ProcessRequest(BaseModel):
     params: ProcessParams
 
 
+class SiSubtractionDiagnostics(BaseModel):
+    method: str = "none"
+    reference_name: str = ""
+    scale_factor_a: Optional[float] = None
+    shift_dx_cm: Optional[float] = None
+    baseline_b0: Optional[float] = None
+    baseline_b1: Optional[float] = None
+    fit_window: str = ""
+    min_residual_near_si: Optional[float] = None
+    rmse_near_si: Optional[float] = None
+    negative_threshold: Optional[float] = None
+    warning: str = ""
+    success: bool = False
+
+
 class DatasetOutput(BaseModel):
     name: str
     x: List[float]
     y_raw: List[float]
     y_background: Optional[List[float]] = None
+    y_si_component: Optional[List[float]] = None
     y_processed: List[float]
     normalization_diagnostics: Optional[NormalizationDiagnostics] = None
+    si_subtraction_diagnostics: Optional[SiSubtractionDiagnostics] = None
 
 
 class ProcessResponse(BaseModel):
@@ -455,12 +488,26 @@ def process_data(req: ProcessRequest):
         raise HTTPException(status_code=400, detail="No datasets provided")
 
     params = req.params
+    si_reference: Optional[tuple[str, np.ndarray, np.ndarray]] = None
+    if params.si_subtraction_enabled and params.si_subtraction_method == "reference_fit":
+        ref_name = params.si_reference_name or ""
+        for candidate in req.datasets:
+            if candidate.name == ref_name:
+                si_reference = (
+                    candidate.name,
+                    np.asarray(candidate.x, dtype=float),
+                    np.asarray(candidate.y, dtype=float),
+                )
+                break
+        if si_reference is None:
+            raise HTTPException(status_code=400, detail="Si reference file is required for reference_fit mode")
+
     datasets: list[DatasetOutput] = []
     for ds in req.datasets:
         x = np.asarray(ds.x, dtype=float)
         y_raw = np.asarray(ds.y, dtype=float)
         try:
-            datasets.append(_build_dataset_output(ds.name, x, y_raw, params))
+            datasets.append(_build_dataset_output(ds.name, x, y_raw, params, si_reference))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"{ds.name}: {exc}") from exc
     return ProcessResponse(datasets=datasets)
@@ -471,8 +518,11 @@ def _build_dataset_output(
     x: np.ndarray,
     y_raw: np.ndarray,
     params: ProcessParams,
+    si_reference: Optional[tuple[str, np.ndarray, np.ndarray]] = None,
 ) -> DatasetOutput:
     background_curve: Optional[np.ndarray] = None
+    si_component: Optional[np.ndarray] = None
+    si_diagnostics: Optional[SiSubtractionDiagnostics] = None
     y_processed = y_raw.copy()
 
     if params.bg_enabled and params.bg_method != "none":
@@ -492,6 +542,15 @@ def _build_dataset_output(
             manual_anchor_y=params.bg_anchor_y,
         )
 
+    if params.si_subtraction_enabled:
+        y_processed, si_component, si_diagnostics = _apply_si_subtraction(
+            name=name,
+            x=x,
+            y=y_processed,
+            params=params,
+            si_reference=si_reference,
+        )
+
     y_processed, norm_diagnostics = apply_normalization_with_diagnostics(
         x,
         y_processed,
@@ -506,8 +565,281 @@ def _build_dataset_output(
         x=x.tolist(),
         y_raw=y_raw.tolist(),
         y_background=background_curve.tolist() if background_curve is not None else None,
+        y_si_component=si_component.tolist() if si_component is not None else None,
         y_processed=y_processed.tolist(),
         normalization_diagnostics=NormalizationDiagnostics(**norm_diagnostics),
+        si_subtraction_diagnostics=si_diagnostics,
+    )
+
+
+def _finite_xy(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    mask = np.isfinite(x) & np.isfinite(y)
+    x_clean = np.asarray(x[mask], dtype=float)
+    y_clean = np.asarray(y[mask], dtype=float)
+    if len(x_clean) < 3:
+        raise ValueError("Not enough finite points")
+    order = np.argsort(x_clean)
+    x_sorted = x_clean[order]
+    y_sorted = y_clean[order]
+    keep = np.concatenate(([True], np.diff(x_sorted) > 0))
+    return x_sorted[keep], y_sorted[keep]
+
+
+def _interp_with_shift(si_x: np.ndarray, si_y: np.ndarray, sample_x: np.ndarray, dx: float) -> np.ndarray:
+    # Model uses si_reference(sample_x + dx), so positive dx samples the reference at higher Raman shift.
+    return np.interp(sample_x + dx, si_x, si_y, left=si_y[0], right=si_y[-1])
+
+
+def _si_warning(
+    corrected: np.ndarray,
+    sample_y: np.ndarray,
+    mask: np.ndarray,
+    threshold_ratio: float,
+) -> tuple[float, float, float, str]:
+    if not np.any(mask):
+        return 0.0, 0.0, 0.0, "Si fit window contains no data points"
+    region = np.asarray(corrected[mask], dtype=float)
+    min_residual = float(np.min(region))
+    rmse = float(np.sqrt(np.mean(region ** 2)))
+    sample_max = float(np.max(np.abs(sample_y[np.isfinite(sample_y)]))) if np.any(np.isfinite(sample_y)) else 0.0
+    negative_threshold = -abs(float(threshold_ratio)) * sample_max
+    warnings: list[str] = []
+    if min_residual < negative_threshold:
+        warnings.append("Possible over-subtraction near Si peak")
+    centered = region - float(np.median(region))
+    if len(centered) >= 6:
+        signs = np.sign(centered)
+        signs = signs[signs != 0]
+        sign_changes = int(np.sum(signs[1:] * signs[:-1] < 0)) if len(signs) > 1 else 0
+        left = float(np.mean(centered[: max(2, len(centered) // 3)]))
+        right = float(np.mean(centered[-max(2, len(centered) // 3):]))
+        if sign_changes >= 2 or left * right < 0:
+            warnings.append("Si residual has positive-negative shape. Check peak alignment dx.")
+    return min_residual, rmse, negative_threshold, "; ".join(warnings) if warnings else "OK"
+
+
+def _apply_si_subtraction(
+    name: str,
+    x: np.ndarray,
+    y: np.ndarray,
+    params: ProcessParams,
+    si_reference: Optional[tuple[str, np.ndarray, np.ndarray]] = None,
+) -> tuple[np.ndarray, Optional[np.ndarray], SiSubtractionDiagnostics]:
+    method = params.si_subtraction_method
+    fit_lo = float(min(params.si_fit_x_start, params.si_fit_x_end))
+    fit_hi = float(max(params.si_fit_x_start, params.si_fit_x_end))
+    fit_window = f"{fit_lo:g}-{fit_hi:g}"
+    mask = (x >= fit_lo) & (x <= fit_hi) & np.isfinite(y)
+
+    if int(np.sum(mask)) < 5:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method=method,
+            reference_name=params.si_reference_name or "",
+            fit_window=fit_window,
+            warning="Si fit window contains fewer than 5 valid points",
+            success=False,
+        )
+
+    if method == "fit_si_peak":
+        return _fit_si_peak_subtraction(name, x, y, params, mask, fit_window)
+
+    if method != "reference_fit":
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method=method,
+            reference_name=params.si_reference_name or "",
+            fit_window=fit_window,
+            warning=f"Unsupported Si subtraction method: {method}",
+            success=False,
+        )
+
+    if si_reference is None:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method=method,
+            reference_name=params.si_reference_name or "",
+            fit_window=fit_window,
+            warning="Si reference file is missing",
+            success=False,
+        )
+
+    ref_name, si_x_raw, si_y_raw = si_reference
+    if ref_name == name:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method=method,
+            reference_name=ref_name,
+            fit_window=fit_window,
+            warning="Selected Si reference was not subtracted from itself",
+            success=False,
+        )
+
+    try:
+        si_x, si_y = _finite_xy(si_x_raw, si_y_raw)
+    except ValueError as exc:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method=method,
+            reference_name=ref_name,
+            fit_window=fit_window,
+            warning=str(exc),
+            success=False,
+        )
+
+    x_fit = x[mask]
+    y_fit = y[mask]
+    a_min = float(min(params.si_scale_min, params.si_scale_max))
+    a_max = float(max(params.si_scale_min, params.si_scale_max))
+    dx_min = float(min(params.si_shift_min, params.si_shift_max))
+    dx_max = float(max(params.si_shift_min, params.si_shift_max))
+    ref_region = _interp_with_shift(si_x, si_y, x_fit, 0.0)
+    y_span = max(float(np.ptp(y_fit)), 1e-12)
+    ref_span = max(float(np.ptp(ref_region)), 1e-12)
+    a0 = float(np.clip(y_span / ref_span, a_min, a_max))
+    b1_guess, b0_guess = np.polyfit(x_fit, y_fit - a0 * ref_region, 1)
+
+    def residual(theta: np.ndarray) -> np.ndarray:
+        a, dx, b0, b1 = theta
+        model = b0 + b1 * x_fit + a * _interp_with_shift(si_x, si_y, x_fit, dx)
+        return model - y_fit
+
+    try:
+        result = least_squares(
+            residual,
+            x0=np.asarray([a0, 0.0, b0_guess, b1_guess], dtype=float),
+            bounds=([a_min, dx_min, -np.inf, -np.inf], [a_max, dx_max, np.inf, np.inf]),
+            max_nfev=800,
+        )
+    except Exception as exc:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method=method,
+            reference_name=ref_name,
+            fit_window=fit_window,
+            warning=f"Si reference fitting failed: {exc}",
+            success=False,
+        )
+
+    if not result.success:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method=method,
+            reference_name=ref_name,
+            scale_factor_a=float(result.x[0]) if len(result.x) else None,
+            shift_dx_cm=float(result.x[1]) if len(result.x) > 1 else None,
+            fit_window=fit_window,
+            warning=f"Si reference fitting failed: {result.message}",
+            success=False,
+        )
+
+    a, dx, b0, b1 = [float(v) for v in result.x]
+    si_component = a * _interp_with_shift(si_x, si_y, x, dx)
+    corrected = y - si_component
+    min_residual, rmse, threshold, warning = _si_warning(
+        corrected,
+        y,
+        mask,
+        params.si_negative_threshold_ratio,
+    )
+    return corrected, si_component, SiSubtractionDiagnostics(
+        method=method,
+        reference_name=ref_name,
+        scale_factor_a=a,
+        shift_dx_cm=dx,
+        baseline_b0=b0,
+        baseline_b1=b1,
+        fit_window=fit_window,
+        min_residual_near_si=min_residual,
+        rmse_near_si=rmse,
+        negative_threshold=threshold,
+        warning=warning,
+        success=True,
+    )
+
+
+def _voigt_peak(x: np.ndarray, amplitude: float, center: float, sigma: float, gamma: float) -> np.ndarray:
+    profile = voigt_profile(x - center, max(float(sigma), 1e-6), max(float(gamma), 1e-6))
+    max_profile = max(float(np.max(profile)), 1e-12)
+    return float(amplitude) * profile / max_profile
+
+
+def _fit_si_peak_subtraction(
+    name: str,
+    x: np.ndarray,
+    y: np.ndarray,
+    params: ProcessParams,
+    mask: np.ndarray,
+    fit_window: str,
+) -> tuple[np.ndarray, np.ndarray, SiSubtractionDiagnostics]:
+    x_fit = x[mask]
+    y_fit = y[mask]
+    center_min = float(min(params.si_peak_center_min, params.si_peak_center_max))
+    center_max = float(max(params.si_peak_center_min, params.si_peak_center_max))
+    fwhm_min = float(max(min(params.si_peak_fwhm_min, params.si_peak_fwhm_max), 0.2))
+    fwhm_max = float(max(params.si_peak_fwhm_min, params.si_peak_fwhm_max))
+    y_min = float(np.min(y_fit))
+    y_max = float(np.max(y_fit))
+    amp0 = max(y_max - y_min, 1e-9)
+    center0 = float(x_fit[int(np.argmax(y_fit))])
+    center0 = float(np.clip(center0, center_min, center_max))
+    fwhm0 = float(np.clip(8.0, fwhm_min, fwhm_max))
+    sigma0 = max(fwhm0 / 3.6013, 1e-6)
+    gamma0 = max(fwhm0 / 3.6013, 1e-6)
+    b1_guess, b0_guess = np.polyfit(x_fit, y_fit, 1)
+
+    sigma_min = max(fwhm_min / 3.6013, 1e-6)
+    sigma_max = max(fwhm_max / 1.0692, sigma_min + 1e-6)
+    gamma_min = max(fwhm_min / 3.6013, 1e-6)
+    gamma_max = max(fwhm_max / 1.0692, gamma_min + 1e-6)
+
+    def residual(theta: np.ndarray) -> np.ndarray:
+        amp, center, sigma, gamma, b0, b1 = theta
+        return b0 + b1 * x_fit + _voigt_peak(x_fit, amp, center, sigma, gamma) - y_fit
+
+    try:
+        result = least_squares(
+            residual,
+            x0=np.asarray([amp0, center0, sigma0, gamma0, b0_guess, b1_guess], dtype=float),
+            bounds=(
+                [0.0, center_min, sigma_min, gamma_min, -np.inf, -np.inf],
+                [np.inf, center_max, sigma_max, gamma_max, np.inf, np.inf],
+            ),
+            max_nfev=1000,
+        )
+    except Exception as exc:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method="fit_si_peak",
+            reference_name="",
+            fit_window=fit_window,
+            warning=f"Si peak fitting failed: {exc}",
+            success=False,
+        )
+
+    if not result.success:
+        return y.copy(), np.zeros_like(y), SiSubtractionDiagnostics(
+            method="fit_si_peak",
+            reference_name="",
+            fit_window=fit_window,
+            warning=f"Si peak fitting failed: {result.message}",
+            success=False,
+        )
+
+    amp, center, sigma, gamma, b0, b1 = [float(v) for v in result.x]
+    si_component = _voigt_peak(x, amp, center, sigma, gamma)
+    corrected = y - si_component
+    min_residual, rmse, threshold, warning = _si_warning(
+        corrected,
+        y,
+        mask,
+        params.si_negative_threshold_ratio,
+    )
+    return corrected, si_component, SiSubtractionDiagnostics(
+        method="fit_si_peak",
+        reference_name="",
+        scale_factor_a=amp,
+        shift_dx_cm=center - 520.7,
+        baseline_b0=b0,
+        baseline_b1=b1,
+        fit_window=fit_window,
+        min_residual_near_si=min_residual,
+        rmse_near_si=rmse,
+        negative_threshold=threshold,
+        warning=warning,
+        success=True,
     )
 
 

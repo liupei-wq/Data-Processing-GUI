@@ -28,11 +28,13 @@ export async function parseFiles(files: File[]): Promise<ParsedFile[]> {
 export async function processData(
   datasets: ParsedFile[],
   params: ProcessParams,
+  signal?: AbortSignal,
 ): Promise<ProcessResult> {
   const res = await fetch(`${BASE}/process`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ datasets, params }),
+    signal,
   })
   if (!res.ok) {
     throw new Error(await readApiError(res, 'Raman 資料處理失敗'))

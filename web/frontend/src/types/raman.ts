@@ -18,6 +18,20 @@ export interface ProcessParams {
   norm_method: 'none' | 'max' | 'min_max' | 'area' | 'range_max' | 'range_area' | 'si_520_height' | 'si_520_fitted_area' | 'mean_region'
   norm_x_start: number | null
   norm_x_end: number | null
+  si_subtraction_enabled: boolean
+  si_subtraction_method: 'reference_fit' | 'fit_si_peak'
+  si_reference_name: string | null
+  si_fit_x_start: number
+  si_fit_x_end: number
+  si_shift_min: number
+  si_shift_max: number
+  si_scale_min: number
+  si_scale_max: number
+  si_negative_threshold_ratio: number
+  si_peak_center_min: number
+  si_peak_center_max: number
+  si_peak_fwhm_min: number
+  si_peak_fwhm_max: number
 }
 
 export interface NormalizationDiagnostics {
@@ -37,12 +51,29 @@ export interface ProcessedDataset {
   x: number[]
   y_raw: number[]
   y_background: number[] | null
+  y_si_component?: number[] | null
   y_processed: number[]
   normalization_diagnostics?: NormalizationDiagnostics | null
+  si_subtraction_diagnostics?: SiSubtractionDiagnostics | null
 }
 
 export interface ProcessResult {
   datasets: ProcessedDataset[]
+}
+
+export interface SiSubtractionDiagnostics {
+  method: string
+  reference_name: string
+  scale_factor_a: number | null
+  shift_dx_cm: number | null
+  baseline_b0: number | null
+  baseline_b1: number | null
+  fit_window: string
+  min_residual_near_si: number | null
+  rmse_near_si: number | null
+  negative_threshold: number | null
+  warning: string
+  success: boolean
 }
 
 export interface SpectrumComponent {

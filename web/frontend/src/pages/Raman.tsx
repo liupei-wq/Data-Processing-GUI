@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react'
-import Plot from '../components/PlotlyChart'
+import Plot, { PlotlyApi } from '../components/PlotlyChart'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import {
@@ -77,6 +77,20 @@ const DEFAULT_PARAMS: ProcessParams = {
   norm_method: 'none',
   norm_x_start: null,
   norm_x_end: null,
+  si_subtraction_enabled: false,
+  si_subtraction_method: 'reference_fit',
+  si_reference_name: null,
+  si_fit_x_start: 500,
+  si_fit_x_end: 540,
+  si_shift_min: -3,
+  si_shift_max: 3,
+  si_scale_min: 0,
+  si_scale_max: 2,
+  si_negative_threshold_ratio: 0.02,
+  si_peak_center_min: 518,
+  si_peak_center_max: 523,
+  si_peak_fwhm_min: 3,
+  si_peak_fwhm_max: 15,
 }
 
 const DEFAULT_PEAK_PARAMS: PeakDetectionParams = {
@@ -158,6 +172,11 @@ const NORMALIZATION_OPTIONS: { value: ProcessParams['norm_method']; label: strin
   { value: 'si_520_height', label: 'Si 520 peak height' },
   { value: 'si_520_fitted_area', label: 'Si 520 fitted area' },
   { value: 'mean_region', label: 'Mean in range' },
+]
+
+const SI_SUBTRACTION_METHOD_OPTIONS: { value: ProcessParams['si_subtraction_method']; label: string }[] = [
+  { value: 'reference_fit', label: 'Si reference 校正扣除' },
+  { value: 'fit_si_peak', label: '直接擬合樣品 Si peak' },
 ]
 
 const ROBUST_LOSS_OPTIONS: { value: FitParams['robust_loss']; label: string }[] = [
@@ -846,6 +865,52 @@ function downloadFile(content: string, filename: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
+function downloadDataUrl(dataUrl: string, filename: string) {
+  const a = document.createElement('a')
+  a.href = dataUrl
+  a.download = filename
+  a.click()
+}
+
+function safeFileStem(name: string) {
+  return name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]+/g, '_') || 'sample'
+}
+
+type PlotlyExportApi = {
+  newPlot: (root: HTMLDivElement, data: Plotly.Data[], layout: Partial<Plotly.Layout>, config?: Partial<Plotly.Config>) => Promise<unknown>
+  toImage: (root: HTMLDivElement, opts: { format: string; width: number; height: number; scale?: number }) => Promise<string>
+  purge: (root: HTMLDivElement) => void
+}
+
+async function exportPlotPng(
+  data: Plotly.Data[],
+  layout: Partial<Plotly.Layout>,
+  filename: string,
+  setError: (message: string | null) => void,
+  width = 1400,
+  height = 820,
+) {
+  if (data.length === 0) return
+  const container = document.createElement('div')
+  container.style.position = 'fixed'
+  container.style.left = '-10000px'
+  container.style.top = '0'
+  container.style.width = `${width}px`
+  container.style.height = `${height}px`
+  document.body.appendChild(container)
+  try {
+    const plotly = PlotlyApi as unknown as PlotlyExportApi
+    await plotly.newPlot(container, data, { ...layout, autosize: false, width, height }, { staticPlot: true, displayModeBar: false, responsive: false })
+    const dataUrl = await plotly.toImage(container, { format: 'png', width, height, scale: 2 })
+    downloadDataUrl(dataUrl, filename)
+    plotly.purge(container)
+  } catch (exportError: unknown) {
+    setError(String((exportError as Error).message ?? exportError))
+  } finally {
+    container.remove()
+  }
+}
+
 function csvEscape(value: unknown) {
   if (value == null) return ''
   const text = String(value)
@@ -861,6 +926,36 @@ function buildStageCsv(datasets: { name: string; x: number[]; y: number[] }[], x
   return toCsv(
     ['dataset', xLabel, yLabel],
     datasets.flatMap(dataset => dataset.x.map((x, index) => [dataset.name, x, dataset.y[index] ?? null])),
+  )
+}
+
+function buildSiCorrectedCsv(dataset: ProcessedDataset) {
+  return toCsv(
+    ['Raman Shift', 'Raw Intensity', 'Corrected Intensity', 'Subtracted Si Component'],
+    dataset.x.map((x, index) => [
+      x,
+      dataset.y_raw[index] ?? null,
+      dataset.y_processed[index] ?? null,
+      dataset.y_si_component?.[index] ?? 0,
+    ]),
+  )
+}
+
+function buildSiReportCsv(datasets: ProcessedDataset[]) {
+  return toCsv(
+    ['Sample', 'Si scale factor a', 'Si shift dx cm^-1', 'Fit window', 'Minimum residual near Si', 'RMSE near Si', 'Warning'],
+    datasets.map(dataset => {
+      const diag = dataset.si_subtraction_diagnostics
+      return [
+        dataset.name,
+        diag?.scale_factor_a ?? '',
+        diag?.shift_dx_cm ?? '',
+        diag?.fit_window ?? '',
+        diag?.min_residual_near_si ?? '',
+        diag?.rmse_near_si ?? '',
+        diag?.warning || '',
+      ]
+    }),
   )
 }
 
@@ -1137,6 +1232,7 @@ export default function Raman({
   const [peakParams, setPeakParams] = useState<PeakDetectionParams>(DEFAULT_PEAK_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
   const [backgroundResult, setBackgroundResult] = useState<ProcessResult | null>(null)
+  const [siSubtractionResult, setSiSubtractionResult] = useState<ProcessResult | null>(null)
   const [normalizationResult, setNormalizationResult] = useState<ProcessResult | null>(null)
   const [selectedSeries, setSelectedSeries] = useState<string>('')
   const [processingViewMode, setProcessingViewMode] = useState<'single' | 'overlay'>('single')
@@ -1200,6 +1296,7 @@ export default function Raman({
     overlay: 'blue',
     preprocess: 'teal',
     background: 'orange',
+    si: 'purple',
     normalization: 'teal',
     final: 'blue',
   })
@@ -1207,6 +1304,7 @@ export default function Raman({
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
   const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
   const [backgroundHidden, setBackgroundHidden] = useState<string[]>([])
+  const [siHidden, setSiHidden] = useState<string[]>([])
   const [normalizationHidden, setNormalizationHidden] = useState<string[]>([])
   const [finalHidden, setFinalHidden] = useState<string[]>([])
 
@@ -1259,41 +1357,76 @@ export default function Raman({
     if (rawFiles.length === 0) {
       setResult(null)
       setBackgroundResult(null)
+      setSiSubtractionResult(null)
       setNormalizationResult(null)
       return
     }
+    if (params.si_subtraction_enabled && params.si_subtraction_method === 'reference_fit' && !params.si_reference_name) {
+      setError('請先選擇 Si reference 檔案，才能使用 Si reference 校正扣除。')
+      return
+    }
     let cancelled = false
+    const controller = new AbortController()
     setIsLoading(true)
     setError(null)
     const hasBackgroundStage = params.bg_enabled && params.bg_method !== 'none'
     const hasNormalizationStage = params.norm_method !== 'none'
     const backgroundParams: ProcessParams = {
       ...params,
+      si_subtraction_enabled: false,
       norm_method: 'none',
       norm_x_start: null,
       norm_x_end: null,
     }
-    Promise.all([
-      processData(rawFiles, params),
-      hasBackgroundStage ? processData(rawFiles, backgroundParams) : Promise.resolve(null),
-    ])
-      .then(([finalResponse, backgroundResponse]) => {
-        if (!cancelled) {
-          setResult(finalResponse)
-          setBackgroundResult(backgroundResponse)
-          setNormalizationResult(hasNormalizationStage ? finalResponse : null)
-        }
-      })
-      .catch(e => {
-        if (!cancelled) setError(String((e as Error).message))
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false)
-      })
+    const siParams: ProcessParams = {
+      ...params,
+      norm_method: 'none',
+      norm_x_start: null,
+      norm_x_end: null,
+    }
+    const timeoutId = window.setTimeout(() => {
+      Promise.all([
+        processData(rawFiles, params, controller.signal),
+        hasBackgroundStage ? processData(rawFiles, backgroundParams, controller.signal) : Promise.resolve(null),
+        hasSiSubtractionStage ? processData(rawFiles, siParams, controller.signal) : Promise.resolve(null),
+      ])
+        .then(([finalResponse, backgroundResponse, siResponse]) => {
+          if (!cancelled) {
+            setResult(finalResponse)
+            setBackgroundResult(backgroundResponse)
+            setSiSubtractionResult(siResponse)
+            setNormalizationResult(hasNormalizationStage ? finalResponse : null)
+          }
+        })
+        .catch(e => {
+          if (!cancelled && (e as Error).name !== 'AbortError') {
+            setError(String((e as Error).message))
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setIsLoading(false)
+        })
+    }, 300)
+
     return () => {
       cancelled = true
+      window.clearTimeout(timeoutId)
+      controller.abort()
     }
   }, [rawFiles, params])
+
+  useEffect(() => {
+    if (!params.si_reference_name && rawFiles.length > 0) {
+      const siCandidate = rawFiles.find(file => /(^|[^a-z])si([^a-z]|$)|silicon/i.test(file.name))
+      if (siCandidate) {
+        setParams(current => current.si_reference_name ? current : { ...current, si_reference_name: siCandidate.name })
+      }
+      return
+    }
+    if (params.si_reference_name && !rawFiles.some(file => file.name === params.si_reference_name)) {
+      setParams(current => ({ ...current, si_reference_name: null }))
+    }
+  }, [params.si_reference_name, rawFiles])
 
   useEffect(() => {
     if (selectedRefs.length === 0) {
@@ -1339,6 +1472,7 @@ export default function Raman({
   }, [normalizationResult, selectedSeries])
   const hasBackgroundStage = params.bg_enabled && params.bg_method !== 'none'
   const hasNormalizationStage = params.norm_method !== 'none'
+  const hasSiSubtractionStage = params.si_subtraction_enabled
   const datasetTabItems = useMemo(
     () => (result?.datasets ?? []).map(dataset => ({ key: dataset.name, label: dataset.name })),
     [result],
@@ -1460,7 +1594,53 @@ export default function Raman({
       { x: backgroundStageDatasets[2].x, y: backgroundStageDatasets[2].y, type: 'scatter', mode: 'lines', name: '背景扣除後', line: { color: palette.primary, width: 2.2 } },
     ] as Plotly.Data[]
   }, [backgroundStageDatasets, chartLineColors.background])
+  const siSubtractionDatasets = useMemo(
+    () => ((siSubtractionResult ?? result)?.datasets ?? []).filter(dataset => dataset.y_si_component && dataset.name !== params.si_reference_name),
+    [params.si_reference_name, result, siSubtractionResult],
+  )
+  const activeSiDataset = useMemo(() => {
+    if (!hasSiSubtractionStage) return null
+    return siSubtractionDatasets.find(dataset => dataset.name === selectedSeries) ?? siSubtractionDatasets[0] ?? null
+  }, [hasSiSubtractionStage, selectedSeries, siSubtractionDatasets])
+  const siStageDatasets = useMemo(() => {
+    if (!activeSiDataset || !activeSiDataset.y_si_component) return []
+    return [
+      { name: 'Si 扣除前', x: activeSiDataset.x, y: activeSiDataset.y_raw },
+      { name: '校正後 Si component', x: activeSiDataset.x, y: activeSiDataset.y_si_component },
+      { name: 'Si 扣除後', x: activeSiDataset.x, y: activeSiDataset.y_processed },
+    ]
+  }, [activeSiDataset])
+  const siChartTraces = useMemo(() => {
+    if (siStageDatasets.length === 0) return []
+    const palette = LINE_COLOR_PALETTES[chartLineColors.si] ?? LINE_COLOR_PALETTES.blue
+    return [
+      { x: siStageDatasets[0].x, y: siStageDatasets[0].y, type: 'scatter', mode: 'lines', name: siStageDatasets[0].name, line: { color: palette.secondary, width: 1.25, dash: 'dot' } },
+      { x: siStageDatasets[1].x, y: siStageDatasets[1].y, type: 'scatter', mode: 'lines', name: siStageDatasets[1].name, line: { color: palette.tertiary ?? palette.accent, width: 1.55, dash: 'dash' } },
+      { x: siStageDatasets[2].x, y: siStageDatasets[2].y, type: 'scatter', mode: 'lines', name: siStageDatasets[2].name, line: { color: palette.primary, width: 2.2 } },
+    ] as Plotly.Data[]
+  }, [chartLineColors.si, siStageDatasets])
+  const siCorrectedOverlayTraces = useMemo(() => {
+    if (siSubtractionDatasets.length === 0) return []
+    const colors = (LINE_COLOR_PALETTES[chartLineColors.si] ?? LINE_COLOR_PALETTES.blue).series
+    return siSubtractionDatasets.map((dataset, index) => ({
+      x: dataset.x,
+      y: dataset.y_processed,
+      type: 'scatter',
+      mode: 'lines',
+      name: dataset.name,
+      line: { color: colors[index % colors.length], width: 2 },
+    })) as Plotly.Data[]
+  }, [chartLineColors.si, siSubtractionDatasets])
+  const siDiagnosticsRows = useMemo(
+    () => siSubtractionDatasets
+      .map(dataset => ({ name: dataset.name, diagnostics: dataset.si_subtraction_diagnostics }))
+      .filter(row => Boolean(row.diagnostics)),
+    [siSubtractionDatasets],
+  )
   const normalizationInput = useMemo(() => {
+    if (hasSiSubtractionStage && activeSiDataset) {
+      return { x: activeSiDataset.x, y: activeSiDataset.y_processed }
+    }
     if (hasBackgroundStage && backgroundDataset) {
       return { x: backgroundDataset.x, y: backgroundDataset.y_processed }
     }
@@ -1468,7 +1648,7 @@ export default function Raman({
       return { x: activeRawDataset.x, y: activeRawDataset.y }
     }
     return null
-  }, [activeRawDataset, backgroundDataset, hasBackgroundStage])
+  }, [activeRawDataset, activeSiDataset, backgroundDataset, hasBackgroundStage, hasSiSubtractionStage])
   const normalizationStageDatasets = useMemo(
     () => normalizationDataset ? [{ name: normalizationDataset.name, x: normalizationDataset.x, y: normalizationDataset.y_processed }] : [],
     [normalizationDataset],
@@ -1553,6 +1733,11 @@ export default function Raman({
     ...chartLayout(),
     shapes: buildRegionShapes(params.bg_x_start ?? bgDataXMin, params.bg_x_end ?? bgDataXMax, '#f59e0b'),
     annotations: buildRegionAnnotations(params.bg_x_start ?? bgDataXMin, params.bg_x_end ?? bgDataXMax, '背景區間', '#f59e0b'),
+  }
+  const siSubtractionLayout = {
+    ...chartLayout(),
+    shapes: buildRegionShapes(params.si_fit_x_start, params.si_fit_x_end, '#a855f7'),
+    annotations: buildRegionAnnotations(params.si_fit_x_start, params.si_fit_x_end, 'Si 基板殘留區', '#c084fc'),
   }
   const normalizationLayout = {
     ...chartLayout(),
@@ -2744,7 +2929,125 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={3} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
+            <SidebarCard step={3} title="Si 基板校正扣除" hint="520 cm⁻¹ 診斷扣除" defaultOpen={false} infoContent={
+              <div className="space-y-3">
+                <p className="font-semibold text-[var(--text-main)]">Si 基板訊號校正</p>
+                <p>這一步不會把裸 Si 光譜整條硬扣掉；reference 模式會先做峰位偏移、強度縮放與局部 baseline 擬合，fit 模式則直接從樣品擬合 520 cm⁻¹ Si peak。</p>
+              </div>
+            }>
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2">
+                <span className="text-xs font-medium text-[var(--text-main)]">啟用 Si 扣除</span>
+                <input
+                  type="checkbox"
+                  checked={params.si_subtraction_enabled}
+                  onChange={e => setParams(current => ({ ...current, si_subtraction_enabled: e.target.checked }))}
+                  className="h-4 w-4 accent-[var(--accent-primary)]"
+                />
+              </label>
+              {params.si_subtraction_enabled && (
+                <div className="mt-3 space-y-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-[var(--text-soft)]">扣除模式</span>
+                    <ThemeSelect
+                      value={params.si_subtraction_method}
+                      onChange={value => setParams(current => ({ ...current, si_subtraction_method: value as ProcessParams['si_subtraction_method'] }))}
+                      options={SI_SUBTRACTION_METHOD_OPTIONS}
+                      buttonClassName="text-sm"
+                    />
+                  </label>
+                  {params.si_subtraction_method === 'reference_fit' && (
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">Si reference 檔案</span>
+                      <ThemeSelect
+                        value={params.si_reference_name ?? ''}
+                        onChange={value => setParams(current => ({ ...current, si_reference_name: value || null }))}
+                        options={[
+                          { value: '', label: '請選擇 Si reference' },
+                          ...rawFiles.map(file => ({ value: file.name, label: file.name })),
+                        ]}
+                        buttonClassName="text-sm"
+                      />
+                    </label>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">fit 起點</span>
+                      <input type="number" value={params.si_fit_x_start} onChange={e => setParams(current => ({ ...current, si_fit_x_start: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-[var(--text-soft)]">fit 終點</span>
+                      <input type="number" value={params.si_fit_x_end} onChange={e => setParams(current => ({ ...current, si_fit_x_end: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                    </label>
+                  </div>
+                  <DualRangeInput
+                    label="Si fit window"
+                    min={xDataMin}
+                    max={xDataMax}
+                    start={params.si_fit_x_start}
+                    end={params.si_fit_x_end}
+                    step={1}
+                    unit="cm⁻¹"
+                    onChange={({ start, end }) => setParams(current => ({ ...current, si_fit_x_start: start, si_fit_x_end: end }))}
+                  />
+                  {params.si_subtraction_method === 'reference_fit' ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">scale 下限</span>
+                          <input type="number" value={params.si_scale_min} step={0.05} onChange={e => setParams(current => ({ ...current, si_scale_min: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">scale 上限</span>
+                          <input type="number" value={params.si_scale_max} step={0.05} onChange={e => setParams(current => ({ ...current, si_scale_max: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">dx 下限</span>
+                          <input type="number" value={params.si_shift_min} step={0.1} onChange={e => setParams(current => ({ ...current, si_shift_min: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">dx 上限</span>
+                          <input type="number" value={params.si_shift_max} step={0.1} onChange={e => setParams(current => ({ ...current, si_shift_max: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">center 下限</span>
+                          <input type="number" value={params.si_peak_center_min} step={0.1} onChange={e => setParams(current => ({ ...current, si_peak_center_min: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">center 上限</span>
+                          <input type="number" value={params.si_peak_center_max} step={0.1} onChange={e => setParams(current => ({ ...current, si_peak_center_max: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM 下限</span>
+                          <input type="number" value={params.si_peak_fwhm_min} step={0.5} onChange={e => setParams(current => ({ ...current, si_peak_fwhm_min: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">FWHM 上限</span>
+                          <input type="number" value={params.si_peak_fwhm_max} step={0.5} onChange={e => setParams(current => ({ ...current, si_peak_fwhm_max: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                      </div>
+                    </>
+                  )}
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-[var(--text-soft)]">負殘差警告比例</span>
+                    <input type="number" value={params.si_negative_threshold_ratio} min={0} max={1} step={0.005} onChange={e => setParams(current => ({ ...current, si_negative_threshold_ratio: Number(e.target.value) }))} className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                  </label>
+                  <p className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                    扣除後不會把負值歸零；500–540 cm⁻¹ 的負峰或 S-shaped residual 會保留並列入診斷。
+                  </p>
+                </div>
+              )}
+            </SidebarCard>
+
+            <SidebarCard step={4} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
                 <p>歸一化方便比較不同 Raman 光譜的峰型與相對強度，但不適合用來保留絕對訊號高低。</p>
@@ -2802,7 +3105,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={4} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
+            <SidebarCard step={5} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰偵測與參考峰說明</p>
                 <p>峰偵測會直接在目前的處理後光譜上找局部極大值。它適合拿來快速建立候選峰，不代表每一個點都一定是物理上成立的 Raman band。</p>
@@ -2908,7 +3211,7 @@ export default function Raman({
               </div>
             </SidebarCard>
 
-            <SidebarCard step={5} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
+            <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰位管理與擬合說明</p>
                 <p>這一步負責整理峰位表、加入手動峰並執行 sequential grouped fitting。</p>
@@ -3329,6 +3632,7 @@ export default function Raman({
                   { label: '資料集', value: `${rawFiles.length} 個` },
                   { label: 'Raman 範圍', value: ramanRangeLabel },
                   { label: '背景方法', value: backgroundMethodLabel },
+                  { label: 'Si 扣除', value: params.si_subtraction_enabled ? SI_SUBTRACTION_METHOD_OPTIONS.find(option => option.value === params.si_subtraction_method)?.label ?? '啟用' : '未啟用' },
                   { label: '歸一化', value: normalizationLabel },
                 ]}
               />
@@ -3374,13 +3678,20 @@ export default function Raman({
                     onLegendDoubleClick={() => false}
                     useResizeHandler
                   />
-                  <div className="mt-3 flex justify-start">
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => downloadFile(buildStageCsv(rawStageDatasets, 'raman_shift_cm-1', 'intensity_raw'), 'raman_raw_stage.csv', 'text/csv')}
                       className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                     >
                       下載此步驟 CSV
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportPlotPng(applyHidden(rawChartTraces, rawHidden), chartLayout(), 'raw_raman_overlay.png', setError)}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      匯出 raw_raman_overlay.png
                     </button>
                   </div>
                 </div>
@@ -3544,10 +3855,136 @@ export default function Raman({
                 </div>
               )}
 
+              {!isOverlayView && hasSiSubtractionStage && siChartTraces.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="4. Si 基板校正扣除診斷"
+                    colorValue={chartLineColors.si}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, si: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">顯示原始樣品、校正後 Si component 與扣除後光譜；紫色區塊是 500–540 cm⁻¹ 附近的 Si residual region。</p>
+                  <DeferredRender minHeight={360}>
+                    <Plot
+                      data={applyHidden(siChartTraces, siHidden)}
+                      layout={siSubtractionLayout as Plotly.Layout}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', minHeight: '360px' }}
+                      onLegendClick={makeLegendClick(setSiHidden) as never}
+                      onLegendDoubleClick={() => false}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
+                  {activeSiDataset?.si_subtraction_diagnostics && (
+                    <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                        <div className="text-[var(--text-soft)]">scale a</div>
+                        <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.scale_factor_a == null ? '-' : activeSiDataset.si_subtraction_diagnostics.scale_factor_a.toFixed(4)}</div>
+                      </div>
+                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                        <div className="text-[var(--text-soft)]">dx cm⁻¹</div>
+                        <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.shift_dx_cm == null ? '-' : activeSiDataset.si_subtraction_diagnostics.shift_dx_cm.toFixed(4)}</div>
+                      </div>
+                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                        <div className="text-[var(--text-soft)]">RMSE near Si</div>
+                        <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.rmse_near_si == null ? '-' : activeSiDataset.si_subtraction_diagnostics.rmse_near_si.toExponential(3)}</div>
+                      </div>
+                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                        <div className="text-[var(--text-soft)]">Warning</div>
+                        <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.warning || '-'}</div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {activeSiDataset && (
+                      <button
+                        type="button"
+                        onClick={() => downloadFile(buildSiCorrectedCsv(activeSiDataset), `${activeSiDataset.name.replace(/\.[^.]+$/, '')}_si_corrected.csv`, 'text/csv')}
+                        className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                      >
+                        下載此樣品 Si corrected CSV
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(buildSiReportCsv(siSubtractionDatasets), 'si_subtraction_report.csv', 'text/csv')}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      下載 Si subtraction report
+                    </button>
+                    {activeSiDataset && (
+                      <button
+                        type="button"
+                        onClick={() => exportPlotPng(applyHidden(siChartTraces, siHidden), siSubtractionLayout as Partial<Plotly.Layout>, `diagnostic_${safeFileStem(activeSiDataset.name)}_si_subtraction.png`, setError)}
+                        className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                      >
+                        匯出 diagnostic PNG
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {!isOverlayView && hasSiSubtractionStage && siCorrectedOverlayTraces.length > 1 && (
+                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <ChartToolbar
+                    title="5. Si 扣除後 Raman 疊圖"
+                    colorValue={chartLineColors.si}
+                    onColorChange={value => setChartLineColors(current => ({ ...current, si: value }))}
+                  />
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">多筆樣品的 Si 扣除後疊圖；Si reference 檔案會自動排除，避免把基板參考當成樣品結果。</p>
+                  <DeferredRender minHeight={340}>
+                    <Plot
+                      data={siCorrectedOverlayTraces}
+                      layout={siSubtractionLayout as Plotly.Layout}
+                      config={withPlotFullscreen({ scrollZoom: false })}
+                      style={{ width: '100%', minHeight: '340px' }}
+                      useResizeHandler
+                    />
+                  </DeferredRender>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => exportPlotPng(siCorrectedOverlayTraces, siSubtractionLayout as Partial<Plotly.Layout>, 'si_corrected_raman_overlay.png', setError)}
+                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
+                    >
+                      匯出 si_corrected_raman_overlay.png
+                    </button>
+                  </div>
+                  {siDiagnosticsRows.length > 0 && (
+                    <div className="mt-3 overflow-auto rounded-xl border border-[var(--card-border)]">
+                      <table className="min-w-full text-left text-xs">
+                        <thead className="bg-[var(--card-ghost)] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">Sample</th>
+                            <th className="px-3 py-2 font-medium">a</th>
+                            <th className="px-3 py-2 font-medium">dx</th>
+                            <th className="px-3 py-2 font-medium">min residual</th>
+                            <th className="px-3 py-2 font-medium">RMSE</th>
+                            <th className="px-3 py-2 font-medium">Warning</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {siDiagnosticsRows.map(row => (
+                            <tr key={row.name} className="border-t border-[var(--card-border)] text-[var(--text-main)]">
+                              <td className="px-3 py-2">{row.name}</td>
+                              <td className="px-3 py-2">{row.diagnostics?.scale_factor_a == null ? '-' : row.diagnostics.scale_factor_a.toFixed(4)}</td>
+                              <td className="px-3 py-2">{row.diagnostics?.shift_dx_cm == null ? '-' : row.diagnostics.shift_dx_cm.toFixed(4)}</td>
+                              <td className="px-3 py-2">{row.diagnostics?.min_residual_near_si == null ? '-' : row.diagnostics.min_residual_near_si.toExponential(3)}</td>
+                              <td className="px-3 py-2">{row.diagnostics?.rmse_near_si == null ? '-' : row.diagnostics.rmse_near_si.toExponential(3)}</td>
+                              <td className="px-3 py-2">{row.diagnostics?.warning || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {!isOverlayView && hasNormalizationStage && normalizationChartTraces.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                   <ChartToolbar
-                    title="4. 歸一化"
+                    title={hasSiSubtractionStage ? '6. 歸一化' : '4. 歸一化'}
                     colorValue={chartLineColors.normalization}
                     onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
                   />
@@ -3608,7 +4045,7 @@ export default function Raman({
               {!isOverlayView && finalChartTraces.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                   <ChartToolbar
-                    title="4. 最終處理光譜"
+                    title="最終處理光譜"
                     colorValue={chartLineColors.final}
                     onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
                     actions={onOpenPlotPopup ? (

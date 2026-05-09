@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
@@ -124,6 +126,7 @@ def manual_anchor_background(x, anchor_x, anchor_y):
     return np.interp(x, ax, ay, left=ay[0], right=ay[-1])
 
 
+@lru_cache(maxsize=32)
 def _baseline_system_matrix(n_points: int):
     """Second-derivative penalty matrix used by Whittaker-style baselines."""
     if n_points < 3:
