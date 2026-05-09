@@ -340,18 +340,40 @@ function fitComponentLabel(component: RamanFitComponent) {
   return group ? `${centerLabel} (${group})` : centerLabel
 }
 
-function componentValueAtCenter(x: number[], y: number[], center: number) {
-  if (x.length === 0 || y.length === 0) return 0
-  let bestIndex = 0
-  let bestDistance = Number.POSITIVE_INFINITY
-  for (let index = 0; index < x.length; index += 1) {
-    const distance = Math.abs((x[index] ?? 0) - center)
-    if (distance < bestDistance) {
-      bestDistance = distance
-      bestIndex = index
+function buildFitComponentLegendAnnotations(components: RamanFitComponent[], enabled: boolean) {
+  if (!enabled || components.length === 0) return { annotations: [] as object[], rowCount: 0 }
+  const annotations: object[] = []
+  let cursorX = 0.02
+  let row = 0
+  components.forEach((component, index) => {
+    const text = fitComponentLabel(component)
+    const width = Math.min(0.34, 0.035 + text.length * 0.0095)
+    if (cursorX + width > 0.98) {
+      row += 1
+      cursorX = 0.02
     }
-  }
-  return y[bestIndex] ?? 0
+    annotations.push({
+      x: cursorX,
+      y: 1.11 - row * 0.06,
+      xref: 'paper',
+      yref: 'paper',
+      xanchor: 'left',
+      yanchor: 'bottom',
+      text,
+      showarrow: false,
+      font: {
+        color: fitComponentColor(index),
+        family: 'Times New Roman, Noto Sans TC, serif',
+        size: 11,
+      },
+      bgcolor: 'rgba(15, 23, 42, 0.76)',
+      bordercolor: 'rgba(148, 163, 184, 0.18)',
+      borderwidth: 1,
+      borderpad: 3,
+    })
+    cursorX += width
+  })
+  return { annotations, rowCount: row + 1 }
 }
 
 function fitResultComponents(fitResult: FitResult, x: number[], baseline: number[]): RamanFitComponent[] {
@@ -491,34 +513,18 @@ function fitResultFigure(
     line: { color: '#8b949e', width: 1.05 },
   })
 
-  const annotations = options.showPeakLabels
-    ? components
-      .filter(component => Number.isFinite(component.center))
-      .map((component, index) => ({
-        x: component.center,
-        y: componentValueAtCenter(x, component.y_component_raw, component.center),
-        xref: 'x' as const,
-        yref: 'y' as const,
-        text: fitComponentLabel(component),
-        showarrow: false,
-        yshift: -12 - (index % 3) * 12,
-        font: { color: fitComponentColor(index), family: legendFamily, size: 11 },
-        bgcolor: 'rgba(15, 23, 42, 0.72)',
-        bordercolor: 'rgba(148, 163, 184, 0.22)',
-        borderwidth: 1,
-      }))
-    : []
+  const componentLegend = buildFitComponentLegendAnnotations(components, options.showPeakLabels)
 
   return {
     data,
     layout: {
       ...base,
-      margin: { l: 68, r: 24, t: 126, b: 72 },
+      margin: { l: 68, r: 24, t: 126 + componentLegend.rowCount * 24, b: 72 },
       legend: {
         orientation: 'h',
         x: 0.5,
         xanchor: 'center',
-        y: 1.18,
+        y: 1.22 + Math.max(0, componentLegend.rowCount - 1) * 0.035,
         yanchor: 'bottom',
         bgcolor: 'rgba(0,0,0,0)',
         borderwidth: 0,
@@ -551,7 +557,7 @@ function fitResultFigure(
         zeroline: true,
         zerolinecolor: 'rgba(148, 163, 184, 0.35)',
       },
-      annotations,
+      annotations: componentLegend.annotations,
     },
   }
 }
@@ -4434,7 +4440,7 @@ export default function Raman({
                       {[
                         ['showComponents', '顯示 components'],
                         ['fillComponents', '填滿 components'],
-                        ['showPeakLabels', '顯示 peak labels'],
+                        ['showPeakLabels', '顯示上方 component 對照'],
                       ].map(([key, label]) => (
                         <label key={key} className="theme-pill flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-[var(--text-main)]">
                           <input

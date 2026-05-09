@@ -558,18 +558,36 @@ function formatRamanComponentLabel(component: RamanComponentCurve) {
   return group ? `${centerText} (${group})` : centerText
 }
 
-function nearestSeriesValue(x: number[], y: number[], target: number) {
-  if (x.length === 0 || y.length === 0) return 0
-  let bestIndex = 0
-  let bestDistance = Infinity
-  for (let index = 0; index < x.length; index += 1) {
-    const distance = Math.abs(x[index] - target)
-    if (distance < bestDistance) {
-      bestDistance = distance
-      bestIndex = index
+function buildRamanComponentLegendAnnotations(components: RamanComponentCurve[], enabled: boolean, fontFamily: string) {
+  if (!enabled || components.length === 0) return { annotations: [] as object[], rowCount: 0 }
+  const annotations: object[] = []
+  let cursorX = 0.02
+  let row = 0
+  components.forEach(component => {
+    const text = formatRamanComponentLabel(component)
+    const width = Math.min(0.34, 0.035 + text.length * 0.0095)
+    if (cursorX + width > 0.98) {
+      row += 1
+      cursorX = 0.02
     }
-  }
-  return y[bestIndex] ?? 0
+    annotations.push({
+      x: cursorX,
+      y: 1.07 - row * 0.06,
+      xref: 'paper',
+      yref: 'paper',
+      xanchor: 'left',
+      yanchor: 'bottom',
+      text,
+      showarrow: false,
+      font: { family: fontFamily, size: 11, color: '#111827' },
+      bgcolor: 'rgba(255,255,255,0.92)',
+      bordercolor: 'rgba(17,24,39,0.12)',
+      borderwidth: 1,
+      borderpad: 3,
+    })
+    cursorX += width
+  })
+  return { annotations, rowCount: row + 1 }
 }
 
 function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
@@ -772,19 +790,8 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
   })
 
   const labelAnnotations = style.showLabels
-    ? file.components
-      .filter(component => component.center != null && component.center >= Math.min(x0, x1) && component.center <= Math.max(x0, x1))
-      .map((component, index) => ({
-        x: component.center as number,
-        y: nearestSeriesValue(file.x, scaledSeries(component.yRaw, factor), component.center as number),
-        xref: 'x' as const,
-        yref: 'y' as const,
-        text: formatRamanComponentLabel(component),
-        showarrow: false,
-        yshift: -12 - (index % 3) * 12,
-        font: { family: style.fontFamily, size: style.labelFontSize, color: '#111827' },
-      }))
-    : []
+    ? buildRamanComponentLegendAnnotations(file.components, true, style.fontFamily)
+    : { annotations: [] as object[], rowCount: 0 }
 
   const axisBase = {
     showgrid: false,
@@ -803,9 +810,9 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
       paper_bgcolor: '#ffffff',
       plot_bgcolor: '#ffffff',
       font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
-      margin: { l: 90, r: 28, t: 48, b: 82 },
+      margin: { l: 90, r: 28, t: 48 + labelAnnotations.rowCount * 24, b: 82 },
       showlegend: true,
-      legend: { x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.72)', font: { size: Math.max(10, style.fontSize - 2) } },
+      legend: { x: 0.99, y: 1.02 + Math.max(0, labelAnnotations.rowCount - 1) * 0.035, xanchor: 'right', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.72)', font: { size: Math.max(10, style.fontSize - 2) } },
       xaxis: {
         ...axisBase,
         domain: [0, 1],
@@ -841,7 +848,7 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
           xanchor: 'left',
           font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' },
         },
-        ...labelAnnotations,
+        ...labelAnnotations.annotations,
       ],
     },
   }
