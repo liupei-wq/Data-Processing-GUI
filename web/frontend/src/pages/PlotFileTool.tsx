@@ -552,38 +552,60 @@ function normalizeRamanComponentGroup(component: RamanComponentCurve) {
   return component.material
 }
 
-function formatRamanComponentLabel(component: RamanComponentCurve) {
-  const centerText = component.center == null ? component.label : `${Math.round(component.center)}`
-  const group = normalizeRamanComponentGroup(component)
-  return group ? `${centerText} (${group})` : centerText
+function compactRamanModeLabel(component: RamanComponentCurve) {
+  return component.label
+    .replace(/^Si\s*/i, '')
+    .replace(/^NiO?\s*/i, '')
+    .replace(/^β-?Ga[₂2]O[₃3]\s*/i, '')
+    .replace(/^Ga[₂2]O[₃3]\s*/i, '')
+    .replace(/\s+candidate$/i, '')
+    .trim()
 }
 
-function buildRamanComponentLegendAnnotations(components: RamanComponentCurve[], enabled: boolean, fontFamily: string) {
+function ramanGroupLegendLabel(group: string, representative: RamanComponentCurve) {
+  const mode = compactRamanModeLabel(representative)
+  if (/^Si/i.test(group)) return mode ? `Si ${mode}` : 'Si'
+  if (/NiO?/i.test(group)) return mode ? `Ni ${mode}` : 'Ni'
+  if (/β-?Ga|Ga[₂2]O[₃3]/i.test(group)) return 'β-Ga₂O₃'
+  return group || representative.label || 'Component'
+}
+
+function buildRamanGroupAnnotations(components: RamanComponentCurve[], enabled: boolean, fontFamily: string, fontSize: number) {
   if (!enabled || components.length === 0) return { annotations: [] as object[], rowCount: 0 }
-  const annotations: object[] = []
-  let cursorX = 0.02
-  let row = 0
+  const groups = new Map<string, RamanComponentCurve>()
   components.forEach(component => {
-    const text = formatRamanComponentLabel(component)
-    const width = Math.min(0.34, 0.035 + text.length * 0.0095)
-    if (cursorX + width > 0.98) {
+    const group = normalizeRamanComponentGroup(component) || component.label || 'Component'
+    const current = groups.get(group)
+    if (!current || Math.abs(component.area ?? 0) > Math.abs(current.area ?? 0)) {
+      groups.set(group, component)
+    }
+  })
+
+  const annotations: object[] = []
+  const entries = Array.from(groups.entries())
+  let cursorX = 0.12
+  let row = 0
+  entries.forEach(([group, component], index) => {
+    const text = `— ${ramanGroupLegendLabel(group, component)}`
+    const width = Math.min(0.36, 0.09 + text.length * 0.018)
+    if (cursorX + width > 0.96) {
       row += 1
-      cursorX = 0.02
+      cursorX = 0.12
     }
     annotations.push({
       x: cursorX,
-      y: 1.07 - row * 0.06,
+      y: 1.16 - row * 0.11,
       xref: 'paper',
       yref: 'paper',
       xanchor: 'left',
       yanchor: 'bottom',
       text,
       showarrow: false,
-      font: { family: fontFamily, size: 11, color: '#111827' },
-      bgcolor: 'rgba(255,255,255,0.92)',
-      bordercolor: 'rgba(17,24,39,0.12)',
-      borderwidth: 1,
-      borderpad: 3,
+      font: {
+        family: 'Comic Sans MS, Bradley Hand, Times New Roman, Noto Sans TC, cursive',
+        size: Math.max(22, fontSize + 12),
+        color: index === 0 ? '#2563eb' : (index === 1 ? '#c21873' : '#d97706'),
+      },
     })
     cursorX += width
   })
@@ -739,7 +761,7 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
       if (style.fillComponents && file.baseline.some(value => Math.abs(value) > 1e-12)) {
         data.push({
           x: [...file.x, ...file.x.slice().reverse()],
-          y: [...scaledSeries(component.yRaw, factor), ...scaledSeries(file.baseline, factor).slice().reverse()],
+          y: [...scaledSeries(component.yCorrected, factor), ...Array(file.x.length).fill(0)],
           type: 'scatter',
           mode: 'lines',
           line: { color: style.componentColor, width: 0 },
@@ -751,13 +773,13 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
       }
       data.push({
         x: file.x,
-        y: scaledSeries(component.yRaw, factor),
+        y: scaledSeries(component.yCorrected, factor),
         type: 'scatter',
         mode: 'lines',
-        name: index === 0 ? 'Individual peak contributions' : component.label,
+        name: index === 0 ? '擬合（baseline-corrected）' : component.label,
         legendgroup: 'raman-components',
         showlegend: index === 0,
-        line: { color: style.componentColor, width: style.componentLineWidth },
+        line: { color: style.componentColor, width: style.componentLineWidth, dash: 'dash' },
         opacity: style.componentOpacity,
         hovertemplate: [
           component.label,
@@ -784,13 +806,12 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
     type: 'scatter',
     mode: 'lines',
     name: 'Residual',
-    xaxis: 'x2',
     yaxis: 'y2',
     line: { color: style.residualColor, width: style.residualLineWidth },
   })
 
   const labelAnnotations = style.showLabels
-    ? buildRamanComponentLegendAnnotations(file.components, true, style.fontFamily)
+    ? buildRamanGroupAnnotations(file.components, true, style.fontFamily, style.labelFontSize)
     : { annotations: [] as object[], rowCount: 0 }
 
   const axisBase = {

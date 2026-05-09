@@ -334,27 +334,49 @@ function normalizeComponentGroupLabel(component: RamanFitComponent) {
   return component.component_material || ''
 }
 
-function fitComponentLabel(component: RamanFitComponent) {
-  const centerLabel = Number.isFinite(component.center) ? `${Math.round(component.center)}` : component.component_label
-  const group = normalizeComponentGroupLabel(component)
-  return group ? `${centerLabel} (${group})` : centerLabel
+function compactFitComponentModeLabel(component: RamanFitComponent) {
+  return (component.component_label || '')
+    .replace(/^Si\s*/i, '')
+    .replace(/^NiO?\s*/i, '')
+    .replace(/^β-?Ga[₂2]O[₃3]\s*/i, '')
+    .replace(/^Ga[₂2]O[₃3]\s*/i, '')
+    .replace(/\s+candidate$/i, '')
+    .trim()
 }
 
-function buildFitComponentLegendAnnotations(components: RamanFitComponent[], enabled: boolean) {
+function fitComponentGroupLegendLabel(group: string, representative: RamanFitComponent) {
+  const mode = compactFitComponentModeLabel(representative)
+  if (/^Si/i.test(group)) return mode ? `Si ${mode}` : 'Si'
+  if (/NiO?/i.test(group)) return mode ? `Ni ${mode}` : 'Ni'
+  if (/β-?Ga|Ga[₂2]O[₃3]/i.test(group)) return 'β-Ga₂O₃'
+  return group || representative.component_label || 'Component'
+}
+
+function buildFitComponentGroupAnnotations(components: RamanFitComponent[], enabled: boolean) {
   if (!enabled || components.length === 0) return { annotations: [] as object[], rowCount: 0 }
+  const groups = new Map<string, RamanFitComponent>()
+  components.forEach(component => {
+    const group = normalizeComponentGroupLabel(component) || component.component_label || 'Component'
+    const current = groups.get(group)
+    if (!current || Math.abs(component.area || component.amplitude || 0) > Math.abs(current.area || current.amplitude || 0)) {
+      groups.set(group, component)
+    }
+  })
+
   const annotations: object[] = []
-  let cursorX = 0.02
+  const entries = Array.from(groups.entries())
+  let cursorX = 0.12
   let row = 0
-  components.forEach((component, index) => {
-    const text = fitComponentLabel(component)
-    const width = Math.min(0.34, 0.035 + text.length * 0.0095)
-    if (cursorX + width > 0.98) {
+  entries.forEach(([group, component], index) => {
+    const text = `— ${fitComponentGroupLegendLabel(group, component)}`
+    const width = Math.min(0.36, 0.09 + text.length * 0.018)
+    if (cursorX + width > 0.96) {
       row += 1
-      cursorX = 0.02
+      cursorX = 0.12
     }
     annotations.push({
       x: cursorX,
-      y: 1.11 - row * 0.06,
+      y: 1.16 - row * 0.11,
       xref: 'paper',
       yref: 'paper',
       xanchor: 'left',
@@ -363,13 +385,9 @@ function buildFitComponentLegendAnnotations(components: RamanFitComponent[], ena
       showarrow: false,
       font: {
         color: fitComponentColor(index),
-        family: 'Times New Roman, Noto Sans TC, serif',
-        size: 11,
+        family: 'Comic Sans MS, Bradley Hand, Times New Roman, Noto Sans TC, cursive',
+        size: 30,
       },
-      bgcolor: 'rgba(15, 23, 42, 0.76)',
-      bordercolor: 'rgba(148, 163, 184, 0.18)',
-      borderwidth: 1,
-      borderpad: 3,
     })
     cursorX += width
   })
@@ -440,7 +458,7 @@ function fitResultFigure(
       y: inputTraceY,
       type: 'scatter',
       mode: 'lines',
-      name: 'Processed spectrum',
+      name: '處理後光譜',
       line: { color: '#e5e7eb', width: 1.45 },
     },
   ]
@@ -462,7 +480,7 @@ function fitResultFigure(
       if (options.fillComponents && baselineHasSignal) {
         data.push({
           x: [...x, ...x.slice().reverse()],
-          y: [...component.y_component_raw, ...baseline.slice().reverse()],
+          y: [...component.y_component_corrected, ...Array(x.length).fill(0)],
           type: 'scatter',
           mode: 'lines',
           line: { color, width: 0 },
@@ -474,10 +492,10 @@ function fitResultFigure(
       }
       data.push({
         x,
-        y: component.y_component_raw,
+        y: component.y_component_corrected,
         type: 'scatter',
         mode: 'lines',
-        name: index === 0 ? 'Individual peak contributions' : component.component_label,
+        name: index === 0 ? '擬合（baseline-corrected）' : component.component_label,
         legendgroup: 'components',
         showlegend: index === 0,
         line: { color, width: 1.15, dash: 'dash' },
@@ -499,7 +517,7 @@ function fitResultFigure(
     y: totalFitRaw.length === x.length ? totalFitRaw : totalFitCorrected.map((value, index) => value + (baseline[index] ?? 0)),
     type: 'scatter',
     mode: 'lines',
-    name: 'Total fit',
+    name: '總擬合',
     line: { color: '#f8c65a', width: 2.7 },
   })
   data.push({
@@ -507,24 +525,23 @@ function fitResultFigure(
     y: fitResult.residuals,
     type: 'scatter',
     mode: 'lines',
-    name: 'Residual',
-    xaxis: 'x2',
+    name: '殘差',
     yaxis: 'y2',
     line: { color: '#8b949e', width: 1.05 },
   })
 
-  const componentLegend = buildFitComponentLegendAnnotations(components, options.showPeakLabels)
+  const componentLegend = buildFitComponentGroupAnnotations(components, options.showPeakLabels)
 
   return {
     data,
     layout: {
       ...base,
-      margin: { l: 68, r: 24, t: 126 + componentLegend.rowCount * 24, b: 72 },
+      margin: { l: 68, r: 72, t: 112 + componentLegend.rowCount * 32, b: 72 },
       legend: {
         orientation: 'h',
         x: 0.5,
         xanchor: 'center',
-        y: 1.22 + Math.max(0, componentLegend.rowCount - 1) * 0.035,
+        y: 1.18 + Math.max(0, componentLegend.rowCount - 1) * 0.09,
         yanchor: 'bottom',
         bgcolor: 'rgba(0,0,0,0)',
         borderwidth: 0,
@@ -535,25 +552,20 @@ function fitResultFigure(
         ...base.xaxis,
         domain: [0, 1],
         anchor: 'y',
-        showticklabels: false,
-      },
-      xaxis2: {
-        ...base.xaxis,
-        domain: [0, 1],
-        anchor: 'y2',
         title: { text: 'Raman Shift (cm⁻¹)' },
       },
       yaxis: {
         ...base.yaxis,
-        domain: [0.3, 1],
+        domain: [0, 1],
         title: { text: isNormalizedScale ? 'Normalized intensity' : 'Intensity' },
         range: isNormalizedScale ? [0, 1.05] : undefined,
       },
       yaxis2: {
         ...base.yaxis,
-        domain: [0, 0.2],
-        anchor: 'x2',
-        title: { text: 'Residual' },
+        overlaying: 'y',
+        side: 'right',
+        title: { text: '殘差' },
+        showgrid: false,
         zeroline: true,
         zerolinecolor: 'rgba(148, 163, 184, 0.35)',
       },
