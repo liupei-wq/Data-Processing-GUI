@@ -352,6 +352,15 @@ class CalibrationSummary(BaseModel):
     reference: str = "520.7 cm⁻¹"
 
 
+class StagedFitDiagnostics(BaseModel):
+    fitting_window: str = ""
+    quality_warnings: List[str] = []
+    baseline_method: str = ""
+    candidate_count: int = 0
+    auto_peak_notes: List[str] = []
+    stage_order: List[str] = []
+
+
 class GroupFitStage(BaseModel):
     group_name: str
     material: str
@@ -454,8 +463,10 @@ class FitResponse(BaseModel):
     r_squared: float
     adjusted_r_squared: float = 0.0
     rmse: float = 0.0
+    reduced_chi_square: float = 0.0
     aic: float = 0.0
     bic: float = 0.0
+    staged_diagnostics: StagedFitDiagnostics = StagedFitDiagnostics()
     residual_diagnostics: ResidualDiagnostics = ResidualDiagnostics()
     group_summaries: List[GroupSummary] = []
     calibration: CalibrationSummary = CalibrationSummary()
@@ -2092,6 +2103,222 @@ def _fit_model(
     )
 
 
+def _fit_window_from_request(req: FitRequest, x: np.ndarray) -> tuple[float, float]:
+    finite_x = x[np.isfinite(x)]
+    if len(finite_x) == 0:
+        raise ValueError("No finite x values in spectrum")
+    data_lo = float(np.min(finite_x))
+    data_hi = float(np.max(finite_x))
+    lo = data_lo if req.fit_lo is None else float(req.fit_lo)
+    hi = data_hi if req.fit_hi is None else float(req.fit_hi)
+    lo, hi = min(lo, hi), max(lo, hi)
+    return max(lo, data_lo), min(hi, data_hi)
+
+
+def _crop_to_fit_window(x: np.ndarray, y: np.ndarray, req: FitRequest) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
+    finite = np.isfinite(x) & np.isfinite(y)
+    if int(np.sum(finite)) < 3:
+        raise ValueError("Spectrum too short for fitting")
+    x_clean = np.asarray(x[finite], dtype=float)
+    y_clean = np.asarray(y[finite], dtype=float)
+    order = np.argsort(x_clean)
+    x_sorted = x_clean[order]
+    y_sorted = y_clean[order]
+    keep = np.concatenate(([True], np.diff(x_sorted) > 0))
+    x_sorted = x_sorted[keep]
+    y_sorted = y_sorted[keep]
+    fit_lo, fit_hi = _fit_window_from_request(req, x_sorted)
+    mask = (x_sorted >= fit_lo) & (x_sorted <= fit_hi)
+    if int(np.sum(mask)) < 8:
+        raise ValueError("Fitting window contains too few data points")
+    return x_sorted[mask], y_sorted[mask], (fit_lo, fit_hi)
+
+
+def _quality_warnings_for_staged_fit(x: np.ndarray, y: np.ndarray) -> list[str]:
+    warnings: list[str] = []
+    if len(y) < 8:
+        return ["fitting window contains very few points"]
+    y_finite = y[np.isfinite(y)]
+    if len(y_finite) == 0:
+        return ["no finite intensity values in fitting window"]
+    y_min = float(np.min(y_finite))
+    y_max = float(np.max(y_finite))
+    y_span = max(y_max - y_min, 1e-12)
+    near_top = np.abs(y_finite - y_max) <= max(y_span * 1e-4, abs(y_max) * 1e-8, 1e-12)
+    if int(np.sum(near_top)) >= max(4, int(0.01 * len(y_finite))):
+        warnings.append("possible overexposure: repeated points at the maximum intensity")
+    if np.percentile(y_finite, 1) < -0.08 * y_span:
+        warnings.append("negative-value anomaly: low tail is strongly below zero in the fitting window")
+
+    if len(y_finite) >= 9:
+        padded = np.pad(y_finite, (2, 2), mode="edge")
+        med = np.asarray([np.median(padded[i:i + 5]) for i in range(len(y_finite))], dtype=float)
+        diff = y_finite - med
+        noise = _robust_noise(diff)
+        spike_mask = diff > max(noise * 8.0, y_span * 0.08)
+        if int(np.sum(spike_mask)) > 0:
+            warnings.append(f"possible cosmic ray spikes: {int(np.sum(spike_mask))} sharp positive outlier(s)")
+    return warnings
+
+
+def _seed_candidate_from_local_max(x: np.ndarray, y_corrected: np.ndarray, candidate: dict) -> tuple[dict, PeakProbeRow]:
+    seeded = dict(candidate)
+    ref_center = float(seeded.get("ref_center", seeded.get("theoretical_center", seeded.get("be", 0.0))))
+    tolerance = float(max(seeded.get("tolerance_cm", 8.0), 0.0))
+    lo = ref_center - tolerance
+    hi = ref_center + tolerance
+    mask = (x >= lo) & (x <= hi)
+    local_max_position: Optional[float] = None
+    height_seed = 1e-9
+    status = "seeded"
+    reason = "initial center kept at reference; no points inside tolerance"
+    if int(np.sum(mask)) > 0:
+        local_x = x[mask]
+        local_y = y_corrected[mask]
+        local_idx = int(np.argmax(local_y))
+        local_max_position = float(local_x[local_idx])
+        height_seed = float(max(local_y[local_idx], _robust_noise(local_y) * 0.5, 1e-9))
+        seeded["be"] = local_max_position
+        reason = "initial center updated to local maximum within tolerance"
+    else:
+        seeded["be"] = ref_center
+        status = "not_observed"
+    seeded["center_min"] = lo
+    seeded["center_max"] = hi if hi > lo else lo + 1e-9
+    seeded["amplitude"] = height_seed
+
+    label = str(seeded.get("display_name", seeded.get("label", "")))
+    probe = PeakProbeRow(
+        material_group=_group_name_for_candidate(seeded),
+        material=_group_material_name(_group_name_for_candidate(seeded)),
+        peak_id=str(seeded.get("peak_id", "")),
+        peak_label=label,
+        mode=str(seeded.get("mode_label", seeded.get("label", ""))),
+        reference_cm1=ref_center,
+        search_window=f"{lo:.1f}-{hi:.1f}",
+        search_window_lo=float(lo),
+        search_window_hi=float(hi),
+        local_max_position=local_max_position,
+        tolerance_cm1=tolerance,
+        status=status,
+        rejection_reason=reason,
+        y_fit=np.zeros_like(y_corrected, dtype=float).tolist(),
+    )
+    return seeded, probe
+
+
+def _residual_peak_is_systematic(x: np.ndarray, residuals: np.ndarray, idx: int, noise: float) -> bool:
+    if idx <= 0 or idx >= len(residuals) - 1:
+        return False
+    span = max(float(np.max(x) - np.min(x)), 1e-9)
+    half_width = max(6.0, span / 80.0)
+    center = float(x[idx])
+    mask = (x >= center - half_width) & (x <= center + half_width)
+    if int(np.sum(mask)) < 5:
+        return False
+    local = residuals[mask]
+    local_centered = local - float(np.median(local))
+    peak_height = float(residuals[idx])
+    positive_area = float(np.sum(np.clip(local_centered, 0.0, None)))
+    negative_area = float(np.sum(np.clip(-local_centered, 0.0, None)))
+    positive_count = int(np.sum(local_centered > max(noise * 0.5, 1e-12)))
+    return peak_height > max(noise * 3.0, 1e-12) and positive_count >= 3 and positive_area > negative_area * 1.4
+
+
+def _auto_peak_candidate(center: float, height: float, x: np.ndarray, round_idx: int) -> dict:
+    span = max(float(np.max(x) - np.min(x)), 1.0)
+    tolerance = float(np.clip(span / 90.0, 4.0, 18.0))
+    fwhm = float(np.clip(span / 120.0, 4.0, 28.0))
+    return {
+        "label": f"auto residual peak {center:.1f} cm⁻¹",
+        "display_name": f"Auto residual peak {center:.1f} cm⁻¹",
+        "be": center,
+        "fwhm": fwhm,
+        "peak_id": f"RAUTO{round_idx:02d}",
+        "material": "Auto residual",
+        "phase": "Auto residual",
+        "phase_group": "Auto residual",
+        "role": "auto peak",
+        "mode_label": "auto residual peak",
+        "note": "Automatically retained only after AIC/BIC improvement and systematic residual peak-shape checks.",
+        "species": "model residual",
+        "tolerance_cm": tolerance,
+        "center_min": center - tolerance,
+        "center_max": center + tolerance,
+        "fwhm_min": max(1.0, fwhm * 0.35),
+        "fwhm_max": max(8.0, fwhm * 3.0),
+        "profile": "pseudo_voigt",
+        "peak_type": "auto_peak",
+        "related_technique": "Model",
+        "reference": "Residual AIC/BIC gate",
+        "reference_source": "Residual AIC/BIC gate",
+        "oxidation_state": "N/A",
+        "oxidation_state_inference": "Not applicable",
+        "theoretical_center": center,
+        "ref_center": center,
+        "lock_center": False,
+        "lock_fwhm": False,
+        "lock_area": False,
+        "lock_profile": False,
+        "can_be_quantified": False,
+        "amplitude": max(float(height), 1e-9),
+    }
+
+
+def _fit_with_aic_bic_auto_peaks(
+    x: np.ndarray,
+    y: np.ndarray,
+    candidates: list[dict],
+    req: FitRequest,
+) -> tuple[dict, list[dict], list[str]]:
+    working = [dict(item) for item in candidates]
+    result = _fit_model(x, y, working, req)
+    notes: list[str] = []
+    if not result.get("success"):
+        return result, working, notes
+    if not req.residual_target_enabled:
+        notes.append("auto peak search disabled")
+        return result, working, notes
+
+    max_rounds = int(np.clip(req.residual_target_rounds, 1, 8))
+    for round_idx in range(1, max_rounds + 1):
+        residuals = np.asarray(result.get("residuals", np.zeros_like(y)), dtype=float)
+        noise = max(_robust_noise(residuals), 1e-12)
+        peak_indices = detect_spectrum_peaks(
+            x,
+            np.clip(residuals, 0.0, None),
+            prominence_ratio=0.04,
+            height_ratio=0.0,
+            min_distance_x=6.0,
+            max_peaks=12,
+        )
+        peak_indices = sorted(peak_indices, key=lambda item: float(residuals[item]), reverse=True)
+        accepted = False
+        for idx in peak_indices:
+            center = float(x[idx])
+            if any(abs(center - float(item.get("be", item.get("ref_center", center)))) <= max(float(item.get("tolerance_cm", 8.0)), 4.0) for item in working):
+                continue
+            if not _residual_peak_is_systematic(x, residuals, int(idx), noise):
+                continue
+            trial_peak = _auto_peak_candidate(center, float(residuals[idx]), x, round_idx)
+            trial_candidates = [*working, trial_peak]
+            trial = _fit_model(x, y, trial_candidates, req)
+            if not trial.get("success"):
+                continue
+            delta_aic = float(result.get("aic", 0.0)) - float(trial.get("aic", 0.0))
+            delta_bic = float(result.get("bic", 0.0)) - float(trial.get("bic", 0.0))
+            if delta_aic >= 6.0 and delta_bic >= 6.0:
+                working = trial_candidates
+                result = trial
+                notes.append(f"accepted auto peak at {center:.2f} cm⁻¹; ΔAIC={delta_aic:.2f}, ΔBIC={delta_bic:.2f}")
+                accepted = True
+                break
+            notes.append(f"rejected auto peak at {center:.2f} cm⁻¹; ΔAIC={delta_aic:.2f}, ΔBIC={delta_bic:.2f}")
+        if not accepted:
+            break
+    return result, working, notes
+
+
 def _estimate_uncertainty(fwhm: float, snr: float, tolerance: float) -> tuple[float | None, float | None]:
     if not np.isfinite(snr) or snr <= 0:
         return None, None
@@ -2248,7 +2475,7 @@ def _peak_row_from_candidate(
         "Species": str(candidate.get("species", "")),
         "Oxidation_State": str(candidate.get("oxidation_state", "N/A")),
         "Oxidation_State_Inference": str(candidate.get("oxidation_state_inference", "Not applicable")),
-        "Assignment_Basis": "sequential grouped Raman fitting with relative-position constraints",
+        "Assignment_Basis": "staged Raman fitting with tolerance-bounded local probing",
         "Profile": str(peak.get("profile", candidate.get("profile", ""))),
         "Peak_Type": str(candidate.get("peak_type", "")),
         "Anchor_Peak": bool(candidate.get("anchor_peak", False)),
@@ -2604,9 +2831,9 @@ def _build_report_v2(
 ) -> RamanReport:
     sample_id = _sample_id_from_name(dataset_name)
     preprocessing_method = (
-        "frontend-processed spectrum + sequential grouped fitting"
+        "frontend-processed spectrum + staged global fitting"
         if req.input_is_preprocessed
-        else "baseline correction + sequential grouped fitting"
+        else "baseline correction + staged global fitting"
     )
     baseline_method = "frontend_processed" if req.input_is_preprocessed else req.baseline_method
     warnings = [row["Note"] for row in rows if row["Status"] in {"uncertain", "rejected"} and row["Note"]]
@@ -2805,257 +3032,66 @@ def fit_raman_peaks(req: FitRequest):
         raise HTTPException(status_code=400, detail="Spectrum too short for fitting")
     if not enabled_rows:
         raise HTTPException(status_code=400, detail="No enabled peaks provided")
-    probe_candidates = [_prepare_candidate_dict(row, 0.0) for row in enabled_rows]
-    if req.input_is_preprocessed:
-        baseline = np.zeros_like(y, dtype=float)
-        y_corrected = y.copy()
-    else:
-        baseline = _baseline_curve_with_peak_masks(
-            x,
-            y,
-            probe_candidates,
-            method=req.baseline_method,
-            baseline_lambda=float(req.baseline_lambda),
-            baseline_p=float(req.baseline_p),
-            baseline_iter=int(req.baseline_iter),
-        )
-        y_corrected = y - baseline
+    try:
+        x_fit, y_fit_window, fit_window = _crop_to_fit_window(x, y, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    calibration = CalibrationSummary()
-    si_probe_candidates = [
-        candidate for candidate in probe_candidates
-        if _group_name_for_candidate(candidate) == "Si group" and abs(float(candidate.get("ref_center", 0.0)) - 520.7) <= 25.0
-    ]
-    if si_probe_candidates:
-        anchor_probe = _choose_anchor_for_group(x, y_corrected, "Si group", si_probe_candidates, req)
-        if anchor_probe is not None:
-            si_center = float(anchor_probe["peak"]["center"])
-            offset = 520.7 - si_center
-            if np.isfinite(offset) and abs(offset) <= 12.0:
-                calibration = CalibrationSummary(
-                    method="constant_offset_from_si_520.7",
-                    offset_cm=float(offset),
-                    si_peak_before_cm=si_center,
-                    si_peak_after_cm=si_center + float(offset),
-                    applied=abs(offset) > 1e-6,
-                )
-            else:
-                calibration = CalibrationSummary(
-                    method="si_detected_but_not_applied",
-                    offset_cm=0.0,
-                    si_peak_before_cm=si_center,
-                    si_peak_after_cm=si_center,
-                    applied=False,
-                )
+    quality_warnings = _quality_warnings_for_staged_fit(x_fit, y_fit_window)
+    raw_candidates = [_prepare_candidate_dict(row, 0.0) for row in enabled_rows]
+    baseline = _baseline_curve_with_peak_masks(
+        x_fit,
+        y_fit_window,
+        raw_candidates,
+        method=req.baseline_method,
+        baseline_lambda=float(req.baseline_lambda),
+        baseline_p=float(req.baseline_p),
+        baseline_iter=int(req.baseline_iter),
+    )
+    y_corrected = y_fit_window - baseline
 
-    x_cal = x + float(calibration.offset_cm)
-    if calibration.applied:
-        calibration.si_peak_after_cm = 520.7
+    effective_req = req.model_copy(update={
+        "robust_loss": req.robust_loss if str(req.robust_loss).lower() != "linear" else "soft_l1",
+    })
+    seeded_candidates: list[dict] = []
+    seed_probe_rows: list[PeakProbeRow] = []
+    for candidate in raw_candidates:
+        seeded, probe = _seed_candidate_from_local_max(x_fit, y_corrected, candidate)
+        seeded_candidates.append(seeded)
+        seed_probe_rows.append(probe)
 
-    candidates = [_prepare_candidate_dict(row, float(calibration.offset_cm)) for row in enabled_rows]
-    group_names = sorted({_group_name_for_candidate(candidate) for candidate in candidates}, key=_group_order)
-    locked_total = np.zeros_like(y_corrected, dtype=float)
-    group_fit_stages: list[GroupFitStage] = []
-    stage_meta: dict[str, dict] = {}
-    accepted_candidates: list[dict] = []
-    all_probe_rows: list[PeakProbeRow] = []
-    probed_rows_by_id: dict[str, dict] = {}
-    grouped_candidates: dict[str, list[dict]] = {group_name: [] for group_name in group_names}
-    for candidate in candidates:
-        grouped_candidates.setdefault(_group_name_for_candidate(candidate), []).append(candidate)
-
-    for group_name in group_names:
-        group_candidates = grouped_candidates[group_name]
-        y_remaining = y_corrected - locked_total
-        anchor_info = _choose_anchor_for_group(x_cal, y_remaining, group_name, group_candidates, req)
-        config = _group_config(group_name)
-        anchor_candidate = anchor_info["candidate"] if anchor_info is not None else (
-            sorted(
-                group_candidates,
-                key=lambda item: (
-                    0 if item.get("anchor_peak") else 1,
-                    min(abs(float(item.get("ref_center", 0.0)) - pref) for pref in config["preferred_anchors"]) if config["preferred_anchors"] else 0.0,
-                ),
-            )[0]
-        )
-        anchor_ref = float(anchor_candidate.get("ref_center", anchor_candidate.get("be", 0.0)))
-        anchor_fitted = float(anchor_info["peak"]["center"]) if anchor_info is not None else None
-        group_shift_seed = (anchor_fitted - anchor_ref) if anchor_fitted is not None else 0.0
-        warnings: list[str] = []
-        if anchor_info is None or float(anchor_info.get("snr", 0.0)) < 3.0:
-            warnings.append("anchor peak not confidently observed; group kept conservative")
-
-        group_fit = np.zeros_like(y_corrected, dtype=float)
-        fitted_lookup: dict[str, dict] = {}
-        probe_rows: list[PeakProbeRow] = []
-        stage_rows_raw: list[dict] = []
-        stretch = 0.0
-        for candidate in group_candidates:
-            ref_center = float(candidate.get("ref_center", candidate.get("be", 0.0)))
-            predicted = _predicted_center(ref_center, group_shift_seed, stretch, anchor_ref)
-            probe, peak, probe_fit = _probe_candidate_peak(
-                x_cal,
-                y_remaining,
-                candidate,
-                req,
-                predicted_center_value=predicted,
-            )
-            probe_rows.append(probe)
-            stage_row = _peak_row_from_probe(candidate, probe, group_shift=group_shift_seed)
-            stage_rows_raw.append(stage_row)
-            if peak is not None and probe.status in ACCEPTED_PEAK_STATUSES:
-                fitted_lookup[str(candidate.get("peak_id", ""))] = peak
-                group_fit += probe_fit
-
-        residual_stage = y_remaining - group_fit
-        group_shift, stretch = _estimate_group_shift_and_stretch(group_name, stage_rows_raw, anchor_ref, str(anchor_candidate.get("peak_id", "")))
-        stage_summary = _group_summary_from_rows(
-            group_name,
-            stage_rows_raw,
-            str(anchor_candidate.get("display_name", anchor_candidate.get("label", ""))),
-            anchor_ref,
-            anchor_fitted,
-            group_shift,
-            stretch,
-            warnings,
-        )
-        for row in stage_rows_raw:
-            row["Group_Shift_cm"] = stage_summary.Group_Shift_cm
-            row["Spacing_Error_cm"] = stage_summary.Mean_Spacing_Error_cm
-            row["Group_Consistency_Score"] = stage_summary.Group_Consistency_Score
-            row["Group_Status"] = stage_summary.Status
-        group_fit_stages.append(GroupFitStage(
-            group_name=group_name,
-            material=_group_material_name(group_name),
-            anchor_peak_label=stage_summary.Anchor_Peak,
-            anchor_ref_cm=float(anchor_ref),
-            anchor_fitted_cm=anchor_fitted,
-            group_shift_cm=float(group_shift),
-            stretch=float(stretch),
-            x=x_cal.tolist(),
-            y_current_spectrum=y_remaining.tolist(),
-            y_remaining_before=y_remaining.tolist(),
-            y_group_fit=group_fit.tolist(),
-            y_locked_previous=locked_total.tolist(),
-            y_combined_fit=(locked_total + group_fit).tolist(),
-            residuals=residual_stage.tolist(),
-            peaks=[FitPeakRow(**row) for row in stage_rows_raw],
-            probe_rows=probe_rows,
-            r_squared=float(1.0 - np.sum(residual_stage ** 2) / max(np.sum((y_remaining - np.mean(y_remaining)) ** 2), 1e-12)),
-            warnings=warnings,
-        ))
-        all_probe_rows.extend(probe_rows)
-        for row in stage_rows_raw:
-            probed_rows_by_id[str(row["Peak_ID"])] = dict(row)
-        stage_meta[group_name] = {
-            "anchor_label": stage_summary.Anchor_Peak,
-            "anchor_ref": anchor_ref,
-            "anchor_fitted": anchor_fitted,
-            "warnings": warnings,
-        }
-        for candidate in group_candidates:
-            peak = fitted_lookup.get(str(candidate.get("peak_id", "")))
-            row = next((item for item in stage_rows_raw if item["Peak_ID"] == str(candidate.get("peak_id", ""))), None)
-            if peak is None or row is None:
-                continue
-            if row["Status"] not in ACCEPTED_PEAK_STATUSES:
-                continue
-            accepted = dict(candidate)
-            accepted["be"] = float(peak.get("center", candidate.get("be", 0.0)))
-            accepted["amplitude"] = float(peak.get("amplitude", 0.0))
-            accepted["fwhm"] = float(peak.get("fwhm", candidate.get("fwhm", 8.0)))
-            accepted["profile"] = str(peak.get("profile", candidate.get("profile", req.profile)))
-            accepted["center_min"] = accepted["be"] - _center_slack(candidate, refinement=True)
-            accepted["center_max"] = accepted["be"] + _center_slack(candidate, refinement=True)
-            accepted_candidates.append(accepted)
-        locked_total += group_fit
-
-    if accepted_candidates:
-        final_result = _fit_model(x_cal, y_corrected, accepted_candidates, req)
-        if not final_result.get("success"):
-            raise HTTPException(status_code=400, detail=str(final_result.get("message", "Final refinement failed")))
-    else:
-        final_result = {
-            "success": True,
-            "peaks": [],
-            "y_fit": np.zeros_like(y_corrected),
-            "y_individual": [],
-            "residuals": y_corrected.copy(),
-            "r_squared": 0.0,
-            "adjusted_r_squared": 0.0,
-            "rmse": float(np.sqrt(np.mean(y_corrected ** 2))) if len(y_corrected) else 0.0,
-            "aic": 0.0,
-            "bic": 0.0,
-        }
+    final_result, final_candidates, auto_peak_notes = _fit_with_aic_bic_auto_peaks(
+        x_fit,
+        y_corrected,
+        seeded_candidates,
+        effective_req,
+    )
+    if not final_result.get("success"):
+        raise HTTPException(status_code=400, detail=str(final_result.get("message", "Global fitting failed")))
 
     final_lookup = {str(peak.get("peak_id", "")): dict(peak) for peak in final_result.get("peaks", [])}
     residuals = np.asarray(final_result.get("residuals", np.zeros_like(y_corrected)), dtype=float)
-    noise_final = _robust_noise(residuals)
+    noise_final = max(_robust_noise(residuals), 1e-12)
     final_rows_raw: list[dict] = []
-    for candidate in candidates:
-        peak_id = str(candidate.get("peak_id", ""))
-        if peak_id in final_lookup:
-            peak = final_lookup[peak_id]
-            row = dict(probed_rows_by_id.get(peak_id, _peak_row_from_candidate(candidate, peak, noise_final, None, group_shift=0.0)))
-            ref_center = float(row["Ref_cm"]) if row.get("Ref_cm") is not None else float(peak.get("center", 0.0))
-            row["Center_cm"] = float(peak.get("center", row["Center_cm"]))
-            row["Delta_cm"] = float(row["Center_cm"] - ref_center)
-            row["FWHM_cm"] = float(peak.get("fwhm", row["FWHM_cm"]))
-            row["Height"] = float(peak.get("amplitude", row["Height"]))
-            row["Area"] = float(peak.get("area", row["Area"]))
-            row["Area_pct"] = float(peak.get("area_pct", row["Area_pct"]))
-            row["Profile"] = str(peak.get("profile", row.get("Profile", "")))
+    for candidate in final_candidates:
+        peak = final_lookup.get(str(candidate.get("peak_id", "")))
+        row = _peak_row_from_candidate(candidate, peak, noise_final, None, group_shift=0.0)
+        row["Assignment_Basis"] = "staged global Raman fitting with tolerance-bounded local-max initialization"
+        if str(candidate.get("peak_type", "")) == "auto_peak" and peak is not None:
+            row["Status"] = "accepted"
             row["Fit_Status"] = "Fit OK"
-            row["Status"] = "accepted" if row.get("Status") in ACCEPTED_PEAK_STATUSES else row.get("Status", "accepted")
-            final_rows_raw.append(row)
-        else:
-            final_rows_raw.append(dict(probed_rows_by_id.get(peak_id, _peak_row_from_candidate(candidate, None, noise_final, None, group_shift=0.0))))
+            row["Can_Be_Quantified"] = False
+            row["Quality_Flags"] = list(dict.fromkeys([*row.get("Quality_Flags", []), "auto peak"]))
+        final_rows_raw.append(row)
 
     _recompute_area_pct(final_rows_raw)
-
-    group_summaries: list[GroupSummary] = []
-    summary_by_group: dict[str, GroupSummary] = {}
-    for group_name in group_names:
-        rows_in_group = [row for row in final_rows_raw if row["Phase_Group"] == group_name]
-        meta = stage_meta.get(group_name, {})
-        anchor_peak_id = next(
-            (row["Peak_ID"] for row in rows_in_group if row["Peak_Name"] == meta.get("anchor_label")),
-            next((row["Peak_ID"] for row in rows_in_group if row["Anchor_Peak"]), ""),
-        )
-        anchor_ref = float(meta.get("anchor_ref", rows_in_group[0]["Ref_cm"] if rows_in_group else 0.0))
-        group_shift, stretch = _estimate_group_shift_and_stretch(group_name, rows_in_group, anchor_ref, anchor_peak_id)
-        anchor_row = next((row for row in rows_in_group if row["Peak_ID"] == anchor_peak_id and row["Status"] in PROBED_OBSERVED_STATUSES), None)
-        summary = _group_summary_from_rows(
-            group_name,
-            rows_in_group,
-            str(meta.get("anchor_label", "")),
-            anchor_ref if anchor_ref else None,
-            float(anchor_row["Center_cm"]) if anchor_row is not None else meta.get("anchor_fitted"),
-            group_shift,
-            stretch,
-            list(meta.get("warnings", [])),
-        )
-        group_summaries.append(summary)
-        summary_by_group[group_name] = summary
-
-    rows: list[FitPeakRow] = []
-    for row in final_rows_raw:
-        summary = summary_by_group.get(row["Phase_Group"])
-        if summary is not None:
-            row["Group_Shift_cm"] = summary.Group_Shift_cm
-            row["Spacing_Error_cm"] = summary.Mean_Spacing_Error_cm
-            row["Group_Consistency_Score"] = summary.Group_Consistency_Score
-            row["Group_Status"] = summary.Status
-            row["Anchor_Related_Delta_cm"] = (
-                row["Delta_cm"] - summary.Group_Shift_cm if row["Delta_cm"] is not None else None
-            )
-        rows.append(FitPeakRow(**row))
-
+    rows = [FitPeakRow(**row) for row in final_rows_raw]
     alignment_rows = _alignment_rows_from_peaks(req.dataset_name, [row.model_dump() for row in rows])
+
     detected_unmatched_rows: list[list[object]] = []
-    accepted_centers = [float(row.Center_cm) for row in rows if row.Status in PROBED_OBSERVED_STATUSES]
+    accepted_centers = [float(row.Center_cm) for row in rows if row.Status in PROBED_OBSERVED_STATUSES or row.Status == "accepted"]
     detected_indices = detect_spectrum_peaks(
-        x_cal,
+        x_fit,
         y_corrected,
         prominence_ratio=0.04,
         height_ratio=0.0,
@@ -3064,7 +3100,7 @@ def fit_raman_peaks(req: FitRequest):
     )
     sample_id = _sample_id_from_name(req.dataset_name)
     for idx in detected_indices:
-        center = float(x_cal[idx])
+        center = float(x_fit[idx])
         if any(abs(center - accepted_center) <= 8.0 for accepted_center in accepted_centers):
             continue
         detected_unmatched_rows.append([
@@ -3075,33 +3111,10 @@ def fit_raman_peaks(req: FitRequest):
             None,
             center,
             "uncertain",
-            "detected in corrected spectrum but not retained in the grouped model",
+            "detected in corrected fitting window but not retained by AIC/BIC-gated model",
         ])
-    for row in rows:
-        if row.Status == "not_observed":
-            detected_unmatched_rows.append([
-                sample_id,
-                "database_not_observed",
-                row.Peak_Name,
-                row.Material,
-                row.Ref_cm,
-                None,
-                row.Status,
-                row.Note,
-            ])
-        elif row.Status in {"candidate", "uncertain", "ambiguous", "overlapped", "rejected"}:
-            detected_unmatched_rows.append([
-                sample_id,
-                "ambiguous_or_low_confidence",
-                row.Peak_Name,
-                row.Material,
-                row.Ref_cm,
-                row.Center_cm,
-                row.Status,
-                row.Note,
-            ])
 
-    n_points = len(x_cal)
+    n_points = len(x_fit)
     n_params = max(len(final_result.get("peaks", [])) * 3, 1)
     ss_res = float(np.sum(residuals ** 2))
     reduced_chi2 = ss_res / max(n_points - n_params, 1)
@@ -3113,29 +3126,58 @@ def fit_raman_peaks(req: FitRequest):
         "aic": float(final_result.get("aic", 0.0)),
         "bic": float(final_result.get("bic", 0.0)),
     }
-    residual_diagnostics = _residual_diagnostics(x_cal, residuals)
+    residual_diagnostics = _residual_diagnostics(x_fit, residuals)
+    calibration = CalibrationSummary(method="none", applied=False)
+    group_summaries, _ = _build_group_summaries([row.model_dump() for row in rows])
+    report_warnings = [*quality_warnings]
+    if effective_req.robust_loss != req.robust_loss:
+        report_warnings.append("robust loss forced from linear to soft_l1 for staged fitting")
     report = _build_report_v2(
         req.dataset_name,
-        req,
+        effective_req,
         calibration,
         metrics,
         group_summaries,
         [row.model_dump() for row in rows],
         alignment_rows,
         detected_unmatched_rows,
-        all_probe_rows,
+        seed_probe_rows,
+    )
+    report.warnings = list(dict.fromkeys([*report.warnings, *report_warnings]))
+
+    staged_diagnostics = StagedFitDiagnostics(
+        fitting_window=f"{fit_window[0]:.3f}-{fit_window[1]:.3f} cm⁻¹",
+        quality_warnings=quality_warnings,
+        baseline_method=str(req.baseline_method),
+        candidate_count=len(seeded_candidates),
+        auto_peak_notes=auto_peak_notes,
+        stage_order=[
+            "1. crop fitting window",
+            "2. inspect overexposure / negative values / cosmic rays",
+            "3. baseline correction",
+            "4. load enabled literature/manual candidates",
+            "5. update initial centers from local maxima within tolerance",
+            "6. global constrained least-squares fit",
+            f"7. robust loss: {effective_req.robust_loss}",
+            "8. calculate R² / adjusted R² / RMSE / reduced χ² / AIC / BIC",
+            "9. AIC/BIC-gated auto peaks only when residual shape is systematic",
+            "10. output table, components, total fit, residual",
+        ],
     )
 
-    message_parts = []
-    if calibration.applied:
-        message_parts.append(f"Si calibration applied: offset {calibration.offset_cm:+.3f} cm⁻¹")
-    message_parts.append("Sequential grouped fitting completed: Si → β-Ga₂O₃ → NiO → global refinement")
+    message_parts = [
+        "Staged fitting completed",
+        f"window {staged_diagnostics.fitting_window}",
+        f"robust loss {effective_req.robust_loss}",
+    ]
+    if quality_warnings:
+        message_parts.append(f"QC warnings: {len(quality_warnings)}")
 
     return FitResponse(
         success=True,
         message="; ".join(message_parts),
         dataset_name=req.dataset_name,
-        profile=req.profile,
+        profile=effective_req.profile,
         y_fit=(baseline + np.asarray(final_result.get("y_fit", np.zeros_like(y_corrected)), dtype=float)).tolist(),
         residuals=residuals.tolist(),
         y_individual=[np.asarray(item, dtype=float).tolist() for item in final_result.get("y_individual", [])],
@@ -3143,18 +3185,20 @@ def fit_raman_peaks(req: FitRequest):
         r_squared=metrics["r_squared"],
         adjusted_r_squared=metrics["adjusted_r_squared"],
         rmse=metrics["rmse"],
+        reduced_chi_square=metrics["reduced_chi2"],
         aic=metrics["aic"],
         bic=metrics["bic"],
+        staged_diagnostics=staged_diagnostics,
         residual_diagnostics=residual_diagnostics,
         group_summaries=group_summaries,
         calibration=calibration,
         segment_summaries=[],
         alignment_rows=alignment_rows,
         report=report,
-        x_calibrated=x_cal.tolist(),
+        x_calibrated=x_fit.tolist(),
         y_baseline=baseline.tolist(),
         y_corrected=y_corrected.tolist(),
         y_fit_corrected=np.asarray(final_result.get("y_fit", np.zeros_like(y_corrected)), dtype=float).tolist(),
-        group_fit_stages=group_fit_stages,
-        group_probe_rows=all_probe_rows,
+        group_fit_stages=[],
+        group_probe_rows=seed_probe_rows,
     )

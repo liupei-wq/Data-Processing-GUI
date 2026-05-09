@@ -106,7 +106,7 @@ const DEFAULT_FIT_PARAMS: FitParams = {
   maxfev: 20000,
   fit_lo: null,
   fit_hi: null,
-  robust_loss: 'linear',
+  robust_loss: 'soft_l1',
   segment_weights: [],
   residual_target_enabled: false,
   residual_target: 0.05,
@@ -306,13 +306,17 @@ function normalizeCandidate(candidate: Partial<FitPeakCandidate>): FitPeakCandid
 }
 
 function fitChartTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly.Data[] {
-  const x = fitResult.x_calibrated?.length === dataset.x.length ? fitResult.x_calibrated : dataset.x
+  const resultX = fitResult.x_calibrated ?? []
+  const x = resultX.length === fitResult.y_fit.length ? resultX : dataset.x
   const baselineHasSignal = (fitResult.y_baseline ?? []).some(value => Math.abs(value) > 1e-9)
   const correctedFitHasSignal = (fitResult.y_fit_corrected ?? []).some(value => Number.isFinite(value))
+  const inputTraceY = fitResult.y_corrected?.length === x.length
+    ? fitResult.y_corrected.map((value, index) => value + (fitResult.y_baseline?.[index] ?? 0))
+    : dataset.y_processed
   const traces: Plotly.Data[] = [
     {
       x,
-      y: dataset.y_processed,
+      y: inputTraceY,
       type: 'scatter',
       mode: 'lines',
       name: '處理後光譜',
@@ -3168,7 +3172,7 @@ export default function Raman({
             <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰位管理與擬合說明</p>
-                <p>這一步負責整理峰位表、加入手動峰並執行 sequential grouped fitting。</p>
+                <p>這一步負責整理峰位表、加入手動峰並執行 staged global fitting。</p>
               </div>
             }>
               <label className="block">
@@ -3397,7 +3401,7 @@ export default function Raman({
               </div>
 
               <div className="mt-3 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3 text-xs leading-6 text-[var(--text-soft)]">
-                目前固定使用 sequential grouped fitting：Si 校正 → β-Ga₂O₃ → NiO → small global refinement。
+                目前使用 staged fitting：裁切 fitting window → QC → baseline correction → tolerance 內局部最大值更新初始值 → robust global constrained fitting → AIC/BIC gate auto peak。
               </div>
 
               <button
@@ -4198,6 +4202,9 @@ export default function Raman({
                       </div>
                       <div className="theme-pill rounded-full px-4 py-2 text-sm text-[var(--text-main)]">
                         RMSE <span className="ml-2 font-semibold text-[var(--text-muted)]">{fitResult.rmse.toExponential(2)}</span>
+                      </div>
+                      <div className="theme-pill rounded-full px-4 py-2 text-sm text-[var(--text-main)]">
+                        reduced χ² <span className="ml-2 font-semibold text-[var(--text-muted)]">{(fitResult.reduced_chi_square ?? 0).toExponential(2)}</span>
                       </div>
                       <div className="theme-pill rounded-full px-4 py-2 text-sm text-[var(--text-main)]">
                         AIC/BIC <span className="ml-2 font-semibold text-[var(--text-muted)]">{fitResult.aic.toFixed(1)} / {fitResult.bic.toFixed(1)}</span>

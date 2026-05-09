@@ -339,6 +339,15 @@ export interface CalibrationSummary {
   reference: string
 }
 
+export interface StagedFitDiagnostics {
+  fitting_window: string
+  quality_warnings: string[]
+  baseline_method: string
+  candidate_count: number
+  auto_peak_notes: string[]
+  stage_order: string[]
+}
+
 export interface AlignmentRow {
   sample_id: string
   material: string
@@ -445,8 +454,10 @@ export interface FitResult {
   r_squared: number
   adjusted_r_squared: number
   rmse: number
+  reduced_chi_square: number
   aic: number
   bic: number
+  staged_diagnostics: StagedFitDiagnostics
   residual_diagnostics: ResidualDiagnostics
   group_summaries: GroupSummary[]
   calibration: CalibrationSummary
