@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react'
-import Plot, { PlotlyApi } from '../components/PlotlyChart'
+import Plot from '../components/PlotlyChart'
 import { type AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
 import {
@@ -863,52 +863,6 @@ function downloadFile(content: string, filename: string, mime: string) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
-}
-
-function downloadDataUrl(dataUrl: string, filename: string) {
-  const a = document.createElement('a')
-  a.href = dataUrl
-  a.download = filename
-  a.click()
-}
-
-function safeFileStem(name: string) {
-  return name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]+/g, '_') || 'sample'
-}
-
-type PlotlyExportApi = {
-  newPlot: (root: HTMLDivElement, data: Plotly.Data[], layout: Partial<Plotly.Layout>, config?: Partial<Plotly.Config>) => Promise<unknown>
-  toImage: (root: HTMLDivElement, opts: { format: string; width: number; height: number; scale?: number }) => Promise<string>
-  purge: (root: HTMLDivElement) => void
-}
-
-async function exportPlotPng(
-  data: Plotly.Data[],
-  layout: Partial<Plotly.Layout>,
-  filename: string,
-  setError: (message: string | null) => void,
-  width = 1400,
-  height = 820,
-) {
-  if (data.length === 0) return
-  const container = document.createElement('div')
-  container.style.position = 'fixed'
-  container.style.left = '-10000px'
-  container.style.top = '0'
-  container.style.width = `${width}px`
-  container.style.height = `${height}px`
-  document.body.appendChild(container)
-  try {
-    const plotly = PlotlyApi as unknown as PlotlyExportApi
-    await plotly.newPlot(container, data, { ...layout, autosize: false, width, height }, { staticPlot: true, displayModeBar: false, responsive: false })
-    const dataUrl = await plotly.toImage(container, { format: 'png', width, height, scale: 2 })
-    downloadDataUrl(dataUrl, filename)
-    plotly.purge(container)
-  } catch (exportError: unknown) {
-    setError(String((exportError as Error).message ?? exportError))
-  } finally {
-    container.remove()
-  }
 }
 
 function csvEscape(value: unknown) {
@@ -3678,20 +3632,13 @@ export default function Raman({
                     onLegendDoubleClick={() => false}
                     useResizeHandler
                   />
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-3 flex justify-start">
                     <button
                       type="button"
                       onClick={() => downloadFile(buildStageCsv(rawStageDatasets, 'raman_shift_cm-1', 'intensity_raw'), 'raman_raw_stage.csv', 'text/csv')}
                       className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                     >
                       下載此步驟 CSV
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => exportPlotPng(applyHidden(rawChartTraces, rawHidden), chartLayout(), 'raw_raman_overlay.png', setError)}
-                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
-                    >
-                      匯出 raw_raman_overlay.png
                     </button>
                   </div>
                 </div>
@@ -3911,15 +3858,6 @@ export default function Raman({
                     >
                       下載 Si subtraction report
                     </button>
-                    {activeSiDataset && (
-                      <button
-                        type="button"
-                        onClick={() => exportPlotPng(applyHidden(siChartTraces, siHidden), siSubtractionLayout as Partial<Plotly.Layout>, `diagnostic_${safeFileStem(activeSiDataset.name)}_si_subtraction.png`, setError)}
-                        className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
-                      >
-                        匯出 diagnostic PNG
-                      </button>
-                    )}
                   </div>
                 </div>
               )}
@@ -3941,15 +3879,6 @@ export default function Raman({
                       useResizeHandler
                     />
                   </DeferredRender>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => exportPlotPng(siCorrectedOverlayTraces, siSubtractionLayout as Partial<Plotly.Layout>, 'si_corrected_raman_overlay.png', setError)}
-                      className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] transition-colors hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
-                    >
-                      匯出 si_corrected_raman_overlay.png
-                    </button>
-                  </div>
                   {siDiagnosticsRows.length > 0 && (
                     <div className="mt-3 overflow-auto rounded-xl border border-[var(--card-border)]">
                       <table className="min-w-full text-left text-xs">
