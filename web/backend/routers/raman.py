@@ -451,12 +451,29 @@ class RamanReport(BaseModel):
     report_json: str = ""
 
 
+class FitComponentCurve(BaseModel):
+    peak_id: str = ""
+    component_label: str = ""
+    component_group: str = ""
+    component_material: str = ""
+    profile: str = ""
+    status: str = ""
+    center: float = 0.0
+    fwhm: float = 0.0
+    amplitude: float = 0.0
+    area: float = 0.0
+    area_percent: float = 0.0
+    y_component_corrected: List[float] = []
+    y_component_raw: List[float] = []
+
+
 class FitResponse(BaseModel):
     success: bool
     message: str = ""
     dataset_name: str
     profile: str
     y_fit: List[float]
+    total_fit_raw: List[float] = []
     residuals: List[float]
     y_individual: List[List[float]]
     peaks: List[FitPeakRow]
@@ -477,6 +494,8 @@ class FitResponse(BaseModel):
     y_baseline: List[float] = []
     y_corrected: List[float] = []
     y_fit_corrected: List[float] = []
+    total_fit_corrected: List[float] = []
+    components: List[FitComponentCurve] = []
     group_fit_stages: List[GroupFitStage] = []
     group_probe_rows: List[PeakProbeRow] = []
 
@@ -952,6 +971,17 @@ def _to_csv(headers: list[str], rows: list[list[object]]) -> str:
 def _sample_id_from_name(name: str) -> str:
     match = re.search(r"(\d{3,4}(?:-\d+)?)", name or "")
     return match.group(1) if match else (name.rsplit(".", 1)[0] if name else "sample")
+
+
+def _same_length_array(values, length: int) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if len(arr) == length:
+        return arr
+    if len(arr) > length:
+        return arr[:length]
+    out = np.zeros(length, dtype=float)
+    out[: len(arr)] = arr
+    return out
 
 
 def _flux_from_name(name: str) -> str:
@@ -1549,6 +1579,46 @@ def _build_group_summaries(peaks: list[dict]) -> tuple[list[GroupSummary], dict[
             "status": status,
         }
     return summaries, lookup
+
+
+def _build_fit_components(
+    baseline: np.ndarray,
+    fitted_peaks: list[dict],
+    y_individual: list,
+    rows: list[FitPeakRow],
+) -> tuple[list[FitComponentCurve], np.ndarray]:
+    row_lookup = {row.Peak_ID: row for row in rows}
+    baseline_arr = np.asarray(baseline, dtype=float).reshape(-1)
+    corrected_curves: list[np.ndarray] = []
+    components: list[FitComponentCurve] = []
+    for index, peak in enumerate(fitted_peaks):
+        y_component_corrected = _same_length_array(y_individual[index] if index < len(y_individual) else [], len(baseline_arr))
+        y_component_raw = baseline_arr + y_component_corrected
+        corrected_curves.append(y_component_corrected)
+        peak_id = str(peak.get("peak_id", ""))
+        row = row_lookup.get(peak_id)
+        component_label = row.Peak_Name if row is not None else str(peak.get("display_name", peak.get("label", f"Peak {index + 1}")))
+        component_group = row.Phase_Group if row is not None else str(peak.get("phase_group", peak.get("phase", peak.get("material", ""))))
+        component_material = row.Material if row is not None else str(peak.get("material", ""))
+        status = row.Status if row is not None else str(peak.get("status", ""))
+        area_percent = float(row.Area_pct) if row is not None else float(peak.get("area_pct", 0.0))
+        components.append(FitComponentCurve(
+            peak_id=peak_id,
+            component_label=component_label,
+            component_group=component_group,
+            component_material=component_material,
+            profile=str(peak.get("profile", "")),
+            status=status,
+            center=float(peak.get("center", 0.0)),
+            fwhm=float(peak.get("fwhm", 0.0)),
+            amplitude=float(peak.get("amplitude", 0.0)),
+            area=float(peak.get("area", 0.0)),
+            area_percent=area_percent,
+            y_component_corrected=y_component_corrected.tolist(),
+            y_component_raw=y_component_raw.tolist(),
+        ))
+    total_fit_corrected = np.sum(np.vstack(corrected_curves), axis=0) if corrected_curves else np.zeros_like(baseline_arr)
+    return components, total_fit_corrected
 
 
 def _confidence_from_flags(flags: list[str], snr: float, area_pct: float, spacing_score: Optional[float]) -> str:
@@ -2828,6 +2898,13 @@ def _build_report_v2(
     alignment_rows: list[AlignmentRow],
     unmatched_rows: list[list[object]],
     probe_rows: list[PeakProbeRow],
+    x_calibrated: np.ndarray,
+    y_baseline: np.ndarray,
+    y_corrected: np.ndarray,
+    total_fit_corrected: np.ndarray,
+    total_fit_raw: np.ndarray,
+    residuals: np.ndarray,
+    components: list[FitComponentCurve],
 ) -> RamanReport:
     sample_id = _sample_id_from_name(dataset_name)
     preprocessing_method = (
@@ -2845,14 +2922,14 @@ def _build_report_v2(
     ]
 
     peak_table_headers = [
-        "sample_id", "group_name", "material", "peak_label", "mode", "reference_shift_cm1", "fitted_shift_cm1",
-        "delta_cm1", "tolerance_cm1", "FWHM", "area", "height", "uncertainty_center", "uncertainty_FWHM",
+        "sample_id", "component_group", "component_material", "component_label", "mode", "reference_shift_cm1", "fitted_shift_cm1",
+        "delta_cm1", "tolerance_cm1", "FWHM", "area", "area_percent", "height", "uncertainty_center", "uncertainty_FWHM",
         "SNR", "anchor_related_delta", "status", "confidence_score", "note",
     ]
     peak_table_rows = [
         [
             sample_id, row["Phase_Group"], row["Material"], row["Peak_Name"], row["Mode_Label"], row["Ref_cm"], row["Center_cm"],
-            row["Delta_cm"], row["Tolerance_cm"], row["FWHM_cm"], row["Area"], row["Height"], row["Bootstrap_Center_STD"],
+            row["Delta_cm"], row["Tolerance_cm"], row["FWHM_cm"], row["Area"], row["Area_pct"], row["Height"], row["Bootstrap_Center_STD"],
             row["Bootstrap_FWHM_STD"], row["SNR"], row["Anchor_Related_Delta_cm"], row["Status"], row["Confidence_Score"], row["Note"],
         ]
         for row in rows
@@ -2903,6 +2980,18 @@ def _build_report_v2(
             warnings.append(f"No accepted {summary.Material} peaks. Checked {len(group_probe)} theoretical positions. Main reasons: {top_reasons or 'no local response above threshold'}.")
 
     report_payload = {
+        "dataset_name": dataset_name,
+        "profile": req.profile,
+        "x_calibrated": x_calibrated.tolist(),
+        "y_baseline": y_baseline.tolist(),
+        "y_corrected": y_corrected.tolist(),
+        "y_fit_corrected": total_fit_corrected.tolist(),
+        "total_fit_corrected": total_fit_corrected.tolist(),
+        "y_fit": total_fit_raw.tolist(),
+        "total_fit_raw": total_fit_raw.tolist(),
+        "residuals": residuals.tolist(),
+        "components": [component.model_dump() for component in components],
+        "peaks": rows,
         "sample_summary": {
             "sample_id": sample_id,
             "sample_name": dataset_name,
@@ -3086,6 +3175,13 @@ def fit_raman_peaks(req: FitRequest):
 
     _recompute_area_pct(final_rows_raw)
     rows = [FitPeakRow(**row) for row in final_rows_raw]
+    component_curves, total_fit_corrected = _build_fit_components(
+        baseline,
+        [dict(item) for item in final_result.get("peaks", [])],
+        final_result.get("y_individual", []),
+        rows,
+    )
+    total_fit_raw = baseline + total_fit_corrected
     alignment_rows = _alignment_rows_from_peaks(req.dataset_name, [row.model_dump() for row in rows])
 
     detected_unmatched_rows: list[list[object]] = []
@@ -3142,6 +3238,13 @@ def fit_raman_peaks(req: FitRequest):
         alignment_rows,
         detected_unmatched_rows,
         seed_probe_rows,
+        x_fit,
+        baseline,
+        y_corrected,
+        total_fit_corrected,
+        total_fit_raw,
+        residuals,
+        component_curves,
     )
     report.warnings = list(dict.fromkeys([*report.warnings, *report_warnings]))
 
@@ -3178,9 +3281,11 @@ def fit_raman_peaks(req: FitRequest):
         message="; ".join(message_parts),
         dataset_name=req.dataset_name,
         profile=effective_req.profile,
-        y_fit=(baseline + np.asarray(final_result.get("y_fit", np.zeros_like(y_corrected)), dtype=float)).tolist(),
+        y_fit=total_fit_raw.tolist(),
+        total_fit_raw=total_fit_raw.tolist(),
         residuals=residuals.tolist(),
         y_individual=[np.asarray(item, dtype=float).tolist() for item in final_result.get("y_individual", [])],
+        components=component_curves,
         peaks=rows,
         r_squared=metrics["r_squared"],
         adjusted_r_squared=metrics["adjusted_r_squared"],
@@ -3198,7 +3303,8 @@ def fit_raman_peaks(req: FitRequest):
         x_calibrated=x_fit.tolist(),
         y_baseline=baseline.tolist(),
         y_corrected=y_corrected.tolist(),
-        y_fit_corrected=np.asarray(final_result.get("y_fit", np.zeros_like(y_corrected)), dtype=float).tolist(),
+        y_fit_corrected=total_fit_corrected.tolist(),
+        total_fit_corrected=total_fit_corrected.tolist(),
         group_fit_stages=[],
         group_probe_rows=seed_probe_rows,
     )

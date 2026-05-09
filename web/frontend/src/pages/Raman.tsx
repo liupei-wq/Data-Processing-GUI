@@ -47,6 +47,7 @@ import type {
   DetectedPeak,
   FitParams,
   FitPeakCandidate,
+  RamanFitComponent,
   FitResult,
   ParsedFile,
   PeakDetectionParams,
@@ -305,46 +306,127 @@ function normalizeCandidate(candidate: Partial<FitPeakCandidate>): FitPeakCandid
   }
 }
 
-function fitChartTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly.Data[] {
+const FIT_COMPONENT_COLORS = ['#7dd3fc', '#a78bfa', '#34d399', '#f59e0b', '#f472b6', '#fb7185', '#22d3ee', '#facc15']
+
+type FitPlotOptions = {
+  showComponents: boolean
+  fillComponents: boolean
+  showPeakLabels: boolean
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const clean = hex.trim().replace('#', '')
+  if (clean.length !== 6) return `rgba(125, 211, 252, ${alpha})`
+  const value = Number.parseInt(clean, 16)
+  const r = (value >> 16) & 255
+  const g = (value >> 8) & 255
+  const b = value & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function fitComponentColor(index: number) {
+  return FIT_COMPONENT_COLORS[index % FIT_COMPONENT_COLORS.length]
+}
+
+function normalizeComponentGroupLabel(component: RamanFitComponent) {
+  const group = (component.component_group || '').replace(/\s*group$/i, '').trim()
+  if (group) return group
+  return component.component_material || ''
+}
+
+function fitComponentLabel(component: RamanFitComponent) {
+  const centerLabel = Number.isFinite(component.center) ? `${Math.round(component.center)}` : component.component_label
+  const group = normalizeComponentGroupLabel(component)
+  return group ? `${centerLabel} (${group})` : centerLabel
+}
+
+function componentValueAtCenter(x: number[], y: number[], center: number) {
+  if (x.length === 0 || y.length === 0) return 0
+  let bestIndex = 0
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < x.length; index += 1) {
+    const distance = Math.abs((x[index] ?? 0) - center)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index
+    }
+  }
+  return y[bestIndex] ?? 0
+}
+
+function fitResultComponents(fitResult: FitResult, x: number[], baseline: number[]): RamanFitComponent[] {
+  const resultComponents = fitResult.components ?? []
+  if (resultComponents.length > 0) return resultComponents
+  const fallbackPeaks = fitResult.peaks ?? []
+  return (fitResult.y_individual ?? []).map((curve, index) => {
+    const yCorrected = curve.length === x.length ? curve : [...curve.slice(0, x.length), ...Array(Math.max(0, x.length - curve.length)).fill(0)]
+    const row = fallbackPeaks[index]
+    return {
+      peak_id: row?.Peak_ID ?? `component-${index + 1}`,
+      component_label: row?.Peak_Name ?? `Peak ${index + 1}`,
+      component_group: row?.Phase_Group ?? '',
+      component_material: row?.Material ?? '',
+      profile: row?.Profile ?? fitResult.profile,
+      status: row?.Status ?? '',
+      center: row?.Center_cm ?? 0,
+      fwhm: row?.FWHM_cm ?? 0,
+      amplitude: row?.Height ?? 0,
+      area: row?.Area ?? 0,
+      area_percent: row?.Area_pct ?? 0,
+      y_component_corrected: yCorrected,
+      y_component_raw: yCorrected.map((value, curveIndex) => value + (baseline[curveIndex] ?? 0)),
+    }
+  })
+}
+
+function fitResultFigure(
+  dataset: ProcessedDataset,
+  fitResult: FitResult,
+  options: FitPlotOptions,
+): { data: Plotly.Data[]; layout: Partial<Plotly.Layout> } {
+  const base = chartLayout()
+  const legendColor =
+    base.font && typeof base.font === 'object' && 'color' in base.font
+      ? base.font.color
+      : '#d9e4f0'
+  const legendFamily =
+    base.font && typeof base.font === 'object' && 'family' in base.font
+      ? base.font.family
+      : 'Times New Roman, Noto Sans TC, serif'
   const resultX = fitResult.x_calibrated ?? []
-  const x = resultX.length === fitResult.y_fit.length ? resultX : dataset.x
-  const baselineHasSignal = (fitResult.y_baseline ?? []).some(value => Math.abs(value) > 1e-9)
-  const correctedFitHasSignal = (fitResult.y_fit_corrected ?? []).some(value => Number.isFinite(value))
+  const totalFitRaw = fitResult.total_fit_raw?.length ? fitResult.total_fit_raw : fitResult.y_fit
+  const totalFitCorrected = fitResult.total_fit_corrected?.length ? fitResult.total_fit_corrected : fitResult.y_fit_corrected
+  const x = resultX.length === totalFitRaw.length ? resultX : dataset.x
+  const baseline = fitResult.y_baseline?.length === x.length
+    ? fitResult.y_baseline
+    : Array(x.length).fill(0)
   const inputTraceY = fitResult.y_corrected?.length === x.length
-    ? fitResult.y_corrected.map((value, index) => value + (fitResult.y_baseline?.[index] ?? 0))
+    ? fitResult.y_corrected.map((value, index) => value + (baseline[index] ?? 0))
     : dataset.y_processed
-  const traces: Plotly.Data[] = [
+  const components = fitResultComponents(fitResult, x, baseline)
+  const baselineHasSignal = baseline.some(value => Math.abs(value) > 1e-9)
+  const processedSeries = dataset?.y_processed ?? []
+  const normalizedWindow = processedSeries.filter(value => Number.isFinite(value))
+  const isNormalizedScale = normalizedWindow.length > 0 &&
+    Math.min(...normalizedWindow) >= -0.02 &&
+    Math.max(...normalizedWindow) <= 1.05 &&
+    baseline.every(value => Math.abs(value) <= 1e-9)
+
+  const data: Plotly.Data[] = [
     {
       x,
       y: inputTraceY,
       type: 'scatter',
       mode: 'lines',
-      name: '處理後光譜',
+      name: 'Processed spectrum',
       line: { color: '#e5e7eb', width: 1.45 },
-    },
-    {
-      x,
-      y: fitResult.y_fit,
-      type: 'scatter',
-      mode: 'lines',
-      name: '總擬合',
-      line: { color: '#f8c65a', width: 2.7 },
-    },
-    {
-      x,
-      y: fitResult.residuals,
-      type: 'scatter',
-      mode: 'lines',
-      name: '殘差',
-      yaxis: 'y2',
-      line: { color: '#8b949e', width: 1.05 },
     },
   ]
 
   if (baselineHasSignal) {
-    traces.splice(1, 0, {
+    data.push({
       x,
-      y: fitResult.y_baseline,
+      y: baseline,
       type: 'scatter',
       mode: 'lines',
       name: 'Baseline',
@@ -352,18 +434,126 @@ function fitChartTraces(dataset: ProcessedDataset, fitResult: FitResult): Plotly
     })
   }
 
-  if (correctedFitHasSignal && baselineHasSignal) {
-    traces.splice(traces.length - 1, 0, {
-      x,
-      y: fitResult.y_fit_corrected,
-      type: 'scatter',
-      mode: 'lines',
-      name: '擬合（baseline-corrected）',
-      line: { color: '#7dd3fc', width: 1.25, dash: 'dash' },
+  if (options.showComponents) {
+    components.forEach((component, index) => {
+      const color = fitComponentColor(index)
+      if (options.fillComponents && baselineHasSignal) {
+        data.push({
+          x: [...x, ...x.slice().reverse()],
+          y: [...component.y_component_raw, ...baseline.slice().reverse()],
+          type: 'scatter',
+          mode: 'lines',
+          line: { color, width: 0 },
+          fill: 'toself',
+          fillcolor: hexToRgba(color, 0.16),
+          hoverinfo: 'skip',
+          showlegend: false,
+        })
+      }
+      data.push({
+        x,
+        y: component.y_component_raw,
+        type: 'scatter',
+        mode: 'lines',
+        name: index === 0 ? 'Individual peak contributions' : component.component_label,
+        legendgroup: 'components',
+        showlegend: index === 0,
+        line: { color, width: 1.15, dash: 'dash' },
+        hovertemplate: [
+          component.component_label,
+          normalizeComponentGroupLabel(component) || component.component_material || undefined,
+          `center ${component.center.toFixed(2)} cm⁻¹`,
+          `FWHM ${component.fwhm.toFixed(2)} cm⁻¹`,
+          `area ${component.area.toFixed(4)}`,
+          `area % ${component.area_percent.toFixed(2)}`,
+          component.status ? `status ${component.status}` : undefined,
+        ].filter(Boolean).join('<br>') + '<extra></extra>',
+      })
     })
   }
 
-  return traces
+  data.push({
+    x,
+    y: totalFitRaw.length === x.length ? totalFitRaw : totalFitCorrected.map((value, index) => value + (baseline[index] ?? 0)),
+    type: 'scatter',
+    mode: 'lines',
+    name: 'Total fit',
+    line: { color: '#f8c65a', width: 2.7 },
+  })
+  data.push({
+    x,
+    y: fitResult.residuals,
+    type: 'scatter',
+    mode: 'lines',
+    name: 'Residual',
+    xaxis: 'x2',
+    yaxis: 'y2',
+    line: { color: '#8b949e', width: 1.05 },
+  })
+
+  const annotations = options.showPeakLabels
+    ? components
+      .filter(component => Number.isFinite(component.center))
+      .map((component, index) => ({
+        x: component.center,
+        y: componentValueAtCenter(x, component.y_component_raw, component.center),
+        xref: 'x' as const,
+        yref: 'y' as const,
+        text: fitComponentLabel(component),
+        showarrow: false,
+        yshift: -12 - (index % 3) * 12,
+        font: { color: fitComponentColor(index), family: legendFamily, size: 11 },
+        bgcolor: 'rgba(15, 23, 42, 0.72)',
+        bordercolor: 'rgba(148, 163, 184, 0.22)',
+        borderwidth: 1,
+      }))
+    : []
+
+  return {
+    data,
+    layout: {
+      ...base,
+      margin: { l: 68, r: 24, t: 126, b: 72 },
+      legend: {
+        orientation: 'h',
+        x: 0.5,
+        xanchor: 'center',
+        y: 1.18,
+        yanchor: 'bottom',
+        bgcolor: 'rgba(0,0,0,0)',
+        borderwidth: 0,
+        font: { color: legendColor, family: legendFamily, size: 12 },
+        traceorder: 'normal',
+      },
+      xaxis: {
+        ...base.xaxis,
+        domain: [0, 1],
+        anchor: 'y',
+        showticklabels: false,
+      },
+      xaxis2: {
+        ...base.xaxis,
+        domain: [0, 1],
+        anchor: 'y2',
+        title: { text: 'Raman Shift (cm⁻¹)' },
+      },
+      yaxis: {
+        ...base.yaxis,
+        domain: [0.3, 1],
+        title: { text: isNormalizedScale ? 'Normalized intensity' : 'Intensity' },
+        range: isNormalizedScale ? [0, 1.05] : undefined,
+      },
+      yaxis2: {
+        ...base.yaxis,
+        domain: [0, 0.2],
+        anchor: 'x2',
+        title: { text: 'Residual' },
+        zeroline: true,
+        zerolinecolor: 'rgba(148, 163, 184, 0.35)',
+      },
+      annotations,
+    },
+  }
 }
 
 function groupStageChartTraces(stage: FitResult['group_fit_stages'][number]): Plotly.Data[] {
@@ -1243,6 +1433,11 @@ export default function Raman({
   const [peakSortKey, setPeakSortKey] = useState<'ref' | 'fit' | 'delta' | 'confidence'>('ref')
   const [activeProbeGroup, setActiveProbeGroup] = useState<string>('Si group')
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
+  const [fitPlotOptions, setFitPlotOptions] = useState<FitPlotOptions>({
+    showComponents: true,
+    fillComponents: false,
+    showPeakLabels: true,
+  })
   const [fitTargetName, setFitTargetName] = useState<string>('')
   const [isFitting, setIsFitting] = useState(false)
   const [siRefPos, setSiRefPos] = useState(520.7)
@@ -1905,6 +2100,10 @@ export default function Raman({
     if (!result) return null
     return result.datasets.find(dataset => dataset.name === fitTargetName) ?? null
   }, [fitTargetName, result])
+  const fitFigure = useMemo(() => {
+    if (!fitResult?.success || !activeFitDataset) return null
+    return fitResultFigure(activeFitDataset, fitResult, fitPlotOptions)
+  }, [activeFitDataset, fitPlotOptions, fitResult])
   const updateFitCandidate = useCallback((peakId: string, patch: Partial<FitPeakCandidate>) => {
     setFitCandidates(current => current.map(item => item.peak_id === peakId ? { ...item, ...patch } : item))
   }, [])
@@ -2588,11 +2787,12 @@ export default function Raman({
 
   const exportFitExcel = useCallback(() => {
     if (!fitResult?.success) return
-    const headers = ['Dataset', 'Peak', 'Phase', 'Mode', 'Center_cm', 'FWHM_cm', 'Area', 'Area_pct', 'Fit_Status', 'Physical_Confidence', 'Flags']
+    const headers = ['Dataset', 'Component_Label', 'Component_Group', 'Material', 'Mode', 'Center_cm', 'FWHM_cm', 'Area', 'Area_pct', 'Fit_Status', 'Physical_Confidence', 'Flags']
     const rows = fitResult.peaks.map(row => [
       fitResult.dataset_name,
       row.Peak_Name,
-      row.Phase,
+      row.Phase_Group,
+      row.Material,
       row.Mode_Label,
       row.Center_cm,
       row.FWHM_cm,
@@ -4230,11 +4430,28 @@ export default function Raman({
                         {fitResult.message}
                       </div>
                     )}
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {[
+                        ['showComponents', '顯示 components'],
+                        ['fillComponents', '填滿 components'],
+                        ['showPeakLabels', '顯示 peak labels'],
+                      ].map(([key, label]) => (
+                        <label key={key} className="theme-pill flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-[var(--text-main)]">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(fitPlotOptions[key as keyof FitPlotOptions])}
+                            onChange={event => setFitPlotOptions(current => ({ ...current, [key]: event.target.checked }))}
+                            className="accent-[var(--accent)]"
+                          />
+                          <span>{label}</span>
+                        </label>
+                      ))}
+                    </div>
                     <div className="theme-block-soft rounded-[24px] p-3 sm:p-4">
                       <DeferredRender minHeight={520}>
                         <Plot
-                          data={fitChartTraces(activeFitDataset, fitResult)}
-                          layout={fitChartLayout(activeFitDataset, fitResult)}
+                          data={fitFigure?.data ?? []}
+                          layout={(fitFigure?.layout ?? chartLayout()) as Plotly.Layout}
                           config={withPlotFullscreen({ scrollZoom: false })}
                           style={{ width: '100%', minHeight: '520px' }}
                           useResizeHandler
@@ -4313,12 +4530,14 @@ export default function Raman({
                       <table className="min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
-                            <th className="px-3 py-3 font-medium">峰名稱</th>
-                            <th className="px-3 py-3 font-medium">group / material</th>
+                            <th className="px-3 py-3 font-medium">component label</th>
+                            <th className="px-3 py-3 font-medium">component group / material</th>
                             <th className="px-3 py-3 font-medium">理論 cm⁻¹</th>
                             <th className="px-3 py-3 font-medium">實測 cm⁻¹</th>
                             <th className="px-3 py-3 font-medium">Δ cm⁻¹</th>
                             <th className="px-3 py-3 font-medium">FWHM</th>
+                            <th className="px-3 py-3 font-medium">area</th>
+                            <th className="px-3 py-3 font-medium">area %</th>
                             <th className="px-3 py-3 font-medium">SNR</th>
                             <th className="px-3 py-3 font-medium">anchor-related Δ</th>
                             <th className="px-3 py-3 font-medium">status</th>
@@ -4338,6 +4557,8 @@ export default function Raman({
                               <td className="px-3 py-3">{row.Status === 'not_observed' || row.Status === 'rejected' ? '—' : fmtFixed(row.Center_cm, 3)}</td>
                               <td className="px-3 py-3">{fmtFixed(row.Delta_cm, 3)}</td>
                               <td className="px-3 py-3">{fmtFixed(row.FWHM_cm, 3)}</td>
+                              <td className="px-3 py-3">{fmtFixed(row.Area, 4)}</td>
+                              <td className="px-3 py-3">{fmtFixed(row.Area_pct, 2)}</td>
                               <td className="px-3 py-3">{fmtFixed(row.SNR, 2)}</td>
                               <td className="px-3 py-3">{fmtFixed(row.Anchor_Related_Delta_cm, 3)}</td>
                               <td className="px-3 py-3">{row.Status}</td>

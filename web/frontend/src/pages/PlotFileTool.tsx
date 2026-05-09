@@ -32,8 +32,15 @@ interface VbmSpectrumFile {
 
 interface RamanComponentCurve {
   label: string
+  group: string
+  material: string
+  status: string
+  profile: string
   center: number | null
-  y: number[]
+  area: number | null
+  areaPercent: number | null
+  yCorrected: number[]
+  yRaw: number[]
 }
 
 interface RamanFitPlotFile {
@@ -44,7 +51,8 @@ interface RamanFitPlotFile {
   raw: number[]
   baseline: number[]
   corrected: number[]
-  totalFit: number[]
+  totalFitCorrected: number[]
+  totalFitRaw: number[]
   residual: number[]
   components: RamanComponentCurve[]
 }
@@ -118,6 +126,7 @@ interface RamanFigureStyle {
   showCorrected: boolean
   showBaseline: boolean
   showComponents: boolean
+  fillComponents: boolean
   showLabels: boolean
   exportWidth: number
   exportHeight: number
@@ -301,6 +310,7 @@ const DEFAULT_RAMAN_STYLE: RamanFigureStyle = {
   showCorrected: true,
   showBaseline: true,
   showComponents: true,
+  fillComponents: false,
   showLabels: true,
   exportWidth: 1600,
   exportHeight: 1050,
@@ -536,6 +546,32 @@ function sameLength(values: number[], length: number) {
   return [...values, ...Array(Math.max(0, length - values.length)).fill(0)]
 }
 
+function normalizeRamanComponentGroup(component: RamanComponentCurve) {
+  const group = component.group.replace(/\s*group$/i, '').trim()
+  if (group) return group
+  return component.material
+}
+
+function formatRamanComponentLabel(component: RamanComponentCurve) {
+  const centerText = component.center == null ? component.label : `${Math.round(component.center)}`
+  const group = normalizeRamanComponentGroup(component)
+  return group ? `${centerText} (${group})` : centerText
+}
+
+function nearestSeriesValue(x: number[], y: number[], target: number) {
+  if (x.length === 0 || y.length === 0) return 0
+  let bestIndex = 0
+  let bestDistance = Infinity
+  for (let index = 0; index < x.length; index += 1) {
+    const distance = Math.abs(x[index] - target)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index
+    }
+  }
+  return y[bestIndex] ?? 0
+}
+
 function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
   const payload = JSON.parse(text) as Record<string, unknown>
   const x = numericArray(payload.x_calibrated)
@@ -544,30 +580,51 @@ function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
   const baseline = sameLength(numericArray(payload.y_baseline), x.length)
   const corrected = sameLength(numericArray(payload.y_corrected), x.length)
   const raw = corrected.map((value, index) => value + (baseline[index] ?? 0))
-  const fitCorrected = numericArray(payload.y_fit_corrected)
-  const fitWithBaseline = numericArray(payload.y_fit)
-  const totalFit = fitCorrected.length > 0
+  const fitCorrected = numericArray(payload.total_fit_corrected ?? payload.y_fit_corrected)
+  const fitWithBaseline = numericArray(payload.total_fit_raw ?? payload.y_fit)
+  const totalFitCorrected = fitCorrected.length > 0
     ? sameLength(fitCorrected, x.length)
     : sameLength(fitWithBaseline, x.length).map((value, index) => value - (baseline[index] ?? 0))
+  const totalFitRaw = fitWithBaseline.length > 0
+    ? sameLength(fitWithBaseline, x.length)
+    : totalFitCorrected.map((value, index) => value + (baseline[index] ?? 0))
   const residual = sameLength(numericArray(payload.residuals), x.length)
   const peakRows = Array.isArray(payload.peaks) ? payload.peaks as Array<Record<string, unknown>> : []
   const individual = Array.isArray(payload.y_individual) ? payload.y_individual as unknown[] : []
-  const components = individual
-    .map((item, index): RamanComponentCurve | null => {
-      const y = sameLength(numericArray(item), x.length)
-      if (y.every(value => Math.abs(value) < 1e-12)) return null
-      const row = peakRows[index] ?? {}
-      const label = String(row.Peak_Name ?? row.Mode_Label ?? row.Material ?? `Peak ${index + 1}`)
-      const center = Number(row.Center_cm ?? row.fitted_center_cm ?? row.center)
-      return {
-        label,
-        center: Number.isFinite(center) ? center : null,
-        y,
-      }
-    })
-    .filter((item): item is RamanComponentCurve => Boolean(item))
+  const componentPayload = Array.isArray(payload.components) ? payload.components as Array<Record<string, unknown>> : []
+  const components = (componentPayload.length > 0 ? componentPayload : individual.map((item, index) => ({
+    y_component_corrected: item,
+    y_component_raw: sameLength(numericArray(item), x.length).map((value, curveIndex) => value + (baseline[curveIndex] ?? 0)),
+    component_label: peakRows[index]?.Peak_Name ?? peakRows[index]?.Mode_Label ?? peakRows[index]?.Material ?? `Peak ${index + 1}`,
+    component_group: peakRows[index]?.Phase_Group ?? '',
+    component_material: peakRows[index]?.Material ?? '',
+    status: peakRows[index]?.Status ?? '',
+    profile: peakRows[index]?.Profile ?? '',
+    center: peakRows[index]?.Center_cm ?? peakRows[index]?.fitted_center_cm ?? peakRows[index]?.center,
+    area: peakRows[index]?.Area,
+    area_percent: peakRows[index]?.Area_pct,
+  }))).map((item, index): RamanComponentCurve | null => {
+    const yCorrected = sameLength(numericArray(item.y_component_corrected), x.length)
+    const yRaw = sameLength(numericArray(item.y_component_raw), x.length)
+    if (yRaw.every(value => Math.abs(value) < 1e-12) && yCorrected.every(value => Math.abs(value) < 1e-12)) return null
+    const center = Number(item.center)
+    const area = Number(item.area)
+    const areaPercent = Number(item.area_percent)
+    return {
+      label: String(item.component_label ?? `Peak ${index + 1}`),
+      group: String(item.component_group ?? ''),
+      material: String(item.component_material ?? ''),
+      status: String(item.status ?? ''),
+      profile: String(item.profile ?? ''),
+      center: Number.isFinite(center) ? center : null,
+      area: Number.isFinite(area) ? area : null,
+      areaPercent: Number.isFinite(areaPercent) ? areaPercent : null,
+      yCorrected,
+      yRaw,
+    }
+  }).filter((item): item is RamanComponentCurve => Boolean(item))
 
-  if (components.length === 0 && totalFit.every(value => Math.abs(value) < 1e-12)) {
+  if (components.length === 0 && totalFitRaw.every(value => Math.abs(value) < 1e-12)) {
     throw new Error(`${fileName}: JSON 內沒有可用的 component 或 fit curve`)
   }
 
@@ -580,7 +637,8 @@ function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
     raw,
     baseline,
     corrected,
-    totalFit,
+    totalFitCorrected,
+    totalFitRaw,
     residual,
     components,
   }
@@ -613,7 +671,7 @@ function scaledSeries(values: number[], factor: number) {
 
 function ramanScaleFactor(file: RamanFitPlotFile, style: RamanFigureStyle) {
   if (!style.normalize) return 1
-  const candidates = [...file.corrected, ...file.totalFit]
+  const candidates = [...file.corrected, ...file.totalFitCorrected]
     .map(value => Math.abs(value))
     .filter(Number.isFinite)
   return Math.max(...candidates, 1)
@@ -659,21 +717,44 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
     })
   }
   if (style.showComponents) {
-    file.components.forEach(component => {
+    file.components.forEach((component, index) => {
+      if (style.fillComponents && file.baseline.some(value => Math.abs(value) > 1e-12)) {
+        data.push({
+          x: [...file.x, ...file.x.slice().reverse()],
+          y: [...scaledSeries(component.yRaw, factor), ...scaledSeries(file.baseline, factor).slice().reverse()],
+          type: 'scatter',
+          mode: 'lines',
+          line: { color: style.componentColor, width: 0 },
+          fill: 'toself',
+          fillcolor: hexToRgba(style.componentColor, clamp(style.componentOpacity * 0.42, 0, 1)),
+          hoverinfo: 'skip',
+          showlegend: false,
+        })
+      }
       data.push({
         x: file.x,
-        y: scaledSeries(component.y, factor),
+        y: scaledSeries(component.yRaw, factor),
         type: 'scatter',
         mode: 'lines',
-        name: component.label,
+        name: index === 0 ? 'Individual peak contributions' : component.label,
+        legendgroup: 'raman-components',
+        showlegend: index === 0,
         line: { color: style.componentColor, width: style.componentLineWidth },
         opacity: style.componentOpacity,
+        hovertemplate: [
+          component.label,
+          normalizeRamanComponentGroup(component) || component.material || undefined,
+          component.center == null ? undefined : `center ${component.center.toFixed(2)} cm⁻¹`,
+          component.area == null ? undefined : `area ${component.area.toFixed(4)}`,
+          component.areaPercent == null ? undefined : `area % ${component.areaPercent.toFixed(2)}`,
+          component.status || undefined,
+        ].filter(Boolean).join('<br>') + '<extra></extra>',
       })
     })
   }
   data.push({
     x: file.x,
-    y: scaledSeries(file.totalFit, factor),
+    y: scaledSeries(file.totalFitRaw, factor),
     type: 'scatter',
     mode: 'lines',
     name: 'Total fit',
@@ -695,11 +776,12 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
       .filter(component => component.center != null && component.center >= Math.min(x0, x1) && component.center <= Math.max(x0, x1))
       .map((component, index) => ({
         x: component.center as number,
-        y: 1.04 + (index % 3) * 0.055,
+        y: nearestSeriesValue(file.x, scaledSeries(component.yRaw, factor), component.center as number),
         xref: 'x' as const,
-        yref: 'paper' as const,
-        text: `${Math.round(component.center as number)}`,
+        yref: 'y' as const,
+        text: formatRamanComponentLabel(component),
         showarrow: false,
+        yshift: -12 - (index % 3) * 12,
         font: { family: style.fontFamily, size: style.labelFontSize, color: '#111827' },
       }))
     : []
@@ -2219,6 +2301,7 @@ export default function PlotFileTool({
                   ['showCorrected', '顯示 corrected'],
                   ['showBaseline', '顯示 baseline'],
                   ['showComponents', '顯示 components'],
+                  ['fillComponents', '填滿 components'],
                   ['showLabels', '顯示 peak labels'],
                 ].map(([key, label]) => (
                   <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">

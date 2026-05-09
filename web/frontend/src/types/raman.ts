@@ -438,6 +438,22 @@ export interface GroupFitStage {
   warnings: string[]
 }
 
+export interface RamanFitComponent {
+  peak_id: string
+  component_label: string
+  component_group: string
+  component_material: string
+  profile: RamanProfile | string
+  status: string
+  center: number
+  fwhm: number
+  amplitude: number
+  area: number
+  area_percent: number
+  y_component_corrected: number[]
+  y_component_raw: number[]
+}
+
 export interface FitResult {
   success: boolean
   message: string
@@ -445,11 +461,14 @@ export interface FitResult {
   profile: RamanProfile
   x_calibrated: number[]
   y_fit: number[]
+  total_fit_raw: number[]
   y_baseline: number[]
   y_corrected: number[]
   y_fit_corrected: number[]
+  total_fit_corrected: number[]
   residuals: number[]
   y_individual: number[][]
+  components: RamanFitComponent[]
   peaks: FitPeakRow[]
   r_squared: number
   adjusted_r_squared: number
