@@ -44,9 +44,11 @@ export async function fitXasPeaks(
   profile: string,
   peakLabels?: string[],
   nRestarts?: number,
+  fitRange?: [number, number] | null,
 ): Promise<XasFitResult> {
   const body: Record<string, unknown> = { x, y, peaks, profile, n_restarts: nRestarts ?? 1 }
   if (peakLabels) body.peak_labels = peakLabels
+  if (fitRange) body.fit_range = fitRange
   const res = await fetch(`${BASE}/fit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

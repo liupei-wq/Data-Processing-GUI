@@ -848,6 +848,9 @@ export default function XAS({
   const [samplesLoading, setSamplesLoading] = useState(false)
   const samplesLoaded = useRef(false)
   const [fitEdgeTypeFilter, setFitEdgeTypeFilter] = useState<'all' | 'K' | 'L'>('all')
+  const [fitRangeEnabled, setFitRangeEnabled] = useState(false)
+  const [fitRangeLo, setFitRangeLo] = useState<number>(0)
+  const [fitRangeHi, setFitRangeHi] = useState<number>(1)
 
 
   const isOverlayMode = viewMode === 'overlay'
@@ -1079,11 +1082,12 @@ export default function XAS({
       const y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
       const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
       const initPeaks = buildXasFitPeakPayloads(activePeaks, datasetMax)
-      const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label), fitNRestarts)
+      const fitRange: [number, number] | null = fitRangeEnabled ? [fitRangeLo, fitRangeHi] : null
+      const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label), fitNRestarts, fitRange)
       setFitResult(res)
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setIsFitting(false) }
-  }, [activeDataset, fitChannel, fitPeakCandidates, fitProfile])
+  }, [activeDataset, fitChannel, fitPeakCandidates, fitProfile, fitNRestarts, fitRangeEnabled, fitRangeLo, fitRangeHi])
 
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
@@ -1932,6 +1936,44 @@ export default function XAS({
                     ]}
                   />
 
+                  {/* 擬合範圍 */}
+                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">擬合範圍</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!fitRangeEnabled) {
+                            setFitRangeLo(energyMin)
+                            setFitRangeHi(energyMax)
+                          }
+                          setFitRangeEnabled(v => !v)
+                        }}
+                        className={[
+                          'rounded-full px-2.5 py-0.5 text-[10px] font-medium transition-colors',
+                          fitRangeEnabled
+                            ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                            : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                        ].join(' ')}
+                      >
+                        {fitRangeEnabled ? '已啟用' : '自動'}
+                      </button>
+                    </div>
+                    {fitRangeEnabled ? (
+                      <DualRangeInput
+                        label=""
+                        min={energyMin}
+                        max={energyMax}
+                        start={fitRangeLo}
+                        end={fitRangeHi}
+                        step={0.1}
+                        onChange={({ start, end }) => { setFitRangeLo(start); setFitRangeHi(end) }}
+                      />
+                    ) : (
+                      <p className="text-[10px] text-[var(--text-soft)]">依峰中心自動決定（中心 ± FWHM×6）</p>
+                    )}
+                  </div>
+
                   {/* 從樣品資料庫載入 */}
                   <div className="space-y-1.5">
                     <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">從樣品資料庫載入</p>
@@ -2482,7 +2524,25 @@ export default function XAS({
                       fill: 'tozeroy' as const,
                     })),
                   ] as Plotly.Data[]}
-                  layout={chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout}
+                  layout={(() => {
+                    const base = chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout
+                    if (fitRangeEnabled) {
+                      base.shapes = [{
+                        type: 'rect', xref: 'x', yref: 'paper',
+                        x0: fitRangeLo, x1: fitRangeHi, y0: 0, y1: 1,
+                        fillcolor: 'rgba(34,211,238,0.08)',
+                        line: { color: 'rgba(34,211,238,0.5)', width: 1.2, dash: 'dash' },
+                      } as Plotly.Shape]
+                      base.annotations = [{
+                        xref: 'x', yref: 'paper',
+                        x: (fitRangeLo + fitRangeHi) / 2, y: 1.0,
+                        text: '擬合範圍', showarrow: false,
+                        font: { size: 10, color: 'rgba(34,211,238,0.8)' },
+                        yanchor: 'bottom',
+                      } as Plotly.Annotations]
+                    }
+                    return base
+                  })()}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 360 }}
                 />
