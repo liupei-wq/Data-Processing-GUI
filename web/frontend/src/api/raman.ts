@@ -149,6 +149,11 @@ export async function fitSpectrum(
       baseline_p: params.baseline_p ?? 0.01,
       baseline_iter: params.baseline_iter ?? 20,
       bootstrap_rounds: params.bootstrap_rounds ?? 8,
+      si_handling_mode: params.si_handling_mode ?? 'mask',
+      si_region_lo: params.si_region_lo ?? 510,
+      si_region_hi: params.si_region_hi ?? 530,
+      si_mask_lo: params.si_mask_lo ?? 505,
+      si_mask_hi: params.si_mask_hi ?? 535,
     }),
   })
   if (!res.ok) {

@@ -112,6 +112,20 @@ RAMAN_REFERENCES: dict[str, list[dict]] = {
         {"pos": 325.0, "label": "artifact", "mode": "objective artifact", "symmetry": "artifact", "strength": 22, "tolerance_cm": 18.0, "fwhm_min": 12.0, "fwhm_max": 80.0, "enabled_by_default": False, "candidate_only": True, "artifact": True, "disabled_until_user_selects": True, "reference_source": "Instrument-specific empirical artifact placeholder", "note": "Objective / optical artifact placeholder near β-Ga₂O₃ 320 cm⁻¹."},
     ],
 
+    # ── Optional impurity / alternate phases (hidden until explicitly enabled) ──
+    "GaOOH": [
+        {"pos": 247.0, "label": "OH", "mode": "GaOOH candidate", "symmetry": "candidate", "strength": 24, "tolerance_cm": 10.0, "fwhm_min": 8.0, "fwhm_max": 35.0, "enabled_by_default": False, "disabled_until_user_selects": True, "reference_source": "GaOOH Raman impurity-phase references", "note": "Optional GaOOH impurity marker; disabled by default and should be supported by independent evidence."},
+        {"pos": 321.0, "label": "OH", "mode": "GaOOH candidate", "symmetry": "candidate", "strength": 32, "tolerance_cm": 10.0, "fwhm_min": 8.0, "fwhm_max": 35.0, "enabled_by_default": False, "disabled_until_user_selects": True, "reference_source": "GaOOH Raman impurity-phase references", "note": "Optional GaOOH impurity marker; overlaps β-Ga₂O₃/optical-artifact region and is disabled by default."},
+        {"pos": 418.0, "label": "OH", "mode": "GaOOH candidate", "symmetry": "candidate", "strength": 28, "tolerance_cm": 10.0, "fwhm_min": 8.0, "fwhm_max": 35.0, "enabled_by_default": False, "disabled_until_user_selects": True, "reference_source": "GaOOH Raman impurity-phase references", "note": "Optional GaOOH impurity marker; disabled by default."},
+        {"pos": 590.0, "label": "OH", "mode": "GaOOH candidate", "symmetry": "candidate", "strength": 20, "tolerance_cm": 12.0, "fwhm_min": 8.0, "fwhm_max": 40.0, "enabled_by_default": False, "disabled_until_user_selects": True, "reference_source": "GaOOH Raman impurity-phase references", "note": "Optional GaOOH impurity marker; disabled by default."},
+    ],
+
+    "Ni(OH)₂": [
+        {"pos": 310.0, "label": "Eg", "mode": "Ni(OH)₂ candidate", "symmetry": "candidate", "strength": 24, "tolerance_cm": 14.0, "fwhm_min": 20.0, "fwhm_max": 100.0, "enabled_by_default": False, "disabled_until_user_selects": True, "reference_source": "Ni(OH)₂ Raman impurity-phase references", "note": "Optional Ni(OH)₂ impurity marker; disabled by default and not a core sample phase."},
+        {"pos": 449.0, "label": "A1g", "mode": "Ni(OH)₂ candidate", "symmetry": "candidate", "strength": 34, "tolerance_cm": 14.0, "fwhm_min": 20.0, "fwhm_max": 100.0, "enabled_by_default": False, "disabled_until_user_selects": True, "reference_source": "Ni(OH)₂ Raman impurity-phase references", "note": "Optional Ni(OH)₂ impurity marker; disabled by default."},
+        {"pos": 530.0, "label": "OH", "mode": "Ni(OH)₂ near-Si marker", "symmetry": "candidate", "strength": 18, "tolerance_cm": 10.0, "fwhm_min": 20.0, "fwhm_max": 100.0, "enabled_by_default": False, "candidate_only": True, "can_be_quantified": False, "disabled_until_user_selects": True, "reference_source": "Ni(OH)₂ Raman impurity-phase references", "note": "Near the Si substrate-dominated region; marker only and not reliable for quantification."},
+    ],
+
     # ── Sapphire α-Al₂O₃ c-plane (0001) ──────────────────────────────────────
     # 2A₁g + 5Eg Raman-active modes (D₃d symmetry)
     # Refs: Porto & Krishnan J. Chem. Phys. 1967; Balkanski et al. PRB 1987
@@ -299,6 +313,11 @@ RAMAN_REFERENCES: dict[str, list[dict]] = {
 }
 
 
+RAMAN_CORE_MATERIALS = {"Si (基板)", "β-Ga₂O₃", "NiO"}
+RAMAN_OPTIONAL_MATERIALS = {"α-Ga₂O₃", "GaOOH", "Ni(OH)₂"}
+RAMAN_SAMPLE_RELATED_MATERIALS = RAMAN_CORE_MATERIALS | RAMAN_OPTIONAL_MATERIALS
+
+
 PHASE_LIBRARY_DEFAULTS: dict[str, dict] = {
     "Si (基板)": {
         "phase_group": "Si group",
@@ -336,6 +355,18 @@ PHASE_LIBRARY_DEFAULTS: dict[str, dict] = {
         "oxidation_state_inference": "Inferred",
         "reference": "Playford et al. Chem. Eur. J. 2013; Cuscó et al. PRB 2020",
     },
+    "GaOOH": {
+        "phase_group": "GaOOH optional group",
+        "species": "Ga-OH lattice",
+        "tolerance_cm": 10.0,
+        "fwhm_min": 8.0,
+        "fwhm_max": 40.0,
+        "profile": "pseudo_voigt",
+        "peak_type": "optional impurity phonon",
+        "oxidation_state": "Ga³⁺",
+        "oxidation_state_inference": "Inferred",
+        "reference": "GaOOH Raman impurity-phase references",
+    },
     "NiO": {
         "phase_group": "NiO group",
         "species": "Ni-O / magnon mode",
@@ -347,6 +378,18 @@ PHASE_LIBRARY_DEFAULTS: dict[str, dict] = {
         "oxidation_state": "Ni²⁺",
         "oxidation_state_inference": "Inferred",
         "reference": "Dietz et al. PRB 1971; Mironova-Ulmane et al. J. Phys. 2007",
+    },
+    "Ni(OH)₂": {
+        "phase_group": "Ni(OH)₂ optional group",
+        "species": "Ni-OH lattice",
+        "tolerance_cm": 14.0,
+        "fwhm_min": 20.0,
+        "fwhm_max": 100.0,
+        "profile": "pseudo_voigt",
+        "peak_type": "optional hydroxide phonon",
+        "oxidation_state": "Ni²⁺",
+        "oxidation_state_inference": "Inferred",
+        "reference": "Ni(OH)₂ Raman impurity-phase references",
     },
 }
 
@@ -384,6 +427,9 @@ def _generic_phase_defaults(material: str) -> dict:
         inference = "Inferred"
         species = "Ce-O lattice"
 
+    is_core = material in RAMAN_CORE_MATERIALS
+    is_sample_related = material in RAMAN_SAMPLE_RELATED_MATERIALS
+
     return {
         "phase_group": f"{material} group",
         "species": species,
@@ -394,12 +440,12 @@ def _generic_phase_defaults(material: str) -> dict:
         "allowed_profiles": ["gaussian", "lorentzian", "voigt", "pseudo_voigt", "split_pseudo_voigt"],
         "peak_type": "phonon",
         "anchor_peak": False,
-        "can_be_quantified": True,
-        "enabled_by_default": True,
-        "candidate_only": False,
+        "can_be_quantified": is_sample_related,
+        "enabled_by_default": is_core,
+        "candidate_only": not is_sample_related,
         "artifact": False,
         "substrate": False,
-        "disabled_until_user_selects": False,
+        "disabled_until_user_selects": not is_core,
         "oxidation_state": oxidation,
         "oxidation_state_inference": inference,
         "reference": "Raman reference peak library",
@@ -408,6 +454,9 @@ def _generic_phase_defaults(material: str) -> dict:
 
 def enriched_raman_peak(material: str, row: dict) -> dict:
     defaults = {**_generic_phase_defaults(material), **PHASE_LIBRARY_DEFAULTS.get(material, {})}
+    is_core = material in RAMAN_CORE_MATERIALS
+    is_optional = material in RAMAN_OPTIONAL_MATERIALS
+    is_sample_related = material in RAMAN_SAMPLE_RELATED_MATERIALS
     peak_type = row.get("peak_type")
     note = str(row.get("note", ""))
     if not peak_type:
@@ -422,6 +471,24 @@ def enriched_raman_peak(material: str, row: dict) -> dict:
     if material == "β-Ga₂O₃" and any(abs(float(row["pos"]) - value) <= 2.0 for value in (416.0, 651.0)):
         anchor_peak = True
     allowed_profiles = row.get("allowed_profiles", defaults.get("allowed_profiles", ["gaussian", "lorentzian", "voigt", "pseudo_voigt", "split_pseudo_voigt"]))
+    ref_pos = float(row.get("theoretical_center", row["pos"]))
+    enabled_by_default = bool(row.get("enabled_by_default", defaults.get("enabled_by_default", False)))
+    disabled_until_user_selects = bool(row.get("disabled_until_user_selects", defaults.get("disabled_until_user_selects", False)))
+    candidate_only = bool(row.get("candidate_only", defaults.get("candidate_only", False)))
+    can_be_quantified = bool(row.get("can_be_quantified", defaults.get("can_be_quantified", True)))
+    if not is_core:
+        enabled_by_default = False
+        disabled_until_user_selects = True
+    if not is_sample_related:
+        candidate_only = True
+        can_be_quantified = False
+    if material == "NiO" and not (580.0 <= ref_pos <= 700.0 or 850.0 <= ref_pos <= 1150.0 or 1300.0 <= ref_pos <= 1700.0):
+        enabled_by_default = False
+        disabled_until_user_selects = True
+        candidate_only = True
+        can_be_quantified = False
+    if is_optional:
+        note = (note + " " if note else "") + "Optional phase; disabled by default and only fitted after user enable."
     return {
         "phase": material,
         "material": material,
@@ -429,7 +496,7 @@ def enriched_raman_peak(material: str, row: dict) -> dict:
         "mode": row.get("mode", row.get("label", "")),
         "label": row.get("label", ""),
         "species": row.get("species", defaults["species"]),
-        "theoretical_center": float(row.get("theoretical_center", row["pos"])),
+        "theoretical_center": ref_pos,
         "pos": float(row["pos"]),
         "tolerance_cm": float(row.get("tolerance_cm", defaults["tolerance_cm"])),
         "fwhm_min": fwhm_min,
@@ -438,12 +505,12 @@ def enriched_raman_peak(material: str, row: dict) -> dict:
         "allowed_profiles": allowed_profiles,
         "peak_type": peak_type,
         "anchor_peak": anchor_peak,
-        "can_be_quantified": bool(row.get("can_be_quantified", defaults.get("can_be_quantified", True))),
-        "enabled_by_default": bool(row.get("enabled_by_default", defaults.get("enabled_by_default", True))),
-        "candidate_only": bool(row.get("candidate_only", defaults.get("candidate_only", False))),
+        "can_be_quantified": can_be_quantified,
+        "enabled_by_default": enabled_by_default,
+        "candidate_only": candidate_only,
         "artifact": bool(row.get("artifact", defaults.get("artifact", False))),
         "substrate": bool(row.get("substrate", defaults.get("substrate", material == "Si (基板)"))),
-        "disabled_until_user_selects": bool(row.get("disabled_until_user_selects", defaults.get("disabled_until_user_selects", False))),
+        "disabled_until_user_selects": disabled_until_user_selects,
         "related_technique": row.get("related_technique", "Raman"),
         "reference": row.get("reference", defaults["reference"]),
         "reference_source": row.get("reference_source", row.get("reference", defaults["reference"])),
@@ -503,19 +570,26 @@ def _assignment_for_enriched_peak(peak: dict) -> dict:
     }
 
 
+def get_raman_reference_materials(include_optional: bool = True) -> list[str]:
+    allowed = RAMAN_SAMPLE_RELATED_MATERIALS if include_optional else RAMAN_CORE_MATERIALS
+    return sorted(material for material in allowed if material in RAMAN_REFERENCES)
+
+
 RAMAN_PEAK_ASSIGNMENTS = [
     _assignment_for_enriched_peak(enriched_raman_peak(material, row))
-    for material, rows in RAMAN_REFERENCES.items()
-    for row in rows
+    for material in get_raman_reference_materials(include_optional=True)
+    for row in RAMAN_REFERENCES.get(material, [])
 ]
 
 
-def get_enriched_raman_peaks(material: str) -> list[dict]:
+def get_enriched_raman_peaks(material: str, include_hidden: bool = False) -> list[dict]:
+    if not include_hidden and material not in RAMAN_SAMPLE_RELATED_MATERIALS:
+        return []
     return [enriched_raman_peak(material, row) for row in RAMAN_REFERENCES.get(material, [])]
 
 
 def get_raman_peak_library() -> list[dict]:
     library: list[dict] = []
-    for material in sorted(RAMAN_REFERENCES):
+    for material in get_raman_reference_materials(include_optional=True):
         library.extend(get_enriched_raman_peaks(material))
     return library

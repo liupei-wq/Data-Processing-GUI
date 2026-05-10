@@ -215,11 +215,16 @@ export interface FitParams {
   residual_target_enabled: boolean
   residual_target: number
   residual_target_rounds: number
-  baseline_method?: 'arpls' | 'airpls' | 'asls'
+  baseline_method?: 'arpls' | 'airpls' | 'asls' | 'polynomial'
   baseline_lambda?: number
   baseline_p?: number
   baseline_iter?: number
   bootstrap_rounds?: number
+  si_handling_mode?: 'mask' | 'fit_subtract'
+  si_region_lo?: number
+  si_region_hi?: number
+  si_mask_lo?: number
+  si_mask_hi?: number
 }
 
 export interface FitPeakRow {
@@ -272,6 +277,8 @@ export interface FitPeakRow {
   Reference: string
   Reference_Source: string
   Is_Doublet: boolean
+  Unresolved: boolean
+  Unresolved_With: string
   Status: string
   Note: string
 }
