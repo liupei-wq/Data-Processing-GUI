@@ -561,3 +561,17 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-10 CST：改善 XAS 扣背景時卡頓。`web/frontend/src/api/xas.ts` 的 `processData` 支援 `AbortSignal`；`web/frontend/src/pages/XAS.tsx` 的自動處理 effect 會對過期 `/api/xas/process` 請求呼叫 abort，並依目前前處理 / Gaussian / 背景 / 歸一化狀態決定是否需要獨立 stage request，可重用 preprocess 或 final 結果時不再重打，減少拖動背景參數時的重複背景扣除計算。驗證 `cd web/frontend && npm run build` 通過。
 
 - 2026-05-10 CST：XAS 峰擬合新增「擬合範圍」設定。後端 `XasFitRequest.fit_range` 已存在；前端新增 `fitRangeEnabled / fitRangeLo / fitRangeHi` state，`web/frontend/src/api/xas.ts` 的 `fitXasPeaks()` 新增 `fitRange?: [number, number] | null` 參數，啟用時傳入 `body.fit_range`；峰形選單下方加入「擬合範圍」卡片（停用時顯示「自動」說明，啟用後改為 `DualRangeInput` 雙把手拉桿，範圍由 energyMin/energyMax 決定）；擬合結果圖在啟用時疊加青色陰影（`rgba(34,211,238,0.08)`）與虛線框標示擬合範圍，並加上「擬合範圍」標籤 annotation；`handleFit` 依賴項補上 `fitNRestarts`（原本遺漏）。影響檔案：`web/frontend/src/api/xas.ts`、`web/frontend/src/pages/XAS.tsx`；後端語法 `python3 -m py_compile` 通過。
+
+- 2026-05-11 CST：開始處理 Raman 圖表需求：結果圖全螢幕、標籤避讓、繪製圖檔峰顯示篩選/可信度篩選、移除 Raman publication residual panel，以及預留多樣品疊圖顯示。範圍先限定 web/frontend Raman 分析頁與 PlotFileTool。
+
+- 2026-05-11 CST：準備實作 Raman 分析頁結果圖全螢幕與 peak label 避讓；判斷以 React overlay 呈現全螢幕，避免恢復舊版 Plotly 自訂 modebar fullscreen 造成 bundle/runtime 風險。
+
+- 2026-05-11 CST：Raman 分析頁已新增擬合結果圖全螢幕 overlay，並將 component peak label 改為圖框上方標籤帶，避免標籤直接覆蓋資料曲線。接續修改 PlotFileTool Raman 繪圖工具。
+
+- 2026-05-11 CST：首次前端建置嘗試失敗，原因是指令工作目錄在 web/frontend 時相對路徑讀不到根目錄 CLAUDE.md，且該 PowerShell session 找不到 npm；接著改從 repo root 讀取 CLAUDE.md 並確認 npm 可執行檔。
+
+- 2026-05-11 CST：清理首次建置失敗時意外建立的 web/frontend/CLAUDE.md；該檔為本次錯誤命令產物，非使用者既有檔案。
+
+- 2026-05-11 CST：確認目前工具環境找不到 node/npm，也沒有本地 node_modules，可先以靜態檢查與 git diff 檢查替代；另補上 PlotFileTool Raman 預覽全螢幕，以涵蓋繪圖工具中的結果圖檢視。
+
+- 2026-05-11 CST：完成 Raman 圖表需求。影響檔案：web/frontend/src/pages/Raman.tsx、web/frontend/src/pages/PlotFileTool.tsx、CLAUDE.md、AGENTS.md。驗證：git diff --check 通過；目前工具環境 Get-Command node/npm 無結果，因此無法執行 cd web/frontend && npm run build。

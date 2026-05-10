@@ -335,24 +335,7 @@ function componentDisplayLabel(label: string, center: number) {
   return `${withoutCenter || 'unassigned Raman component'}<br>${center.toFixed(1)} cm⁻¹`
 }
 
-function componentPeakY(x: number[], y: number[], center: number) {
-  if (x.length !== y.length || x.length === 0 || !Number.isFinite(center)) return 0
-  let bestIndex = 0
-  let bestDistance = Infinity
-  x.forEach((value, index) => {
-    const distance = Math.abs(value - center)
-    if (distance < bestDistance) {
-      bestDistance = distance
-      bestIndex = index
-    }
-  })
-  const halfWindow = 3
-  const lo = Math.max(0, bestIndex - halfWindow)
-  const hi = Math.min(y.length, bestIndex + halfWindow + 1)
-  return Math.max(...y.slice(lo, hi).filter(Number.isFinite), y[bestIndex] ?? 0)
-}
-
-function buildFitComponentPeakMarkers(components: RamanFitComponent[], x: number[], enabled: boolean) {
+function buildFitComponentPeakMarkers(components: RamanFitComponent[], enabled: boolean) {
   if (!enabled || components.length === 0) return { annotations: [] as object[], shapes: [] as object[] }
   const sorted = components
     .map((component, index) => ({ component, index }))
@@ -366,7 +349,6 @@ function buildFitComponentPeakMarkers(components: RamanFitComponent[], x: number
     const closeCount = recentCenters.filter(center => Math.abs(center - component.center) <= 28).length
     recentCenters.push(component.center)
     const lane = closeCount % 4
-    const yPeak = componentPeakY(x, component.y_component_corrected, component.center)
     shapes.push({
       type: 'line',
       xref: 'x',
@@ -381,17 +363,11 @@ function buildFitComponentPeakMarkers(components: RamanFitComponent[], x: number
     })
     annotations.push({
       x: component.center,
-      y: yPeak,
+      y: 1.02 + lane * 0.075,
       xref: 'x',
-      yref: 'y',
+      yref: 'paper',
       text: componentDisplayLabel(component.component_label, component.center),
-      showarrow: true,
-      arrowhead: 2,
-      arrowsize: 0.8,
-      arrowwidth: 1,
-      arrowcolor: color,
-      ax: 0,
-      ay: -42 - lane * 20,
+      showarrow: false,
       xanchor: 'center',
       yanchor: 'bottom',
       align: 'center',
@@ -549,18 +525,18 @@ function fitResultFigure(
     line: { color: '#8b949e', width: 1.05 },
   })
 
-  const componentMarkers = buildFitComponentPeakMarkers(components, x, options.showPeakLabels)
+  const componentMarkers = buildFitComponentPeakMarkers(components, options.showPeakLabels)
 
   return {
     data,
     layout: {
       ...base,
-      margin: { l: 68, r: 72, t: 118, b: 72 },
+      margin: { l: 68, r: 72, t: 186, b: 72 },
       legend: {
         orientation: 'h',
         x: 0.5,
         xanchor: 'center',
-        y: 1.16,
+        y: 1.33,
         yanchor: 'bottom',
         bgcolor: 'rgba(0,0,0,0)',
         borderwidth: 0,
@@ -1476,6 +1452,7 @@ export default function Raman({
     fillComponents: false,
     showPeakLabels: true,
   })
+  const [fitFullscreenOpen, setFitFullscreenOpen] = useState(false)
   const [fitTargetName, setFitTargetName] = useState<string>('')
   const [isFitting, setIsFitting] = useState(false)
   const [siRefPos, setSiRefPos] = useState(520.7)
@@ -4484,6 +4461,14 @@ export default function Raman({
                           <span>{label}</span>
                         </label>
                       ))}
+                      <button
+                        type="button"
+                        onClick={() => setFitFullscreenOpen(true)}
+                        disabled={!fitFigure}
+                        className="theme-pill pressable rounded-xl px-3 py-2 text-xs font-semibold text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        全螢幕檢視
+                      </button>
                     </div>
                     <div className="theme-block-soft rounded-[24px] p-3 sm:p-4">
                       <DeferredRender minHeight={520}>
@@ -5291,6 +5276,32 @@ export default function Raman({
         onClose={() => setOverlaySelectorOpen(false)}
         onConfirm={applyOverlaySelection}
       />
+      {fitFullscreenOpen && fitFigure && (
+        <div className="fixed inset-0 z-[1000] flex flex-col bg-[color:color-mix(in_srgb,var(--bg-canvas)_96%,black)] p-3 sm:p-5" role="dialog" aria-modal="true">
+          <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow)]">
+            <div>
+              <div className="text-sm font-semibold text-[var(--text-main)]">Raman 擬合結果圖</div>
+              <div className="mt-1 text-xs text-[var(--text-soft)]">{activeFitDataset?.name ?? fitTargetName}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFitFullscreenOpen(false)}
+              className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-semibold text-[var(--accent)]"
+            >
+              關閉
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2 shadow-[var(--card-shadow)]">
+            <Plot
+              data={fitFigure.data}
+              layout={fitFigure.layout as Plotly.Layout}
+              config={withPlotFullscreen({ scrollZoom: true })}
+              style={{ width: '100%', height: '100%' }}
+              useResizeHandler
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
