@@ -23,11 +23,13 @@ export async function parseFiles(files: File[], flipTfy: boolean): Promise<Parse
 export async function processData(
   datasets: DatasetInput[],
   params: ProcessParams,
+  signal?: AbortSignal,
 ): Promise<ProcessResult> {
   const res = await fetch(`${BASE}/process`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ datasets, params }),
+    signal,
   })
   if (!res.ok) {
     throw new Error(await readApiError(res, 'XAS 資料處理失敗'))

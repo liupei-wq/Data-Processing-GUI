@@ -871,7 +871,8 @@ export default function XAS({
   const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
   const interpolationEnabled = params.interpolate
 
-  // reprocess whenever rawFiles or params change (300ms debounce to avoid rapid API calls during slider drag)
+  // Reprocess when rawFiles or params change. The stage requests are debounced,
+  // abortable, and only run when a distinct intermediate result is needed.
   useEffect(() => {
     if (rawFiles.length === 0) {
       setResult(null)
@@ -882,6 +883,7 @@ export default function XAS({
       return
     }
     let cancelled = false
+    const controller = new AbortController()
     const timer = setTimeout(() => {
       if (cancelled) return
       setIsLoading(true); setError(null)
@@ -925,22 +927,46 @@ export default function XAS({
         white_line_start: null,
         white_line_end: null,
       }
-      Promise.all([
-        processData(datasets, effectiveParams),
-        processData(datasets, preprocessParams),
-        processData(datasets, preNormalizationParams),
-      ])
+      const hasPreprocessingStage = params.interpolate || params.average || params.energy_shift !== 0
+      const hasGaussianStage = effectiveParams.gauss_enabled && effectiveParams.gauss_peaks.length > 0
+      const needsPreNormalizationRequest = effectiveParams.norm_method !== 'none' && (
+        effectiveParams.bg_enabled ||
+        hasGaussianStage ||
+        !hasPreprocessingStage
+      )
+
+      const finalRequest = processData(datasets, effectiveParams, controller.signal)
+      const preprocessRequest = hasPreprocessingStage
+        ? processData(datasets, preprocessParams, controller.signal)
+        : Promise.resolve<ProcessResult | null>(null)
+      const preNormalizationRequest = needsPreNormalizationRequest
+        ? processData(datasets, preNormalizationParams, controller.signal)
+        : Promise.resolve<ProcessResult | null>(null)
+
+      Promise.all([finalRequest, preprocessRequest, preNormalizationRequest])
         .then(([finalStage, preprocessStage, preNormalizationStage]) => {
           if (!cancelled) {
             setResult(finalStage)
             setPreprocessResult(preprocessStage)
-            setPreNormalizationResult(preNormalizationStage)
+            setPreNormalizationResult(
+              effectiveParams.norm_method === 'none'
+                ? finalStage
+                : (preNormalizationStage ?? preprocessStage ?? finalStage),
+            )
           }
         })
-        .catch(e => { if (!cancelled) setError(String(e.message)) })
+        .catch(e => {
+          const err = e as Error
+          if (cancelled || err.name === 'AbortError') return
+          setError(String(err.message))
+        })
         .finally(() => { if (!cancelled) setIsLoading(false) })
     }, 300)
-    return () => { cancelled = true; clearTimeout(timer) }
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      controller.abort()
+    }
   }, [rawFiles, params, effectiveNPoints, whiteLineEnabled])
 
   useEffect(() => {
