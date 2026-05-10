@@ -117,11 +117,6 @@ const DEFAULT_FIT_PARAMS: FitParams = {
   baseline_p: 0.01,
   baseline_iter: 20,
   bootstrap_rounds: 8,
-  si_handling_mode: 'mask',
-  si_region_lo: 510,
-  si_region_hi: 530,
-  si_mask_lo: 505,
-  si_mask_hi: 535,
 }
 
 const BACKGROUND_METHOD_HELP: Record<ProcessParams['bg_method'], string> = {
@@ -193,18 +188,6 @@ const ROBUST_LOSS_OPTIONS: { value: FitParams['robust_loss']; label: string }[] 
   { value: 'arctan', label: 'Arctan（更保守抑制離群值）' },
 ]
 
-const FIT_BASELINE_METHOD_OPTIONS: { value: NonNullable<FitParams['baseline_method']>; label: string }[] = [
-  { value: 'arpls', label: 'arPLS（平滑自適應基線）' },
-  { value: 'airpls', label: 'airPLS（迭代峰值降權）' },
-  { value: 'asls', label: 'AsLS（不對稱最小平方）' },
-  { value: 'polynomial', label: '低階 Polynomial' },
-]
-
-const SI_HANDLING_OPTIONS: { value: NonNullable<FitParams['si_handling_mode']>; label: string }[] = [
-  { value: 'mask', label: 'Mask 505–535，不做樣品峰定量' },
-  { value: 'fit_subtract', label: '先獨立擬合 Si peak 後扣除' },
-]
-
 const BATCH_NORMALIZE_OPTIONS = [
   { value: 'si_520', label: '以 Si 520 峰正規化' },
   { value: 'total_area', label: '以總面積正規化' },
@@ -232,10 +215,9 @@ function refPeakToCandidate(peak: RefPeak, defaultFwhm: number): FitPeakCandidat
   const label = peak.label || `${peak.position_cm.toFixed(1)} cm⁻¹`
   const role = roleFromStrength(peak.strength)
   const fwhm = Math.min(Math.max(defaultFwhm, peak.fwhm_min), peak.fwhm_max)
-  const enabledByDefault = peak.enabled_by_default !== false && !peak.disabled_until_user_selects
   return {
     peak_id: createPeakCandidateId(),
-    enabled: enabledByDefault,
+    enabled: true,
     material: peak.material,
     phase: peak.phase || peak.material,
     phase_group: peak.phase_group || `${peak.material} group`,
@@ -1025,8 +1007,6 @@ function getFitQualityFlags(
   if (row.Delta_cm != null && Math.abs(row.Delta_cm) > maxAbsDelta) flags.push(`|Δ|>${maxAbsDelta}`)
   if (row.Boundary_Peak) flags.push('boundary peak')
   if (row.Broad_Background_Like) flags.push('broad/background-like peak')
-  if (row.Unresolved) flags.push('unresolved')
-  if (row.Can_Be_Quantified === false && row.Status === 'overlapped') flags.push('Si substrate overlap')
   return Array.from(new Set(flags))
 }
 
@@ -1035,8 +1015,6 @@ function translateQualityFlag(flag: string) {
   if (flag === 'broad/background-like peak') return '峰形過寬或接近背景'
   if (flag === 'center outside tolerance') return '中心超出容許範圍'
   if (flag === 'FWHM at limit') return 'FWHM 碰到限制'
-  if (flag === 'unresolved') return '不可分辨峰'
-  if (flag === 'Si substrate overlap') return '與 Si 基板峰重疊'
   if (flag === 'Area=0') return '面積為 0'
   if (flag.startsWith('Area%<')) return flag.replace('Area%<', '面積占比 < ')
   if (flag.startsWith('|Δ|>')) return flag.replace('|Δ|>', '峰位偏移 > ')
@@ -2824,25 +2802,19 @@ export default function Raman({
 
   const exportFitExcel = useCallback(() => {
     if (!fitResult?.success) return
-    const headers = ['Dataset', 'Component_Label', 'Component_Group', 'Material', 'Mode', 'Reference_cm', 'Center_cm', 'Shift_cm', 'FWHM_cm', 'Area', 'Area_pct', 'Can_Be_Quantified', 'Unresolved', 'Unresolved_With', 'Fit_Status', 'Physical_Confidence', 'Reason', 'Flags']
+    const headers = ['Dataset', 'Component_Label', 'Component_Group', 'Material', 'Mode', 'Center_cm', 'FWHM_cm', 'Area', 'Area_pct', 'Fit_Status', 'Physical_Confidence', 'Flags']
     const rows = fitResult.peaks.map(row => [
       fitResult.dataset_name,
       row.Peak_Name,
       row.Phase_Group,
       row.Material,
       row.Mode_Label,
-      row.Ref_cm,
       row.Center_cm,
-      row.Delta_cm,
       row.FWHM_cm,
       row.Area,
       row.Area_pct,
-      row.Can_Be_Quantified,
-      row.Unresolved,
-      row.Unresolved_With,
       row.Fit_Status,
       row.Physical_Confidence || row.Confidence,
-      row.Note,
       row.Quality_Flags.join(' / '),
     ])
     downloadFile(toCsv(headers, rows).replace(/,/g, '\t'), 'raman_fit_results.xls', 'application/vnd.ms-excel')
@@ -3581,72 +3553,6 @@ export default function Raman({
                     buttonClassName="text-sm"
                   />
                 </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Fitting baseline</span>
-                  <ThemeSelect
-                    value={fitParams.baseline_method ?? 'arpls'}
-                    onChange={value => setFitParams(current => ({ ...current, baseline_method: value as FitParams['baseline_method'] }))}
-                    options={FIT_BASELINE_METHOD_OPTIONS}
-                    buttonClassName="text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Si 520 cm⁻¹ 處理</span>
-                  <ThemeSelect
-                    value={fitParams.si_handling_mode ?? 'mask'}
-                    onChange={value => setFitParams(current => ({ ...current, si_handling_mode: value as FitParams['si_handling_mode'] }))}
-                    options={SI_HANDLING_OPTIONS}
-                    buttonClassName="text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Si 主峰區起點</span>
-                  <input
-                    type="number"
-                    value={fitParams.si_region_lo ?? 510}
-                    min={480}
-                    max={540}
-                    step={1}
-                    onChange={e => setFitParams(current => ({ ...current, si_region_lo: Number(e.target.value) }))}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">Si 主峰區終點</span>
-                  <input
-                    type="number"
-                    value={fitParams.si_region_hi ?? 530}
-                    min={500}
-                    max={560}
-                    step={1}
-                    onChange={e => setFitParams(current => ({ ...current, si_region_hi: Number(e.target.value) }))}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">樣品峰 mask 起點</span>
-                  <input
-                    type="number"
-                    value={fitParams.si_mask_lo ?? 505}
-                    min={480}
-                    max={530}
-                    step={1}
-                    onChange={e => setFitParams(current => ({ ...current, si_mask_lo: Number(e.target.value) }))}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--text-soft)]">樣品峰 mask 終點</span>
-                  <input
-                    type="number"
-                    value={fitParams.si_mask_hi ?? 535}
-                    min={510}
-                    max={560}
-                    step={1}
-                    onChange={e => setFitParams(current => ({ ...current, si_mask_hi: Number(e.target.value) }))}
-                    className="theme-input w-full rounded-xl px-3 py-2 text-sm"
-                  />
-                </label>
                 <button
                   type="button"
                   onClick={() => applyProfileToSuggestedPeaks('split_pseudo_voigt')}
@@ -3710,7 +3616,7 @@ export default function Raman({
               </div>
 
               <div className="mt-3 rounded-[18px] border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3 text-xs leading-6 text-[var(--text-soft)]">
-                目前使用 segmented Raman fitting：先做平滑 baseline correction，再分區處理 β-Ga₂O₃ / NiO；520 cm⁻¹ 區預設視為 Si substrate dominated，不作 Ga₂O₃ 或 NiO 定量證據。
+                目前使用 staged fitting：裁切 fitting window → QC → baseline correction → tolerance 內局部最大值更新初始值 → robust global constrained fitting → AIC/BIC gate auto peak。
               </div>
 
               <button
@@ -4658,7 +4564,6 @@ export default function Raman({
                             <th className="px-3 py-3 font-medium">SNR</th>
                             <th className="px-3 py-3 font-medium">anchor-related Δ</th>
                             <th className="px-3 py-3 font-medium">status</th>
-                            <th className="px-3 py-3 font-medium">quant</th>
                             <th className="px-3 py-3 font-medium">confidence</th>
                             <th className="px-3 py-3 font-medium">note</th>
                           </tr>
@@ -4680,12 +4585,8 @@ export default function Raman({
                               <td className="px-3 py-3">{fmtFixed(row.SNR, 2)}</td>
                               <td className="px-3 py-3">{fmtFixed(row.Anchor_Related_Delta_cm, 3)}</td>
                               <td className="px-3 py-3">{row.Status}</td>
-                              <td className="px-3 py-3 text-xs">
-                                {row.Can_Be_Quantified ? '可定量' : '不定量'}
-                                {row.Unresolved && <div className="mt-1 text-[11px] text-[var(--text-soft)]">unresolved</div>}
-                              </td>
                               <td className="px-3 py-3">{fmtFixed(row.Confidence_Score, 0)}<div className="text-[11px] text-[var(--text-soft)]">{translateConfidenceLevel(row.Physical_Confidence || row.Confidence)}</div></td>
-                              <td className="px-3 py-3 text-xs text-[var(--text-soft)]">{[row.Note, row.Unresolved_With ? `unresolved with ${row.Unresolved_With}` : ''].filter(Boolean).join('; ') || '—'}</td>
+                              <td className="px-3 py-3 text-xs text-[var(--text-soft)]">{row.Note || '—'}</td>
                             </tr>
                           ))}
                         </tbody>

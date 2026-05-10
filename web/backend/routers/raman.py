@@ -17,15 +17,7 @@ from core.parsers import parse_two_column_spectrum_bytes
 from core.peak_fitting import fit_peaks
 from core.processing import apply_background, apply_normalization_with_diagnostics, airpls_background, arpls_background, asls_background, masked_weight_profile
 from core.spectrum_ops import detect_spectrum_peaks
-from db.raman_database import (
-    RAMAN_OPTIONAL_MATERIALS,
-    RAMAN_PEAK_ASSIGNMENTS,
-    RAMAN_REFERENCES,
-    RAMAN_SAMPLE_RELATED_MATERIALS,
-    get_enriched_raman_peaks,
-    get_raman_peak_library,
-    get_raman_reference_materials,
-)
+from db.raman_database import RAMAN_PEAK_ASSIGNMENTS, RAMAN_REFERENCES, get_enriched_raman_peaks, get_raman_peak_library
 
 router = APIRouter()
 
@@ -238,11 +230,6 @@ class FitRequest(BaseModel):
     baseline_p: float = 0.01
     baseline_iter: int = 20
     bootstrap_rounds: int = 8
-    si_handling_mode: str = "mask"  # mask | fit_subtract
-    si_region_lo: float = 510.0
-    si_region_hi: float = 530.0
-    si_mask_lo: float = 505.0
-    si_mask_hi: float = 535.0
     peaks: List[FitPeakInput]
 
 
@@ -296,8 +283,6 @@ class FitPeakRow(BaseModel):
     Reference: str = ""
     Reference_Source: str = ""
     Is_Doublet: bool = False
-    Unresolved: bool = False
-    Unresolved_With: str = ""
     Status: str = ""
     Note: str = ""
 
@@ -923,7 +908,7 @@ def detect_peaks(req: PeakDetectRequest):
 
 @router.get("/references", summary="List Raman reference materials")
 def get_references():
-    return {"materials": get_raman_reference_materials(include_optional=True)}
+    return {"materials": sorted(RAMAN_REFERENCES.keys())}
 
 
 @router.post("/reference-peaks", response_model=RefPeaksResponse, summary="Get Raman reference peaks")
@@ -1042,15 +1027,6 @@ def _baseline_curve_with_peak_masks(
         return airpls_background(y, lam=baseline_lambda, max_iter=baseline_iter, weights=weights)
     if selected == "asls":
         return asls_background(y, lam=baseline_lambda, p=baseline_p, max_iter=baseline_iter, weights=weights)
-    if selected in {"poly", "polynomial", "low_order_polynomial"}:
-        degree = 3
-        baseline_mask = weights >= 0.35
-        if int(np.sum(baseline_mask)) >= degree + 2:
-            try:
-                coeff = np.polyfit(x[baseline_mask], y[baseline_mask], degree)
-                return np.polyval(coeff, x)
-            except Exception:
-                pass
     return arpls_background(y, lam=baseline_lambda, max_iter=baseline_iter, weights=weights)
 
 
@@ -1935,51 +1911,6 @@ NON_QUANT_COMPONENT_TOKENS = {
     "baseline",
     "residual",
 }
-SI_REFERENCE_CENTER = 520.7
-SI_DOMINATED_NOTE = "overlapped with Si substrate peak, not reliable for quantification; 520 cm^-1 region is Si substrate dominated"
-SEGMENT_DEFINITIONS = [
-    {
-        "key": "beta_low_mid",
-        "name": "100-500 cm^-1 beta-Ga2O3 low/mid modes",
-        "lo": 100.0,
-        "hi": 500.0,
-        "materials": {"β-Ga₂O₃", "α-Ga₂O₃", "GaOOH"},
-        "requires_broad_peak": False,
-    },
-    {
-        "key": "si_substrate",
-        "name": "500-560 cm^-1 Si substrate only",
-        "lo": 500.0,
-        "hi": 560.0,
-        "materials": {"Si (基板)"},
-        "requires_broad_peak": False,
-    },
-    {
-        "key": "beta_high_nio",
-        "name": "580-700 cm^-1 beta-Ga2O3 high modes / possible NiO",
-        "lo": 580.0,
-        "hi": 700.0,
-        "materials": {"β-Ga₂O₃", "α-Ga₂O₃", "GaOOH", "NiO", "Ni(OH)₂"},
-        "requires_broad_peak": False,
-    },
-    {
-        "key": "nio_two_phonon",
-        "name": "850-1150 cm^-1 NiO two-phonon broad band",
-        "lo": 850.0,
-        "hi": 1150.0,
-        "materials": {"NiO", "Ni(OH)₂"},
-        "requires_broad_peak": True,
-    },
-    {
-        "key": "nio_two_magnon",
-        "name": "1300-1700 cm^-1 NiO two-magnon broad band",
-        "lo": 1300.0,
-        "hi": 1700.0,
-        "materials": {"NiO"},
-        "requires_broad_peak": True,
-    },
-]
-SEGMENT_BY_KEY = {segment["key"]: segment for segment in SEGMENT_DEFINITIONS}
 
 
 def _group_name_for_candidate(candidate: dict) -> str:
@@ -2396,11 +2327,8 @@ def _seed_candidate_from_local_max(x: np.ndarray, y_corrected: np.ndarray, candi
     seeded = dict(candidate)
     ref_center = float(seeded.get("ref_center", seeded.get("theoretical_center", seeded.get("be", 0.0))))
     tolerance = float(max(seeded.get("tolerance_cm", 8.0), 0.0))
-    lo = float(seeded.get("center_min", ref_center - tolerance))
-    hi = float(seeded.get("center_max", ref_center + tolerance))
-    if hi <= lo:
-        lo = ref_center - tolerance
-        hi = ref_center + tolerance
+    lo = ref_center - tolerance
+    hi = ref_center + tolerance
     mask = (x >= lo) & (x <= hi)
     local_max_position: Optional[float] = None
     height_seed = 1e-9
@@ -2439,465 +2367,6 @@ def _seed_candidate_from_local_max(x: np.ndarray, y_corrected: np.ndarray, candi
         y_fit=np.zeros_like(y_corrected, dtype=float).tolist(),
     )
     return seeded, probe
-
-
-def _sorted_window(lo: float, hi: float) -> tuple[float, float]:
-    return (float(min(lo, hi)), float(max(lo, hi)))
-
-
-def _si_mask_window(req: FitRequest) -> tuple[float, float]:
-    return _sorted_window(float(req.si_mask_lo), float(req.si_mask_hi))
-
-
-def _si_main_window(req: FitRequest) -> tuple[float, float]:
-    return _sorted_window(float(req.si_region_lo), float(req.si_region_hi))
-
-
-def _candidate_ref_center(candidate: dict) -> float:
-    return float(candidate.get("ref_center", candidate.get("theoretical_center", candidate.get("be", 0.0))))
-
-
-def _is_si_candidate(candidate: dict) -> bool:
-    return str(candidate.get("material", "")).startswith("Si")
-
-
-def _is_si_dominated_center(center: float, req: FitRequest) -> bool:
-    mask_lo, mask_hi = _si_mask_window(req)
-    return (mask_lo <= center <= mask_hi) or abs(center - SI_REFERENCE_CENTER) < 10.0 or (515.0 <= center <= 535.0)
-
-
-def _candidate_segment_key(candidate: dict, req: FitRequest) -> str | None:
-    ref_center = _candidate_ref_center(candidate)
-    material = str(candidate.get("material", ""))
-    if _is_si_candidate(candidate):
-        return "si_substrate" if 500.0 <= ref_center <= 560.0 else None
-    if _is_si_dominated_center(ref_center, req):
-        return None
-    for segment in SEGMENT_DEFINITIONS:
-        if segment["key"] == "si_substrate":
-            continue
-        if material in segment["materials"] and float(segment["lo"]) <= ref_center <= float(segment["hi"]):
-            return str(segment["key"])
-    return None
-
-
-def _physical_candidate_for_segment(candidate: dict, req: FitRequest) -> tuple[dict, str | None]:
-    out = dict(candidate)
-    material = str(out.get("material", ""))
-    ref_center = _candidate_ref_center(out)
-    known_unrelated = material in RAMAN_REFERENCES and material not in RAMAN_SAMPLE_RELATED_MATERIALS
-    if known_unrelated:
-        return out, f"{material} is not part of the enabled Raman sample-structure library"
-
-    optional = material in RAMAN_OPTIONAL_MATERIALS
-    if optional:
-        out["enabled_by_default"] = False
-        out["disabled_until_user_selects"] = True
-
-    if _is_si_candidate(out):
-        if not (500.0 <= ref_center <= 560.0):
-            return out, "Only the Si substrate 520 cm^-1 main peak is fitted in the Raman fitting workflow"
-        center_min, center_max = 519.0, 522.0
-        fwhm_min = max(float(out.get("fwhm_min", 3.0)), 3.0)
-        fwhm_max = min(max(float(out.get("fwhm_max", 12.0)), fwhm_min + 0.2), 15.0)
-        out.update({
-            "be": float(np.clip(float(out.get("be", ref_center)), center_min, center_max)),
-            "center_min": center_min,
-            "center_max": center_max,
-            "tolerance_cm": min(max(float(out.get("tolerance_cm", 3.0)), 1.0), 3.0),
-            "fwhm_min": fwhm_min,
-            "fwhm_max": fwhm_max,
-            "fwhm": float(np.clip(float(out.get("fwhm", 8.0)), fwhm_min, fwhm_max)),
-            "profile": str(out.get("profile", "voigt")) if str(out.get("profile", "voigt")) in {"voigt", "lorentzian"} else "voigt",
-            "can_be_quantified": False,
-            "substrate": True,
-            "peak_type": "Si substrate phonon",
-        })
-        return out, None
-
-    if _is_si_dominated_center(ref_center, req):
-        out.update({
-            "can_be_quantified": False,
-            "candidate_only": True,
-            "fit_disabled_reason": SI_DOMINATED_NOTE,
-        })
-        return out, SI_DOMINATED_NOTE
-
-    if material in {"β-Ga₂O₃", "α-Ga₂O₃", "GaOOH"}:
-        tolerance = float(np.clip(float(out.get("tolerance_cm", 10.0)), 8.0, 12.0))
-        fwhm_min = max(float(out.get("fwhm_min", 5.0)), 5.0)
-        fwhm_max = min(max(float(out.get("fwhm_max", 35.0)), fwhm_min + 0.5), 35.0)
-        out.update({
-            "tolerance_cm": tolerance,
-            "center_min": ref_center - tolerance,
-            "center_max": ref_center + tolerance,
-            "fwhm_min": fwhm_min,
-            "fwhm_max": fwhm_max,
-            "fwhm": float(np.clip(float(out.get("fwhm", 12.0)), fwhm_min, fwhm_max)),
-            "profile": _normal_profile_for_physical_peak(str(out.get("profile", "pseudo_voigt")), str(out.get("peak_type", ""))),
-        })
-    elif material in {"NiO", "Ni(OH)₂"}:
-        tolerance = float(max(float(out.get("tolerance_cm", 20.0)), 14.0))
-        fwhm_min = max(float(out.get("fwhm_min", 40.0)), 40.0)
-        fwhm_max = min(max(float(out.get("fwhm_max", 120.0)), fwhm_min + 5.0), 200.0)
-        out.update({
-            "tolerance_cm": tolerance,
-            "center_min": ref_center - tolerance,
-            "center_max": ref_center + tolerance,
-            "fwhm_min": fwhm_min,
-            "fwhm_max": fwhm_max,
-            "fwhm": float(np.clip(float(out.get("fwhm", 80.0)), fwhm_min, fwhm_max)),
-            "profile": "pseudo_voigt",
-        })
-    else:
-        out.update({
-            "can_be_quantified": False,
-            "candidate_only": True,
-            "tolerance_cm": min(max(float(out.get("tolerance_cm", 10.0)), 4.0), 18.0),
-            "fwhm_min": max(float(out.get("fwhm_min", 5.0)), 5.0),
-            "fwhm_max": min(max(float(out.get("fwhm_max", 60.0)), 6.0), 80.0),
-        })
-
-    segment_key = _candidate_segment_key(out, req)
-    if segment_key is None:
-        return out, "candidate is outside the controlled Raman fitting segments"
-    out["fit_segment_key"] = segment_key
-    return out, None
-
-
-def _marker_row_from_candidate(candidate: dict, status: str, note: str, confidence: str = "Low") -> dict:
-    row = _peak_row_from_candidate(candidate, None, 1.0, None, group_shift=0.0)
-    row.update({
-        "Status": status,
-        "Fit_Status": "Not quantified" if status in {"overlapped", "unresolved"} else "Not observed",
-        "Can_Be_Quantified": False,
-        "Area": 0.0,
-        "Area_pct": 0.0,
-        "Height": 0.0,
-        "SNR": 0.0,
-        "Confidence": confidence,
-        "Physical_Confidence": confidence,
-        "Confidence_Score": 10.0 if confidence == "Low" else 45.0,
-        "Note": note,
-    })
-    if status == "unresolved":
-        row["Unresolved"] = True
-    return row
-
-
-def _region_has_obvious_peak(x: np.ndarray, y: np.ndarray, lo: float, hi: float, broad: bool = False) -> bool:
-    mask = (x >= lo) & (x <= hi)
-    if int(np.sum(mask)) < 8:
-        return False
-    local = np.asarray(y[mask], dtype=float)
-    if len(local) < 8 or not np.any(np.isfinite(local)):
-        return False
-    edge_count = max(2, int(round(len(local) * 0.18)))
-    edge_values = np.concatenate([local[:edge_count], local[-edge_count:]])
-    baseline_level = float(np.median(edge_values))
-    peak_height = float(np.max(local) - baseline_level)
-    noise = max(_robust_noise(edge_values - baseline_level), _robust_noise(local - np.median(local)) * 0.45, 1e-12)
-    y_span = max(float(np.ptp(local)), 1e-12)
-    threshold = max(noise * (2.8 if broad else 2.2), y_span * (0.10 if broad else 0.04))
-    if peak_height <= threshold:
-        return False
-    if broad:
-        positive_fraction = float(np.mean((local - baseline_level) > noise * 1.2))
-        return positive_fraction >= 0.06
-    return True
-
-
-def _candidate_has_local_evidence(x: np.ndarray, y: np.ndarray, candidate: dict) -> bool:
-    ref_center = _candidate_ref_center(candidate)
-    tolerance = float(max(candidate.get("tolerance_cm", 8.0), 1.0))
-    half_width = max(tolerance, float(candidate.get("fwhm_min", 5.0)) * 0.7, 4.0)
-    mask = (x >= ref_center - half_width) & (x <= ref_center + half_width)
-    if int(np.sum(mask)) < 3:
-        return False
-    local = np.asarray(y[mask], dtype=float)
-    if len(local) == 0:
-        return False
-    local_peak = float(np.max(local))
-    local_noise = max(_robust_noise(local - np.median(local)), 1e-12)
-    global_span = max(float(np.ptp(y)), 1e-12)
-    material = str(candidate.get("material", ""))
-    factor = 1.8 if material.startswith("Si") else (2.2 if material == "β-Ga₂O₃" else 2.5)
-    return local_peak > max(local_noise * factor, global_span * 0.008)
-
-
-def _candidate_priority(candidate: dict) -> tuple[int, int, int, float]:
-    material = str(candidate.get("material", ""))
-    material_rank = 0 if material.startswith("Si") else (1 if material == "β-Ga₂O₃" else (2 if material == "NiO" else 3))
-    candidate_penalty = 1 if bool(candidate.get("candidate_only", False)) else 0
-    anchor_bonus = -1 if bool(candidate.get("anchor_peak", False)) else 0
-    return (material_rank, candidate_penalty, anchor_bonus, -float(candidate.get("strength", 0.0)))
-
-
-def _collapse_unresolved_candidates(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
-    if not candidates:
-        return [], []
-    sorted_candidates = sorted(candidates, key=_candidate_ref_center)
-    clusters: list[list[dict]] = []
-    for candidate in sorted_candidates:
-        ref_center = _candidate_ref_center(candidate)
-        placed = False
-        for cluster in clusters:
-            if any(abs(ref_center - _candidate_ref_center(item)) < 0.5 * max(float(candidate.get("fwhm", candidate.get("fwhm_min", 5.0))), float(item.get("fwhm", item.get("fwhm_min", 5.0)))) for item in cluster):
-                cluster.append(candidate)
-                placed = True
-                break
-        if not placed:
-            clusters.append([candidate])
-
-    retained: list[dict] = []
-    marker_rows: list[dict] = []
-    for cluster in clusters:
-        if len(cluster) == 1:
-            retained.append(cluster[0])
-            continue
-        ordered = sorted(cluster, key=_candidate_priority)
-        keeper = dict(ordered[0])
-        others = ordered[1:]
-        unresolved_labels = [
-            f"{item.get('display_name', item.get('label', 'peak'))} @ {_candidate_ref_center(item):.1f}"
-            for item in others
-        ]
-        keeper["unresolved"] = True
-        keeper["unresolved_with"] = "; ".join(unresolved_labels)
-        keeper["can_be_quantified"] = False
-        keeper["note"] = (str(keeper.get("note", "")) + " " if keeper.get("note") else "") + "Represents an unresolved cluster; not reliable for area comparison."
-        retained.append(keeper)
-        for item in others:
-            item = dict(item)
-            item["unresolved"] = True
-            item["unresolved_with"] = f"{keeper.get('display_name', keeper.get('label', 'peak'))} @ {_candidate_ref_center(keeper):.1f}"
-            marker_rows.append(_marker_row_from_candidate(
-                item,
-                "unresolved",
-                f"unresolved with {item['unresolved_with']}; center spacing is < 0.5 x max(FWHM), not reliable for quantification",
-                confidence="Low",
-            ))
-    return retained, marker_rows
-
-
-def _fit_segment_candidates_full(
-    segment: dict,
-    x: np.ndarray,
-    y_raw: np.ndarray,
-    baseline: np.ndarray,
-    y_for_fit: np.ndarray,
-    candidates: list[dict],
-    req: FitRequest,
-) -> tuple[list[dict], list[dict], list[np.ndarray], np.ndarray, SegmentFitSummary, list[PeakProbeRow]]:
-    lo = float(segment["lo"])
-    hi = float(segment["hi"])
-    mask = (x >= lo) & (x <= hi)
-    empty_fit = np.zeros_like(x, dtype=float)
-    if int(np.sum(mask)) < 8:
-        rows = [
-            _marker_row_from_candidate(candidate, "not_observed", "segment contains too few data points", confidence="Low")
-            for candidate in candidates
-        ]
-        summary = SegmentFitSummary(
-            Range=str(segment["name"]), Lo_cm=lo, Hi_cm=hi, Baseline_Method=req.baseline_method,
-            Warning="segment contains too few data points", x=x[mask].tolist(), y_raw=y_raw[mask].tolist(),
-            baseline=baseline[mask].tolist(), y_corrected=y_for_fit[mask].tolist(),
-            y_fit=np.zeros(int(np.sum(mask))).tolist(), residuals=y_for_fit[mask].tolist(),
-        )
-        return [], rows, [], empty_fit, summary, []
-
-    x_seg = x[mask]
-    y_seg = y_for_fit[mask]
-    raw_seg = y_raw[mask]
-    baseline_seg = baseline[mask]
-    requires_broad = bool(segment.get("requires_broad_peak", False))
-    if not _region_has_obvious_peak(x_seg, y_seg, lo, hi, broad=requires_broad):
-        warning = "no obvious broad peak in segment" if requires_broad else "no obvious peak in segment"
-        rows = [
-            _marker_row_from_candidate(candidate, "not_observed", warning, confidence="Low")
-            for candidate in candidates
-        ]
-        summary = SegmentFitSummary(
-            Range=str(segment["name"]), Lo_cm=lo, Hi_cm=hi, Baseline_Method=req.baseline_method,
-            Warning=warning, x=x_seg.tolist(), y_raw=raw_seg.tolist(), baseline=baseline_seg.tolist(),
-            y_corrected=y_seg.tolist(), y_fit=np.zeros_like(y_seg).tolist(), residuals=y_seg.tolist(),
-        )
-        return [], rows, [], empty_fit, summary, []
-
-    probe_rows: list[PeakProbeRow] = []
-    evidence_candidates: list[dict] = []
-    marker_rows: list[dict] = []
-    for candidate in candidates:
-        if _candidate_has_local_evidence(x_seg, y_seg, candidate):
-            evidence_candidates.append(candidate)
-        else:
-            marker_rows.append(_marker_row_from_candidate(candidate, "not_observed", "no local peak evidence above baseline-corrected noise", confidence="Low"))
-
-    retained_candidates, unresolved_rows = _collapse_unresolved_candidates(evidence_candidates)
-    marker_rows.extend(unresolved_rows)
-
-    seeded_candidates: list[dict] = []
-    for candidate in retained_candidates:
-        seeded, probe = _seed_candidate_from_local_max(x_seg, y_seg, candidate)
-        seeded_candidates.append(seeded)
-        probe_rows.append(probe)
-
-    if not seeded_candidates:
-        residuals = y_seg.copy()
-        summary = SegmentFitSummary(
-            Range=str(segment["name"]), Lo_cm=lo, Hi_cm=hi, Baseline_Method=req.baseline_method,
-            RMSE=float(np.sqrt(np.mean(residuals ** 2))) if len(residuals) else 0.0,
-            Residual_MaxAbs=float(np.max(np.abs(residuals))) if len(residuals) else 0.0,
-            Peak_Count=0,
-            Warning="no candidate passed local evidence / unresolved filters",
-            x=x_seg.tolist(), y_raw=raw_seg.tolist(), baseline=baseline_seg.tolist(),
-            y_corrected=y_seg.tolist(), y_fit=np.zeros_like(y_seg).tolist(), residuals=residuals.tolist(),
-        )
-        return [], marker_rows, [], empty_fit, summary, probe_rows
-
-    result = _fit_model(x_seg, y_seg, seeded_candidates, req)
-    if not result.get("success"):
-        rows = [
-            _marker_row_from_candidate(candidate, "not_observed", str(result.get("message", "segment fit failed")), confidence="Low")
-            for candidate in seeded_candidates
-        ]
-        residuals = y_seg.copy()
-        summary = SegmentFitSummary(
-            Range=str(segment["name"]), Lo_cm=lo, Hi_cm=hi, Baseline_Method=req.baseline_method,
-            RMSE=float(np.sqrt(np.mean(residuals ** 2))) if len(residuals) else 0.0,
-            Residual_MaxAbs=float(np.max(np.abs(residuals))) if len(residuals) else 0.0,
-            Peak_Count=0,
-            Warning=str(result.get("message", "segment fit failed")),
-            x=x_seg.tolist(), y_raw=raw_seg.tolist(), baseline=baseline_seg.tolist(),
-            y_corrected=y_seg.tolist(), y_fit=np.zeros_like(y_seg).tolist(), residuals=residuals.tolist(),
-        )
-        return [], [*marker_rows, *rows], [], empty_fit, summary, probe_rows
-
-    fit_lookup = {str(peak.get("peak_id", "")): dict(peak) for peak in result.get("peaks", [])}
-    residuals_seg = np.asarray(result.get("residuals", y_seg), dtype=float)
-    noise = max(_robust_noise(residuals_seg), 1e-12)
-    rows = [*marker_rows]
-    for candidate in seeded_candidates:
-        rows.append(_peak_row_from_candidate(candidate, fit_lookup.get(str(candidate.get("peak_id", ""))), noise, None, group_shift=0.0))
-
-    full_peaks: list[dict] = []
-    full_components: list[np.ndarray] = []
-    full_y_fit = np.zeros_like(x, dtype=float)
-    for index, peak in enumerate(result.get("peaks", [])):
-        peak_full = dict(peak)
-        component_seg = np.asarray(result.get("y_individual", [])[index] if index < len(result.get("y_individual", [])) else np.zeros_like(y_seg), dtype=float)
-        component_full = np.zeros_like(x, dtype=float)
-        component_full[mask] = component_seg
-        full_components.append(component_full)
-        full_peaks.append(peak_full)
-        full_y_fit += component_full
-
-    y_fit_seg = np.asarray(result.get("y_fit", np.zeros_like(y_seg)), dtype=float)
-    summary = SegmentFitSummary(
-        Range=str(segment["name"]),
-        Lo_cm=lo,
-        Hi_cm=hi,
-        Baseline_Method=req.baseline_method,
-        R_squared=float(result.get("r_squared", 0.0)),
-        RMSE=float(result.get("rmse", 0.0)),
-        Residual_MaxAbs=float(np.max(np.abs(residuals_seg))) if len(residuals_seg) else 0.0,
-        Peak_Count=len(full_peaks),
-        Warning="",
-        x=x_seg.tolist(),
-        y_raw=raw_seg.tolist(),
-        baseline=baseline_seg.tolist(),
-        y_corrected=y_seg.tolist(),
-        y_fit=y_fit_seg.tolist(),
-        residuals=residuals_seg.tolist(),
-    )
-    return full_peaks, rows, full_components, full_y_fit, summary, probe_rows
-
-
-def _apply_si_dominated_rules(rows: list[dict], req: FitRequest) -> None:
-    for row in rows:
-        material = str(row.get("Material", ""))
-        if material.startswith("Si"):
-            row["Can_Be_Quantified"] = False
-            if SI_REFERENCE_CENTER - 6.0 <= float(row.get("Center_cm", SI_REFERENCE_CENTER)) <= SI_REFERENCE_CENTER + 6.0:
-                note = str(row.get("Note", ""))
-                addition = "Si substrate dominated region; not Ga2O3/NiO evidence"
-                row["Note"] = "; ".join(item for item in [note, addition] if item)
-            continue
-        centers = [row.get("Center_cm"), row.get("Ref_cm")]
-        if any(center is not None and _is_si_dominated_center(float(center), req) for center in centers):
-            row["Can_Be_Quantified"] = False
-            row["Status"] = "overlapped"
-            row["Fit_Status"] = "Not quantified"
-            row["Confidence"] = "Low"
-            row["Physical_Confidence"] = "Low"
-            row["Confidence_Score"] = min(float(row.get("Confidence_Score", 0.0)), 25.0)
-            flags = list(row.get("Quality_Flags", []))
-            row["Quality_Flags"] = list(dict.fromkeys([*flags, "Si substrate overlap"]))
-            note = str(row.get("Note", ""))
-            row["Note"] = "; ".join(item for item in [note, SI_DOMINATED_NOTE] if item)
-
-
-def _apply_unresolved_peak_rules(rows: list[dict]) -> None:
-    quant_like_statuses = PROBED_OBSERVED_STATUSES | ACCEPTED_PEAK_STATUSES | {"unresolved"}
-    for index, row in enumerate(rows):
-        if bool(row.get("Unresolved", False)):
-            row["Status"] = "unresolved"
-            row["Can_Be_Quantified"] = False
-        if str(row.get("Status", "")) not in quant_like_statuses:
-            continue
-        center = row.get("Center_cm")
-        if center is None:
-            continue
-        for other in rows[index + 1:]:
-            if str(other.get("Status", "")) not in quant_like_statuses:
-                continue
-            other_center = other.get("Center_cm")
-            if other_center is None:
-                continue
-            fwhm = max(float(row.get("FWHM_cm", 0.0)), float(other.get("FWHM_cm", 0.0)))
-            if fwhm <= 0:
-                continue
-            if abs(float(center) - float(other_center)) >= 0.5 * fwhm:
-                continue
-            left_label = f"{row.get('Peak_Name', 'peak')} @ {float(center):.1f}"
-            right_label = f"{other.get('Peak_Name', 'peak')} @ {float(other_center):.1f}"
-            for current, peer_label in ((row, right_label), (other, left_label)):
-                current["Unresolved"] = True
-                existing = str(current.get("Unresolved_With", ""))
-                current["Unresolved_With"] = "; ".join(item for item in [existing, peer_label] if item)
-                current["Can_Be_Quantified"] = False
-                current["Status"] = "unresolved"
-                current["Fit_Status"] = "Not quantified"
-                current["Confidence"] = "Low"
-                current["Physical_Confidence"] = "Low"
-                current["Confidence_Score"] = min(float(current.get("Confidence_Score", 0.0)), 30.0)
-                flags = list(current.get("Quality_Flags", []))
-                current["Quality_Flags"] = list(dict.fromkeys([*flags, "unresolved"]))
-                note = str(current.get("Note", ""))
-                addition = "unresolved: center spacing is < 0.5 x max(FWHM), not reliable for area quantification"
-                current["Note"] = "; ".join(item for item in [note, addition] if item)
-
-
-def _metrics_from_segmented_fit(y: np.ndarray, residuals: np.ndarray, peak_count: int) -> dict:
-    n_points = len(y)
-    ss_res = float(np.sum(residuals ** 2))
-    ss_tot = float(np.sum((y - float(np.mean(y))) ** 2)) if n_points else 0.0
-    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
-    n_params = max(peak_count * 3, 1)
-    adjusted = 1.0 - (1.0 - r_squared) * (n_points - 1) / max(n_points - n_params - 1, 1) if n_points > 1 else r_squared
-    rmse = float(np.sqrt(np.mean(residuals ** 2))) if n_points else 0.0
-    variance = max(ss_res / max(n_points, 1), 1e-12)
-    aic = float(n_points * math.log(variance) + 2 * n_params) if n_points else 0.0
-    bic = float(n_points * math.log(variance) + math.log(max(n_points, 2)) * n_params) if n_points else 0.0
-    reduced_chi2 = ss_res / max(n_points - n_params, 1)
-    return {
-        "r_squared": float(r_squared),
-        "adjusted_r_squared": float(adjusted),
-        "rmse": rmse,
-        "reduced_chi2": float(reduced_chi2),
-        "aic": aic,
-        "bic": bic,
-    }
 
 
 def _residual_peak_is_systematic(x: np.ndarray, residuals: np.ndarray, idx: int, noise: float) -> bool:
@@ -3204,8 +2673,6 @@ def _peak_row_from_candidate(
         "Reference": str(candidate.get("reference", "")),
         "Reference_Source": str(candidate.get("reference_source", candidate.get("reference", ""))),
         "Is_Doublet": bool(candidate.get("doublet", False)),
-        "Unresolved": bool(candidate.get("unresolved", False)),
-        "Unresolved_With": str(candidate.get("unresolved_with", "")),
         "Status": status,
         "Note": "; ".join(note_list),
     }
@@ -3286,8 +2753,6 @@ def _peak_row_from_probe(candidate: dict, probe: PeakProbeRow, group_shift: floa
         "Reference": str(candidate.get("reference", "")),
         "Reference_Source": str(candidate.get("reference_source", candidate.get("reference", ""))),
         "Is_Doublet": bool(candidate.get("doublet", False)),
-        "Unresolved": bool(candidate.get("unresolved", False)),
-        "Unresolved_With": str(candidate.get("unresolved_with", "")),
         "Status": probe.status,
         "Note": probe.rejection_reason,
     }
@@ -3535,13 +3000,12 @@ def _build_report_v2(
 ) -> RamanReport:
     sample_id = _sample_id_from_name(dataset_name)
     preprocessing_method = (
-        "frontend-processed spectrum + segmented physical Raman fitting"
+        "frontend-processed spectrum + staged global fitting"
         if req.input_is_preprocessed
-        else "baseline correction + segmented physical Raman fitting"
+        else "baseline correction + staged global fitting"
     )
-    baseline_method = req.baseline_method
-    warnings = [row["Note"] for row in rows if row["Status"] in {"uncertain", "rejected", "overlapped", "unresolved"} and row["Note"]]
-    warnings.append("520 cm^-1 region is Si substrate dominated; do not use it as direct Ga2O3 or NiO evidence.")
+    baseline_method = "frontend_processed" if req.input_is_preprocessed else req.baseline_method
+    warnings = [row["Note"] for row in rows if row["Status"] in {"uncertain", "rejected"} and row["Note"]]
     unmatched = [f"{row['Peak_Name']} ({row['Center_cm']:.1f} cm⁻¹)" for row in rows if row["Status"] == "rejected"]
     unobserved = [f"{row['Peak_Name']} [{row['Material']} @ {row['Ref_cm']:.1f} cm⁻¹]" for row in rows if row["Status"] == "not_observed" and row["Ref_cm"] is not None]
     credibility_summary = [
@@ -3552,14 +3016,13 @@ def _build_report_v2(
     peak_table_headers = [
         "sample_id", "component_group", "component_material", "component_label", "assignment", "assignment_type", "mode", "reference_shift_cm1", "fitted_shift_cm1",
         "delta_cm1", "tolerance_cm1", "FWHM", "area", "area_percent", "height", "uncertainty_center", "uncertainty_FWHM",
-        "SNR", "anchor_related_delta", "status", "confidence_level", "confidence_score", "can_be_quantified", "unresolved", "unresolved_with", "reason",
+        "SNR", "anchor_related_delta", "status", "confidence_score", "note",
     ]
     peak_table_rows = [
         [
             sample_id, row["Phase_Group"], row["Material"], row["Peak_Name"], row.get("Assignment_Label", ""), row.get("Assignment_Type", ""), row["Mode_Label"], row["Ref_cm"], row["Center_cm"],
             row["Delta_cm"], row["Tolerance_cm"], row["FWHM_cm"], row["Area"], row["Area_pct"], row["Height"], row["Bootstrap_Center_STD"],
-            row["Bootstrap_FWHM_STD"], row["SNR"], row["Anchor_Related_Delta_cm"], row["Status"], row.get("Confidence", ""), row["Confidence_Score"],
-            row.get("Can_Be_Quantified", False), row.get("Unresolved", False), row.get("Unresolved_With", ""), row["Note"],
+            row["Bootstrap_FWHM_STD"], row["SNR"], row["Anchor_Related_Delta_cm"], row["Status"], row["Confidence_Score"], row["Note"],
         ]
         for row in rows
     ]
@@ -3756,120 +3219,61 @@ def fit_raman_peaks(req: FitRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     quality_warnings = _quality_warnings_for_staged_fit(x_fit, y_fit_window)
-    effective_req = req.model_copy(update={
-        "robust_loss": req.robust_loss if str(req.robust_loss).lower() != "linear" else "soft_l1",
-        "si_handling_mode": str(req.si_handling_mode or "mask").lower(),
-    })
-    if effective_req.si_handling_mode not in {"mask", "fit_subtract"}:
-        effective_req = effective_req.model_copy(update={"si_handling_mode": "mask"})
-
-    raw_candidates: list[dict] = []
-    fit_candidates: list[dict] = []
-    prefit_rows: list[dict] = []
-    for row in enabled_rows:
-        candidate = _prepare_candidate_dict(row, 0.0)
-        physical_candidate, skip_reason = _physical_candidate_for_segment(candidate, effective_req)
-        raw_candidates.append(physical_candidate)
-        if skip_reason:
-            status = "overlapped" if "Si substrate" in skip_reason else "not_observed"
-            prefit_rows.append(_marker_row_from_candidate(physical_candidate, status, skip_reason, confidence="Low"))
-        else:
-            fit_candidates.append(physical_candidate)
-
+    raw_candidates = [_prepare_candidate_dict(row, 0.0) for row in enabled_rows]
     baseline = _baseline_curve_with_peak_masks(
         x_fit,
         y_fit_window,
         raw_candidates,
-        method=effective_req.baseline_method,
-        baseline_lambda=float(effective_req.baseline_lambda),
-        baseline_p=float(effective_req.baseline_p),
-        baseline_iter=int(effective_req.baseline_iter),
+        method=req.baseline_method,
+        baseline_lambda=float(req.baseline_lambda),
+        baseline_p=float(req.baseline_p),
+        baseline_iter=int(req.baseline_iter),
     )
     y_corrected = y_fit_window - baseline
 
-    candidates_by_segment: dict[str, list[dict]] = {}
-    for candidate in fit_candidates:
-        key = str(candidate.get("fit_segment_key", ""))
-        if key:
-            candidates_by_segment.setdefault(key, []).append(candidate)
-
-    total_fit_corrected = np.zeros_like(y_corrected, dtype=float)
-    y_individual_full: list[np.ndarray] = []
-    final_peaks: list[dict] = []
-    final_rows_raw: list[dict] = [*prefit_rows]
-    segment_summaries: list[SegmentFitSummary] = []
+    effective_req = req.model_copy(update={
+        "robust_loss": req.robust_loss if str(req.robust_loss).lower() != "linear" else "soft_l1",
+    })
+    seeded_candidates: list[dict] = []
     seed_probe_rows: list[PeakProbeRow] = []
+    for candidate in raw_candidates:
+        seeded, probe = _seed_candidate_from_local_max(x_fit, y_corrected, candidate)
+        seeded_candidates.append(seeded)
+        seed_probe_rows.append(probe)
 
-    si_component = np.zeros_like(y_corrected, dtype=float)
-    si_candidates = candidates_by_segment.pop("si_substrate", [])
-    if si_candidates:
-        si_lo, si_hi = _si_main_window(effective_req)
-        si_lo = max(500.0, si_lo)
-        si_hi = min(560.0, si_hi)
-        if si_hi <= si_lo:
-            si_lo, si_hi = 510.0, 530.0
-        si_segment = {
-            **SEGMENT_BY_KEY["si_substrate"],
-            "lo": si_lo,
-            "hi": si_hi,
-            "name": f"{si_lo:.0f}-{si_hi:.0f} cm^-1 Si substrate main peak",
-        }
-        peaks, rows, components, segment_fit, summary, probes = _fit_segment_candidates_full(
-            si_segment,
-            x_fit,
-            y_fit_window,
-            baseline,
-            y_corrected,
-            si_candidates,
-            effective_req,
-        )
-        final_peaks.extend(peaks)
-        final_rows_raw.extend(rows)
-        y_individual_full.extend(components)
-        total_fit_corrected += segment_fit
-        si_component = segment_fit
-        segment_summaries.append(summary)
-        seed_probe_rows.extend(probes)
-    elif effective_req.si_handling_mode == "fit_subtract":
-        quality_warnings.append("Si fit/subtract mode selected, but no enabled Si substrate peak was available")
+    final_result, final_candidates, auto_peak_notes = _fit_with_aic_bic_auto_peaks(
+        x_fit,
+        y_corrected,
+        seeded_candidates,
+        effective_req,
+    )
+    if not final_result.get("success"):
+        raise HTTPException(status_code=400, detail=str(final_result.get("message", "Global fitting failed")))
 
-    sample_fit_y = y_corrected - si_component if effective_req.si_handling_mode == "fit_subtract" else y_corrected
-    for segment in SEGMENT_DEFINITIONS:
-        key = str(segment["key"])
-        if key == "si_substrate":
-            continue
-        candidates = candidates_by_segment.get(key, [])
-        if not candidates:
-            continue
-        peaks, rows, components, segment_fit, summary, probes = _fit_segment_candidates_full(
-            segment,
-            x_fit,
-            y_fit_window,
-            baseline,
-            sample_fit_y,
-            candidates,
-            effective_req,
-        )
-        final_peaks.extend(peaks)
-        final_rows_raw.extend(rows)
-        y_individual_full.extend(components)
-        total_fit_corrected += segment_fit
-        segment_summaries.append(summary)
-        seed_probe_rows.extend(probes)
+    final_lookup = {str(peak.get("peak_id", "")): dict(peak) for peak in final_result.get("peaks", [])}
+    residuals = np.asarray(final_result.get("residuals", np.zeros_like(y_corrected)), dtype=float)
+    noise_final = max(_robust_noise(residuals), 1e-12)
+    final_rows_raw: list[dict] = []
+    for candidate in final_candidates:
+        peak = final_lookup.get(str(candidate.get("peak_id", "")))
+        row = _peak_row_from_candidate(candidate, peak, noise_final, None, group_shift=0.0)
+        row["Assignment_Basis"] = "staged global Raman fitting with tolerance-bounded local-max initialization"
+        if str(candidate.get("peak_type", "")) == "auto_peak" and peak is not None:
+            row["Status"] = "accepted"
+            row["Fit_Status"] = "Fit OK"
+            row["Can_Be_Quantified"] = False
+            row["Quality_Flags"] = list(dict.fromkeys([*row.get("Quality_Flags", []), "auto peak"]))
+        final_rows_raw.append(row)
 
-    residuals = y_corrected - total_fit_corrected
-    _apply_si_dominated_rules(final_rows_raw, effective_req)
-    _apply_unresolved_peak_rules(final_rows_raw)
     _recompute_area_pct(final_rows_raw)
-    _apply_component_assignments(final_rows_raw, fit_candidates)
+    _apply_component_assignments(final_rows_raw, final_candidates)
     rows = [FitPeakRow(**row) for row in final_rows_raw]
     component_curves, total_fit_corrected = _build_fit_components(
         baseline,
-        [dict(item) for item in final_peaks],
-        y_individual_full,
+        [dict(item) for item in final_result.get("peaks", [])],
+        final_result.get("y_individual", []),
         rows,
     )
-    residuals = y_corrected - total_fit_corrected
     total_fit_raw = baseline + total_fit_corrected
     alignment_rows = _alignment_rows_from_peaks(req.dataset_name, [row.model_dump() for row in rows])
 
@@ -3886,18 +3290,6 @@ def fit_raman_peaks(req: FitRequest):
     sample_id = _sample_id_from_name(req.dataset_name)
     for idx in detected_indices:
         center = float(x_fit[idx])
-        if _is_si_dominated_center(center, effective_req):
-            detected_unmatched_rows.append([
-                sample_id,
-                "si_substrate_dominated_region",
-                f"{center:.1f} cm⁻¹",
-                "Si substrate",
-                SI_REFERENCE_CENTER,
-                center,
-                "not_quantified",
-                "520 cm^-1 region is Si substrate dominated; not direct Ga2O3 or NiO evidence",
-            ])
-            continue
         if any(abs(center - accepted_center) <= 8.0 for accepted_center in accepted_centers):
             continue
         detected_unmatched_rows.append([
@@ -3911,25 +3303,24 @@ def fit_raman_peaks(req: FitRequest):
             "detected in corrected fitting window but not retained by AIC/BIC-gated model",
         ])
 
-    metrics = _metrics_from_segmented_fit(y_corrected, residuals, len(final_peaks))
+    n_points = len(x_fit)
+    n_params = max(len(final_result.get("peaks", [])) * 3, 1)
+    ss_res = float(np.sum(residuals ** 2))
+    reduced_chi2 = ss_res / max(n_points - n_params, 1)
+    metrics = {
+        "r_squared": float(final_result.get("r_squared", 0.0)),
+        "adjusted_r_squared": float(final_result.get("adjusted_r_squared", 0.0)),
+        "rmse": float(final_result.get("rmse", 0.0)),
+        "reduced_chi2": float(reduced_chi2),
+        "aic": float(final_result.get("aic", 0.0)),
+        "bic": float(final_result.get("bic", 0.0)),
+    }
     residual_diagnostics = _residual_diagnostics(x_fit, residuals)
-    si_rows = [
-        row for row in rows
-        if row.Material.startswith("Si") and row.Ref_cm is not None and abs(row.Ref_cm - SI_REFERENCE_CENTER) <= 20.0
-    ]
-    si_center = si_rows[0].Center_cm if si_rows else None
-    calibration = CalibrationSummary(
-        method=f"si_substrate_{effective_req.si_handling_mode}",
-        si_peak_before_cm=si_center,
-        si_peak_after_cm=si_center,
-        applied=False,
-    )
+    calibration = CalibrationSummary(method="none", applied=False)
     group_summaries, _ = _build_group_summaries([row.model_dump() for row in rows])
     report_warnings = [*quality_warnings]
     if effective_req.robust_loss != req.robust_loss:
         report_warnings.append("robust loss forced from linear to soft_l1 for staged fitting")
-    report_warnings.append("520 cm^-1 region is Si substrate dominated and is not direct Ga2O3 or NiO evidence")
-    report_warnings.append("auto residual peaks are disabled in segmented physical Raman fitting")
     report = _build_report_v2(
         req.dataset_name,
         effective_req,
@@ -3954,28 +3345,26 @@ def fit_raman_peaks(req: FitRequest):
         fitting_window=f"{fit_window[0]:.3f}-{fit_window[1]:.3f} cm⁻¹",
         quality_warnings=quality_warnings,
         baseline_method=str(req.baseline_method),
-        candidate_count=len(fit_candidates),
-        auto_peak_notes=["auto peak search disabled by material/segment-gated Raman fitting"],
+        candidate_count=len(seeded_candidates),
+        auto_peak_notes=auto_peak_notes,
         stage_order=[
             "1. crop fitting window",
             "2. inspect overexposure / negative values / cosmic rays",
-            "3. smooth baseline correction before peak fitting",
-            "4. keep only Si substrate / beta-Ga2O3 / NiO plus user-enabled optional phases",
-            "5. fit 500-560 cm^-1 as independent Si substrate region",
-            "6. mask or subtract the Si 505-535 cm^-1 contribution before sample-region quantification",
-            "7. fit controlled Raman segments: 100-500, 580-700, 850-1150, 1300-1700 cm^-1",
-            "8. require local peak evidence; do not force-fit empty regions",
-            "9. apply physical center/FWHM limits and unresolved peak-distance checks",
-            f"10. robust loss: {effective_req.robust_loss}",
-            "11. output raw, baseline, corrected spectrum, total fit, components, residual, assignment table",
+            "3. baseline correction",
+            "4. load enabled literature/manual candidates",
+            "5. update initial centers from local maxima within tolerance",
+            "6. global constrained least-squares fit",
+            f"7. robust loss: {effective_req.robust_loss}",
+            "8. calculate R² / adjusted R² / RMSE / reduced χ² / AIC / BIC",
+            "9. AIC/BIC-gated auto peaks only when residual shape is systematic",
+            "10. output table, components, total fit, residual",
         ],
     )
 
     message_parts = [
-        "Segmented Raman fitting completed",
+        "Staged fitting completed",
         f"window {staged_diagnostics.fitting_window}",
         f"robust loss {effective_req.robust_loss}",
-        f"Si handling {effective_req.si_handling_mode}",
     ]
     if quality_warnings:
         message_parts.append(f"QC warnings: {len(quality_warnings)}")
@@ -3988,7 +3377,7 @@ def fit_raman_peaks(req: FitRequest):
         y_fit=total_fit_raw.tolist(),
         total_fit_raw=total_fit_raw.tolist(),
         residuals=residuals.tolist(),
-        y_individual=[np.asarray(item, dtype=float).tolist() for item in y_individual_full],
+        y_individual=[np.asarray(item, dtype=float).tolist() for item in final_result.get("y_individual", [])],
         components=component_curves,
         peaks=rows,
         r_squared=metrics["r_squared"],
@@ -4001,7 +3390,7 @@ def fit_raman_peaks(req: FitRequest):
         residual_diagnostics=residual_diagnostics,
         group_summaries=group_summaries,
         calibration=calibration,
-        segment_summaries=segment_summaries,
+        segment_summaries=[],
         alignment_rows=alignment_rows,
         report=report,
         x_calibrated=x_fit.tolist(),
