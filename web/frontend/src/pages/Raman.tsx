@@ -328,70 +328,85 @@ function fitComponentColor(index: number) {
   return FIT_COMPONENT_COLORS[index % FIT_COMPONENT_COLORS.length]
 }
 
-function normalizeComponentGroupLabel(component: RamanFitComponent) {
-  const group = (component.component_group || '').replace(/\s*group$/i, '').trim()
-  if (group) return group
-  return component.component_material || ''
-}
-
-function compactFitComponentModeLabel(component: RamanFitComponent) {
-  return (component.component_label || '')
-    .replace(/^Si\s*/i, '')
-    .replace(/^NiO?\s*/i, '')
-    .replace(/^β-?Ga[₂2]O[₃3]\s*/i, '')
-    .replace(/^Ga[₂2]O[₃3]\s*/i, '')
-    .replace(/\s+candidate$/i, '')
+function componentDisplayLabel(label: string, center: number) {
+  const withoutCenter = String(label || 'unassigned Raman component')
+    .replace(/,\s*[-+]?\d+(?:\.\d+)?\s*cm(?:⁻¹|-1)?\s*$/i, '')
     .trim()
+  return `${withoutCenter || 'unassigned Raman component'}<br>${center.toFixed(1)} cm⁻¹`
 }
 
-function fitComponentGroupLegendLabel(group: string, representative: RamanFitComponent) {
-  const mode = compactFitComponentModeLabel(representative)
-  if (/^Si/i.test(group)) return mode ? `Si ${mode}` : 'Si'
-  if (/NiO?/i.test(group)) return mode ? `Ni ${mode}` : 'Ni'
-  if (/β-?Ga|Ga[₂2]O[₃3]/i.test(group)) return 'β-Ga₂O₃'
-  return group || representative.component_label || 'Component'
-}
-
-function buildFitComponentGroupAnnotations(components: RamanFitComponent[], enabled: boolean) {
-  if (!enabled || components.length === 0) return { annotations: [] as object[], rowCount: 0 }
-  const groups = new Map<string, RamanFitComponent>()
-  components.forEach(component => {
-    const group = normalizeComponentGroupLabel(component) || component.component_label || 'Component'
-    const current = groups.get(group)
-    if (!current || Math.abs(component.area || component.amplitude || 0) > Math.abs(current.area || current.amplitude || 0)) {
-      groups.set(group, component)
+function componentPeakY(x: number[], y: number[], center: number) {
+  if (x.length !== y.length || x.length === 0 || !Number.isFinite(center)) return 0
+  let bestIndex = 0
+  let bestDistance = Infinity
+  x.forEach((value, index) => {
+    const distance = Math.abs(value - center)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index
     }
   })
+  const halfWindow = 3
+  const lo = Math.max(0, bestIndex - halfWindow)
+  const hi = Math.min(y.length, bestIndex + halfWindow + 1)
+  return Math.max(...y.slice(lo, hi).filter(Number.isFinite), y[bestIndex] ?? 0)
+}
 
+function buildFitComponentPeakMarkers(components: RamanFitComponent[], x: number[], enabled: boolean) {
+  if (!enabled || components.length === 0) return { annotations: [] as object[], shapes: [] as object[] }
+  const sorted = components
+    .map((component, index) => ({ component, index }))
+    .filter(({ component }) => Number.isFinite(component.center))
+    .sort((a, b) => a.component.center - b.component.center)
+  const recentCenters: number[] = []
   const annotations: object[] = []
-  const entries = Array.from(groups.entries())
-  let cursorX = 0.12
-  let row = 0
-  entries.forEach(([group, component], index) => {
-    const text = `— ${fitComponentGroupLegendLabel(group, component)}`
-    const width = Math.min(0.36, 0.09 + text.length * 0.018)
-    if (cursorX + width > 0.96) {
-      row += 1
-      cursorX = 0.12
-    }
-    annotations.push({
-      x: cursorX,
-      y: 1.16 - row * 0.11,
-      xref: 'paper',
+  const shapes: object[] = []
+  sorted.forEach(({ component, index }) => {
+    const color = fitComponentColor(index)
+    const closeCount = recentCenters.filter(center => Math.abs(center - component.center) <= 28).length
+    recentCenters.push(component.center)
+    const lane = closeCount % 4
+    const yPeak = componentPeakY(x, component.y_component_corrected, component.center)
+    shapes.push({
+      type: 'line',
+      xref: 'x',
       yref: 'paper',
-      xanchor: 'left',
-      yanchor: 'bottom',
-      text,
-      showarrow: false,
-      font: {
-        color: fitComponentColor(index),
-        family: 'Comic Sans MS, Bradley Hand, Times New Roman, Noto Sans TC, cursive',
-        size: 30,
-      },
+      x0: component.center,
+      x1: component.center,
+      y0: 0,
+      y1: 1,
+      line: { color, width: 1, dash: 'dot' },
+      opacity: 0.45,
+      layer: 'below',
     })
-    cursorX += width
+    annotations.push({
+      x: component.center,
+      y: yPeak,
+      xref: 'x',
+      yref: 'y',
+      text: componentDisplayLabel(component.component_label, component.center),
+      showarrow: true,
+      arrowhead: 2,
+      arrowsize: 0.8,
+      arrowwidth: 1,
+      arrowcolor: color,
+      ax: 0,
+      ay: -42 - lane * 20,
+      xanchor: 'center',
+      yanchor: 'bottom',
+      align: 'center',
+      font: {
+        color,
+        family: 'Times New Roman, Noto Sans TC, serif',
+        size: 12,
+      },
+      bgcolor: 'rgba(15, 23, 42, 0.76)',
+      bordercolor: color,
+      borderwidth: 1,
+      borderpad: 3,
+    })
   })
-  return { annotations, rowCount: row + 1 }
+  return { annotations, shapes }
 }
 
 function fitResultComponents(fitResult: FitResult, x: number[], baseline: number[]): RamanFitComponent[] {
@@ -408,6 +423,9 @@ function fitResultComponents(fitResult: FitResult, x: number[], baseline: number
       component_material: row?.Material ?? '',
       profile: row?.Profile ?? fitResult.profile,
       status: row?.Status ?? '',
+      assignment: row?.Assignment_Label ?? '',
+      label_type: row?.Assignment_Type ?? '',
+      mode_label: row?.Mode_Label ?? '',
       center: row?.Center_cm ?? 0,
       fwhm: row?.FWHM_cm ?? 0,
       amplitude: row?.Height ?? 0,
@@ -495,13 +513,14 @@ function fitResultFigure(
         y: component.y_component_corrected,
         type: 'scatter',
         mode: 'lines',
-        name: index === 0 ? '擬合（baseline-corrected）' : component.component_label,
-        legendgroup: 'components',
-        showlegend: index === 0,
+        name: component.component_label,
+        legendgroup: component.peak_id || component.component_label,
+        showlegend: true,
         line: { color, width: 1.15, dash: 'dash' },
         hovertemplate: [
           component.component_label,
-          normalizeComponentGroupLabel(component) || component.component_material || undefined,
+          component.assignment || component.component_material || undefined,
+          component.label_type ? `assignment ${component.label_type}` : undefined,
           `center ${component.center.toFixed(2)} cm⁻¹`,
           `FWHM ${component.fwhm.toFixed(2)} cm⁻¹`,
           `area ${component.area.toFixed(4)}`,
@@ -530,18 +549,18 @@ function fitResultFigure(
     line: { color: '#8b949e', width: 1.05 },
   })
 
-  const componentLegend = buildFitComponentGroupAnnotations(components, options.showPeakLabels)
+  const componentMarkers = buildFitComponentPeakMarkers(components, x, options.showPeakLabels)
 
   return {
     data,
     layout: {
       ...base,
-      margin: { l: 68, r: 72, t: 112 + componentLegend.rowCount * 32, b: 72 },
+      margin: { l: 68, r: 72, t: 118, b: 72 },
       legend: {
         orientation: 'h',
         x: 0.5,
         xanchor: 'center',
-        y: 1.18 + Math.max(0, componentLegend.rowCount - 1) * 0.09,
+        y: 1.16,
         yanchor: 'bottom',
         bgcolor: 'rgba(0,0,0,0)',
         borderwidth: 0,
@@ -569,7 +588,8 @@ function fitResultFigure(
         zeroline: true,
         zerolinecolor: 'rgba(148, 163, 184, 0.35)',
       },
-      annotations: componentLegend.annotations,
+      annotations: componentMarkers.annotations,
+      shapes: componentMarkers.shapes,
     },
   }
 }
@@ -4452,7 +4472,7 @@ export default function Raman({
                       {[
                         ['showComponents', '顯示 components'],
                         ['fillComponents', '填滿 components'],
-                        ['showPeakLabels', '顯示上方 component 對照'],
+                        ['showPeakLabels', '顯示 component peak labels'],
                       ].map(([key, label]) => (
                         <label key={key} className="theme-pill flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-[var(--text-main)]">
                           <input

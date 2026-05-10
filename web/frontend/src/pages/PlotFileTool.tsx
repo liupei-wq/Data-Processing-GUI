@@ -34,6 +34,9 @@ interface RamanComponentCurve {
   label: string
   group: string
   material: string
+  assignment: string
+  labelType: string
+  modeLabel: string
   status: string
   profile: string
   center: number | null
@@ -546,70 +549,92 @@ function sameLength(values: number[], length: number) {
   return [...values, ...Array(Math.max(0, length - values.length)).fill(0)]
 }
 
-function normalizeRamanComponentGroup(component: RamanComponentCurve) {
-  const group = component.group.replace(/\s*group$/i, '').trim()
-  if (group) return group
-  return component.material
+function ramanComponentColor(index: number, fallback: string) {
+  return DEFAULT_COMPONENT_COLORS[index % DEFAULT_COMPONENT_COLORS.length] || fallback
 }
 
-function compactRamanModeLabel(component: RamanComponentCurve) {
-  return component.label
-    .replace(/^Si\s*/i, '')
-    .replace(/^NiO?\s*/i, '')
-    .replace(/^β-?Ga[₂2]O[₃3]\s*/i, '')
-    .replace(/^Ga[₂2]O[₃3]\s*/i, '')
-    .replace(/\s+candidate$/i, '')
+function ramanComponentDisplayLabel(label: string, center: number) {
+  const withoutCenter = String(label || 'unassigned Raman component')
+    .replace(/,\s*[-+]?\d+(?:\.\d+)?\s*cm(?:⁻¹|-1)?\s*$/i, '')
     .trim()
+  return `${withoutCenter || 'unassigned Raman component'}<br>${center.toFixed(1)} cm⁻¹`
 }
 
-function ramanGroupLegendLabel(group: string, representative: RamanComponentCurve) {
-  const mode = compactRamanModeLabel(representative)
-  if (/^Si/i.test(group)) return mode ? `Si ${mode}` : 'Si'
-  if (/NiO?/i.test(group)) return mode ? `Ni ${mode}` : 'Ni'
-  if (/β-?Ga|Ga[₂2]O[₃3]/i.test(group)) return 'β-Ga₂O₃'
-  return group || representative.label || 'Component'
-}
-
-function buildRamanGroupAnnotations(components: RamanComponentCurve[], enabled: boolean, fontFamily: string, fontSize: number) {
-  if (!enabled || components.length === 0) return { annotations: [] as object[], rowCount: 0 }
-  const groups = new Map<string, RamanComponentCurve>()
-  components.forEach(component => {
-    const group = normalizeRamanComponentGroup(component) || component.label || 'Component'
-    const current = groups.get(group)
-    if (!current || Math.abs(component.area ?? 0) > Math.abs(current.area ?? 0)) {
-      groups.set(group, component)
+function ramanComponentPeakY(x: number[], y: number[], center: number) {
+  if (x.length !== y.length || x.length === 0 || !Number.isFinite(center)) return 0
+  let bestIndex = 0
+  let bestDistance = Infinity
+  x.forEach((value, index) => {
+    const distance = Math.abs(value - center)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index
     }
   })
+  const lo = Math.max(0, bestIndex - 3)
+  const hi = Math.min(y.length, bestIndex + 4)
+  return Math.max(...y.slice(lo, hi).filter(Number.isFinite), y[bestIndex] ?? 0)
+}
 
+function buildRamanComponentPeakMarkers(
+  file: RamanFitPlotFile,
+  factor: number,
+  enabled: boolean,
+  fontFamily: string,
+  fontSize: number,
+  fallbackColor: string,
+) {
+  if (!enabled || file.components.length === 0) return { annotations: [] as object[], shapes: [] as object[] }
+  const sorted = file.components
+    .map((component, index) => ({ component, index }))
+    .filter(({ component }) => component.center != null && Number.isFinite(component.center))
+    .sort((a, b) => Number(a.component.center) - Number(b.component.center))
+  const recentCenters: number[] = []
   const annotations: object[] = []
-  const entries = Array.from(groups.entries())
-  let cursorX = 0.12
-  let row = 0
-  entries.forEach(([group, component], index) => {
-    const text = `— ${ramanGroupLegendLabel(group, component)}`
-    const width = Math.min(0.36, 0.09 + text.length * 0.018)
-    if (cursorX + width > 0.96) {
-      row += 1
-      cursorX = 0.12
-    }
-    annotations.push({
-      x: cursorX,
-      y: 1.16 - row * 0.11,
-      xref: 'paper',
+  const shapes: object[] = []
+  sorted.forEach(({ component, index }) => {
+    const center = Number(component.center)
+    const color = ramanComponentColor(index, fallbackColor)
+    const closeCount = recentCenters.filter(value => Math.abs(value - center) <= 28).length
+    recentCenters.push(center)
+    const lane = closeCount % 4
+    const yPeak = ramanComponentPeakY(file.x, scaledSeries(component.yCorrected, factor), center)
+    shapes.push({
+      type: 'line',
+      xref: 'x',
       yref: 'paper',
-      xanchor: 'left',
-      yanchor: 'bottom',
-      text,
-      showarrow: false,
-      font: {
-        family: 'Comic Sans MS, Bradley Hand, Times New Roman, Noto Sans TC, cursive',
-        size: Math.max(22, fontSize + 12),
-        color: index === 0 ? '#2563eb' : (index === 1 ? '#c21873' : '#d97706'),
-      },
+      x0: center,
+      x1: center,
+      y0: 0.28,
+      y1: 1,
+      line: { color, width: 1, dash: 'dot' },
+      opacity: 0.48,
+      layer: 'below',
     })
-    cursorX += width
+    annotations.push({
+      x: center,
+      y: yPeak,
+      xref: 'x',
+      yref: 'y',
+      text: ramanComponentDisplayLabel(component.label, center),
+      showarrow: true,
+      arrowhead: 2,
+      arrowsize: 0.8,
+      arrowwidth: 1,
+      arrowcolor: color,
+      ax: 0,
+      ay: -38 - lane * 19,
+      xanchor: 'center',
+      yanchor: 'bottom',
+      align: 'center',
+      font: { family: fontFamily, size: fontSize, color },
+      bgcolor: 'rgba(255,255,255,0.86)',
+      bordercolor: color,
+      borderwidth: 1,
+      borderpad: 3,
+    })
   })
-  return { annotations, rowCount: row + 1 }
+  return { annotations, shapes }
 }
 
 function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
@@ -638,6 +663,9 @@ function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
     component_label: peakRows[index]?.Peak_Name ?? peakRows[index]?.Mode_Label ?? peakRows[index]?.Material ?? `Peak ${index + 1}`,
     component_group: peakRows[index]?.Phase_Group ?? '',
     component_material: peakRows[index]?.Material ?? '',
+    assignment: peakRows[index]?.Assignment_Label ?? '',
+    label_type: peakRows[index]?.Assignment_Type ?? '',
+    mode_label: peakRows[index]?.Mode_Label ?? '',
     status: peakRows[index]?.Status ?? '',
     profile: peakRows[index]?.Profile ?? '',
     center: peakRows[index]?.Center_cm ?? peakRows[index]?.fitted_center_cm ?? peakRows[index]?.center,
@@ -654,6 +682,9 @@ function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
       label: String(item.component_label ?? `Peak ${index + 1}`),
       group: String(item.component_group ?? ''),
       material: String(item.component_material ?? ''),
+      assignment: String(item.assignment ?? ''),
+      labelType: String(item.label_type ?? ''),
+      modeLabel: String(item.mode_label ?? ''),
       status: String(item.status ?? ''),
       profile: String(item.profile ?? ''),
       center: Number.isFinite(center) ? center : null,
@@ -758,15 +789,16 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
   }
   if (style.showComponents) {
     file.components.forEach((component, index) => {
+      const componentColor = ramanComponentColor(index, style.componentColor)
       if (style.fillComponents && file.baseline.some(value => Math.abs(value) > 1e-12)) {
         data.push({
           x: [...file.x, ...file.x.slice().reverse()],
           y: [...scaledSeries(component.yCorrected, factor), ...Array(file.x.length).fill(0)],
           type: 'scatter',
           mode: 'lines',
-          line: { color: style.componentColor, width: 0 },
+          line: { color: componentColor, width: 0 },
           fill: 'toself',
-          fillcolor: hexToRgba(style.componentColor, clamp(style.componentOpacity * 0.42, 0, 1)),
+          fillcolor: hexToRgba(componentColor, clamp(style.componentOpacity * 0.42, 0, 1)),
           hoverinfo: 'skip',
           showlegend: false,
         })
@@ -776,14 +808,15 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
         y: scaledSeries(component.yCorrected, factor),
         type: 'scatter',
         mode: 'lines',
-        name: index === 0 ? '擬合（baseline-corrected）' : component.label,
-        legendgroup: 'raman-components',
-        showlegend: index === 0,
-        line: { color: style.componentColor, width: style.componentLineWidth, dash: 'dash' },
+        name: component.label,
+        legendgroup: component.label,
+        showlegend: true,
+        line: { color: componentColor, width: style.componentLineWidth, dash: 'dash' },
         opacity: style.componentOpacity,
         hovertemplate: [
           component.label,
-          normalizeRamanComponentGroup(component) || component.material || undefined,
+          component.assignment || component.material || undefined,
+          component.labelType ? `assignment ${component.labelType}` : undefined,
           component.center == null ? undefined : `center ${component.center.toFixed(2)} cm⁻¹`,
           component.area == null ? undefined : `area ${component.area.toFixed(4)}`,
           component.areaPercent == null ? undefined : `area % ${component.areaPercent.toFixed(2)}`,
@@ -810,9 +843,14 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
     line: { color: style.residualColor, width: style.residualLineWidth },
   })
 
-  const labelAnnotations = style.showLabels
-    ? buildRamanGroupAnnotations(file.components, true, style.fontFamily, style.labelFontSize)
-    : { annotations: [] as object[], rowCount: 0 }
+  const labelMarkers = buildRamanComponentPeakMarkers(
+    file,
+    factor,
+    style.showLabels,
+    style.fontFamily,
+    style.labelFontSize,
+    style.componentColor,
+  )
 
   const axisBase = {
     showgrid: false,
@@ -831,9 +869,9 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
       paper_bgcolor: '#ffffff',
       plot_bgcolor: '#ffffff',
       font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
-      margin: { l: 90, r: 28, t: 48 + labelAnnotations.rowCount * 24, b: 82 },
+      margin: { l: 90, r: 28, t: 74, b: 82 },
       showlegend: true,
-      legend: { x: 0.99, y: 1.02 + Math.max(0, labelAnnotations.rowCount - 1) * 0.035, xanchor: 'right', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.72)', font: { size: Math.max(10, style.fontSize - 2) } },
+      legend: { x: 0.99, y: 1.02, xanchor: 'right', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.72)', font: { size: Math.max(10, style.fontSize - 2) } },
       xaxis: {
         ...axisBase,
         domain: [0, 1],
@@ -869,8 +907,9 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
           xanchor: 'left',
           font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' },
         },
-        ...labelAnnotations.annotations,
+        ...labelMarkers.annotations,
       ],
+      shapes: labelMarkers.shapes,
     },
   }
 }

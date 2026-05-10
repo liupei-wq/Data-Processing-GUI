@@ -230,6 +230,8 @@ export interface FitPeakRow {
   Material: string
   Peak_Role: string
   Mode_Label: string
+  Assignment_Label: string
+  Assignment_Type: string
   Symmetry: string
   Species: string
   Oxidation_State: string
@@ -443,6 +445,9 @@ export interface RamanFitComponent {
   component_label: string
   component_group: string
   component_material: string
+  assignment: string
+  label_type: string
+  mode_label: string
   profile: RamanProfile | string
   status: string
   center: number

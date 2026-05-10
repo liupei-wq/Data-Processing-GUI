@@ -455,6 +455,61 @@ def enriched_raman_peak(material: str, row: dict) -> dict:
     }
 
 
+def _compact_assignment_mode(value: str) -> str:
+    mode = str(value or "").strip()
+    mode = mode.replace("candidate near ", "near ")
+    mode = mode.replace(" probe", "")
+    mode = mode.replace(" candidate", "")
+    mode = mode.strip()
+    return mode
+
+
+def _assignment_for_enriched_peak(peak: dict) -> dict:
+    material = str(peak.get("material", ""))
+    mode = _compact_assignment_mode(str(peak.get("mode") or peak.get("label") or "mode"))
+    note = str(peak.get("note", "")).lower()
+    is_substrate = bool(peak.get("substrate", False))
+    is_artifact = bool(peak.get("artifact", False))
+    is_candidate = bool(peak.get("candidate_only", False))
+    label_type = "substrate" if is_substrate else ("tentative" if is_candidate or is_artifact or material == "NiO" else "confirmed")
+
+    if is_artifact:
+        assignment = "instrument artifact / tentative"
+    elif material == "Si (基板)":
+        assignment = f"Si substrate {mode}"
+    elif material == "β-Ga₂O₃":
+        if is_candidate or "ambiguous" in note or "possible" in note:
+            assignment = "possible β-Ga₂O₃-related mode"
+            label_type = "tentative"
+        else:
+            assignment = f"β-Ga₂O₃ {mode} mode" if "mode" not in mode.lower() else f"β-Ga₂O₃ {mode}"
+    elif material == "NiO":
+        if "defect" in f"{mode} {note}":
+            assignment = "defect-related / possible NiO-related mode"
+        else:
+            assignment = f"possible NiO-related {mode}"
+        label_type = "tentative"
+    else:
+        assignment = f"{material} {mode}" if mode else material
+
+    assignment = " ".join(assignment.split())
+    return {
+        "center_guess": float(peak.get("theoretical_center", peak.get("pos", 0.0))),
+        "tolerance": float(peak.get("tolerance_cm", 10.0)),
+        "assignment": assignment,
+        "label_type": label_type,
+        "material": "Si substrate" if material == "Si (基板)" else material,
+        "mode": mode,
+    }
+
+
+RAMAN_PEAK_ASSIGNMENTS = [
+    _assignment_for_enriched_peak(enriched_raman_peak(material, row))
+    for material, rows in RAMAN_REFERENCES.items()
+    for row in rows
+]
+
+
 def get_enriched_raman_peaks(material: str) -> list[dict]:
     return [enriched_raman_peak(material, row) for row in RAMAN_REFERENCES.get(material, [])]
 

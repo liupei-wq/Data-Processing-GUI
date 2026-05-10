@@ -17,7 +17,7 @@ from core.parsers import parse_two_column_spectrum_bytes
 from core.peak_fitting import fit_peaks
 from core.processing import apply_background, apply_normalization_with_diagnostics, airpls_background, arpls_background, asls_background, masked_weight_profile
 from core.spectrum_ops import detect_spectrum_peaks
-from db.raman_database import RAMAN_REFERENCES, get_enriched_raman_peaks, get_raman_peak_library
+from db.raman_database import RAMAN_PEAK_ASSIGNMENTS, RAMAN_REFERENCES, get_enriched_raman_peaks, get_raman_peak_library
 
 router = APIRouter()
 
@@ -241,6 +241,8 @@ class FitPeakRow(BaseModel):
     Material: str
     Peak_Role: str
     Mode_Label: str
+    Assignment_Label: str = ""
+    Assignment_Type: str = ""
     Symmetry: str = ""
     Species: str = ""
     Oxidation_State: str = "N/A"
@@ -456,6 +458,9 @@ class FitComponentCurve(BaseModel):
     component_label: str = ""
     component_group: str = ""
     component_material: str = ""
+    assignment: str = ""
+    label_type: str = ""
+    mode_label: str = ""
     profile: str = ""
     status: str = ""
     center: float = 0.0
@@ -1070,6 +1075,87 @@ def _prepare_candidate_dict(row: FitPeakInput, shift_offset: float = 0.0) -> dic
     }
 
 
+def _match_raman_peak_assignment(center: float, candidate: dict | None = None) -> dict | None:
+    if not np.isfinite(center):
+        return None
+    candidate_material = str((candidate or {}).get("material", "")).strip()
+    matches: list[tuple[float, dict]] = []
+    for item in RAMAN_PEAK_ASSIGNMENTS:
+        guess = float(item.get("center_guess", 0.0))
+        tolerance = float(item.get("tolerance", 0.0))
+        distance = abs(center - guess)
+        if distance > tolerance:
+            continue
+        item_material = str(item.get("material", "")).strip()
+        material_bonus = 0.0
+        if candidate_material:
+            normalized_candidate = "Si substrate" if candidate_material == "Si (基板)" else candidate_material
+            material_bonus = -0.35 * tolerance if normalized_candidate == item_material else 0.35 * tolerance
+        matches.append((distance + material_bonus, item))
+    if not matches:
+        return None
+    matches.sort(key=lambda entry: entry[0])
+    return dict(matches[0][1])
+
+
+def _fallback_assignment_for_candidate(center: float, candidate: dict | None = None) -> dict:
+    candidate = candidate or {}
+    material = str(candidate.get("material", "") or candidate.get("phase", "")).strip()
+    if material == "Si (基板)":
+        material_label = "Si substrate"
+        label_type = "substrate"
+    elif material == "NiO":
+        material_label = "possible NiO-related"
+        label_type = "tentative"
+    elif material:
+        material_label = material
+        label_type = "tentative" if bool(candidate.get("candidate_only", False)) else "confirmed"
+    else:
+        material_label = "unassigned Raman component"
+        label_type = "tentative"
+    mode = str(candidate.get("mode_label", candidate.get("label", ""))).strip()
+    mode = re.sub(r"\s*(candidate|probe)\s*$", "", mode, flags=re.IGNORECASE).strip()
+    if material_label == "unassigned Raman component":
+        assignment = material_label
+    elif label_type == "tentative" and material == "NiO":
+        assignment = f"{material_label} {mode or 'mode'}".strip()
+    else:
+        assignment = f"{material_label} {mode or 'mode'}".strip()
+    return {
+        "center_guess": center,
+        "tolerance": 0.0,
+        "assignment": " ".join(assignment.split()),
+        "label_type": label_type,
+        "material": material_label,
+        "mode": mode,
+    }
+
+
+def _format_component_label(assignment: str, center: float, label_type: str) -> str:
+    label = str(assignment or "unassigned Raman component").strip()
+    if label_type == "tentative" and "tentative" not in label.lower() and not label.lower().startswith("possible"):
+        label = f"{label} / tentative"
+    return f"{label}, {center:.1f} cm⁻¹"
+
+
+def _apply_component_assignments(rows: list[dict], candidates: list[dict]) -> None:
+    candidate_lookup = {str(candidate.get("peak_id", "")): candidate for candidate in candidates}
+    for row in rows:
+        status = str(row.get("Status", ""))
+        if status in {"not_observed", "rejected"}:
+            continue
+        center = float(row.get("Center_cm", 0.0))
+        candidate = candidate_lookup.get(str(row.get("Peak_ID", "")))
+        assignment = _match_raman_peak_assignment(center, candidate) or _fallback_assignment_for_candidate(center, candidate)
+        assignment_label = str(assignment.get("assignment", "unassigned Raman component"))
+        label_type = str(assignment.get("label_type", "tentative"))
+        row["Assignment_Label"] = assignment_label
+        row["Assignment_Type"] = label_type
+        row["Mode_Label"] = str(assignment.get("mode") or row.get("Mode_Label", ""))
+        row["Peak_Name"] = _format_component_label(assignment_label, center, label_type)
+        row["Assignment_Basis"] = "fitted-center match against centralized Raman peak assignment table"
+
+
 def _candidate_status_and_note(row: dict, bootstrap: dict | None, comparison: dict | None) -> tuple[str, list[str]]:
     notes: list[str] = []
     snr = float(row.get("SNR") or 0.0)
@@ -1600,6 +1686,9 @@ def _build_fit_components(
         component_label = row.Peak_Name if row is not None else str(peak.get("display_name", peak.get("label", f"Peak {index + 1}")))
         component_group = row.Phase_Group if row is not None else str(peak.get("phase_group", peak.get("phase", peak.get("material", ""))))
         component_material = row.Material if row is not None else str(peak.get("material", ""))
+        assignment = row.Assignment_Label if row is not None else ""
+        label_type = row.Assignment_Type if row is not None else ""
+        mode_label = row.Mode_Label if row is not None else str(peak.get("mode_label", peak.get("label", "")))
         status = row.Status if row is not None else str(peak.get("status", ""))
         area_percent = float(row.Area_pct) if row is not None else float(peak.get("area_pct", 0.0))
         components.append(FitComponentCurve(
@@ -1607,6 +1696,9 @@ def _build_fit_components(
             component_label=component_label,
             component_group=component_group,
             component_material=component_material,
+            assignment=assignment,
+            label_type=label_type,
+            mode_label=mode_label,
             profile=str(peak.get("profile", "")),
             status=status,
             center=float(peak.get("center", 0.0)),
@@ -2922,13 +3014,13 @@ def _build_report_v2(
     ]
 
     peak_table_headers = [
-        "sample_id", "component_group", "component_material", "component_label", "mode", "reference_shift_cm1", "fitted_shift_cm1",
+        "sample_id", "component_group", "component_material", "component_label", "assignment", "assignment_type", "mode", "reference_shift_cm1", "fitted_shift_cm1",
         "delta_cm1", "tolerance_cm1", "FWHM", "area", "area_percent", "height", "uncertainty_center", "uncertainty_FWHM",
         "SNR", "anchor_related_delta", "status", "confidence_score", "note",
     ]
     peak_table_rows = [
         [
-            sample_id, row["Phase_Group"], row["Material"], row["Peak_Name"], row["Mode_Label"], row["Ref_cm"], row["Center_cm"],
+            sample_id, row["Phase_Group"], row["Material"], row["Peak_Name"], row.get("Assignment_Label", ""), row.get("Assignment_Type", ""), row["Mode_Label"], row["Ref_cm"], row["Center_cm"],
             row["Delta_cm"], row["Tolerance_cm"], row["FWHM_cm"], row["Area"], row["Area_pct"], row["Height"], row["Bootstrap_Center_STD"],
             row["Bootstrap_FWHM_STD"], row["SNR"], row["Anchor_Related_Delta_cm"], row["Status"], row["Confidence_Score"], row["Note"],
         ]
@@ -3174,6 +3266,7 @@ def fit_raman_peaks(req: FitRequest):
         final_rows_raw.append(row)
 
     _recompute_area_pct(final_rows_raw)
+    _apply_component_assignments(final_rows_raw, final_candidates)
     rows = [FitPeakRow(**row) for row in final_rows_raw]
     component_curves, total_fit_corrected = _build_fit_components(
         baseline,
