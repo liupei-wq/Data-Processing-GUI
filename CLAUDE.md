@@ -583,3 +583,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-11 CST：同步：已將 Raman fitting 復原提交推送到 origin/main（包含 Revert v23.2 與復原紀錄），用於觸發線上網頁更新。
 
 - 2026-05-12 CST：右側選單在「分析模組」區新增明確的 `XAS Athena 處理` 入口，排在 XAS 後方，作為像 Raman / XRD 一樣的專門資料處理入口；功能包含 Athena `.xmu` 資料夾分樣品處理、normalized / flattened 預覽與 Origin CSV/TXT 匯出。驗證 `cd web/frontend && npm run build` 通過。
+
+- 2026-05-12 CST：`XAS Athena 處理` 預覽圖改用高對比線色，平均曲線改深色；新增「手動刪峰」滑桿，可選 scan1 / scan2 / 兩筆 scan 的 energy 區間，加入後會在圖上以淡橘色區塊標示，並於平均前將該區間併入 removal mask 內插處理，CSV/TXT 匯出同步反映手動刪峰結果。驗證 `cd web/frontend && npm run build` 通過。

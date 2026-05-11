@@ -38,6 +38,13 @@ export interface AthenaAverageResult {
   removedFromScan2Flat: number[]
 }
 
+export interface AthenaManualRemovalRegion {
+  id: string
+  start: number
+  end: number
+  scan: 'scan1' | 'scan2' | 'both'
+}
+
 export interface AthenaSampleGroup {
   sampleName: string
   scans: AthenaScanResult[]
@@ -224,6 +231,28 @@ function averageValues(y1: number[], y2: number[]) {
   return y1.map((value, index) => (value + y2[index]) / 2)
 }
 
+function applyManualRemovalRegions(
+  energy: number[],
+  removedFrom1: number[],
+  removedFrom2: number[],
+  manualRegions: AthenaManualRemovalRegion[] = [],
+) {
+  const nextRemovedFrom1 = removedFrom1.slice()
+  const nextRemovedFrom2 = removedFrom2.slice()
+
+  for (const region of manualRegions) {
+    const start = Math.min(region.start, region.end)
+    const end = Math.max(region.start, region.end)
+    for (let index = 0; index < energy.length; index += 1) {
+      if (energy[index] < start || energy[index] > end) continue
+      if (region.scan === 'scan1' || region.scan === 'both') nextRemovedFrom1[index] = 1
+      if (region.scan === 'scan2' || region.scan === 'both') nextRemovedFrom2[index] = 1
+    }
+  }
+
+  return { removedFrom1: nextRemovedFrom1, removedFrom2: nextRemovedFrom2 }
+}
+
 function sampleNameFromFile(file: FileWithRelativePath) {
   const relativePath = file.webkitRelativePath || file.name
   const parts = relativePath.split('/').filter(Boolean)
@@ -305,14 +334,21 @@ export function parseAthenaXmuText(text: string, fileName: string, filePath: str
   return result
 }
 
-export function makeAthenaAverage(sampleName: string, scan1: AthenaScanResult, scan2: AthenaScanResult): AthenaAverageResult {
+export function makeAthenaAverage(
+  sampleName: string,
+  scan1: AthenaScanResult,
+  scan2: AthenaScanResult,
+  manualRegions: AthenaManualRemovalRegion[] = [],
+): AthenaAverageResult {
   const energy = buildCommonEnergyGrid([scan1, scan2])
   const norm1 = interpolateToGrid(scan1.energy, scan1.normalizedMu, energy)
   const norm2 = interpolateToGrid(scan2.energy, scan2.normalizedMu, energy)
   const normClean = despikeTwoScans(energy, norm1, norm2)
+  const removalMask = applyManualRemovalRegions(energy, normClean.removedFrom1, normClean.removedFrom2, manualRegions)
+  const normCleanWithManual = applyRemovalMasks(energy, norm1, norm2, removalMask.removedFrom1, removalMask.removedFrom2)
   const flat1 = interpolateToGrid(scan1.energy, scan1.flattenedMu, energy)
   const flat2 = interpolateToGrid(scan2.energy, scan2.flattenedMu, energy)
-  const flatClean = applyRemovalMasks(energy, flat1, flat2, normClean.removedFrom1, normClean.removedFrom2)
+  const flatClean = applyRemovalMasks(energy, flat1, flat2, removalMask.removedFrom1, removalMask.removedFrom2)
 
   return {
     id: `${sampleName}:average`,
@@ -320,16 +356,16 @@ export function makeAthenaAverage(sampleName: string, scan1: AthenaScanResult, s
     sourceScan1: scan1.fileName,
     sourceScan2: scan2.fileName,
     energy,
-    scan1NormalizedClean: normClean.y1Clean,
-    scan2NormalizedClean: normClean.y2Clean,
-    averageNormalized: averageValues(normClean.y1Clean, normClean.y2Clean),
+    scan1NormalizedClean: normCleanWithManual.y1Clean,
+    scan2NormalizedClean: normCleanWithManual.y2Clean,
+    averageNormalized: averageValues(normCleanWithManual.y1Clean, normCleanWithManual.y2Clean),
     scan1FlattenedClean: flatClean.y1Clean,
     scan2FlattenedClean: flatClean.y2Clean,
     averageFlattened: averageValues(flatClean.y1Clean, flatClean.y2Clean),
-    removedFromScan1Norm: normClean.removedFrom1,
-    removedFromScan2Norm: normClean.removedFrom2,
-    removedFromScan1Flat: normClean.removedFrom1.slice(),
-    removedFromScan2Flat: normClean.removedFrom2.slice(),
+    removedFromScan1Norm: removalMask.removedFrom1,
+    removedFromScan2Norm: removalMask.removedFrom2,
+    removedFromScan1Flat: removalMask.removedFrom1.slice(),
+    removedFromScan2Flat: removalMask.removedFrom2.slice(),
   }
 }
 

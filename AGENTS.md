@@ -149,3 +149,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-11：依使用者要求復原上一輪 Raman fitting 修改（v23.2 反向套用），回到 v23.1 的 Raman fitting 狀態；保留 v23.1 的 Raman 圖表全螢幕、峰顯示篩選與多樣品疊圖功能。
 - 2026-05-11：已將 Raman fitting 復原提交推送到 origin/main，用於同步線上網頁；目前保留 v23.1 的 Raman 圖表全螢幕、峰顯示篩選與多樣品疊圖功能。
 - 2026-05-12：右側選單在「分析模組」區新增明確的 `XAS Athena 處理` 入口，排在 XAS 後方，用於 Athena `.xmu` 資料夾分樣品處理、normalized / flattened 預覽與 Origin CSV/TXT 匯出；驗證 `cd web/frontend && npm run build` 通過。
+- 2026-05-12：`XAS Athena 處理` 預覽圖改用高對比線色，平均曲線改深色；新增「手動刪峰」滑桿，可選 scan1 / scan2 / 兩筆 scan 的 energy 區間，加入後會在圖上以淡橘色區塊標示，並於平均前將該區間併入 removal mask 內插處理，CSV/TXT 匯出同步反映手動刪峰結果。驗證 `cd web/frontend && npm run build` 通過。
