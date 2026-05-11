@@ -22,6 +22,8 @@ const ATHENA_TRACE_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580
 const ATHENA_AVERAGE_COLOR = '#111827'
 const ATHENA_REMOVAL_FILL = 'rgba(245, 158, 11, 0.18)'
 const ATHENA_REMOVAL_LINE = 'rgba(245, 158, 11, 0.72)'
+const ATHENA_DRAFT_REMOVAL_FILL = 'rgba(59, 130, 246, 0.16)'
+const ATHENA_DRAFT_REMOVAL_LINE = 'rgba(37, 99, 235, 0.78)'
 
 const directoryInputProps = {
   webkitdirectory: '',
@@ -184,6 +186,25 @@ export default function Athena() {
       layer: 'below' as const,
     }))
 
+    if (selectedEnergyRange) {
+      const draftStart = clampRangeValue(removalDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
+      const draftEnd = clampRangeValue(removalDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
+      if (Math.abs(draftEnd - draftStart) > selectedEnergyRange.step / 2) {
+        removalShapes.push({
+          type: 'rect',
+          xref: 'x',
+          yref: 'paper',
+          x0: Math.min(draftStart, draftEnd),
+          x1: Math.max(draftStart, draftEnd),
+          y0: 0,
+          y1: 1,
+          fillcolor: ATHENA_DRAFT_REMOVAL_FILL,
+          line: { color: ATHENA_DRAFT_REMOVAL_LINE, width: 1.5 },
+          layer: 'below',
+        })
+      }
+    }
+
     return {
       data,
       layout: {
@@ -209,7 +230,7 @@ export default function Athena() {
       } satisfies Partial<Plotly.Layout>,
       config: { responsive: true, displaylogo: false } satisfies Partial<Plotly.Config>,
     }
-  }, [previewMode, selectedGroup, selectedManualRemovals])
+  }, [previewMode, removalDraft.end, removalDraft.start, selectedEnergyRange, selectedGroup, selectedManualRemovals])
 
   const handleFiles = async (fileList: FileList | null) => {
     const files = Array.from(fileList ?? [])
