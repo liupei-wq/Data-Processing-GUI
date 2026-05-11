@@ -589,3 +589,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-12 CST：收斂 `XAS Athena 處理` 版面，左側上傳/匯出/手動刪峰卡片改為 compact，主 grid 左欄由 22rem 縮至 18–19rem；樣品清單從圖左側移到圖上方橫向按鈕，避免吃掉 Plotly 寬度造成圖跑版；預覽圖高度固定 500px，legend 移到下方左側。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
 
 - 2026-05-12 CST：`XAS Athena 處理` 手動刪峰滑桿拖拉時新增藍色半透明 draft 區間，與已加入的橘色刪峰區間區分，讓使用者拖曳左右邊界時能即時看見目前選取範圍。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-12 CST：`XAS Athena 處理` 新增「匯出 OriginPro 產檔腳本」；網頁會將目前處理結果、手動刪峰後平均資料與 raw scan 嵌入 `.py`，使用者在有 OriginPro / originpro package 的 Windows 電腦執行後會自動建立 worksheet、normalized / flattened overlay graph，並輸出 `Athena_XMU_processed.opju`。瀏覽器/Render 無法直接寫 `.opju`，需靠本機 OriginPro API 產檔。驗證 `cd web/frontend && npm run build` 通過。
+
+- 2026-05-12 CST：放寬 `XAS Athena 處理` 自動刪峰判定：`SPIKE_DIFF_MAD_FACTOR` 由 4.5 降至 3.0，`PEAK_EDGE_THRESHOLD_RATIO` 由 0.35 降至 0.25，讓差異峰更容易被偵測且峰腳區段更容易納入 removal mask；手動滑桿刪峰不變。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。

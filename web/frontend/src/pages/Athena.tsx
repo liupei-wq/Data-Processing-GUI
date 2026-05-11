@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Plot from '../components/PlotlyChart'
 import {
   buildAthenaAverageCsv,
+  buildAthenaOriginProjectPython,
   buildAthenaRawCsv,
   buildAthenaSummaryTxt,
   downloadTextFile,
@@ -267,6 +268,15 @@ export default function Athena() {
     triggerDownload(`athena_summary_${timestampForFilename()}.txt`, buildAthenaSummaryTxt(adjustedResult))
   }
 
+  const exportOriginProjectScript = () => {
+    if (!adjustedResult) return
+    triggerDownload(
+      `athena_create_origin_project_${timestampForFilename()}.py`,
+      buildAthenaOriginProjectPython(adjustedResult),
+      'text/x-python;charset=utf-8',
+    )
+  }
+
   const addManualRemoval = () => {
     if (!selectedGroup || !selectedEnergyRange) return
     const start = clampRangeValue(removalDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
@@ -390,6 +400,14 @@ export default function Athena() {
                 className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-left text-xs font-semibold text-[var(--text-main)] disabled:opacity-40"
               >
                 匯出處理摘要 TXT
+              </button>
+              <button
+                type="button"
+                disabled={!adjustedResult}
+                onClick={exportOriginProjectScript}
+                className="rounded-xl border border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_10%,transparent)] px-3 py-2 text-left text-xs font-semibold text-[var(--text-main)] disabled:opacity-40"
+              >
+                匯出 OriginPro 產檔腳本
               </button>
             </div>
           </Section>
