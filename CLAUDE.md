@@ -599,3 +599,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-12 CST：`XAS Athena 處理` 自動刪峰改為可調靈敏度，於手動刪峰區新增「標準 / 寬鬆 / 很寬鬆 / 極寬鬆」選單；寬鬆為目前預設（MAD 3.0 / 邊界 0.25），很寬鬆為 MAD 2.2 / 邊界 0.18，極寬鬆為 MAD 1.6 / 邊界 0.12，讓使用者可先用更寬鬆自動 removal mask 多抓峰，再用手動滑桿補刪或微調。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
 
 - 2026-05-12 CST：`XAS Athena 處理` 新增加回誤刪資料功能；在手動刪峰區新增 Restore 綠色拉條，可選 scan1 / scan2 / 兩筆 scan 的 energy 區間，最終 mask 流程為自動刪峰 → 手動刪峰 → 手動加回，restore 區間會將 removal mask 清為 0，使該段使用原始資料參與平均；圖上加回區間以綠色顯示，拖拉中的加回區間以青綠色顯示。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-12 CST：`XAS Athena 處理` 右側「樣品與預覽」圖卡在桌面版改為 sticky，使用者捲動左側自動刪峰/手動刪峰/加回資料控制時，處理圖會固定在視窗內；sticky 容器加上 `max-height: calc(100vh - 2rem)` 與內部滾動，避免矮視窗卡住。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-12 CST：改善 `XAS Athena 處理` 刪峰/加回滑桿拖曳頓挫；滑桿數值仍即時更新，但圖上的 draft 區間改用 80ms debounce 後才觸發 Plotly 重畫，降低拖曳時的 Plotly relayout 頻率。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。

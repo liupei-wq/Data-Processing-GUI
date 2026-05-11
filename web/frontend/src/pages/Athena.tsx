@@ -108,6 +108,17 @@ function formatEnergy(value: number) {
   return Number.isFinite(value) ? value.toFixed(3) : '-'
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedValue(value), delayMs)
+    return () => window.clearTimeout(timer)
+  }, [delayMs, value])
+
+  return debouncedValue
+}
+
 function Section({
   title,
   description,
@@ -143,6 +154,8 @@ export default function Athena() {
   const [removalDraft, setRemovalDraft] = useState<RemovalDraft>({ start: 0, end: 0, scan: 'both' })
   const [restoreDraft, setRestoreDraft] = useState<RestoreDraft>({ start: 0, end: 0, scan: 'both' })
   const [removalSensitivity, setRemovalSensitivity] = useState<AthenaRemovalSensitivity>('loose')
+  const chartRemovalDraft = useDebouncedValue(removalDraft, 80)
+  const chartRestoreDraft = useDebouncedValue(restoreDraft, 80)
   const autoRemovalOptions = useMemo(
     () => ATHENA_REMOVAL_SENSITIVITY_OPTIONS.find(option => option.id === removalSensitivity)?.options ?? DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
     [removalSensitivity],
@@ -267,8 +280,8 @@ export default function Athena() {
     }
 
     if (selectedEnergyRange) {
-      const draftStart = clampRangeValue(removalDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
-      const draftEnd = clampRangeValue(removalDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
+      const draftStart = clampRangeValue(chartRemovalDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
+      const draftEnd = clampRangeValue(chartRemovalDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
       if (Math.abs(draftEnd - draftStart) > selectedEnergyRange.step / 2) {
         removalShapes.push({
           type: 'rect',
@@ -284,8 +297,8 @@ export default function Athena() {
         })
       }
 
-      const draftRestoreStart = clampRangeValue(restoreDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
-      const draftRestoreEnd = clampRangeValue(restoreDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
+      const draftRestoreStart = clampRangeValue(chartRestoreDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
+      const draftRestoreEnd = clampRangeValue(chartRestoreDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
       if (Math.abs(draftRestoreEnd - draftRestoreStart) > selectedEnergyRange.step / 2) {
         removalShapes.push({
           type: 'rect',
@@ -329,10 +342,10 @@ export default function Athena() {
     }
   }, [
     previewMode,
-    removalDraft.end,
-    removalDraft.start,
-    restoreDraft.end,
-    restoreDraft.start,
+    chartRemovalDraft.end,
+    chartRemovalDraft.start,
+    chartRestoreDraft.end,
+    chartRestoreDraft.start,
     selectedEnergyRange,
     selectedGroup,
     selectedManualRemovals,
@@ -754,79 +767,81 @@ export default function Athena() {
         </div>
 
         <div className="min-w-0 space-y-4">
-          <Section title="4. 樣品與預覽">
-            {adjustedResult ? (
-              <div className="min-w-0 space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  {adjustedResult.groups.map(group => (
-                    <button
-                      key={group.sampleName}
-                      type="button"
-                      onClick={() => setSelectedSampleName(group.sampleName)}
-                      className={[
-                        'rounded-xl border px-3 py-2 text-left transition-colors',
-                        selectedGroup?.sampleName === group.sampleName
-                          ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)]'
-                          : 'border-[var(--card-border)] bg-[var(--card-bg)] hover:border-[var(--accent-secondary)]',
-                      ].join(' ')}
-                    >
-                      <span className="block text-sm font-semibold text-[var(--text-main)]">{group.sampleName}</span>
-                      <span className="mt-0.5 block text-[11px] text-[var(--text-soft)]">{group.scans.length} scans / {group.average ? '已有平均' : '無平均'}</span>
-                    </button>
-                  ))}
-                </div>
+          <div className="lg:sticky lg:top-4 lg:z-20 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-1">
+            <Section title="4. 樣品與預覽">
+              {adjustedResult ? (
+                <div className="min-w-0 space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    {adjustedResult.groups.map(group => (
+                      <button
+                        key={group.sampleName}
+                        type="button"
+                        onClick={() => setSelectedSampleName(group.sampleName)}
+                        className={[
+                          'rounded-xl border px-3 py-2 text-left transition-colors',
+                          selectedGroup?.sampleName === group.sampleName
+                            ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)]'
+                            : 'border-[var(--card-border)] bg-[var(--card-bg)] hover:border-[var(--accent-secondary)]',
+                        ].join(' ')}
+                      >
+                        <span className="block text-sm font-semibold text-[var(--text-main)]">{group.sampleName}</span>
+                        <span className="mt-0.5 block text-[11px] text-[var(--text-soft)]">{group.scans.length} scans / {group.average ? '已有平均' : '無平均'}</span>
+                      </button>
+                    ))}
+                  </div>
 
-                <div className="min-w-0">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewMode('normalized')}
-                        className={`rounded-full px-4 py-2 text-xs font-semibold ${previewMode === 'normalized' ? 'bg-[var(--accent)] text-[var(--accent-contrast)]' : 'border border-[var(--card-border)] text-[var(--text-main)]'}`}
-                      >
-                        Normalized μ(E)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPreviewMode('flattened')}
-                        className={`rounded-full px-4 py-2 text-xs font-semibold ${previewMode === 'flattened' ? 'bg-[var(--accent)] text-[var(--accent-contrast)]' : 'border border-[var(--card-border)] text-[var(--text-main)]'}`}
-                      >
-                        Flattened μ(E)
-                      </button>
+                  <div className="min-w-0">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewMode('normalized')}
+                          className={`rounded-full px-4 py-2 text-xs font-semibold ${previewMode === 'normalized' ? 'bg-[var(--accent)] text-[var(--accent-contrast)]' : 'border border-[var(--card-border)] text-[var(--text-main)]'}`}
+                        >
+                          Normalized μ(E)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewMode('flattened')}
+                          className={`rounded-full px-4 py-2 text-xs font-semibold ${previewMode === 'flattened' ? 'bg-[var(--accent)] text-[var(--accent-contrast)]' : 'border border-[var(--card-border)] text-[var(--text-main)]'}`}
+                        >
+                          Flattened μ(E)
+                        </button>
+                      </div>
+                      {selectedGroup && (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedGroup.scans[0] && (
+                            <button type="button" onClick={() => downloadRawScan(selectedGroup.scans[0])} className="rounded-full border border-[var(--card-border)] px-3 py-2 text-xs font-semibold text-[var(--text-main)]">
+                              匯出目前第一筆 scan
+                            </button>
+                          )}
+                          {selectedGroup.average && (
+                            <button type="button" onClick={() => downloadAverageResult(selectedGroup.average as AthenaAverageResult)} className="rounded-full border border-[var(--card-border)] px-3 py-2 text-xs font-semibold text-[var(--text-main)]">
+                              匯出目前平均 CSV
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {selectedGroup && (
-                      <div className="flex flex-wrap gap-2">
-                        {selectedGroup.scans[0] && (
-                          <button type="button" onClick={() => downloadRawScan(selectedGroup.scans[0])} className="rounded-full border border-[var(--card-border)] px-3 py-2 text-xs font-semibold text-[var(--text-main)]">
-                            匯出目前第一筆 scan
-                          </button>
-                        )}
-                        {selectedGroup.average && (
-                          <button type="button" onClick={() => downloadAverageResult(selectedGroup.average as AthenaAverageResult)} className="rounded-full border border-[var(--card-border)] px-3 py-2 text-xs font-semibold text-[var(--text-main)]">
-                            匯出目前平均 CSV
-                          </button>
-                        )}
+
+                    {previewFigure ? (
+                      <div className="min-w-0 overflow-hidden rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2">
+                        <Plot data={previewFigure.data} layout={previewFigure.layout} config={previewFigure.config} />
+                      </div>
+                    ) : (
+                      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">
+                        讀取 Athena .xmu 資料夾後，預覽圖會顯示在這裡。
                       </div>
                     )}
                   </div>
-
-                  {previewFigure ? (
-                    <div className="min-w-0 overflow-hidden rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2">
-                      <Plot data={previewFigure.data} layout={previewFigure.layout} config={previewFigure.config} />
-                    </div>
-                  ) : (
-                    <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">
-                      讀取 Athena .xmu 資料夾後，預覽圖會顯示在這裡。
-                    </div>
-                  )}
                 </div>
-              </div>
-            ) : (
-              <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-6 text-center text-sm leading-7 text-[var(--text-soft)]">
-                尚未讀取資料。請先點選「讀取整個資料夾」，或選擇多個 Athena .xmu 檔案。
-              </div>
-            )}
-          </Section>
+              ) : (
+                <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-6 text-center text-sm leading-7 text-[var(--text-soft)]">
+                  尚未讀取資料。請先點選「讀取整個資料夾」，或選擇多個 Athena .xmu 檔案。
+                </div>
+              )}
+            </Section>
+          </div>
 
           {selectedGroup && (
             <Section title="5. 處理狀態">
