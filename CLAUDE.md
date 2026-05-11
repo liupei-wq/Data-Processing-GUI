@@ -613,3 +613,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-12] 檢查：補跑 Raman reference database JSON 解析、語法殘留掃描與 git diff --check。
 
 [2026-05-12] 實作完成：繪製圖檔 Raman 多樣品疊圖新增 default_raman_peaks 可勾選資料庫、參考峰標註/Si interference/zoom-in/峰比對 CSV，並同步更新 AGENTS.md；npm build 因環境缺 npm 未執行，JSON 解析與 git diff --check 通過。
+
+- 2026-05-12：XAS Athena 網頁 parser 支援 8 欄與 9 欄 Athena .xmu；8 欄缺少 chi(e) 時自動以 0.0 補入，錯誤訊息改為至少 8 欄。另補 PlotFileTool Raman local maximum 回傳型別，驗證 cd web/frontend && npm run build、git diff --check 通過。

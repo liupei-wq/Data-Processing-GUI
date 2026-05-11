@@ -318,10 +318,10 @@ export function parseAthenaXmuText(text: string, fileName: string, filePath: str
       continue
     }
     const row = line.split(/\s+/).map(finiteNumber)
-    if (row.length >= 9 && row.every(value => value != null)) rows.push(row as number[])
+    if (row.length >= 8 && row.every(value => value != null)) rows.push(row as number[])
   }
 
-  if (rows.length === 0) throw new Error(`${fileName} 沒有讀到 9 欄格式的 Athena .xmu 數據。`)
+  if (rows.length === 0) throw new Error(`${fileName} 沒有讀到至少 8 欄格式的 Athena .xmu 數據。`)
 
   const e0 = readHeaderValue(headers, 'Athena.e0')
   const edgeStep = readHeaderValue(headers, 'Athena.edge_step')
@@ -351,7 +351,7 @@ export function parseAthenaXmuText(text: string, fileName: string, filePath: str
   }
 
   for (const row of rows) {
-    const [energy, xmu, bkg, preEdge, postEdge, derivative, secondDerivative, i0, chiE] = row
+    const [energy, xmu, bkg, preEdge, postEdge, derivative, secondDerivative, i0, chiE = 0] = row
     const normalizedMu = (xmu - preEdge) / edgeStep
     const postEdgeNorm = (postEdge - preEdge) / edgeStep
     result.energy.push(energy)

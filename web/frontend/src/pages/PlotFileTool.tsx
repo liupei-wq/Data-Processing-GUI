@@ -1007,7 +1007,12 @@ function formatRamanReferencePeakLabel(peak: RamanReferencePeak, mode: RamanRefe
   return `${displayRamanMaterial(peak.material)}<br>${shiftLabel}`
 }
 
-function findRamanLocalMaximum(file: RamanFitPlotFile, style: RamanFigureStyle, shift: number, tolerance: number) {
+function findRamanLocalMaximum(
+  file: RamanFitPlotFile,
+  style: RamanFigureStyle,
+  shift: number,
+  tolerance: number,
+): { x: number; y: number } | null {
   const lo = shift - Math.abs(tolerance)
   const hi = shift + Math.abs(tolerance)
   const factor = ramanScaleFactor(file, style)

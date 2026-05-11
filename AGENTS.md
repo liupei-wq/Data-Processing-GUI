@@ -160,3 +160,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-12：`XAS Athena 處理` 右側「樣品與預覽」圖卡在桌面版改為 sticky，使用者捲動左側自動刪峰/手動刪峰/加回資料控制時，處理圖會固定在視窗內；sticky 容器加上 `max-height: calc(100vh - 2rem)` 與內部滾動，避免矮視窗卡住。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
 - 2026-05-12：改善 `XAS Athena 處理` 刪峰/加回滑桿拖曳頓挫；滑桿數值仍即時更新，但圖上的 draft 區間改用 80ms debounce 後才觸發 Plotly 重畫，降低拖曳時的 Plotly relayout 頻率。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
 - 2026-05-12：`繪製圖檔` Raman 多樣品疊圖新增可勾選參考峰資料庫 `web/frontend/public/peak_database/default_raman_peaks.json`；疊圖可顯示 Ga2O3 / NiO / Si 參考峰垂直線、結構底色標籤、Si interference 灰區與 zoom-in 子圖，並支援匯出所選峰表與各樣品參考峰附近實測最大值比對 CSV；Raman 匯入同時支援 fit JSON 與兩欄式 TXT/CSV/DAT。驗證 JSON 解析與 `git diff --check` 通過；目前工具環境找不到 npm，未能執行 `npm run build`。
+
+- 2026-05-12：XAS Athena 網頁 parser 支援 8 欄與 9 欄 Athena .xmu；8 欄缺少 chi(e) 時自動以 0.0 補入，錯誤訊息改為至少 8 欄。另補 PlotFileTool Raman local maximum 回傳型別，驗證 cd web/frontend && npm run build、git diff --check 通過。
