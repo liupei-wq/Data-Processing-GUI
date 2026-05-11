@@ -593,3 +593,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-12 CST：`XAS Athena 處理` 新增「匯出 OriginPro 產檔腳本」；網頁會將目前處理結果、手動刪峰後平均資料與 raw scan 嵌入 `.py`，使用者在有 OriginPro / originpro package 的 Windows 電腦執行後會自動建立 worksheet、normalized / flattened overlay graph，並輸出 `Athena_XMU_processed.opju`。瀏覽器/Render 無法直接寫 `.opju`，需靠本機 OriginPro API 產檔。驗證 `cd web/frontend && npm run build` 通過。
 
 - 2026-05-12 CST：放寬 `XAS Athena 處理` 自動刪峰判定：`SPIKE_DIFF_MAD_FACTOR` 由 4.5 降至 3.0，`PEAK_EDGE_THRESHOLD_RATIO` 由 0.35 降至 0.25，讓差異峰更容易被偵測且峰腳區段更容易納入 removal mask；手動滑桿刪峰不變。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-12 CST：修正 `XAS Athena 處理` 匯出的 OriginPro 產檔腳本相容性：raw scan worksheet 改用樣品+檔名避免重名，`wks.from_list` 與線色設定加入 fallback；已同步修補 `C:\Users\User\Downloads\athena_create_origin_project_20260511_204722.py` 並成功產生 `C:\Users\User\Downloads\Athena_XMU_processed.opju`。驗證下載腳本 `py_compile`、`cd web/frontend && npm run build`、`git diff --check` 通過。
+
+- 2026-05-12 CST：`XAS Athena 處理` 自動刪峰改為可調靈敏度，於手動刪峰區新增「標準 / 寬鬆 / 很寬鬆 / 極寬鬆」選單；寬鬆為目前預設（MAD 3.0 / 邊界 0.25），很寬鬆為 MAD 2.2 / 邊界 0.18，極寬鬆為 MAD 1.6 / 邊界 0.12，讓使用者可先用更寬鬆自動 removal mask 多抓峰，再用手動滑桿補刪或微調。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。

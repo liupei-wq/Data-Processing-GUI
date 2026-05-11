@@ -45,6 +45,12 @@ export interface AthenaManualRemovalRegion {
   scan: 'scan1' | 'scan2' | 'both'
 }
 
+export interface AthenaAutoRemovalOptions {
+  diffMadFactor: number
+  edgeThresholdRatio: number
+  minPeakSegmentPoints?: number
+}
+
 export interface AthenaSampleGroup {
   sampleName: string
   scans: AthenaScanResult[]
@@ -60,9 +66,11 @@ export interface AthenaProcessResult {
 
 type FileWithRelativePath = File & { webkitRelativePath?: string }
 
-const SPIKE_DIFF_MAD_FACTOR = 3.0
-const PEAK_EDGE_THRESHOLD_RATIO = 0.25
-const MIN_PEAK_SEGMENT_POINTS = 1
+export const DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS: AthenaAutoRemovalOptions = {
+  diffMadFactor: 3.0,
+  edgeThresholdRatio: 0.25,
+  minPeakSegmentPoints: 1,
+}
 
 function finiteNumber(value: string) {
   const parsed = Number(value)
@@ -164,15 +172,16 @@ function buildCommonEnergyGrid(results: AthenaScanResult[]) {
   return grid
 }
 
-function despikeTwoScans(x: number[], y1: number[], y2: number[]) {
+function despikeTwoScans(x: number[], y1: number[], y2: number[], options: AthenaAutoRemovalOptions = DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS) {
   if (y1.length !== y2.length) throw new Error('兩筆 scan 長度不同，請先內插到共同 energy grid。')
 
   const diff = y1.map((value, index) => value - y2[index])
   const diffMed = median(diff) ?? 0
   const diffMad = mad(diff) || 1e-12
   const robustSigma = 1.4826 * diffMad
-  const coreThreshold = SPIKE_DIFF_MAD_FACTOR * robustSigma
-  const edgeThreshold = PEAK_EDGE_THRESHOLD_RATIO * coreThreshold
+  const coreThreshold = options.diffMadFactor * robustSigma
+  const edgeThreshold = options.edgeThresholdRatio * coreThreshold
+  const minPeakSegmentPoints = options.minPeakSegmentPoints ?? 1
   const centeredDiff = diff.map(value => value - diffMed)
   const removedFrom1 = Array(y1.length).fill(0) as number[]
   const removedFrom2 = Array(y2.length).fill(0) as number[]
@@ -190,7 +199,7 @@ function despikeTwoScans(x: number[], y1: number[], y2: number[]) {
     while (end < centeredDiff.length - 1 && centeredDiff[end + 1] * sign > edgeThreshold) end += 1
 
     for (let visitIndex = start; visitIndex <= end; visitIndex += 1) visited[visitIndex] = true
-    if (end - start + 1 >= MIN_PEAK_SEGMENT_POINTS) segments.push({ start, end, sign })
+    if (end - start + 1 >= minPeakSegmentPoints) segments.push({ start, end, sign })
   }
 
   const merged: Array<{ start: number; end: number; sign: number }> = []
@@ -339,11 +348,12 @@ export function makeAthenaAverage(
   scan1: AthenaScanResult,
   scan2: AthenaScanResult,
   manualRegions: AthenaManualRemovalRegion[] = [],
+  autoRemovalOptions: AthenaAutoRemovalOptions = DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
 ): AthenaAverageResult {
   const energy = buildCommonEnergyGrid([scan1, scan2])
   const norm1 = interpolateToGrid(scan1.energy, scan1.normalizedMu, energy)
   const norm2 = interpolateToGrid(scan2.energy, scan2.normalizedMu, energy)
-  const normClean = despikeTwoScans(energy, norm1, norm2)
+  const normClean = despikeTwoScans(energy, norm1, norm2, autoRemovalOptions)
   const removalMask = applyManualRemovalRegions(energy, normClean.removedFrom1, normClean.removedFrom2, manualRegions)
   const normCleanWithManual = applyRemovalMasks(energy, norm1, norm2, removalMask.removedFrom1, removalMask.removedFrom2)
   const flat1 = interpolateToGrid(scan1.energy, scan1.flattenedMu, energy)
@@ -621,17 +631,28 @@ if op.oext:
 def set_columns(wks, columns):
     wks.cols = len(columns)
     for col_index, column in enumerate(columns):
-        wks.from_list(
-            col_index,
-            column["values"],
-            lname=column["name"],
-            units=column.get("units", ""),
-            axis=column.get("axis", "Y"),
-        )
+        try:
+            wks.from_list(
+                col_index,
+                column["values"],
+                lname=column["name"],
+                units=column.get("units", ""),
+                axis=column.get("axis", "Y"),
+            )
+        except TypeError:
+            # Older originpro builds accept only positional values here.
+            wks.from_list(col_index, column["values"])
+            try:
+                wks.set_label(col_index, column["name"], "L")
+                if column.get("units"):
+                    wks.set_label(col_index, column["units"], "U")
+            except Exception:
+                pass
 
 
 def import_raw_scan(scan):
-    wks = op.new_sheet("w", lname=scan["sampleName"])
+    sheet_name = safe_origin_name(f'{scan["sampleName"]}_{scan["fileName"]}', max_len=60)
+    wks = op.new_sheet("w", lname=sheet_name)
     set_columns(wks, [
         {"name": "Energy", "units": "eV", "axis": "X", "values": scan["energy"]},
         {"name": "xmu", "units": "a.u.", "values": scan["xmu"]},
@@ -677,8 +698,11 @@ def make_overlay_graph(items, coly, graph_title, y_title):
     for index, item in enumerate(items):
         plot = gl.add_plot(item["worksheet"], coly=coly, colx=0, type="line")
         plot.width = 2
-        plot.color = colors[index % len(colors)]
-        plot.colorinc = 0
+        try:
+            plot.color = colors[index % len(colors)]
+            plot.colorinc = 0
+        except Exception:
+            pass
     gl.rescale()
     try:
         gl.axis("x").title = "Energy (eV)"

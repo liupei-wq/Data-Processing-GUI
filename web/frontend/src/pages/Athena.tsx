@@ -5,11 +5,13 @@ import {
   buildAthenaOriginProjectPython,
   buildAthenaRawCsv,
   buildAthenaSummaryTxt,
+  DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
   downloadTextFile,
   makeAthenaAverage,
   processAthenaFiles,
   safeAthenaFilename,
   type AthenaAverageResult,
+  type AthenaAutoRemovalOptions,
   type AthenaManualRemovalRegion,
   type AthenaProcessResult,
   type AthenaSampleGroup,
@@ -18,6 +20,7 @@ import {
 
 type AthenaPreviewMode = 'normalized' | 'flattened'
 type RemovalDraft = { start: number; end: number; scan: AthenaManualRemovalRegion['scan'] }
+type AthenaRemovalSensitivity = 'standard' | 'loose' | 'very-loose' | 'extra-loose'
 
 const ATHENA_TRACE_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#be123c', '#4f46e5']
 const ATHENA_AVERAGE_COLOR = '#111827'
@@ -25,6 +28,37 @@ const ATHENA_REMOVAL_FILL = 'rgba(245, 158, 11, 0.18)'
 const ATHENA_REMOVAL_LINE = 'rgba(245, 158, 11, 0.72)'
 const ATHENA_DRAFT_REMOVAL_FILL = 'rgba(59, 130, 246, 0.16)'
 const ATHENA_DRAFT_REMOVAL_LINE = 'rgba(37, 99, 235, 0.78)'
+const ATHENA_REMOVAL_SENSITIVITY_OPTIONS: Array<{
+  id: AthenaRemovalSensitivity
+  label: string
+  detail: string
+  options: AthenaAutoRemovalOptions
+}> = [
+  {
+    id: 'loose',
+    label: '寬鬆',
+    detail: '目前建議值，較容易抓出差異峰',
+    options: DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
+  },
+  {
+    id: 'very-loose',
+    label: '很寬鬆',
+    detail: '適合想多抓一些肩峰與小尖峰',
+    options: { diffMadFactor: 2.2, edgeThresholdRatio: 0.18, minPeakSegmentPoints: 1 },
+  },
+  {
+    id: 'extra-loose',
+    label: '極寬鬆',
+    detail: '會抓更多疑似差異段，適合先大量清除再手動調整',
+    options: { diffMadFactor: 1.6, edgeThresholdRatio: 0.12, minPeakSegmentPoints: 1 },
+  },
+  {
+    id: 'standard',
+    label: '標準',
+    detail: '較保守，接近原本自動刪峰',
+    options: { diffMadFactor: 4.5, edgeThresholdRatio: 0.35, minPeakSegmentPoints: 1 },
+  },
+]
 
 const directoryInputProps = {
   webkitdirectory: '',
@@ -100,6 +134,12 @@ export default function Athena() {
   const [message, setMessage] = useState('')
   const [manualRemovals, setManualRemovals] = useState<Record<string, AthenaManualRemovalRegion[]>>({})
   const [removalDraft, setRemovalDraft] = useState<RemovalDraft>({ start: 0, end: 0, scan: 'both' })
+  const [removalSensitivity, setRemovalSensitivity] = useState<AthenaRemovalSensitivity>('loose')
+  const autoRemovalOptions = useMemo(
+    () => ATHENA_REMOVAL_SENSITIVITY_OPTIONS.find(option => option.id === removalSensitivity)?.options ?? DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
+    [removalSensitivity],
+  )
+  const activeRemovalSensitivity = ATHENA_REMOVAL_SENSITIVITY_OPTIONS.find(option => option.id === removalSensitivity) ?? ATHENA_REMOVAL_SENSITIVITY_OPTIONS[0]
 
   const adjustedResult = useMemo<AthenaProcessResult | null>(() => {
     if (!result) return null
@@ -112,14 +152,14 @@ export default function Athena() {
           return {
             ...group,
             scans: sortedScans,
-            average: makeAthenaAverage(group.sampleName, sortedScans[0], sortedScans[1], manualRemovals[group.sampleName] ?? []),
+            average: makeAthenaAverage(group.sampleName, sortedScans[0], sortedScans[1], manualRemovals[group.sampleName] ?? [], autoRemovalOptions),
           }
         } catch {
           return group
         }
       }),
     }
-  }, [manualRemovals, result])
+  }, [autoRemovalOptions, manualRemovals, result])
 
   const selectedGroup = useMemo<AthenaSampleGroup | null>(() => {
     if (!adjustedResult?.groups.length) return null
@@ -415,6 +455,26 @@ export default function Athena() {
           <Section title="3. 手動刪峰" description="用滑桿選取要刪掉的 energy 區間。" compact>
             {selectedGroup && selectedEnergyRange ? (
               <div className="space-y-3">
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <label className="text-xs font-semibold text-[var(--text-soft)]">
+                    自動刪峰靈敏度
+                    <select
+                      value={removalSensitivity}
+                      onChange={event => setRemovalSensitivity(event.target.value as AthenaRemovalSensitivity)}
+                      className="mt-1 w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--input-text)]"
+                    >
+                      {ATHENA_REMOVAL_SENSITIVITY_OPTIONS.map(option => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="mt-2 text-xs leading-5 text-[var(--text-soft)]">{activeRemovalSensitivity.detail}</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[var(--text-soft)]">
+                    <span className="rounded-lg border border-[var(--card-border)] px-2 py-1">MAD {autoRemovalOptions.diffMadFactor}</span>
+                    <span className="rounded-lg border border-[var(--card-border)] px-2 py-1">邊界 {autoRemovalOptions.edgeThresholdRatio}</span>
+                  </div>
+                </div>
+
                 <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
                   <div className="mb-3 grid gap-2">
                     <label className="text-xs font-semibold text-[var(--text-soft)]">
