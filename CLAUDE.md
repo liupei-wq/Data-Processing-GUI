@@ -575,3 +575,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-11 CST：確認目前工具環境找不到 node/npm，也沒有本地 node_modules，可先以靜態檢查與 git diff 檢查替代；另補上 PlotFileTool Raman 預覽全螢幕，以涵蓋繪圖工具中的結果圖檢視。
 
 - 2026-05-11 CST：完成 Raman 圖表需求。影響檔案：web/frontend/src/pages/Raman.tsx、web/frontend/src/pages/PlotFileTool.tsx、CLAUDE.md、AGENTS.md。驗證：git diff --check 通過；目前工具環境 Get-Command node/npm 無結果，因此無法執行 cd web/frontend && npm run build。
+
+- 2026-05-11 CST：依使用者要求復原上一輪 Raman fitting 修改（v23.2 反向套用）：移除材料白名單/Si mask 或 fit-subtract/分區物理限制/unresolved 新流程與前端 fitting 控制，回到 v23.1 的 Raman fitting 狀態；保留 v23.1 的 Raman 圖表全螢幕與繪製圖檔功能。
+
+- 2026-05-11 CST：檢查：復原後確認 Raman fitting 新流程關鍵字已從 web/backend 與 web/frontend/src 消失；復原後程式檔與 HEAD~1(v23.1) 無差異；git diff --cached --check 與 git diff --check 通過。
