@@ -603,3 +603,13 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-12 CST：`XAS Athena 處理` 右側「樣品與預覽」圖卡在桌面版改為 sticky，使用者捲動左側自動刪峰/手動刪峰/加回資料控制時，處理圖會固定在視窗內；sticky 容器加上 `max-height: calc(100vh - 2rem)` 與內部滾動，避免矮視窗卡住。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
 
 - 2026-05-12 CST：改善 `XAS Athena 處理` 刪峰/加回滑桿拖曳頓挫；滑桿數值仍即時更新，但圖上的 draft 區間改用 80ms debounce 後才觸發 Plotly 重畫，降低拖曳時的 Plotly relayout 頻率。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
+
+[2026-05-12] 實作：開始整合繪製圖檔 Raman 多樣品疊圖參考峰資料庫功能，新增可勾選 Raman reference peaks、Si interference、zoom-in 與峰比對匯出。
+
+[2026-05-12] 檢查：執行 cd web/frontend && npm run build 驗證 Raman reference overlay 改動。
+
+[2026-05-12] 檢查：Raman reference overlay 前端 build 因工具環境找不到 npm 而未能執行；改以靜態檢查與 git diff --check 補驗。
+
+[2026-05-12] 檢查：補跑 Raman reference database JSON 解析、語法殘留掃描與 git diff --check。
+
+[2026-05-12] 實作完成：繪製圖檔 Raman 多樣品疊圖新增 default_raman_peaks 可勾選資料庫、參考峰標註/Si interference/zoom-in/峰比對 CSV，並同步更新 AGENTS.md；npm build 因環境缺 npm 未執行，JSON 解析與 git diff --check 通過。

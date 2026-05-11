@@ -1,0 +1,202 @@
+{
+  "database_name": "default_raman_reference_peaks",
+  "version": "2026-05-12",
+  "notes": "Default candidate Raman reference peaks for Ga2O3/NiO/p-Si heterostructure. Please replace citations with final literature sources used in thesis/paper.",
+  "sources": [
+    {
+      "source_id": "GA2O3_BETA_GENERAL",
+      "material": "Ga2O3",
+      "phase": "beta",
+      "citation": "Candidate β-Ga2O3 Raman mode reference. Replace with final selected literature.",
+      "peaks": [
+        {
+          "shift_cm-1": 112,
+          "label": "β-Ga2O3 112",
+          "mode": "low-frequency lattice mode",
+          "structure": "mixed",
+          "polyhedron": "mixed",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 145,
+          "label": "β-Ga2O3 145",
+          "mode": "low-frequency lattice mode",
+          "structure": "mixed",
+          "polyhedron": "mixed",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 169,
+          "label": "β-Ga2O3 169",
+          "mode": "low-frequency lattice mode",
+          "structure": "mixed",
+          "polyhedron": "mixed",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 199,
+          "label": "β-Ga2O3 199",
+          "mode": "low-frequency lattice mode",
+          "structure": "mixed",
+          "polyhedron": "mixed",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 320,
+          "label": "β-Ga2O3 320",
+          "mode": "deformation / bending",
+          "structure": "octahedral",
+          "polyhedron": "GaO6",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 346,
+          "label": "β-Ga2O3 346",
+          "mode": "deformation / bending",
+          "structure": "octahedral",
+          "polyhedron": "GaO6",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 416,
+          "label": "β-Ga2O3 416",
+          "mode": "deformation / bending",
+          "structure": "octahedral",
+          "polyhedron": "GaO6",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 475,
+          "label": "β-Ga2O3 475",
+          "mode": "intermediate vibration",
+          "structure": "mixed",
+          "polyhedron": "mixed",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 630,
+          "label": "β-Ga2O3 630",
+          "mode": "stretching",
+          "structure": "tetrahedral",
+          "polyhedron": "GaO4",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 653,
+          "label": "β-Ga2O3 653",
+          "mode": "stretching",
+          "structure": "tetrahedral",
+          "polyhedron": "GaO4",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 767,
+          "label": "β-Ga2O3 767",
+          "mode": "stretching",
+          "structure": "tetrahedral",
+          "polyhedron": "GaO4",
+          "confidence": "candidate",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "source_id": "NIO_GENERAL",
+      "material": "NiO",
+      "phase": "cubic",
+      "citation": "Candidate NiO Raman reference. NiO peaks are often broad and defect-sensitive. Replace with final selected literature.",
+      "peaks": [
+        {
+          "shift_cm-1": 370,
+          "label": "NiO ~370",
+          "mode": "1P / disorder-related",
+          "structure": "octahedral",
+          "polyhedron": "NiO6",
+          "confidence": "tentative",
+          "enabled": false
+        },
+        {
+          "shift_cm-1": 500,
+          "label": "NiO ~500",
+          "mode": "TO/LO region; overlap with Si possible",
+          "structure": "octahedral",
+          "polyhedron": "NiO6",
+          "confidence": "tentative",
+          "enabled": false
+        },
+        {
+          "shift_cm-1": 740,
+          "label": "NiO ~740",
+          "mode": "2TO / broad second-order feature",
+          "structure": "octahedral",
+          "polyhedron": "NiO6",
+          "confidence": "tentative",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 880,
+          "label": "NiO ~880",
+          "mode": "TO+LO / two-phonon region",
+          "structure": "octahedral",
+          "polyhedron": "NiO6",
+          "confidence": "tentative",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 1080,
+          "label": "NiO ~1080",
+          "mode": "2LO / broad higher-order feature",
+          "structure": "octahedral",
+          "polyhedron": "NiO6",
+          "confidence": "tentative",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "source_id": "SI_SUBSTRATE",
+      "material": "Si",
+      "phase": "diamond cubic",
+      "citation": "Silicon substrate Raman reference.",
+      "peaks": [
+        {
+          "shift_cm-1": 300,
+          "label": "Si ~300",
+          "mode": "second-order Si",
+          "structure": "substrate",
+          "polyhedron": "substrate",
+          "confidence": "candidate",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 520,
+          "label": "Si 520",
+          "mode": "first-order optical phonon",
+          "structure": "substrate",
+          "polyhedron": "substrate",
+          "confidence": "high",
+          "enabled": true
+        },
+        {
+          "shift_cm-1": 960,
+          "label": "Si ~960",
+          "mode": "second-order Si",
+          "structure": "substrate",
+          "polyhedron": "substrate",
+          "confidence": "candidate",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}

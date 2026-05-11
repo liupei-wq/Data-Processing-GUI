@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Plot, { PlotlyApi } from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { ModuleTopBar } from '../components/WorkspaceUi'
@@ -7,6 +7,8 @@ import { withPlotFullscreen } from '../components/plotConfig'
 type PlotModule = 'xps' | 'raman' | 'xrd' | 'xas' | 'xes'
 type RamanPlotMode = 'single' | 'overlay'
 type RamanConfidenceFilter = 'all' | 'high' | 'medium-up' | 'low-only'
+type RamanReferenceLabelMode = 'full' | 'material-shift' | 'shift' | 'index'
+type RamanReferenceLineDash = 'solid' | 'dash' | 'dot' | 'dashdot'
 
 interface FitSpectrumFile {
   id: string
@@ -55,6 +57,8 @@ interface RamanFitPlotFile {
   id: string
   name: string
   sampleLabel: string
+  sourceType: 'fit-json' | 'spectrum'
+  hasFit: boolean
   x: number[]
   raw: number[]
   baseline: number[]
@@ -63,6 +67,31 @@ interface RamanFitPlotFile {
   totalFitRaw: number[]
   residual: number[]
   components: RamanComponentCurve[]
+}
+
+interface RamanReferencePeak {
+  id: string
+  databaseId: string
+  databaseName: string
+  sourceId: string
+  citation: string
+  material: string
+  phase: string
+  shift: number
+  label: string
+  mode: string
+  structure: string
+  polyhedron: string
+  confidence: string
+  enabled: boolean
+}
+
+interface RamanReferenceDatabase {
+  id: string
+  name: string
+  version: string
+  notes: string
+  peaks: RamanReferencePeak[]
 }
 
 interface ComponentStyle {
@@ -139,6 +168,19 @@ interface RamanFigureStyle {
   confidenceFilter: RamanConfidenceFilter
   overlayOffset: number
   showOverlayFit: boolean
+  showOverlayZoom: boolean
+  overlayZoomLeft: number
+  overlayZoomRight: number
+  showSiMask: boolean
+  siMaskCenter: number
+  siMaskHalfWidth: number
+  showReferencePeaks: boolean
+  referenceLabelMode: RamanReferenceLabelMode
+  referenceLineDash: RamanReferenceLineDash
+  referenceLineWidth: number
+  referenceLineOpacity: number
+  referenceLabelYFraction: number
+  referenceMatchTolerance: number
   exportWidth: number
   exportHeight: number
   exportScale: number
@@ -228,6 +270,34 @@ const ROMAN_COMPONENT_POSITIONS = [
   { labelX: 0.82, labelY: 0.58 },
   { labelX: 0.18, labelY: 0.55 },
 ]
+
+const RAMAN_REFERENCE_DATABASES = [
+  { id: 'default_raman_peaks.json', label: 'default_raman_peaks.json', url: '/peak_database/default_raman_peaks.json' },
+]
+
+const RAMAN_MATERIAL_COLORS: Record<string, string> = {
+  ga2o3: '#1f77b4',
+  'ga₂o₃': '#1f77b4',
+  nio: '#d95f02',
+  si: '#7b3294',
+  other: '#4d4d4d',
+}
+
+const RAMAN_STRUCTURE_COLORS: Record<string, string> = {
+  tetrahedral: '#7fd3ff',
+  octahedral: '#96d38c',
+  mixed: '#c9c9c9',
+  substrate: '#d8b4ff',
+  unknown: '#ededed',
+}
+
+const RAMAN_STRUCTURE_LABELS: Record<string, string> = {
+  tetrahedral: 'tetrahedral / GaO4',
+  octahedral: 'octahedral / GaO6 or NiO6',
+  mixed: 'mixed / low-frequency',
+  substrate: 'Si substrate',
+  unknown: 'unknown',
+}
 
 const DEFAULT_STYLE: PlotFigureStyle = {
   titleLabel: 'O 1s',
@@ -326,6 +396,19 @@ const DEFAULT_RAMAN_STYLE: RamanFigureStyle = {
   confidenceFilter: 'all',
   overlayOffset: 0.82,
   showOverlayFit: true,
+  showOverlayZoom: true,
+  overlayZoomLeft: 100,
+  overlayZoomRight: 850,
+  showSiMask: true,
+  siMaskCenter: 520,
+  siMaskHalfWidth: 18,
+  showReferencePeaks: true,
+  referenceLabelMode: 'material-shift',
+  referenceLineDash: 'dash',
+  referenceLineWidth: 1,
+  referenceLineOpacity: 0.75,
+  referenceLabelYFraction: 0.92,
+  referenceMatchTolerance: 8,
   exportWidth: 1600,
   exportHeight: 900,
   exportScale: 4,
@@ -433,6 +516,139 @@ function splitDelimitedLine(line: string, delimiter: string) {
   }
   out.push(current.trim())
   return out
+}
+
+function csvEscape(value: unknown) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`
+}
+
+function rowsToCsv(headers: string[], rows: Array<Record<string, unknown>>) {
+  return [
+    headers.join(','),
+    ...rows.map(row => headers.map(header => csvEscape(row[header])).join(',')),
+  ].join('\n')
+}
+
+function ramanMaterialKey(material: string) {
+  return material.trim().toLowerCase().replace(/\s+/g, '')
+}
+
+function ramanMaterialColor(material: string) {
+  return RAMAN_MATERIAL_COLORS[ramanMaterialKey(material)] ?? RAMAN_MATERIAL_COLORS.other
+}
+
+function ramanStructureColor(structure: string) {
+  return RAMAN_STRUCTURE_COLORS[structure.trim().toLowerCase()] ?? RAMAN_STRUCTURE_COLORS.unknown
+}
+
+function displayRamanMaterial(material: string) {
+  const key = ramanMaterialKey(material)
+  if (key === 'ga2o3' || key === 'ga₂o₃') return 'Ga₂O₃'
+  return material || 'Other'
+}
+
+function inferRamanSampleLabel(fileName: string) {
+  const stem = safeFileStem(fileName)
+  const lower = stem.toLowerCase()
+  if (lower.includes('40-10') || lower.includes('40_10') || lower.includes('1013')) return '40-10'
+  if (lower.includes('45-5') || lower.includes('45_5') || lower.includes('1020')) return '45-5'
+  if (lower.includes('50-0') || lower.includes('50_0') || lower.includes('1014')) return '50-0'
+  if (lower.includes('si')) return 'Si substrate'
+  return stem
+}
+
+function parseRamanReferenceDatabase(payload: Record<string, unknown>, fallbackId: string): RamanReferenceDatabase {
+  const databaseName = String(payload.database_name ?? fallbackId)
+  const sources = Array.isArray(payload.sources) ? payload.sources as Array<Record<string, unknown>> : []
+  const peaks: RamanReferencePeak[] = []
+
+  sources.forEach((source, sourceIndex) => {
+    const sourceId = String(source.source_id ?? `${fallbackId}_${sourceIndex + 1}`)
+    const sourceMaterial = String(source.material ?? 'Other')
+    const sourcePhase = String(source.phase ?? '')
+    const citation = String(source.citation ?? '')
+    const sourcePeaks = Array.isArray(source.peaks) ? source.peaks as Array<Record<string, unknown>> : []
+    sourcePeaks.forEach((peak, peakIndex) => {
+      const rawShift = peak['shift_cm-1'] ?? peak.shift ?? peak.shift_cm1
+      const shift = Number(rawShift)
+      if (!Number.isFinite(shift)) return
+      const material = String(peak.material ?? sourceMaterial)
+      peaks.push({
+        id: `${fallbackId}:${sourceId}:${material}:${shift}:${peakIndex}`,
+        databaseId: fallbackId,
+        databaseName,
+        sourceId,
+        citation,
+        material,
+        phase: String(peak.phase ?? sourcePhase),
+        shift,
+        label: String(peak.label ?? `${material} ${shift}`),
+        mode: String(peak.mode ?? ''),
+        structure: String(peak.structure ?? 'unknown'),
+        polyhedron: String(peak.polyhedron ?? ''),
+        confidence: String(peak.confidence ?? ''),
+        enabled: Boolean(peak.enabled ?? true),
+      })
+    })
+  })
+
+  return {
+    id: fallbackId,
+    name: databaseName,
+    version: String(payload.version ?? ''),
+    notes: String(payload.notes ?? ''),
+    peaks,
+  }
+}
+
+function parseRamanSpectrumText(text: string, fileName: string): RamanFitPlotFile {
+  const x: number[] = []
+  const raw: number[] = []
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  lines.forEach((line, index) => {
+    const cleaned = index === 0 ? line.replace(/^\uFEFF/, '') : line
+    if (cleaned.startsWith('#') || cleaned.startsWith('//')) return
+    const delimiter = cleaned.includes('\t') ? '\t' : (cleaned.includes(',') ? ',' : 'whitespace')
+    const cells = splitDelimitedLine(cleaned, delimiter)
+    const numericCells = cells
+      .map(cell => Number(cell))
+      .filter(Number.isFinite)
+    if (numericCells.length < 2) return
+    x.push(numericCells[0])
+    raw.push(numericCells[1])
+  })
+
+  if (x.length < 3) throw new Error(`${fileName}: Raman 原始檔至少需要兩欄數值資料`)
+  const points = x
+    .map((xValue, index) => ({ x: xValue, y: raw[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  const seen = new Set<number>()
+  const cleanX: number[] = []
+  const cleanY: number[] = []
+  points.forEach(point => {
+    if (seen.has(point.x)) return
+    seen.add(point.x)
+    cleanX.push(point.x)
+    cleanY.push(point.y)
+  })
+  if (cleanX.length < 3) throw new Error(`${fileName}: Raman 原始檔有效資料點不足`)
+
+  return {
+    id: `${fileName}-${Math.random().toString(36).slice(2, 8)}`,
+    name: fileName,
+    sampleLabel: inferRamanSampleLabel(fileName),
+    sourceType: 'spectrum',
+    hasFit: false,
+    x: cleanX,
+    raw: cleanY,
+    baseline: Array(cleanX.length).fill(0),
+    corrected: cleanY,
+    totalFitCorrected: Array(cleanX.length).fill(0),
+    totalFitRaw: Array(cleanX.length).fill(0),
+    residual: Array(cleanX.length).fill(0),
+    components: [],
+  }
 }
 
 function chooseVbmColumns(headers: string[], rows: string[][], fileName: string) {
@@ -698,6 +914,8 @@ function parseRamanFitJson(text: string, fileName: string): RamanFitPlotFile {
     id: `${fileName}-${Math.random().toString(36).slice(2, 8)}`,
     name: fileName,
     sampleLabel: String(payload.dataset_name ?? report?.sample_id ?? safeFileStem(fileName)),
+    sourceType: 'fit-json',
+    hasFit: true,
     x,
     raw,
     baseline,
@@ -772,6 +990,69 @@ function ramanScaleFactor(file: RamanFitPlotFile, style: RamanFigureStyle) {
     .map(value => Math.abs(value))
     .filter(Number.isFinite)
   return Math.max(...candidates, 1)
+}
+
+function formatRamanShift(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '')
+}
+
+function formatRamanReferencePeakLabel(peak: RamanReferencePeak, mode: RamanReferenceLabelMode, index: number) {
+  const shiftLabel = formatRamanShift(peak.shift)
+  if (mode === 'shift') return shiftLabel
+  if (mode === 'index') return `P${index}`
+  if (mode === 'full') {
+    const polyhedron = peak.polyhedron ? `<br>${peak.polyhedron}` : ''
+    return `${displayRamanMaterial(peak.material)} ${shiftLabel}${polyhedron}`
+  }
+  return `${displayRamanMaterial(peak.material)}<br>${shiftLabel}`
+}
+
+function findRamanLocalMaximum(file: RamanFitPlotFile, style: RamanFigureStyle, shift: number, tolerance: number) {
+  const lo = shift - Math.abs(tolerance)
+  const hi = shift + Math.abs(tolerance)
+  const factor = ramanScaleFactor(file, style)
+  let best: { x: number; y: number } | null = null
+  file.x.forEach((xValue, index) => {
+    if (xValue < lo || xValue > hi) return
+    const yValue = (file.corrected[index] ?? file.raw[index] ?? 0) / factor
+    if (!Number.isFinite(yValue)) return
+    if (!best || yValue > best.y) best = { x: xValue, y: yValue }
+  })
+  return best
+}
+
+function buildRamanReferencePeakRows(peaks: RamanReferencePeak[]) {
+  return peaks.map((peak, index) => ({
+    peak_id: `P${index + 1}`,
+    'shift_cm-1': peak.shift,
+    material: peak.material,
+    phase: peak.phase,
+    label: peak.label,
+    mode: peak.mode,
+    structure: peak.structure,
+    polyhedron: peak.polyhedron,
+    confidence: peak.confidence,
+    source_id: peak.sourceId,
+    citation: peak.citation,
+  }))
+}
+
+function buildRamanReferenceMatchRows(files: RamanFitPlotFile[], peaks: RamanReferencePeak[], style: RamanFigureStyle) {
+  return peaks.flatMap((peak, peakIndex) => files.map(file => {
+    const observed = findRamanLocalMaximum(file, style, peak.shift, style.referenceMatchTolerance)
+    return {
+      peak_id: `P${peakIndex + 1}`,
+      sample: file.sampleLabel,
+      'ref_shift_cm-1': peak.shift,
+      'observed_local_max_cm-1': observed ? observed.x : '',
+      'delta_cm-1': observed ? observed.x - peak.shift : '',
+      local_intensity_after_norm: observed ? observed.y : '',
+      material: peak.material,
+      polyhedron: peak.polyhedron,
+      mode: peak.mode,
+      source_id: peak.sourceId,
+    }
+  }))
 }
 
 function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureStyle): { data: Plotly.Data[]; layout: Partial<Plotly.Layout> } {
@@ -852,14 +1133,16 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
       })
     })
   }
-  data.push({
-    x: file.x,
-    y: scaledSeries(file.totalFitRaw, factor),
-    type: 'scatter',
-    mode: 'lines',
-    name: 'Total fit',
-    line: { color: style.fitColor, width: style.fitLineWidth },
-  })
+  if (file.hasFit) {
+    data.push({
+      x: file.x,
+      y: scaledSeries(file.totalFitRaw, factor),
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Total fit',
+      line: { color: style.fitColor, width: style.fitLineWidth },
+    })
+  }
 
   const labelMarkers = buildRamanComponentPeakMarkers(
     components,
@@ -918,7 +1201,7 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
   }
 }
 
-function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureStyle): { data: Plotly.Data[]; layout: Partial<Plotly.Layout> } | null {
+function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureStyle, referencePeaks: RamanReferencePeak[] = []): { data: Plotly.Data[]; layout: Partial<Plotly.Layout> } | null {
   const usableFiles = files.filter(file => file.x.length > 2)
   if (usableFiles.length === 0) return null
   const allX = usableFiles.flatMap(file => file.x)
@@ -926,6 +1209,13 @@ function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureSt
   const xMax = Math.max(...allX)
   const x0 = style.xLeft ?? xMin
   const x1 = style.xRight ?? xMax
+  const rangeLeft = Math.min(x0, x1)
+  const rangeRight = Math.max(x0, x1)
+  const zoomLeft = Math.min(style.overlayZoomLeft, style.overlayZoomRight)
+  const zoomRight = Math.max(style.overlayZoomLeft, style.overlayZoomRight)
+  const showZoom = style.showOverlayZoom && zoomRight - zoomLeft > 1
+  const mainDomain: [number, number] = showZoom ? [0.34, 1] : [0, 1]
+  const zoomDomain: [number, number] = [0, 0.24]
   const spans = usableFiles.map(file => {
     const factor = ramanScaleFactor(file, style)
     const values = scaledSeries(file.corrected, factor).filter(Number.isFinite)
@@ -935,7 +1225,16 @@ function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureSt
   const offsetStep = Math.max(0, style.overlayOffset) * unitSpan
   const data: Plotly.Data[] = []
   const plottedValues: number[] = []
-  const annotations: Partial<Plotly.Annotations>[] = []
+  const zoomValues: number[] = []
+  const annotations: object[] = []
+  const shapes: object[] = []
+  const pushZoomValues = (xValues: number[], yValues: number[]) => {
+    if (!showZoom) return
+    xValues.forEach((xValue, valueIndex) => {
+      const yValue = yValues[valueIndex]
+      if (xValue >= zoomLeft && xValue <= zoomRight && Number.isFinite(yValue)) zoomValues.push(yValue)
+    })
+  }
 
   usableFiles.forEach((file, index) => {
     const factor = ramanScaleFactor(file, style)
@@ -943,7 +1242,8 @@ function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureSt
     const color = ramanComponentColor(index, style.correctedColor)
     const corrected = scaledSeries(file.corrected, factor).map(value => value + offset)
     const totalFit = scaledSeries(file.totalFitRaw, factor).map(value => value + offset)
-    plottedValues.push(...corrected.filter(Number.isFinite), ...totalFit.filter(Number.isFinite))
+    plottedValues.push(...corrected.filter(Number.isFinite))
+    pushZoomValues(file.x, corrected)
     data.push({
       x: file.x,
       y: corrected,
@@ -952,7 +1252,23 @@ function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureSt
       name: file.sampleLabel,
       line: { color, width: style.correctedLineWidth },
     })
-    if (style.showOverlayFit) {
+    if (showZoom) {
+      data.push({
+        x: file.x,
+        y: corrected,
+        xaxis: 'x2',
+        yaxis: 'y2',
+        type: 'scatter',
+        mode: 'lines',
+        name: `${file.sampleLabel} zoom`,
+        legendgroup: file.id,
+        showlegend: false,
+        line: { color, width: style.correctedLineWidth },
+      })
+    }
+    if (style.showOverlayFit && file.hasFit) {
+      plottedValues.push(...totalFit.filter(Number.isFinite))
+      pushZoomValues(file.x, totalFit)
       data.push({
         x: file.x,
         y: totalFit,
@@ -964,6 +1280,21 @@ function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureSt
         line: { color: style.fitColor, width: style.fitLineWidth, dash: 'dash' },
         opacity: 0.72,
       })
+      if (showZoom) {
+        data.push({
+          x: file.x,
+          y: totalFit,
+          xaxis: 'x2',
+          yaxis: 'y2',
+          type: 'scatter',
+          mode: 'lines',
+          name: `${file.sampleLabel} fit zoom`,
+          legendgroup: file.id,
+          showlegend: false,
+          line: { color: style.fitColor, width: style.fitLineWidth, dash: 'dash' },
+          opacity: 0.72,
+        })
+      }
     }
     annotations.push({
       x: 1.01,
@@ -980,6 +1311,9 @@ function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureSt
   const yMin = plottedValues.length > 0 ? Math.min(...plottedValues) : 0
   const yMax = plottedValues.length > 0 ? Math.max(...plottedValues) : unitSpan
   const pad = Math.max((yMax - yMin) * 0.08, unitSpan * 0.08)
+  const zoomYMin = zoomValues.length > 0 ? Math.min(...zoomValues) : yMin
+  const zoomYMax = zoomValues.length > 0 ? Math.max(...zoomValues) : yMax
+  const zoomPad = Math.max((zoomYMax - zoomYMin) * 0.1, unitSpan * 0.06)
   const axisBase = {
     showgrid: false,
     zeroline: false,
@@ -991,27 +1325,123 @@ function buildRamanOverlayFigure(files: RamanFitPlotFile[], style: RamanFigureSt
     tickfont: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
   }
 
+  if (style.showSiMask) {
+    const siX0 = style.siMaskCenter - Math.abs(style.siMaskHalfWidth)
+    const siX1 = style.siMaskCenter + Math.abs(style.siMaskHalfWidth)
+    const siShape = (xref: 'x' | 'x2', y0: number, y1: number) => ({
+      type: 'rect',
+      xref,
+      yref: 'paper',
+      x0: siX0,
+      x1: siX1,
+      y0,
+      y1,
+      fillcolor: '#bdbdbd',
+      opacity: 0.18,
+      line: { width: 0 },
+      layer: 'below',
+    })
+    shapes.push(siShape('x', mainDomain[0], mainDomain[1]))
+    if (showZoom && siX1 >= zoomLeft && siX0 <= zoomRight) shapes.push(siShape('x2', zoomDomain[0], zoomDomain[1]))
+    annotations.push({
+      x: style.siMaskCenter,
+      y: mainDomain[1] - 0.02,
+      xref: 'x',
+      yref: 'paper',
+      text: 'Si interference',
+      showarrow: false,
+      yanchor: 'top',
+      font: { family: style.fontFamily, size: Math.max(10, style.fontSize - 4), color: '#555555' },
+    })
+  }
+
+  if (style.showReferencePeaks && referencePeaks.length > 0) {
+    const visibleReferencePeaks = referencePeaks
+      .filter(peak => peak.shift >= rangeLeft && peak.shift <= rangeRight)
+      .sort((a, b) => a.shift - b.shift)
+    const mainHeight = mainDomain[1] - mainDomain[0]
+    visibleReferencePeaks.forEach((peak, index) => {
+      const lineColor = ramanMaterialColor(peak.material)
+      const boxColor = ramanStructureColor(peak.structure)
+      const lineBase = {
+        type: 'line',
+        yref: 'paper',
+        x0: peak.shift,
+        x1: peak.shift,
+        line: {
+          color: lineColor,
+          width: style.referenceLineWidth,
+          dash: style.referenceLineDash,
+        },
+        opacity: style.referenceLineOpacity,
+        layer: 'below',
+      }
+      shapes.push({ ...lineBase, xref: 'x', y0: mainDomain[0], y1: mainDomain[1] })
+      if (showZoom && peak.shift >= zoomLeft && peak.shift <= zoomRight) {
+        shapes.push({ ...lineBase, xref: 'x2', y0: zoomDomain[0], y1: zoomDomain[1] })
+      }
+      const lane = index % 5
+      const labelY = mainDomain[0] + clamp(style.referenceLabelYFraction, 0.5, 0.98) * mainHeight - lane * 0.072 * mainHeight
+      annotations.push({
+        x: peak.shift,
+        y: labelY,
+        xref: 'x',
+        yref: 'paper',
+        text: formatRamanReferencePeakLabel(peak, style.referenceLabelMode, index + 1),
+        textangle: -90,
+        showarrow: false,
+        xanchor: 'center',
+        yanchor: 'top',
+        align: 'center',
+        xshift: [-8, -4, 4, 8][index % 4],
+        font: { family: style.fontFamily, size: style.labelFontSize, color: '#111827' },
+        bgcolor: hexToRgba(boxColor, 0.62),
+        bordercolor: lineColor,
+        borderwidth: 1,
+        borderpad: 3,
+      })
+    })
+  }
+
   return {
     data,
     layout: {
       paper_bgcolor: '#ffffff',
       plot_bgcolor: '#ffffff',
       font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
-      margin: { l: 90, r: 150, t: 72, b: 82 },
+      margin: { l: 90, r: 150, t: style.showReferencePeaks ? 124 : 72, b: 82 },
       showlegend: true,
       legend: { x: 0.99, y: 1.02, xanchor: 'right', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.72)', font: { size: Math.max(10, style.fontSize - 2) } },
       xaxis: {
         ...axisBase,
+        anchor: 'y',
         range: [x0, x1],
-        title: { text: 'Raman Shift (cm⁻¹)', standoff: 18, font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' } },
+        title: { text: showZoom ? '' : 'Raman Shift (cm⁻¹)', standoff: 18, font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' } },
       },
       yaxis: {
         ...axisBase,
+        domain: mainDomain,
         range: [yMin - pad, yMax + pad],
         showticklabels: offsetStep <= 1e-12,
         title: { text: style.normalize ? 'Normalized intensity + offset' : 'Intensity + offset', standoff: 18, font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' } },
       },
+      ...(showZoom ? {
+        xaxis2: {
+          ...axisBase,
+          anchor: 'y2',
+          range: [zoomLeft, zoomRight],
+          title: { text: 'Raman Shift (cm⁻¹)', standoff: 18, font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' } },
+        },
+        yaxis2: {
+          ...axisBase,
+          domain: zoomDomain,
+          range: [zoomYMin - zoomPad, zoomYMax + zoomPad],
+          showticklabels: false,
+          title: { text: 'Zoom-in', standoff: 12, font: { family: style.fontFamily, size: Math.max(12, style.axisTitleFontSize - 6), color: '#111827' } },
+        },
+      } : {}),
       annotations: annotations as unknown as Plotly.Layout['annotations'],
+      shapes: shapes as unknown as Plotly.Layout['shapes'],
     },
   }
 }
@@ -2092,8 +2522,43 @@ export default function PlotFileTool({
   const [selectedRamanId, setSelectedRamanId] = useState<string>('')
   const [ramanPlotMode, setRamanPlotMode] = useState<RamanPlotMode>('single')
   const [ramanFullscreenOpen, setRamanFullscreenOpen] = useState(false)
+  const [ramanReferenceDatabases, setRamanReferenceDatabases] = useState<RamanReferenceDatabase[]>([])
+  const [ramanReferenceSelectedDbIds, setRamanReferenceSelectedDbIds] = useState<string[]>([])
+  const [ramanReferenceSelectedPeakIds, setRamanReferenceSelectedPeakIds] = useState<string[]>([])
+  const [ramanReferenceMaterialFilter, setRamanReferenceMaterialFilter] = useState<string[]>([])
+  const [ramanReferenceDbError, setRamanReferenceDbError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadRamanReferenceDatabases() {
+      try {
+        const loaded = await Promise.all(RAMAN_REFERENCE_DATABASES.map(async db => {
+          const response = await fetch(db.url)
+          if (!response.ok) throw new Error(`${db.label}: HTTP ${response.status}`)
+          const payload = await response.json() as Record<string, unknown>
+          return parseRamanReferenceDatabase(payload, db.id)
+        }))
+        if (cancelled) return
+        setRamanReferenceDatabases(loaded)
+        setRamanReferenceSelectedDbIds(current => current.length > 0 ? current : loaded.map(db => db.id))
+        setRamanReferenceSelectedPeakIds(current => current.length > 0 ? current : loaded.flatMap(db => db.peaks.filter(peak => peak.enabled).map(peak => peak.id)))
+        setRamanReferenceMaterialFilter(current => {
+          if (current.length > 0) return current
+          return Array.from(new Set(loaded.flatMap(db => db.peaks.map(peak => peak.material)))).sort((a, b) => a.localeCompare(b))
+        })
+        setRamanReferenceDbError(null)
+      } catch (loadError: unknown) {
+        if (cancelled) return
+        setRamanReferenceDbError(String((loadError as Error).message ?? loadError))
+      }
+    }
+    void loadRamanReferenceDatabases()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const keys = useMemo(() => componentKeys(files), [files])
   const panelFigure = useMemo(() => files.length > 0 ? buildXpsPanelFigure(files, style, componentStyles) : null, [files, style, componentStyles])
@@ -2116,13 +2581,36 @@ export default function PlotFileTool({
     () => ramanFiles.find(file => file.id === selectedRamanId) ?? ramanFiles[0] ?? null,
     [ramanFiles, selectedRamanId],
   )
+  const ramanReferenceAllPeaks = useMemo(
+    () => ramanReferenceDatabases.flatMap(db => db.peaks),
+    [ramanReferenceDatabases],
+  )
+  const ramanReferenceMaterials = useMemo(
+    () => Array.from(new Set(ramanReferenceAllPeaks.map(peak => peak.material))).sort((a, b) => a.localeCompare(b)),
+    [ramanReferenceAllPeaks],
+  )
+  const ramanReferenceVisiblePeaks = useMemo(
+    () => ramanReferenceAllPeaks
+      .filter(peak => ramanReferenceSelectedDbIds.includes(peak.databaseId))
+      .filter(peak => ramanReferenceMaterialFilter.includes(peak.material))
+      .sort((a, b) => a.shift - b.shift),
+    [ramanReferenceAllPeaks, ramanReferenceMaterialFilter, ramanReferenceSelectedDbIds],
+  )
+  const selectedRamanReferencePeaks = useMemo(
+    () => ramanReferenceVisiblePeaks.filter(peak => ramanReferenceSelectedPeakIds.includes(peak.id)),
+    [ramanReferenceSelectedPeakIds, ramanReferenceVisiblePeaks],
+  )
+  const ramanReferenceMatchRows = useMemo(
+    () => buildRamanReferenceMatchRows(ramanFiles, selectedRamanReferencePeaks, ramanStyle),
+    [ramanFiles, ramanStyle, selectedRamanReferencePeaks],
+  )
   const ramanFigure = useMemo(
     () => ramanPlotMode === 'overlay'
-      ? buildRamanOverlayFigure(ramanFiles, ramanStyle)
+      ? buildRamanOverlayFigure(ramanFiles, ramanStyle, selectedRamanReferencePeaks)
       : activeRamanFile
         ? buildRamanPublicationFigure(activeRamanFile, ramanStyle)
         : null,
-    [activeRamanFile, ramanFiles, ramanPlotMode, ramanStyle],
+    [activeRamanFile, ramanFiles, ramanPlotMode, ramanStyle, selectedRamanReferencePeaks],
   )
 
   const importFiles = async (fileList: FileList | null) => {
@@ -2182,7 +2670,9 @@ export default function PlotFileTool({
     for (const file of Array.from(fileList)) {
       try {
         const text = await file.text()
-        imported.push(parseRamanFitJson(text, file.name))
+        imported.push(file.name.toLowerCase().endsWith('.json')
+          ? parseRamanFitJson(text, file.name)
+          : parseRamanSpectrumText(text, file.name))
       } catch (importError: unknown) {
         errors.push(String((importError as Error).message ?? importError))
       }
@@ -2208,6 +2698,37 @@ export default function PlotFileTool({
     setRamanFiles(current => current.map(file => file.id === fileId
       ? { ...file, components: file.components.map(component => ({ ...component, visible })) }
       : file))
+  }
+
+  const updateRamanReferencePeakSelected = (peakId: string, selected: boolean) => {
+    setRamanReferenceSelectedPeakIds(current => {
+      if (selected) return current.includes(peakId) ? current : [...current, peakId]
+      return current.filter(id => id !== peakId)
+    })
+  }
+
+  const setVisibleRamanReferencePeaksSelected = (selected: boolean) => {
+    const visibleIds = new Set(ramanReferenceVisiblePeaks.map(peak => peak.id))
+    setRamanReferenceSelectedPeakIds(current => {
+      if (selected) return Array.from(new Set([...current, ...visibleIds]))
+      return current.filter(id => !visibleIds.has(id))
+    })
+  }
+
+  const resetRamanReferencePeaks = () => {
+    setRamanReferenceSelectedDbIds(ramanReferenceDatabases.map(db => db.id))
+    setRamanReferenceMaterialFilter(ramanReferenceMaterials)
+    setRamanReferenceSelectedPeakIds(ramanReferenceAllPeaks.filter(peak => peak.enabled).map(peak => peak.id))
+  }
+
+  const exportRamanReferencePeakCsv = () => {
+    const headers = ['peak_id', 'shift_cm-1', 'material', 'phase', 'label', 'mode', 'structure', 'polyhedron', 'confidence', 'source_id', 'citation']
+    downloadTextFile(rowsToCsv(headers, buildRamanReferencePeakRows(selectedRamanReferencePeaks)), 'raman_selected_reference_peaks.csv', 'text/csv;charset=utf-8')
+  }
+
+  const exportRamanReferenceMatchCsv = () => {
+    const headers = ['peak_id', 'sample', 'ref_shift_cm-1', 'observed_local_max_cm-1', 'delta_cm-1', 'local_intensity_after_norm', 'material', 'polyhedron', 'mode', 'source_id']
+    downloadTextFile(rowsToCsv(headers, ramanReferenceMatchRows), 'raman_peak_match_table.csv', 'text/csv;charset=utf-8')
   }
 
   const applyRomanPreset = () => {
@@ -2367,7 +2888,7 @@ export default function PlotFileTool({
           { label: `目前 ${activeModule.toUpperCase()}` },
           { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : (xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
           { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : (xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
-          { label: activeModule === 'raman' ? `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}` : (xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : (xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
         ]}
       />
 
@@ -2395,11 +2916,11 @@ export default function PlotFileTool({
         <div className="mb-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
           <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
             <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-              <p className="text-sm font-semibold text-[var(--text-main)]">Raman fit JSON</p>
-              <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">從 Raman 分析頁匯出的 JSON 報告可在這裡轉成文獻風格 deconvolution 圖，也可把多個樣品做最終疊圖。</p>
+              <p className="text-sm font-semibold text-[var(--text-main)]">Raman 圖譜檔</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">可匯入 Raman 分析頁 JSON 報告，也可直接匯入兩欄式 TXT / CSV / DAT 做多樣品參考峰疊圖。</p>
               <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
-                上傳 Raman fit JSON
-                <input type="file" multiple accept=".json" className="hidden" onChange={event => { void importRamanFiles(event.target.files); event.target.value = '' }} />
+                上傳 Raman JSON / TXT / CSV
+                <input type="file" multiple accept=".json,.txt,.csv,.dat,.tsv" className="hidden" onChange={event => { void importRamanFiles(event.target.files); event.target.value = '' }} />
               </label>
               {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
               {ramanFiles.length > 0 && (
@@ -2421,7 +2942,7 @@ export default function PlotFileTool({
                         <span className="truncate">{file.name}</span>
                         <button type="button" onClick={() => setRamanFiles(current => current.filter(item => item.id !== file.id))} className="text-rose-400">移除</button>
                       </div>
-                      <p className="mt-1 text-[10px] text-[var(--text-soft)]">{file.x.length} pts / {file.components.filter(component => component.visible !== false).length}/{file.components.length} peaks</p>
+                      <p className="mt-1 text-[10px] text-[var(--text-soft)]">{file.sourceType === 'fit-json' ? 'fit JSON' : 'raw spectrum'} / {file.x.length} pts / {file.components.filter(component => component.visible !== false).length}/{file.components.length} peaks</p>
                     </div>
                   ))}
                   <button type="button" onClick={() => { setRamanFiles([]); setSelectedRamanId('') }} className="text-xs text-rose-400">清除全部</button>
@@ -2465,15 +2986,15 @@ export default function PlotFileTool({
                 </div>
               </div>
               {ramanFigure ? (
-                <Plot data={ramanFigure.data} layout={ramanFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: ramanPlotMode === 'overlay' ? 640 : 600 }} />
+                <Plot data={ramanFigure.data} layout={ramanFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: ramanPlotMode === 'overlay' ? (ramanStyle.showOverlayZoom ? 760 : 640) : 600 }} />
               ) : (
-                <div className="flex min-h-[440px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">上傳 Raman fit JSON 後預覽圖會顯示在這裡。</div>
+                <div className="flex min-h-[440px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">上傳 Raman JSON 或兩欄式光譜檔後預覽圖會顯示在這裡。</div>
               )}
             </div>
           </section>
 
           <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
-            {activeRamanFile && (
+            {activeRamanFile && ramanPlotMode === 'single' && (
               <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-[var(--text-main)]">Raman 峰顯示</p>
@@ -2529,6 +3050,98 @@ export default function PlotFileTool({
                 </div>
               </div>
             )}
+            {ramanPlotMode === 'overlay' && (
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">Raman 參考峰資料庫</p>
+                  <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
+                    {selectedRamanReferencePeaks.length}/{ramanReferenceVisiblePeaks.length}
+                  </span>
+                </div>
+                {ramanReferenceDbError && <p className="mb-3 text-xs text-amber-400">{ramanReferenceDbError}</p>}
+                <div className="space-y-2">
+                  {ramanReferenceDatabases.map(db => (
+                    <label key={db.id} className="flex items-start gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                      <input
+                        type="checkbox"
+                        checked={ramanReferenceSelectedDbIds.includes(db.id)}
+                        onChange={event => setRamanReferenceSelectedDbIds(current => event.target.checked ? Array.from(new Set([...current, db.id])) : current.filter(id => id !== db.id))}
+                        className="mt-0.5 accent-[var(--accent-secondary)]"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-semibold">{RAMAN_REFERENCE_DATABASES.find(item => item.id === db.id)?.label ?? db.id}</span>
+                        <span className="mt-1 block text-[10px] text-[var(--text-soft)]">{db.peaks.length} peaks / v{db.version || '-'}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {ramanReferenceMaterials.length > 0 && (
+                  <div className="mt-3">
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">材料篩選</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {ramanReferenceMaterials.map(material => (
+                        <label key={material} className="flex items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                          <input
+                            type="checkbox"
+                            checked={ramanReferenceMaterialFilter.includes(material)}
+                            onChange={event => setRamanReferenceMaterialFilter(current => event.target.checked ? Array.from(new Set([...current, material])) : current.filter(item => item !== material))}
+                            className="accent-[var(--accent-secondary)]"
+                          />
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ramanMaterialColor(material) }} />
+                          <span>{displayRamanMaterial(material)}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setVisibleRamanReferencePeaksSelected(true)} className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">全選可見</button>
+                  <button type="button" onClick={() => setVisibleRamanReferencePeaksSelected(false)} className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">全不選</button>
+                  <button type="button" onClick={resetRamanReferencePeaks} className="rounded-full border border-[var(--accent-secondary)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-secondary)]">預設</button>
+                </div>
+                <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {ramanReferenceVisiblePeaks.map((peak, index) => (
+                    <label
+                      key={peak.id}
+                      className={[
+                        'flex items-start gap-2 rounded-xl border px-3 py-2 text-xs',
+                        ramanReferenceSelectedPeakIds.includes(peak.id) ? 'border-[var(--accent-secondary)] bg-[var(--accent-soft)]' : 'border-[var(--card-border)] bg-[var(--card-ghost)]',
+                      ].join(' ')}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={ramanReferenceSelectedPeakIds.includes(peak.id)}
+                        onChange={event => updateRamanReferencePeakSelected(peak.id, event.target.checked)}
+                        className="mt-0.5 accent-[var(--accent-secondary)]"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-semibold text-[var(--text-main)]">
+                          P{index + 1} {displayRamanMaterial(peak.material)} {formatRamanShift(peak.shift)} cm⁻¹
+                        </span>
+                        <span className="mt-1 block text-[10px] leading-4 text-[var(--text-soft)]">
+                          {peak.polyhedron || peak.structure} / {peak.mode || peak.confidence || peak.sourceId}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button type="button" disabled={selectedRamanReferencePeaks.length === 0} onClick={exportRamanReferencePeakCsv} className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">峰表 CSV</button>
+                  <button type="button" disabled={ramanReferenceMatchRows.length === 0} onClick={exportRamanReferenceMatchCsv} className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">比對 CSV</button>
+                </div>
+                <div className="mt-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <p className="mb-2 text-[10px] leading-4 text-[var(--text-soft)]">線色代表材料，標籤底色代表結構貢獻。</p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {Object.entries(RAMAN_STRUCTURE_LABELS).map(([key, label]) => (
+                      <span key={key} className="flex items-center gap-1.5 text-[10px] text-[var(--text-soft)]">
+                        <span className="h-2.5 w-2.5 rounded-sm border border-black/20" style={{ backgroundColor: ramanStructureColor(key) }} />
+                        <span className="truncate">{label}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">Raman 圖面設定</p>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
@@ -2566,6 +3179,61 @@ export default function PlotFileTool({
                   <NumInput label="Component 透明度" value={ramanStyle.componentOpacity} onChange={value => setRamanStyle(prev => ({ ...prev, componentOpacity: clamp(value, 0, 1) }))} min={0} max={1} step={0.02} />
                 </div>
                 <NumInput label="疊圖 offset" value={ramanStyle.overlayOffset} onChange={value => setRamanStyle(prev => ({ ...prev, overlayOffset: clamp(value, 0, 3) }))} min={0} max={3} step={0.05} />
+                {ramanPlotMode === 'overlay' && (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="Zoom 左端" value={ramanStyle.overlayZoomLeft} onChange={value => setRamanStyle(prev => ({ ...prev, overlayZoomLeft: value }))} step={1} />
+                      <NumInput label="Zoom 右端" value={ramanStyle.overlayZoomRight} onChange={value => setRamanStyle(prev => ({ ...prev, overlayZoomRight: value }))} step={1} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="Si 中心" value={ramanStyle.siMaskCenter} onChange={value => setRamanStyle(prev => ({ ...prev, siMaskCenter: value }))} step={1} />
+                      <NumInput label="Si 半寬" value={ramanStyle.siMaskHalfWidth} onChange={value => setRamanStyle(prev => ({ ...prev, siMaskHalfWidth: Math.max(0, value) }))} min={0} step={1} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考峰標籤</span>
+                        <select value={ramanStyle.referenceLabelMode} onChange={event => setRamanStyle(prev => ({ ...prev, referenceLabelMode: event.target.value as RamanReferenceLabelMode }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                          <option value="full">完整模式</option>
+                          <option value="material-shift">材料 + 波數</option>
+                          <option value="shift">只顯示波數</option>
+                          <option value="index">編號模式</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考線型</span>
+                        <select value={ramanStyle.referenceLineDash} onChange={event => setRamanStyle(prev => ({ ...prev, referenceLineDash: event.target.value as RamanReferenceLineDash }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                          <option value="dash">--</option>
+                          <option value="dashdot">-.</option>
+                          <option value="dot">:</option>
+                          <option value="solid">-</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="參考線寬" value={ramanStyle.referenceLineWidth} onChange={value => setRamanStyle(prev => ({ ...prev, referenceLineWidth: clamp(value, 0.2, 6) }))} min={0.2} max={6} step={0.1} />
+                      <NumInput label="參考透明度" value={ramanStyle.referenceLineOpacity} onChange={value => setRamanStyle(prev => ({ ...prev, referenceLineOpacity: clamp(value, 0.05, 1) }))} min={0.05} max={1} step={0.05} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="標籤高度" value={ramanStyle.referenceLabelYFraction} onChange={value => setRamanStyle(prev => ({ ...prev, referenceLabelYFraction: clamp(value, 0.5, 0.98) }))} min={0.5} max={0.98} step={0.01} />
+                      <NumInput label="比對 ±cm⁻¹" value={ramanStyle.referenceMatchTolerance} onChange={value => setRamanStyle(prev => ({ ...prev, referenceMatchTolerance: Math.max(0, value) }))} min={0} step={1} />
+                    </div>
+                    {[
+                      ['showOverlayZoom', '加入 zoom-in 子圖'],
+                      ['showSiMask', '標示 Si 強峰干擾區'],
+                      ['showReferencePeaks', '顯示參考峰標註'],
+                    ].map(([key, label]) => (
+                      <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                        <span>{label}</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(ramanStyle[key as keyof RamanFigureStyle])}
+                          onChange={event => setRamanStyle(prev => ({ ...prev, [key]: event.target.checked }))}
+                          className="accent-[var(--accent-secondary)]"
+                        />
+                      </label>
+                    ))}
+                  </>
+                )}
                 {[
                   ['normalize', '強度歸一化'],
                   ['showRaw', '顯示 original'],
