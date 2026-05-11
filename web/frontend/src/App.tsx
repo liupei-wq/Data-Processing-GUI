@@ -1,4 +1,4 @@
-import { Component, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Component, Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ANALYSIS_MODULES, type AnalysisModuleId } from './components/AnalysisModuleNav'
 import CursorParticles from './components/CursorParticles'
@@ -60,11 +60,16 @@ const FONT_SCALES: { id: FontScale; label: string }[] = [
 
 const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
   { id: 'tool-plot-files', label: '繪製圖檔', detail: '投稿圖輸出' },
-  { id: 'tool-athena', label: 'XAS Athena 處理', detail: '.xmu 資料夾 / Origin 匯出' },
   { id: 'tool-background', label: '背景扣除', detail: '單一處理' },
   { id: 'tool-normalize', label: '歸一化', detail: '單一處理' },
   { id: 'tool-gaussian', label: '高斯模板扣除', detail: '單一處理' },
 ]
+
+const ATHENA_WORKSPACE: { id: WorkspaceId; label: string; detail: string } = {
+  id: 'tool-athena',
+  label: 'XAS Athena 處理',
+  detail: '.xmu 資料夾 / Origin 匯出',
+}
 
 class WorkspaceErrorBoundary extends Component<
   { workspace: WorkspaceId; children: ReactNode },
@@ -251,9 +256,11 @@ export default function App() {
     if (module === 'xes') setWorkspace('workflow-xes')
   }
 
-  const currentWorkspaceGroup = workspace.startsWith('tool-') ? '單一處理' : '分析模組'
+  const currentWorkspaceGroup = workspace === ATHENA_WORKSPACE.id
+    ? '分析模組'
+    : workspace.startsWith('tool-') ? '單一處理' : '分析模組'
   const currentWorkspaceLabel = workspace.startsWith('tool-')
-    ? (TOOL_WORKSPACES.find(item => item.id === workspace)?.label ?? '單一處理')
+    ? (workspace === ATHENA_WORKSPACE.id ? ATHENA_WORKSPACE.label : TOOL_WORKSPACES.find(item => item.id === workspace)?.label ?? '單一處理')
     : (ANALYSIS_MODULES.find(item => `workflow-${item.id}` === workspace)?.label ?? '分析模組')
 
   const themeLauncher = (
@@ -406,22 +413,40 @@ export default function App() {
             {ANALYSIS_MODULES.map(item => {
               const wsId = `workflow-${item.id}` as WorkspaceId
               return (
-                <button
-                  key={wsId}
-                  type="button"
-                  onClick={() => {
-                    setWorkspace(wsId)
-                    setWorkspaceLauncherOpen(false)
-                    setWorkspaceLauncherPreview(false)
-                  }}
-                  className={[
-                    'workspace-launcher__item pressable',
-                    workspace === wsId ? 'workspace-launcher__item--active' : '',
-                  ].join(' ')}
-                >
-                  <span className="workspace-launcher__item-label">{item.label}</span>
-                  <span className="workspace-launcher__item-detail">{item.detail}</span>
-                </button>
+                <Fragment key={wsId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWorkspace(wsId)
+                      setWorkspaceLauncherOpen(false)
+                      setWorkspaceLauncherPreview(false)
+                    }}
+                    className={[
+                      'workspace-launcher__item pressable',
+                      workspace === wsId ? 'workspace-launcher__item--active' : '',
+                    ].join(' ')}
+                  >
+                    <span className="workspace-launcher__item-label">{item.label}</span>
+                    <span className="workspace-launcher__item-detail">{item.detail}</span>
+                  </button>
+                  {item.id === 'xas' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWorkspace(ATHENA_WORKSPACE.id)
+                        setWorkspaceLauncherOpen(false)
+                        setWorkspaceLauncherPreview(false)
+                      }}
+                      className={[
+                        'workspace-launcher__item pressable',
+                        workspace === ATHENA_WORKSPACE.id ? 'workspace-launcher__item--active' : '',
+                      ].join(' ')}
+                    >
+                      <span className="workspace-launcher__item-label">{ATHENA_WORKSPACE.label}</span>
+                      <span className="workspace-launcher__item-detail">{ATHENA_WORKSPACE.detail}</span>
+                    </button>
+                  )}
+                </Fragment>
               )
             })}
           </div>
