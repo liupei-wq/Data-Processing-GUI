@@ -148,3 +148,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-11：Raman 分析頁擬合結果圖新增全螢幕 overlay，component peak labels 改為圖框上方標籤帶避免遮住曲線；「繪製圖檔」Raman 分頁新增單一擬合圖 / 多樣品疊圖模式、峰顯示勾選、可信度篩選，並移除 publication plot 下方 residual panel。驗證 `git diff --check` 通過；目前工具環境找不到 Node/npm，未能執行 `npm run build`。
 - 2026-05-11：依使用者要求復原上一輪 Raman fitting 修改（v23.2 反向套用），回到 v23.1 的 Raman fitting 狀態；保留 v23.1 的 Raman 圖表全螢幕、峰顯示篩選與多樣品疊圖功能。
 - 2026-05-11：已將 Raman fitting 復原提交推送到 origin/main，用於同步線上網頁；目前保留 v23.1 的 Raman 圖表全螢幕、峰顯示篩選與多樣品疊圖功能。
+- 2026-05-12：右側工具選單新增明確的 `XAS Athena 處理` 入口，用於 Athena `.xmu` 資料夾分樣品處理、normalized / flattened 預覽與 Origin CSV/TXT 匯出；驗證 `cd web/frontend && npm run build` 通過。

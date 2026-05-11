@@ -60,7 +60,7 @@ const FONT_SCALES: { id: FontScale; label: string }[] = [
 
 const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
   { id: 'tool-plot-files', label: '繪製圖檔', detail: '投稿圖輸出' },
-  { id: 'tool-athena', label: 'Athena', detail: '.xmu 資料夾 / 匯出' },
+  { id: 'tool-athena', label: 'XAS Athena 處理', detail: '.xmu 資料夾 / Origin 匯出' },
   { id: 'tool-background', label: '背景扣除', detail: '單一處理' },
   { id: 'tool-normalize', label: '歸一化', detail: '單一處理' },
   { id: 'tool-gaussian', label: '高斯模板扣除', detail: '單一處理' },

@@ -581,3 +581,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-11 CST：檢查：復原後確認 Raman fitting 新流程關鍵字已從 web/backend 與 web/frontend/src 消失；復原後程式檔與 HEAD~1(v23.1) 無差異；git diff --cached --check 與 git diff --check 通過。
 
 - 2026-05-11 CST：同步：已將 Raman fitting 復原提交推送到 origin/main（包含 Revert v23.2 與復原紀錄），用於觸發線上網頁更新。
+
+- 2026-05-12 CST：右側工具選單將 Athena 入口明確命名為 `XAS Athena 處理`，作為像 Raman / XRD 一樣的專門資料處理入口；功能包含 Athena `.xmu` 資料夾分樣品處理、normalized / flattened 預覽與 Origin CSV/TXT 匯出。驗證 `cd web/frontend && npm run build` 通過。
