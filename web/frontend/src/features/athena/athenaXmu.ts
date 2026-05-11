@@ -45,6 +45,13 @@ export interface AthenaManualRemovalRegion {
   scan: 'scan1' | 'scan2' | 'both'
 }
 
+export interface AthenaManualRestoreRegion {
+  id: string
+  start: number
+  end: number
+  scan: 'scan1' | 'scan2' | 'both'
+}
+
 export interface AthenaAutoRemovalOptions {
   diffMadFactor: number
   edgeThresholdRatio: number
@@ -262,6 +269,28 @@ function applyManualRemovalRegions(
   return { removedFrom1: nextRemovedFrom1, removedFrom2: nextRemovedFrom2 }
 }
 
+function applyManualRestoreRegions(
+  energy: number[],
+  removedFrom1: number[],
+  removedFrom2: number[],
+  restoreRegions: AthenaManualRestoreRegion[] = [],
+) {
+  const nextRemovedFrom1 = removedFrom1.slice()
+  const nextRemovedFrom2 = removedFrom2.slice()
+
+  for (const region of restoreRegions) {
+    const start = Math.min(region.start, region.end)
+    const end = Math.max(region.start, region.end)
+    for (let index = 0; index < energy.length; index += 1) {
+      if (energy[index] < start || energy[index] > end) continue
+      if (region.scan === 'scan1' || region.scan === 'both') nextRemovedFrom1[index] = 0
+      if (region.scan === 'scan2' || region.scan === 'both') nextRemovedFrom2[index] = 0
+    }
+  }
+
+  return { removedFrom1: nextRemovedFrom1, removedFrom2: nextRemovedFrom2 }
+}
+
 function sampleNameFromFile(file: FileWithRelativePath) {
   const relativePath = file.webkitRelativePath || file.name
   const parts = relativePath.split('/').filter(Boolean)
@@ -348,13 +377,15 @@ export function makeAthenaAverage(
   scan1: AthenaScanResult,
   scan2: AthenaScanResult,
   manualRegions: AthenaManualRemovalRegion[] = [],
+  restoreRegions: AthenaManualRestoreRegion[] = [],
   autoRemovalOptions: AthenaAutoRemovalOptions = DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
 ): AthenaAverageResult {
   const energy = buildCommonEnergyGrid([scan1, scan2])
   const norm1 = interpolateToGrid(scan1.energy, scan1.normalizedMu, energy)
   const norm2 = interpolateToGrid(scan2.energy, scan2.normalizedMu, energy)
   const normClean = despikeTwoScans(energy, norm1, norm2, autoRemovalOptions)
-  const removalMask = applyManualRemovalRegions(energy, normClean.removedFrom1, normClean.removedFrom2, manualRegions)
+  const manualRemovalMask = applyManualRemovalRegions(energy, normClean.removedFrom1, normClean.removedFrom2, manualRegions)
+  const removalMask = applyManualRestoreRegions(energy, manualRemovalMask.removedFrom1, manualRemovalMask.removedFrom2, restoreRegions)
   const normCleanWithManual = applyRemovalMasks(energy, norm1, norm2, removalMask.removedFrom1, removalMask.removedFrom2)
   const flat1 = interpolateToGrid(scan1.energy, scan1.flattenedMu, energy)
   const flat2 = interpolateToGrid(scan2.energy, scan2.flattenedMu, energy)

@@ -13,6 +13,7 @@ import {
   type AthenaAverageResult,
   type AthenaAutoRemovalOptions,
   type AthenaManualRemovalRegion,
+  type AthenaManualRestoreRegion,
   type AthenaProcessResult,
   type AthenaSampleGroup,
   type AthenaScanResult,
@@ -20,6 +21,7 @@ import {
 
 type AthenaPreviewMode = 'normalized' | 'flattened'
 type RemovalDraft = { start: number; end: number; scan: AthenaManualRemovalRegion['scan'] }
+type RestoreDraft = { start: number; end: number; scan: AthenaManualRestoreRegion['scan'] }
 type AthenaRemovalSensitivity = 'standard' | 'loose' | 'very-loose' | 'extra-loose'
 
 const ATHENA_TRACE_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#be123c', '#4f46e5']
@@ -28,6 +30,10 @@ const ATHENA_REMOVAL_FILL = 'rgba(245, 158, 11, 0.18)'
 const ATHENA_REMOVAL_LINE = 'rgba(245, 158, 11, 0.72)'
 const ATHENA_DRAFT_REMOVAL_FILL = 'rgba(59, 130, 246, 0.16)'
 const ATHENA_DRAFT_REMOVAL_LINE = 'rgba(37, 99, 235, 0.78)'
+const ATHENA_RESTORE_FILL = 'rgba(34, 197, 94, 0.16)'
+const ATHENA_RESTORE_LINE = 'rgba(22, 163, 74, 0.78)'
+const ATHENA_DRAFT_RESTORE_FILL = 'rgba(20, 184, 166, 0.16)'
+const ATHENA_DRAFT_RESTORE_LINE = 'rgba(13, 148, 136, 0.78)'
 const ATHENA_REMOVAL_SENSITIVITY_OPTIONS: Array<{
   id: AthenaRemovalSensitivity
   label: string
@@ -133,7 +139,9 @@ export default function Athena() {
   const [isLoading, setIsLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [manualRemovals, setManualRemovals] = useState<Record<string, AthenaManualRemovalRegion[]>>({})
+  const [manualRestores, setManualRestores] = useState<Record<string, AthenaManualRestoreRegion[]>>({})
   const [removalDraft, setRemovalDraft] = useState<RemovalDraft>({ start: 0, end: 0, scan: 'both' })
+  const [restoreDraft, setRestoreDraft] = useState<RestoreDraft>({ start: 0, end: 0, scan: 'both' })
   const [removalSensitivity, setRemovalSensitivity] = useState<AthenaRemovalSensitivity>('loose')
   const autoRemovalOptions = useMemo(
     () => ATHENA_REMOVAL_SENSITIVITY_OPTIONS.find(option => option.id === removalSensitivity)?.options ?? DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
@@ -152,14 +160,21 @@ export default function Athena() {
           return {
             ...group,
             scans: sortedScans,
-            average: makeAthenaAverage(group.sampleName, sortedScans[0], sortedScans[1], manualRemovals[group.sampleName] ?? [], autoRemovalOptions),
+            average: makeAthenaAverage(
+              group.sampleName,
+              sortedScans[0],
+              sortedScans[1],
+              manualRemovals[group.sampleName] ?? [],
+              manualRestores[group.sampleName] ?? [],
+              autoRemovalOptions,
+            ),
           }
         } catch {
           return group
         }
       }),
     }
-  }, [autoRemovalOptions, manualRemovals, result])
+  }, [autoRemovalOptions, manualRemovals, manualRestores, result])
 
   const selectedGroup = useMemo<AthenaSampleGroup | null>(() => {
     if (!adjustedResult?.groups.length) return null
@@ -173,10 +188,19 @@ export default function Athena() {
   }, [selectedGroup])
 
   const selectedManualRemovals = selectedGroup ? manualRemovals[selectedGroup.sampleName] ?? [] : []
+  const selectedManualRestores = selectedGroup ? manualRestores[selectedGroup.sampleName] ?? [] : []
 
   useEffect(() => {
     if (!selectedEnergyRange) return
     setRemovalDraft(current => {
+      const currentStart = current.start || selectedEnergyRange.min
+      const currentEnd = current.end || selectedEnergyRange.max
+      const nextStart = clampRangeValue(currentStart, selectedEnergyRange.min, selectedEnergyRange.max)
+      const nextEnd = clampRangeValue(currentEnd, selectedEnergyRange.min, selectedEnergyRange.max)
+      if (nextStart === current.start && nextEnd === current.end) return current
+      return { ...current, start: nextStart, end: nextEnd }
+    })
+    setRestoreDraft(current => {
       const currentStart = current.start || selectedEnergyRange.min
       const currentEnd = current.end || selectedEnergyRange.max
       const nextStart = clampRangeValue(currentStart, selectedEnergyRange.min, selectedEnergyRange.max)
@@ -227,6 +251,21 @@ export default function Athena() {
       layer: 'below' as const,
     }))
 
+    for (const region of selectedManualRestores) {
+      removalShapes.push({
+        type: 'rect',
+        xref: 'x',
+        yref: 'paper',
+        x0: Math.min(region.start, region.end),
+        x1: Math.max(region.start, region.end),
+        y0: 0,
+        y1: 1,
+        fillcolor: ATHENA_RESTORE_FILL,
+        line: { color: ATHENA_RESTORE_LINE, width: 1 },
+        layer: 'below',
+      })
+    }
+
     if (selectedEnergyRange) {
       const draftStart = clampRangeValue(removalDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
       const draftEnd = clampRangeValue(removalDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
@@ -241,6 +280,23 @@ export default function Athena() {
           y1: 1,
           fillcolor: ATHENA_DRAFT_REMOVAL_FILL,
           line: { color: ATHENA_DRAFT_REMOVAL_LINE, width: 1.5 },
+          layer: 'below',
+        })
+      }
+
+      const draftRestoreStart = clampRangeValue(restoreDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
+      const draftRestoreEnd = clampRangeValue(restoreDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
+      if (Math.abs(draftRestoreEnd - draftRestoreStart) > selectedEnergyRange.step / 2) {
+        removalShapes.push({
+          type: 'rect',
+          xref: 'x',
+          yref: 'paper',
+          x0: Math.min(draftRestoreStart, draftRestoreEnd),
+          x1: Math.max(draftRestoreStart, draftRestoreEnd),
+          y0: 0,
+          y1: 1,
+          fillcolor: ATHENA_DRAFT_RESTORE_FILL,
+          line: { color: ATHENA_DRAFT_RESTORE_LINE, width: 1.5 },
           layer: 'below',
         })
       }
@@ -271,7 +327,17 @@ export default function Athena() {
       } satisfies Partial<Plotly.Layout>,
       config: { responsive: true, displaylogo: false } satisfies Partial<Plotly.Config>,
     }
-  }, [previewMode, removalDraft.end, removalDraft.start, selectedEnergyRange, selectedGroup, selectedManualRemovals])
+  }, [
+    previewMode,
+    removalDraft.end,
+    removalDraft.start,
+    restoreDraft.end,
+    restoreDraft.start,
+    selectedEnergyRange,
+    selectedGroup,
+    selectedManualRemovals,
+    selectedManualRestores,
+  ])
 
   const handleFiles = async (fileList: FileList | null) => {
     const files = Array.from(fileList ?? [])
@@ -282,6 +348,7 @@ export default function Athena() {
       const nextResult = await processAthenaFiles(files)
       setResult(nextResult)
       setManualRemovals({})
+      setManualRestores({})
       setSelectedSampleName(nextResult.groups[0]?.sampleName ?? '')
       setMessage(`完成：讀取 ${nextResult.scans.length} 筆 .xmu，建立 ${nextResult.groups.length} 個樣品群組。`)
     } catch (error) {
@@ -330,8 +397,28 @@ export default function Athena() {
     }))
   }
 
+  const addManualRestore = () => {
+    if (!selectedGroup || !selectedEnergyRange) return
+    const start = clampRangeValue(restoreDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
+    const end = clampRangeValue(restoreDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
+    setManualRestores(current => ({
+      ...current,
+      [selectedGroup.sampleName]: [
+        ...(current[selectedGroup.sampleName] ?? []),
+        { id: makeRemovalId(), start: Math.min(start, end), end: Math.max(start, end), scan: restoreDraft.scan },
+      ],
+    }))
+  }
+
   const removeManualRemoval = (sampleName: string, regionId: string) => {
     setManualRemovals(current => ({
+      ...current,
+      [sampleName]: (current[sampleName] ?? []).filter(region => region.id !== regionId),
+    }))
+  }
+
+  const removeManualRestore = (sampleName: string, regionId: string) => {
+    setManualRestores(current => ({
       ...current,
       [sampleName]: (current[sampleName] ?? []).filter(region => region.id !== regionId),
     }))
@@ -340,6 +427,11 @@ export default function Athena() {
   const clearSelectedManualRemovals = () => {
     if (!selectedGroup) return
     setManualRemovals(current => ({ ...current, [selectedGroup.sampleName]: [] }))
+  }
+
+  const clearSelectedManualRestores = () => {
+    if (!selectedGroup) return
+    setManualRestores(current => ({ ...current, [selectedGroup.sampleName]: [] }))
   }
 
   const averageCount = adjustedResult?.groups.filter(group => group.average).length ?? 0
@@ -554,6 +646,101 @@ export default function Athena() {
                   )) : (
                     <div className="rounded-xl border border-dashed border-[var(--card-border)] px-3 py-3 text-xs text-[var(--text-soft)]">
                       目前沒有手動刪峰區間。
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-[color:color-mix(in_srgb,#16a34a_34%,var(--card-border))] bg-[color:color-mix(in_srgb,#16a34a_8%,transparent)] p-3">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-[var(--text-main)]">加回誤刪資料</p>
+                      <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">綠色區間會把自動/手動 removal mask 清掉，改用原始資料參與平均。</p>
+                    </div>
+                    <span className="rounded-full border border-[color:color-mix(in_srgb,#16a34a_45%,var(--card-border))] px-2 py-1 text-[10px] font-semibold text-[var(--text-soft)]">
+                      Restore
+                    </span>
+                  </div>
+
+                  <div className="mb-3 grid gap-2">
+                    <label className="text-xs font-semibold text-[var(--text-soft)]">
+                      加回對象
+                      <select
+                        value={restoreDraft.scan}
+                        onChange={event => setRestoreDraft(current => ({ ...current, scan: event.target.value as AthenaManualRestoreRegion['scan'] }))}
+                        className="mt-1 w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--input-text)]"
+                      >
+                        <option value="both">兩筆 scan</option>
+                        <option value="scan1">只加回 scan 1</option>
+                        <option value="scan2">只加回 scan 2</option>
+                      </select>
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-xl border border-[var(--card-border)] px-3 py-1.5">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">Start</div>
+                        <div className="font-mono text-sm text-[var(--text-main)]">{formatEnergy(Math.min(restoreDraft.start, restoreDraft.end))} eV</div>
+                      </div>
+                      <div className="rounded-xl border border-[var(--card-border)] px-3 py-1.5">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">End</div>
+                        <div className="font-mono text-sm text-[var(--text-main)]">{formatEnergy(Math.max(restoreDraft.start, restoreDraft.end))} eV</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="block text-xs font-semibold text-[var(--text-soft)]">
+                      加回左邊界
+                      <input
+                        type="range"
+                        min={selectedEnergyRange.min}
+                        max={selectedEnergyRange.max}
+                        step={selectedEnergyRange.step}
+                        value={clampRangeValue(restoreDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)}
+                        onChange={event => setRestoreDraft(current => ({ ...current, start: Number(event.target.value) }))}
+                        className="mt-2 w-full accent-emerald-500"
+                      />
+                    </label>
+                    <label className="block text-xs font-semibold text-[var(--text-soft)]">
+                      加回右邊界
+                      <input
+                        type="range"
+                        min={selectedEnergyRange.min}
+                        max={selectedEnergyRange.max}
+                        step={selectedEnergyRange.step}
+                        value={clampRangeValue(restoreDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)}
+                        onChange={event => setRestoreDraft(current => ({ ...current, end: Number(event.target.value) }))}
+                        className="mt-2 w-full accent-emerald-500"
+                      />
+                    </label>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={addManualRestore}
+                    className="mt-3 w-full rounded-xl border border-[color:color-mix(in_srgb,#16a34a_45%,var(--card-border))] px-3 py-2 text-sm font-semibold text-[var(--text-main)]"
+                  >
+                    加入加回區間
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text-soft)]">Restore regions</p>
+                    <button type="button" disabled={selectedManualRestores.length === 0} onClick={clearSelectedManualRestores} className="text-xs font-semibold text-emerald-500 disabled:opacity-40">
+                      清除全部
+                    </button>
+                  </div>
+                  {selectedManualRestores.length ? selectedManualRestores.map(region => (
+                    <div key={region.id} className="flex items-center justify-between gap-3 rounded-xl border border-[color:color-mix(in_srgb,#16a34a_34%,var(--card-border))] px-3 py-2 text-xs">
+                      <span className="text-[var(--text-main)]">
+                        {region.scan === 'both' ? '兩筆' : region.scan === 'scan1' ? 'scan 1' : 'scan 2'} · {formatEnergy(region.start)}–{formatEnergy(region.end)} eV
+                      </span>
+                      <button type="button" onClick={() => removeManualRestore(selectedGroup.sampleName, region.id)} className="font-semibold text-emerald-500">
+                        移除
+                      </button>
+                    </div>
+                  )) : (
+                    <div className="rounded-xl border border-dashed border-[var(--card-border)] px-3 py-3 text-xs text-[var(--text-soft)]">
+                      目前沒有加回區間。
                     </div>
                   )}
                 </div>
