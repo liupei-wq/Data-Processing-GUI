@@ -579,3 +579,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-11 CST：依使用者要求復原上一輪 Raman fitting 修改（v23.2 反向套用）：移除材料白名單/Si mask 或 fit-subtract/分區物理限制/unresolved 新流程與前端 fitting 控制，回到 v23.1 的 Raman fitting 狀態；保留 v23.1 的 Raman 圖表全螢幕與繪製圖檔功能。
 
 - 2026-05-11 CST：檢查：復原後確認 Raman fitting 新流程關鍵字已從 web/backend 與 web/frontend/src 消失；復原後程式檔與 HEAD~1(v23.1) 無差異；git diff --cached --check 與 git diff --check 通過。
+
+- 2026-05-11 CST：同步：已將 Raman fitting 復原提交推送到 origin/main（包含 Revert v23.2 與復原紀錄），用於觸發線上網頁更新。
