@@ -585,3 +585,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 - 2026-05-12 CST：右側選單在「分析模組」區新增明確的 `XAS Athena 處理` 入口，排在 XAS 後方，作為像 Raman / XRD 一樣的專門資料處理入口；功能包含 Athena `.xmu` 資料夾分樣品處理、normalized / flattened 預覽與 Origin CSV/TXT 匯出。驗證 `cd web/frontend && npm run build` 通過。
 
 - 2026-05-12 CST：`XAS Athena 處理` 預覽圖改用高對比線色，平均曲線改深色；新增「手動刪峰」滑桿，可選 scan1 / scan2 / 兩筆 scan 的 energy 區間，加入後會在圖上以淡橘色區塊標示，並於平均前將該區間併入 removal mask 內插處理，CSV/TXT 匯出同步反映手動刪峰結果。驗證 `cd web/frontend && npm run build` 通過。
+
+- 2026-05-12 CST：收斂 `XAS Athena 處理` 版面，左側上傳/匯出/手動刪峰卡片改為 compact，主 grid 左欄由 22rem 縮至 18–19rem；樣品清單從圖左側移到圖上方橫向按鈕，避免吃掉 Plotly 寬度造成圖跑版；預覽圖高度固定 500px，legend 移到下方左側。驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。

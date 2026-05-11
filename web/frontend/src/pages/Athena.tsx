@@ -69,16 +69,18 @@ function Section({
   title,
   description,
   children,
+  compact = false,
 }: {
   title: string
   description?: string
   children: ReactNode
+  compact?: boolean
 }) {
   return (
-    <section className="workspace-stage-card rounded-[28px] p-5">
-      <div className="mb-4">
-        <h2 className="text-base font-semibold text-[var(--text-main)]">{title}</h2>
-        {description && <p className="mt-1 text-sm leading-6 text-[var(--text-soft)]">{description}</p>}
+    <section className={`workspace-stage-card rounded-[20px] ${compact ? 'p-3.5' : 'p-4'}`}>
+      <div className={compact ? 'mb-2' : 'mb-3'}>
+        <h2 className={`${compact ? 'text-sm' : 'text-base'} font-semibold text-[var(--text-main)]`}>{title}</h2>
+        {description && <p className={`mt-1 ${compact ? 'text-xs leading-5' : 'text-sm leading-6'} text-[var(--text-soft)]`}>{description}</p>}
       </div>
       {children}
     </section>
@@ -186,8 +188,8 @@ export default function Athena() {
       data,
       layout: {
         autosize: true,
-        height: 420,
-        margin: { l: 62, r: 24, t: 48, b: 58 },
+        height: 500,
+        margin: { l: 66, r: 28, t: 46, b: 70 },
         title: { text: `Athena ${selectedGroup.sampleName} ${previewMode === 'normalized' ? 'Normalized' : 'Flattened'} 預覽` },
         paper_bgcolor: 'transparent',
         plot_bgcolor: 'transparent',
@@ -203,7 +205,7 @@ export default function Athena() {
           gridcolor: 'rgba(148,163,184,0.18)',
           zerolinecolor: 'rgba(148,163,184,0.24)',
         },
-        legend: { orientation: 'h', y: -0.22 },
+        legend: { orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top' },
       } satisfies Partial<Plotly.Layout>,
       config: { responsive: true, displaylogo: false } satisfies Partial<Plotly.Config>,
     }
@@ -279,10 +281,10 @@ export default function Athena() {
           <h1 className="module-title">Athena</h1>
           <span className="module-subtitle">Athena .xmu folder processor</span>
         </div>
-        <p className="module-description">
+        <p className="module-description max-w-4xl">
           讀取整個資料夾中的 Athena .xmu 檔案，依子資料夾分樣品，計算 Normalized μ(E) 與 Flattened μ(E)，並可把每個處理動作匯出成檔案。
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <span className="status-chip">資料夾讀取</span>
           <span className="status-chip">Normalized / Flattened</span>
           <span className="status-chip">重複量測平均</span>
@@ -291,13 +293,14 @@ export default function Athena() {
         </div>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
-        <div className="space-y-5">
+      <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)]">
+        <div className="space-y-4">
           <Section
             title="1. 讀取 Athena 資料"
-            description="建議使用資料夾上傳；每個子資料夾會視為一個樣品，子資料夾內的 .xmu 會視為重複量測。"
+            description="資料夾上傳會依子資料夾分樣品。"
+            compact
           >
-            <div className="space-y-3">
+            <div className="space-y-2">
               <input
                 ref={folderInputRef}
                 type="file"
@@ -325,7 +328,7 @@ export default function Athena() {
                 type="button"
                 disabled={isLoading}
                 onClick={() => folderInputRef.current?.click()}
-                className="w-full rounded-2xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-[var(--accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="w-full rounded-xl bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[var(--accent-contrast)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 讀取整個資料夾
               </button>
@@ -333,21 +336,21 @@ export default function Athena() {
                 type="button"
                 disabled={isLoading}
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 text-sm font-semibold text-[var(--text-main)] transition-colors hover:border-[var(--accent-secondary)] disabled:opacity-50"
+                className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm font-semibold text-[var(--text-main)] transition-colors hover:border-[var(--accent-secondary)] disabled:opacity-50"
               >
                 選擇多個 .xmu 檔案
               </button>
-              {message && <p className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">{message}</p>}
+              {message && <p className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-5 text-[var(--text-soft)]">{message}</p>}
             </div>
           </Section>
 
-          <Section title="2. 匯出動作" description="每個處理階段都可直接下載；大量下載時瀏覽器可能會詢問是否允許多檔下載。">
+          <Section title="2. 匯出動作" compact>
             <div className="grid gap-2">
               <button
                 type="button"
                 disabled={!result?.scans.length}
                 onClick={exportAllRawScans}
-                className="rounded-xl border border-[var(--card-border)] px-4 py-2.5 text-left text-sm font-semibold text-[var(--text-main)] disabled:opacity-40"
+                className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-left text-xs font-semibold text-[var(--text-main)] disabled:opacity-40"
               >
                 匯出全部原始轉換 CSV
               </button>
@@ -355,7 +358,7 @@ export default function Athena() {
                 type="button"
                 disabled={averageCount === 0}
                 onClick={exportAllAverages}
-                className="rounded-xl border border-[var(--card-border)] px-4 py-2.5 text-left text-sm font-semibold text-[var(--text-main)] disabled:opacity-40"
+                className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-left text-xs font-semibold text-[var(--text-main)] disabled:opacity-40"
               >
                 匯出全部平均結果 CSV
               </button>
@@ -363,18 +366,18 @@ export default function Athena() {
                 type="button"
                 disabled={!result}
                 onClick={exportSummary}
-                className="rounded-xl border border-[var(--card-border)] px-4 py-2.5 text-left text-sm font-semibold text-[var(--text-main)] disabled:opacity-40"
+                className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-left text-xs font-semibold text-[var(--text-main)] disabled:opacity-40"
               >
                 匯出處理摘要 TXT
               </button>
             </div>
           </Section>
 
-          <Section title="3. 手動刪峰" description="用滑桿選取你覺得要刪掉的能量區間；平均前會把該段設為空值並線性內插補回。">
+          <Section title="3. 手動刪峰" description="用滑桿選取要刪掉的 energy 區間。" compact>
             {selectedGroup && selectedEnergyRange ? (
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
-                  <div className="mb-3 grid gap-2 sm:grid-cols-3">
+              <div className="space-y-3">
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <div className="mb-3 grid gap-2">
                     <label className="text-xs font-semibold text-[var(--text-soft)]">
                       刪除對象
                       <select
@@ -387,11 +390,11 @@ export default function Athena() {
                         <option value="scan2">只刪 scan 2</option>
                       </select>
                     </label>
-                    <div className="rounded-xl border border-[var(--card-border)] px-3 py-2">
+                    <div className="rounded-xl border border-[var(--card-border)] px-3 py-1.5">
                       <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">Start</div>
                       <div className="font-mono text-sm text-[var(--text-main)]">{formatEnergy(Math.min(removalDraft.start, removalDraft.end))} eV</div>
                     </div>
-                    <div className="rounded-xl border border-[var(--card-border)] px-3 py-2">
+                    <div className="rounded-xl border border-[var(--card-border)] px-3 py-1.5">
                       <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">End</div>
                       <div className="font-mono text-sm text-[var(--text-main)]">{formatEnergy(Math.max(removalDraft.start, removalDraft.end))} eV</div>
                     </div>
@@ -427,7 +430,7 @@ export default function Athena() {
                   <button
                     type="button"
                     onClick={addManualRemoval}
-                    className="mt-4 w-full rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-contrast)]"
+                    className="mt-3 w-full rounded-xl bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[var(--accent-contrast)]"
                   >
                     加入刪峰區間
                   </button>
@@ -457,32 +460,32 @@ export default function Athena() {
                 </div>
               </div>
             ) : (
-              <div className="rounded-2xl border border-dashed border-[var(--card-border)] px-4 py-5 text-sm text-[var(--text-soft)]">
+              <div className="rounded-xl border border-dashed border-[var(--card-border)] px-3 py-4 text-sm text-[var(--text-soft)]">
                 讀取至少兩筆同一樣品的 .xmu 後，這裡會出現刪峰滑桿。
               </div>
             )}
           </Section>
         </div>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-4">
           <Section title="4. 樣品與預覽">
             {adjustedResult ? (
-              <div className="grid gap-4 xl:grid-cols-[17rem_minmax(0,1fr)]">
-                <div className="space-y-2">
+              <div className="min-w-0 space-y-4">
+                <div className="flex flex-wrap gap-2">
                   {adjustedResult.groups.map(group => (
                     <button
                       key={group.sampleName}
                       type="button"
                       onClick={() => setSelectedSampleName(group.sampleName)}
                       className={[
-                        'w-full rounded-2xl border px-4 py-3 text-left transition-colors',
+                        'rounded-xl border px-3 py-2 text-left transition-colors',
                         selectedGroup?.sampleName === group.sampleName
                           ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)]'
                           : 'border-[var(--card-border)] bg-[var(--card-bg)] hover:border-[var(--accent-secondary)]',
                       ].join(' ')}
                     >
                       <span className="block text-sm font-semibold text-[var(--text-main)]">{group.sampleName}</span>
-                      <span className="mt-1 block text-xs text-[var(--text-soft)]">{group.scans.length} scans / {group.average ? '已有平均' : '無平均'}</span>
+                      <span className="mt-0.5 block text-[11px] text-[var(--text-soft)]">{group.scans.length} scans / {group.average ? '已有平均' : '無平均'}</span>
                     </button>
                   ))}
                 </div>
@@ -522,7 +525,9 @@ export default function Athena() {
                   </div>
 
                   {previewFigure ? (
-                    <Plot data={previewFigure.data} layout={previewFigure.layout} config={previewFigure.config} />
+                    <div className="min-w-0 overflow-hidden rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2">
+                      <Plot data={previewFigure.data} layout={previewFigure.layout} config={previewFigure.config} />
+                    </div>
                   ) : (
                     <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">
                       讀取 Athena .xmu 資料夾後，預覽圖會顯示在這裡。
