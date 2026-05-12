@@ -615,3 +615,29 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-12] 實作完成：繪製圖檔 Raman 多樣品疊圖新增 default_raman_peaks 可勾選資料庫、參考峰標註/Si interference/zoom-in/峰比對 CSV，並同步更新 AGENTS.md；npm build 因環境缺 npm 未執行，JSON 解析與 git diff --check 通過。
 
 - 2026-05-12：XAS Athena 網頁 parser 支援 8 欄與 9 欄 Athena .xmu；8 欄缺少 chi(e) 時自動以 0.0 補入，錯誤訊息改為至少 8 欄。另補 PlotFileTool Raman local maximum 回傳型別，驗證 cd web/frontend && npm run build、git diff --check 通過。
+
+[2026-05-12] 實作：依使用者要求調整繪製圖檔 Raman 疊圖，準備擴充 β-Ga2O3/NiO 共振峰資料、簡化標籤為材料色文字、加入逐峰標籤位置與逐數據線色/位置控制。
+
+[2026-05-12] 檢查：Raman reference 共振峰/標籤位置改動後，JSON 解析與 git diff --check 通過；工具環境仍找不到 node/npm，因此無法執行 npm run build。
+
+[2026-05-12] 實作完成：Raman 疊圖參考峰改為共振態標籤與材料色純文字，新增逐峰標籤位置、整體標籤視窗位置、逐數據線色/垂直位置/名稱位置控制，並同步更新 AGENTS.md。
+
+[2026-05-12] 檢查：使用者要求同步變更，先檢查 git 工作樹、分支與遠端狀態，避免覆蓋未要求修改的既有變更。
+
+[2026-05-12] 檢查：查看本地未提交變更摘要，準備同步前確認只包含使用者要求的 Raman 繪圖與紀錄更新。
+
+[2026-05-12] 檢查：查看 origin/main 最新提交 V25.1 的檔案範圍，判斷與本地 Raman 疊圖變更是否會衝突。
+
+[2026-05-12] 檢查：同步前執行 git diff --check，確認目前本地變更沒有 whitespace error。
+
+[2026-05-12] 同步：同步前檢查通過，準備提交本地 Raman 疊圖參考峰與文件紀錄變更，再 rebase 至 origin/main 最新 V25.1。
+
+[2026-05-12] 同步：本地提交已建立（Enhance Raman overlay reference controls），準備 rebase 到 origin/main V25.1 以接上遠端最新變更。
+
+[2026-05-12] 同步：rebase 時 AGENTS.md / CLAUDE.md 文件紀錄衝突，已保留遠端 V25.1 Athena parser 紀錄與本地 Raman 疊圖同步紀錄。
+
+[2026-05-12] 同步：rebase origin/main V25.1 成功，文件衝突已解決；準備進行最終狀態檢查與推送。
+
+[2026-05-12] 檢查：推送前執行 conflict marker 掃描、提交 diff whitespace 檢查、Raman reference JSON 解析，並在 npm 可用時執行前端 build。
+
+[2026-05-12] 檢查完成：推送前 conflict marker 掃描、git diff --check origin/main..HEAD、Raman reference JSON 解析通過；目前工具環境找不到 npm，未執行 npm run build。
