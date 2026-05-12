@@ -168,3 +168,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-12：同步 rebase origin/main V25.1 成功，已解決 AGENTS.md / CLAUDE.md 文件紀錄衝突；準備最終檢查與推送。
 - 2026-05-12：推送前 conflict marker 掃描、git diff --check origin/main..HEAD、Raman reference JSON 解析通過；目前工具環境找不到 npm，未執行 
 pm run build。
+- 2026-05-12：同步完成，已將 Raman 疊圖參考峰控制變更推送到 origin/main（eeafcbd..e07da12），遠端已接上 V25.1 後的新提交。

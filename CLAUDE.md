@@ -641,3 +641,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-12] 檢查：推送前執行 conflict marker 掃描、提交 diff whitespace 檢查、Raman reference JSON 解析，並在 npm 可用時執行前端 build。
 
 [2026-05-12] 檢查完成：推送前 conflict marker 掃描、git diff --check origin/main..HEAD、Raman reference JSON 解析通過；目前工具環境找不到 npm，未執行 npm run build。
+
+[2026-05-12] 同步完成：已將 Raman 疊圖參考峰控制變更推送到 origin/main（eeafcbd..e07da12），遠端已接上 V25.1 後的新提交。
