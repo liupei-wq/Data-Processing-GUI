@@ -643,3 +643,19 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-12] 檢查完成：推送前 conflict marker 掃描、git diff --check origin/main..HEAD、Raman reference JSON 解析通過；目前工具環境找不到 npm，未執行 npm run build。
 
 [2026-05-12] 同步完成：已將 Raman 疊圖參考峰控制變更推送到 origin/main（eeafcbd..e07da12），遠端已接上 V25.1 後的新提交。
+
+[2026-05-12] 檢查：使用者要求 Raman 繪圖區新增可修改參考峰理論值與自訂參考峰名稱，並調整圖中右上角顯示；先讀取目前 PlotFileTool 與 Raman peak database 實作。
+
+[2026-05-12] 實作：準備修改 PlotFileTool Raman overlay reference peak 結構與 UI，新增可編輯理論 Raman shift、顯示名稱，以及右上角 overlay legend 顯示開關。
+
+[2026-05-12] 實作：更新 Raman reference peak 匯入與標籤格式，保留 defaultShift/defaultDisplayLabel 供預設還原，圖上標籤改用可編輯 displayLabel。
+
+[2026-05-12] 實作：新增 updateRamanReferencePeakData，讓 Raman overlay 右側面板可直接修改每個參考峰理論值與顯示名稱；reset 會同步還原預設值。
+
+[2026-05-12] 實作：補強 Raman reference peak CSV 與 match CSV 欄位，輸出自訂顯示名稱與原始預設理論值。
+
+[2026-05-12] 實作：調整 Raman overlay figure legend 顯示策略，並準備在 reference peak 卡片加入名稱與理論值輸入欄位。
+
+[2026-05-12] 檢查：Raman reference peak 理論值/名稱編輯功能完成後，執行 git diff --check、default_raman_peaks JSON 解析，並在 npm 可用時執行前端 build。
+
+[2026-05-12] 實作完成：Raman 繪圖 overlay 參考峰新增可編輯理論值與自訂顯示名稱；每個參考峰可單獨還原，整體預設會還原所有理論值/名稱；圖中右上角 overlay legend 預設關閉並新增顯示開關。驗證 git diff --check 與 default_raman_peaks JSON 解析通過；工具環境找不到 npm，未執行 npm run build。

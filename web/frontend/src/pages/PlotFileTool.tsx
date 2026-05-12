@@ -82,7 +82,10 @@ interface RamanReferencePeak {
   material: string
   phase: string
   shift: number
+  defaultShift: number
   label: string
+  displayLabel: string
+  defaultDisplayLabel: string
   resonanceState: string
   mode: string
   structure: string
@@ -192,6 +195,7 @@ interface RamanFigureStyle {
   referenceLabelYFraction: number
   referenceLabelWindowXShift: number
   referenceMatchTolerance: number
+  showOverlayLegend: boolean
   exportWidth: number
   exportHeight: number
   exportScale: number
@@ -421,6 +425,7 @@ const DEFAULT_RAMAN_STYLE: RamanFigureStyle = {
   referenceLabelYFraction: 0.92,
   referenceLabelWindowXShift: 0,
   referenceMatchTolerance: 8,
+  showOverlayLegend: false,
   exportWidth: 1600,
   exportHeight: 900,
   exportScale: 4,
@@ -585,6 +590,17 @@ function parseRamanReferenceDatabase(payload: Record<string, unknown>, fallbackI
       const shift = Number(rawShift)
       if (!Number.isFinite(shift)) return
       const material = String(peak.material ?? sourceMaterial)
+      const label = String(peak.label ?? `${material} ${shift}`)
+      const displayLabel = String(
+        peak.display_label
+        ?? peak.displayLabel
+        ?? peak.reference_label
+        ?? peak.resonance_state
+        ?? peak.resonanceState
+        ?? peak.mode_state
+        ?? peak.mode
+        ?? label,
+      )
       peaks.push({
         id: `${fallbackId}:${sourceId}:${material}:${shift}:${peakIndex}`,
         databaseId: fallbackId,
@@ -594,7 +610,10 @@ function parseRamanReferenceDatabase(payload: Record<string, unknown>, fallbackI
         material,
         phase: String(peak.phase ?? sourcePhase),
         shift,
-        label: String(peak.label ?? `${material} ${shift}`),
+        defaultShift: shift,
+        label,
+        displayLabel,
+        defaultDisplayLabel: displayLabel,
         resonanceState: String(peak.resonance_state ?? peak.resonanceState ?? peak.mode_state ?? ''),
         mode: String(peak.mode ?? ''),
         structure: String(peak.structure ?? 'unknown'),
@@ -1029,7 +1048,7 @@ function formatRamanShift(value: number) {
 
 function formatRamanReferencePeakLabel(peak: RamanReferencePeak, mode: RamanReferenceLabelMode, index: number) {
   const shiftLabel = formatRamanShift(peak.shift)
-  const resonance = peak.resonanceState || peak.mode.split(',')[0] || peak.label
+  const resonance = peak.displayLabel || peak.resonanceState || peak.mode.split(',')[0] || peak.label
   if (mode === 'shift') return `${resonance}<br>${shiftLabel}`
   if (mode === 'index') return `P${index}<br>${resonance}`
   if (mode === 'full') {
@@ -1061,9 +1080,12 @@ function buildRamanReferencePeakRows(peaks: RamanReferencePeak[]) {
   return peaks.map((peak, index) => ({
     peak_id: `P${index + 1}`,
     'shift_cm-1': peak.shift,
+    'default_shift_cm-1': peak.defaultShift,
     material: peak.material,
     phase: peak.phase,
     label: peak.label,
+    display_label: peak.displayLabel,
+    default_display_label: peak.defaultDisplayLabel,
     resonance_state: peak.resonanceState,
     mode: peak.mode,
     structure: peak.structure,
@@ -1085,6 +1107,7 @@ function buildRamanReferenceMatchRows(files: RamanFitPlotFile[], peaks: RamanRef
       'delta_cm-1': observed ? observed.x - peak.shift : '',
       local_intensity_after_norm: observed ? observed.y : '',
       material: peak.material,
+      display_label: peak.displayLabel,
       resonance_state: peak.resonanceState,
       polyhedron: peak.polyhedron,
       mode: peak.mode,
@@ -1450,7 +1473,7 @@ function buildRamanOverlayFigure(
       plot_bgcolor: '#ffffff',
       font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
       margin: { l: 90, r: 150, t: style.showReferencePeaks ? 124 : 72, b: 82 },
-      showlegend: true,
+      showlegend: style.showOverlayLegend,
       legend: { x: 0.99, y: 1.02, xanchor: 'right', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.72)', font: { size: Math.max(10, style.fontSize - 2) } },
       xaxis: {
         ...axisBase,
@@ -2761,10 +2784,25 @@ export default function PlotFileTool({
   }
 
   const resetRamanReferencePeaks = () => {
+    setRamanReferenceDatabases(current => current.map(db => ({
+      ...db,
+      peaks: db.peaks.map(peak => ({
+        ...peak,
+        shift: peak.defaultShift,
+        displayLabel: peak.defaultDisplayLabel,
+      })),
+    })))
     setRamanReferenceSelectedDbIds(ramanReferenceDatabases.map(db => db.id))
     setRamanReferenceMaterialFilter(ramanReferenceMaterials)
     setRamanReferenceSelectedPeakIds(ramanReferenceAllPeaks.filter(peak => peak.enabled).map(peak => peak.id))
     setRamanReferencePeakStyles({})
+  }
+
+  const updateRamanReferencePeakData = (peakId: string, patch: Partial<Pick<RamanReferencePeak, 'shift' | 'displayLabel'>>) => {
+    setRamanReferenceDatabases(current => current.map(db => ({
+      ...db,
+      peaks: db.peaks.map(peak => peak.id === peakId ? { ...peak, ...patch } : peak),
+    })))
   }
 
   const updateRamanReferencePeakStyle = (peakId: string, patch: Partial<RamanReferencePeakStyle>) => {
@@ -2779,12 +2817,12 @@ export default function PlotFileTool({
   }
 
   const exportRamanReferencePeakCsv = () => {
-    const headers = ['peak_id', 'shift_cm-1', 'material', 'phase', 'label', 'resonance_state', 'mode', 'structure', 'polyhedron', 'confidence', 'source_id', 'citation']
+    const headers = ['peak_id', 'shift_cm-1', 'default_shift_cm-1', 'material', 'phase', 'label', 'display_label', 'default_display_label', 'resonance_state', 'mode', 'structure', 'polyhedron', 'confidence', 'source_id', 'citation']
     downloadTextFile(rowsToCsv(headers, buildRamanReferencePeakRows(selectedRamanReferencePeaks)), 'raman_selected_reference_peaks.csv', 'text/csv;charset=utf-8')
   }
 
   const exportRamanReferenceMatchCsv = () => {
-    const headers = ['peak_id', 'sample', 'ref_shift_cm-1', 'observed_local_max_cm-1', 'delta_cm-1', 'local_intensity_after_norm', 'material', 'resonance_state', 'polyhedron', 'mode', 'source_id']
+    const headers = ['peak_id', 'sample', 'ref_shift_cm-1', 'observed_local_max_cm-1', 'delta_cm-1', 'local_intensity_after_norm', 'material', 'display_label', 'resonance_state', 'polyhedron', 'mode', 'source_id']
     downloadTextFile(rowsToCsv(headers, ramanReferenceMatchRows), 'raman_peak_match_table.csv', 'text/csv;charset=utf-8')
   }
 
@@ -3186,13 +3224,32 @@ export default function PlotFileTool({
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-semibold" style={{ color: ramanMaterialColor(peak.material) }}>
-                              P{index + 1} {displayRamanMaterial(peak.material)} {peak.resonanceState || peak.mode} {formatRamanShift(peak.shift)} cm⁻¹
+                              P{index + 1} {displayRamanMaterial(peak.material)} {peak.displayLabel || peak.resonanceState || peak.mode} {formatRamanShift(peak.shift)} cm⁻¹
                             </span>
                             <span className="mt-1 block text-[10px] leading-4 text-[var(--text-soft)]">
-                              {peak.mode || peak.confidence || peak.sourceId}
+                              原始：{formatRamanShift(peak.defaultShift)} cm⁻¹ / {peak.defaultDisplayLabel}
                             </span>
                           </span>
                         </label>
+                        <label className="mt-2 block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考峰名稱</span>
+                          <input
+                            type="text"
+                            value={peak.displayLabel}
+                            onChange={event => updateRamanReferencePeakData(peak.id, { displayLabel: event.target.value })}
+                            className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none"
+                          />
+                        </label>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <NumInput label="理論值(cm⁻¹)" value={peak.shift} onChange={value => Number.isFinite(value) && updateRamanReferencePeakData(peak.id, { shift: value })} step={0.1} />
+                          <button
+                            type="button"
+                            onClick={() => updateRamanReferencePeakData(peak.id, { shift: peak.defaultShift, displayLabel: peak.defaultDisplayLabel })}
+                            className="mt-4 rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]"
+                          >
+                            還原此峰
+                          </button>
+                        </div>
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <NumInput label="標籤 X" value={currentPeakStyle?.labelXShift ?? [-8, -4, 4, 8][index % 4]} onChange={value => updateRamanReferencePeakStyle(peak.id, { labelXShift: clamp(value, -240, 240) })} min={-240} max={240} step={2} />
                           <NumInput label="標籤 Y" value={currentPeakStyle?.labelYFraction ?? defaultY} onChange={value => updateRamanReferencePeakStyle(peak.id, { labelYFraction: clamp(value, 0.34, 1.08) })} min={0.34} max={1.08} step={0.01} />
@@ -3291,6 +3348,7 @@ export default function PlotFileTool({
                       ['showOverlayZoom', '加入 zoom-in 子圖'],
                       ['showSiMask', '標示 Si 強峰干擾區'],
                       ['showReferencePeaks', '顯示參考峰標註'],
+                      ['showOverlayLegend', '顯示右上角圖例'],
                     ].map(([key, label]) => (
                       <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
                         <span>{label}</span>
