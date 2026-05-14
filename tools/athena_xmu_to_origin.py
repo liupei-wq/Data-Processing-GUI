@@ -193,7 +193,8 @@ def process_xmu_file(file_path, sample_name=None):
     """
     將 Athena .xmu 資料轉成可匯入 Origin 的欄位。
     Athena .xmu 常見欄位：
-    energy, xmu, bkg, pre_edge, post_edge, der, sec, i0, chi(e)
+    8 欄：energy, xmu, bkg, pre_edge, post_edge, der, sec, i0
+    9 欄：energy, xmu, bkg, pre_edge, post_edge, der, sec, i0, chi(e)
     """
     headers, data = read_athena_xmu(file_path)
 
@@ -231,7 +232,7 @@ def process_xmu_file(file_path, sample_name=None):
     }
 
     for row in data:
-        if len(row) < 9:
+        if len(row) < 8:
             continue
 
         energy = row[0]
@@ -242,7 +243,7 @@ def process_xmu_file(file_path, sample_name=None):
         derivative = row[5]
         second_derivative = row[6]
         i0 = row[7]
-        chi_e = row[8]
+        chi_e = row[8] if len(row) >= 9 else 0.0
 
         normalized_mu = (xmu - pre_edge) / edge_step
         post_edge_norm = (post_edge - pre_edge) / edge_step
@@ -264,7 +265,7 @@ def process_xmu_file(file_path, sample_name=None):
         result["energy_minus_e0"].append(energy_minus_e0)
 
     if not result["energy"]:
-        raise ValueError(f"沒有讀到 9 欄格式的 Athena .xmu 數據：{file_path}")
+        raise ValueError(f"沒有讀到至少 8 欄格式的 Athena .xmu 數據：{file_path}")
 
     return result
 
