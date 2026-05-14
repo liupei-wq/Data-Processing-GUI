@@ -173,3 +173,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-12：推送前 conflict marker 掃描、git diff --check origin/main..HEAD、Raman reference JSON 解析通過；目前工具環境找不到 npm，未執行 npm run build。
 - 2026-05-12：同步完成，已將 Raman 疊圖參考峰控制變更推送到 origin/main（eeafcbd..e07da12），遠端已接上 V25.1 後的新提交。
 - 2026-05-12：Raman 繪圖 overlay 參考峰新增可編輯理論值與自訂顯示名稱；每峰可單獨還原，整體預設會還原所有理論值/名稱；右上角 overlay legend 預設關閉並新增顯示開關。驗證 git diff --check 與 JSON 解析通過；目前工具環境找不到 npm，未執行 npm run build。
+
+- 2026-05-15: XAS Athena manual removal/restore editor was unified behind a two-option mode selector. Only the selected mode now shows its editable draft range on the Plotly preview, and drag relayout updates only that active draft. Verification: `cd web/frontend && npm run build` passed.

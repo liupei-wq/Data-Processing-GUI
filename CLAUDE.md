@@ -669,3 +669,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-12] 檢查：Raman reference peak 理論值/名稱編輯功能完成後，執行 git diff --check、default_raman_peaks JSON 解析，並在 npm 可用時執行前端 build。
 
 [2026-05-12] 實作完成：Raman 繪圖 overlay 參考峰新增可編輯理論值與自訂顯示名稱；每個參考峰可單獨還原，整體預設會還原所有理論值/名稱；圖中右上角 overlay legend 預設關閉並新增顯示開關。驗證 git diff --check 與 default_raman_peaks JSON 解析通過；工具環境找不到 npm，未執行 npm run build。
+
+[2026-05-15] XAS Athena manual removal/restore editor was unified behind a two-option mode selector. Only the selected mode now shows its editable draft range on the Plotly preview, and drag relayout updates only that active draft. Verification: `cd web/frontend && npm run build` passed.

@@ -23,6 +23,7 @@ import {
 } from '../features/athena/athenaXmu'
 
 type AthenaPreviewMode = 'normalized' | 'flattened'
+type AthenaManualEditMode = 'remove' | 'restore'
 type RemovalDraft = { start: number; end: number; scan: AthenaManualRemovalRegion['scan'] }
 type RestoreDraft = { start: number; end: number; scan: AthenaManualRestoreRegion['scan'] }
 type AthenaRemovalSensitivity = 'standard' | 'loose' | 'very-loose' | 'extra-loose'
@@ -197,6 +198,7 @@ export default function Athena() {
   const [message, setMessage] = useState('')
   const [manualRemovals, setManualRemovals] = useState<Record<string, AthenaManualRemovalRegion[]>>({})
   const [manualRestores, setManualRestores] = useState<Record<string, AthenaManualRestoreRegion[]>>({})
+  const [manualEditMode, setManualEditMode] = useState<AthenaManualEditMode>('remove')
   const [removalDraft, setRemovalDraft] = useState<RemovalDraft>({ start: 0, end: 0, scan: 'both' })
   const [restoreDraft, setRestoreDraft] = useState<RestoreDraft>({ start: 0, end: 0, scan: 'both' })
   const [removalSensitivity, setRemovalSensitivity] = useState<AthenaRemovalSensitivity>('loose')
@@ -333,7 +335,7 @@ export default function Athena() {
       })
     }
 
-    if (selectedEnergyRange) {
+    if (selectedEnergyRange && manualEditMode === 'remove') {
       const draftStart = clampRangeValue(chartRemovalDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
       const draftEnd = clampRangeValue(chartRemovalDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
       if (Math.abs(draftEnd - draftStart) > selectedEnergyRange.step / 2) {
@@ -351,7 +353,9 @@ export default function Athena() {
           editable: true,
         })
       }
+    }
 
+    if (selectedEnergyRange && manualEditMode === 'restore') {
       const draftRestoreStart = clampRangeValue(chartRestoreDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
       const draftRestoreEnd = clampRangeValue(chartRestoreDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
       if (Math.abs(draftRestoreEnd - draftRestoreStart) > selectedEnergyRange.step / 2) {
@@ -407,6 +411,7 @@ export default function Athena() {
     chartRemovalDraft.start,
     chartRestoreDraft.end,
     chartRestoreDraft.start,
+    manualEditMode,
     selectedEnergyRange,
     selectedGroup,
     selectedManualRemovals,
@@ -496,8 +501,8 @@ export default function Athena() {
     }
 
     const savedShapeCount = selectedManualRemovals.length + selectedManualRestores.length
-    const removalVisible = draftIsVisible(removalDraft)
-    const restoreVisible = draftIsVisible(restoreDraft)
+    const removalVisible = manualEditMode === 'remove' && draftIsVisible(removalDraft)
+    const restoreVisible = manualEditMode === 'restore' && draftIsVisible(restoreDraft)
     if (removalVisible) {
       applyDraftRange(setRemovalDraft, removalDraft, relayoutShapeRange(event, savedShapeCount))
     }
@@ -505,7 +510,7 @@ export default function Athena() {
       applyDraftRange(
         setRestoreDraft,
         restoreDraft,
-        relayoutShapeRange(event, savedShapeCount + (removalVisible ? 1 : 0)),
+        relayoutShapeRange(event, savedShapeCount),
       )
     }
   }
@@ -790,7 +795,38 @@ export default function Athena() {
           <Section title="4. 手動刪峰" description="用滑桿選取要刪掉的 energy 區間。" compact>
             {selectedGroup && selectedEnergyRange ? (
               <div className="space-y-3">
-                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setManualEditMode('remove')}
+                      className={[
+                        'rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                        manualEditMode === 'remove'
+                          ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+                          : 'border border-[var(--card-border)] text-[var(--text-main)]',
+                      ].join(' ')}
+                    >
+                      刪峰
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setManualEditMode('restore')}
+                      className={[
+                        'rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                        manualEditMode === 'restore'
+                          ? 'bg-emerald-500 text-white'
+                          : 'border border-[var(--card-border)] text-[var(--text-main)]',
+                      ].join(' ')}
+                    >
+                      加回
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-[var(--text-soft)]">
+                    先選擇刪峰或加回，右側預覽圖只會顯示目前選項的可拖曳區間。
+                  </p>
+                </div>
+                <div className={manualEditMode === 'remove' ? 'rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3' : 'hidden'}>
                   <label className="text-xs font-semibold text-[var(--text-soft)]">
                     自動刪峰靈敏度
                     <select
@@ -810,7 +846,7 @@ export default function Athena() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                <div className={manualEditMode === 'remove' ? 'rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3' : 'hidden'}>
                   <div className="mb-3 grid gap-2">
                     <label className="text-xs font-semibold text-[var(--text-soft)]">
                       刪除對象
@@ -893,7 +929,7 @@ export default function Athena() {
                   )}
                 </div>
 
-                <div className="rounded-xl border border-[color:color-mix(in_srgb,#16a34a_34%,var(--card-border))] bg-[color:color-mix(in_srgb,#16a34a_8%,transparent)] p-3">
+                <div className={manualEditMode === 'restore' ? 'rounded-xl border border-[color:color-mix(in_srgb,#16a34a_34%,var(--card-border))] bg-[color:color-mix(in_srgb,#16a34a_8%,transparent)] p-3' : 'hidden'}>
                   <div className="mb-3 flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-[var(--text-main)]">加回誤刪資料</p>
