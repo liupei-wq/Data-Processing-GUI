@@ -7,6 +7,9 @@
 [2026-05-15] 變更：XAS 歸一化方法精簡，只保留 `athena_norm` 與 `post_edge`，移除 `min_max`、`max`、`area`、`mean_region`；`types/xas.ts` 的 `norm_method` union type 同步縮減；sidebar Section 4 選單、onChange 邏輯、renderNormalizationSidebarInputs 死碼分支、chart controls label 全部清理。驗證 `npm run build` 通過。
 
 [2026-05-15] 變更：XAS 模組歸一化圖新增「背景擬合視圖」。後端 `_normalize_athena()` 回傳值擴充為 7-tuple，新增 `pre_line`（pre-edge 線性擬合線）、`post_poly`（post-edge 多項式）、`y_sub`（扣 pre-edge 後光譜）；`ProcessedDataset` 新增 `tey/tfy_pre_edge_line`、`tey/tfy_post_edge_poly`、`tey/tfy_pre_subtracted` 六個欄位；前端 `types/xas.ts` 同步；`XAS.tsx` 加 `normChartMode` state，在歸一化卡片 footer 加「背景擬合 / 歸一化後」切換 pills，背景擬合模式顯示原始光譜 + 橘色 pre-edge 線（左 y 軸）及扣除後光譜 + 綠色 post-edge 多項式（右 y 軸），Pre-edge 滑桿條件從 `post_edge` 擴充至 `athena_norm`。驗證 `python3 -m py_compile`、`npm run build`、`git diff --check` 通過。
+[2026-05-15] 變更：`Athena` 入口新增到分析頁左側 module tabs，顯示為 `Athena`，選取後進入既有 `tool-athena` workspace；右側 floating 選單依使用者要求暫時保留 Athena 入口。同步補 `MODULE_CONTENT.athena` metadata。驗證 `cd web/frontend && npm run build` 通過。
+
+[2026-05-15] 變更：`Athena` 入口改放到分析頁左側 module tabs，顯示為 `Athena`，選取後進入既有 `tool-athena` workspace；右側 floating 選單不再插入 Athena 入口。同步補 `MODULE_CONTENT.athena` metadata。驗證 `cd web/frontend && npm run build` 通過。
 
 [2026-05-15] 變更：`XAS Athena 處理` 的手動刪峰 / 加回資料 draft 區間支援直接在 Plotly 預覽圖上拖曳；藍色刪峰區與青綠色加回區可拖整塊或左右邊界，左側 start/end 拉桿數值會同步更新。`PlotlyChart.tsx` 兼容層新增 `onRelayout` 轉發。驗證 `cd web/frontend && npm run build` 通過。
 
@@ -683,3 +686,6 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-15] 檢查：使用者要求「推下來，以 GitHub 為主」；先確認本地 `main` 狀態為 `ahead 1, behind 43`，本地多出 commit `2265a2b`，遠端 `origin/main` 為 `8a0ae72`。
 
 [2026-05-15] 同步完成：已建立本地備份分支 `backup_github_sync_20260515_2265a2b`，執行 `git fetch origin` 後以 `git reset --hard origin/main` 將 `main` 直接對齊 GitHub；目前 `HEAD=origin/main=8a0ae72`（`v25.3`）。
+[2026-05-15] XAS Athena manual removal/restore editor was unified behind a two-option mode selector. Only the selected mode now shows its editable draft range on the Plotly preview, and drag relayout updates only that active draft. Verification: `cd web/frontend && npm run build` passed.
+
+[2026-05-15] 合併：依使用者要求 merge GitHub 檔案；執行 `git fetch origin` 與 `git merge origin/main` 後，確認程式碼檔自動合併，僅 `CLAUDE.md` / `AGENTS.md` 發生文件衝突，已手動整併保留遠端 `v25.4/v25.5` 與本地 `v25.6` 紀錄。

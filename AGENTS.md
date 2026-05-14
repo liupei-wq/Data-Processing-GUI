@@ -108,6 +108,7 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-15：`XAS Athena 處理` 新增線性背景扣除與歸一化微調；左側新增全域微調卡，可開關線性扣背景並調整背景斜率/截距、歸一化倍率/平移。微調會套用到所有 scan 的 normalized / flattened 曲線，並同步進入平均、手動刪峰/加回、CSV 匯出與 OriginPro 產檔腳本。驗證 `cd web/frontend && npm run build` 通過。
 - 2026-05-15：`XAS Athena 處理` 的手動刪峰 / 加回資料 draft 區間支援直接在 Plotly 預覽圖上拖曳；藍色刪峰區與青綠色加回區可拖整塊或左右邊界，左側 start/end 拉桿數值會同步更新。`PlotlyChart.tsx` 兼容層新增 `onRelayout` 轉發。驗證 `cd web/frontend && npm run build` 通過。
 - 2026-05-15：`XAS Athena 處理` 右側預覽新增最終結果圖；上方保留 raw/平均與可拖曳區間，下方獨立顯示目前 selected sample 經微調、刪峰/加回後的 clean scan1、clean scan2 與 final average 曲線，並跟 Normalized / Flattened 切換同步。驗證 `cd web/frontend && npm run build` 通過。
+- 2026-05-15：`Athena` 入口新增到分析頁左側 module tabs，顯示為 `Athena`，選取後進入既有 `tool-athena` workspace；右側 floating 選單依使用者要求暫時保留 Athena 入口。同步補 `MODULE_CONTENT.athena` metadata。驗證 `cd web/frontend && npm run build` 通過。
 - 每次任務結束後即時更新 `CLAUDE.md` 與 `AGENTS.md`
 - `README.md` 預設使用繁體中文
 - Render 免費方案閒置後會休眠，首次請求較慢
@@ -173,3 +174,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-12：同步完成，已將 Raman 疊圖參考峰控制變更推送到 origin/main（eeafcbd..e07da12），遠端已接上 V25.1 後的新提交。
 - 2026-05-12：Raman 繪圖 overlay 參考峰新增可編輯理論值與自訂顯示名稱；每峰可單獨還原，整體預設會還原所有理論值/名稱；右上角 overlay legend 預設關閉並新增顯示開關。驗證 git diff --check 與 JSON 解析通過；目前工具環境找不到 npm，未執行 npm run build。
 - 2026-05-15：依使用者要求以 GitHub 為主同步本地 repo；確認 `main` 原本 `ahead 1, behind 43`，已建立備份分支 `backup_github_sync_20260515_2265a2b` 後執行 `git fetch origin` 與 `git reset --hard origin/main`，目前 `HEAD=8a0ae72`（`v25.3`）且 `main` 已對齊 `origin/main`。
+- 2026-05-15: XAS Athena manual removal/restore editor was unified behind a two-option mode selector. Only the selected mode now shows its editable draft range on the Plotly preview, and drag relayout updates only that active draft. Verification: `cd web/frontend && npm run build` passed.
+- 2026-05-15：依使用者要求 merge GitHub 檔案；執行 `git fetch origin` 後將 `origin/main` merge 到本地 `main`，程式碼檔自動合併完成，僅 `CLAUDE.md` 與 `AGENTS.md` 需要手動解決文件衝突，已保留遠端 `v25.4/v25.5` 與本地 `v25.6` 相關紀錄。

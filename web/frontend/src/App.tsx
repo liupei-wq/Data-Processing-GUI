@@ -252,6 +252,7 @@ export default function App() {
     if (module === 'raman') setWorkspace('workflow-raman')
     if (module === 'xrd') setWorkspace('workflow-xrd')
     if (module === 'xas') setWorkspace('workflow-xas')
+    if (module === 'athena') setWorkspace('tool-athena')
     if (module === 'xps') setWorkspace('workflow-xps')
     if (module === 'xes') setWorkspace('workflow-xes')
   }
@@ -410,7 +411,7 @@ export default function App() {
         <div className="workspace-launcher__panel">
           <div className="workspace-launcher__section">
             <div className="workspace-launcher__title">分析模組</div>
-            {ANALYSIS_MODULES.map(item => {
+            {ANALYSIS_MODULES.filter(item => item.id !== 'athena').map(item => {
               const wsId = `workflow-${item.id}` as WorkspaceId
               return (
                 <Fragment key={wsId}>
