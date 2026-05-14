@@ -2012,6 +2012,11 @@ export default function XPS({
     setError(bundle?.error ?? null)
   }, [processingViewMode, activeDatasetKey, datasetBundles])
 
+  useEffect(() => {
+    if (processingViewMode !== 'overlay') return
+    setError(overlayBundle?.error ?? null)
+  }, [processingViewMode, overlayBundle])
+
   // load elements list on mount
   useEffect(() => {
     Promise.all([listElements(), fetchPeriodicTable()])
@@ -2827,13 +2832,47 @@ export default function XPS({
                         </button>
                       </div>
                       {processingViewMode === 'overlay' ? (
-                        <button
-                          type="button"
-                          onClick={() => setOverlaySelectorOpen(true)}
-                          className="w-full rounded-lg border border-[var(--accent-soft)] py-1.5 text-xs text-[var(--accent-strong)] transition-colors hover:bg-[var(--accent-soft)]"
-                        >
-                          選擇疊圖資料（{overlaySelection.length} 筆）
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setOverlaySelectorOpen(true)}
+                            className="w-full rounded-lg border border-[var(--accent-soft)] py-1.5 text-xs text-[var(--accent-strong)] transition-colors hover:bg-[var(--accent-soft)]"
+                          >
+                            選擇疊圖資料（{overlaySelection.length} 筆）
+                          </button>
+                          {overlayFiles.length > 1 ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOverlayState(current => ({
+                                    ...current,
+                                    autoInterpPoints: true,
+                                    params: {
+                                      ...current.params,
+                                      average: !current.params.average,
+                                      interpolate: !current.params.average ? true : current.params.interpolate,
+                                    },
+                                  }))
+                                }}
+                                className={`w-full rounded-lg border py-1.5 text-xs transition-colors ${
+                                  overlayState.params.average
+                                    ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] font-medium text-[var(--text-main)]'
+                                    : 'border-[var(--card-border)] text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)]'
+                                }`}
+                              >
+                                {overlayState.params.average ? '取消平均，改回疊圖比較' : '平均所有疊圖數據'}
+                              </button>
+                              <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                                {overlayState.params.average
+                                  ? '已啟用平均：目前選取資料會先對齊到同一組內插點數，再產生一條平均光譜；後續峰擬合與 RSF 只會使用這條平均光譜。'
+                                  : '目前是不平均疊圖：每筆資料會各自套用同一組內插、能量校正、背景扣除與歸一化參數後疊圖比較；峰擬合與 RSF 會鎖定停用。'}
+                              </p>
+                            </>
+                          ) : (
+                            <p className="text-[10px] text-[var(--text-soft)]">請先在多筆疊圖模式選至少 2 筆資料，才可平均所有疊圖數據。</p>
+                          )}
+                        </>
                       ) : (
                         <CustomSelect
                           label="顯示資料"
@@ -2846,42 +2885,7 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={3} title="多檔平均" hint="平均前會沿用上一步的內插網格" defaultOpen={false}>
-                  {processingViewMode === 'single' ? (
-                    <p className="text-[10px] text-[var(--text-soft)]">單筆資料處理只會處理目前這一筆，所以這一步固定停用。</p>
-                  ) : overlayFiles.length > 1 ? (
-                    <>
-                      <TogglePill
-                        label="平均所有疊圖數據"
-                        checked={overlayState.params.average}
-                        onChange={value => {
-                          setOverlayState(current => ({
-                            ...current,
-                            autoInterpPoints: value ? true : current.autoInterpPoints,
-                            params: {
-                              ...current.params,
-                              average: value,
-                              interpolate: value ? true : current.params.interpolate,
-                            },
-                          }))
-                        }}
-                      />
-                      {overlayState.params.average ? (
-                        <p className="text-[10px] leading-5 text-[var(--text-soft)]">
-                          已啟用平均：目前選取資料會先對齊到同一組內插點數，再產生一條平均光譜；後續峰擬合與 RSF 只會使用這條平均光譜。
-                        </p>
-                      ) : (
-                        <p className="text-[10px] leading-5 text-[var(--text-soft)]">
-                          目前是不平均疊圖：每筆資料會各自套用同一組內插、能量校正、背景扣除與歸一化參數後疊圖比較；峰擬合與 RSF 會鎖定停用。
-                        </p>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-[10px] text-[var(--text-soft)]">請先在多筆疊圖模式選至少 2 筆資料，這一步才可啟用。</p>
-                  )}
-                </Section>
-
-                <Section step={4} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
+                <Section step={3} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
                   <TogglePill label="手動調整偏移量" checked={currentManualEnergyShiftEnabled} onChange={setCurrentManualEnergyShiftEnabled} />
                   {currentManualEnergyShiftEnabled && (
                     <NumInput label="手動 BE 位移 (eV)" value={currentParams.energy_shift} onChange={set('energy_shift')} step={0.01} />
@@ -2968,7 +2972,7 @@ export default function XPS({
                   </div>
                 </Section>
 
-                <Section step={5} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false} infoContent={
+                <Section step={4} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false} infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">背景扣除方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">Linear</span> — 線性連接起點與終點 bg(E)=aE+b。適用背景緩慢線性變化的簡單情況。峰頂遠超出線性基線時可能低估背景。</div>
@@ -3009,7 +3013,7 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
+                <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">歸一化方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">不歸一化 (None)</span> — 保留原始強度。適合已完成儀器強度校正的資料，或需比較絕對強度的情況。</div>
@@ -3039,7 +3043,7 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={7} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
+                <Section step={6} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
                   {overlayNonAverageMode && (
                     <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-3 text-[10px] leading-5 text-amber-300">
                       不平均疊圖模式下會同時存在多條處理後光譜，峰擬合與 RSF 需要單一輸入光譜，因此這裡先鎖定。請啟用「平均所有疊圖數據」，或切回單筆資料後再擬合。
@@ -3239,7 +3243,7 @@ export default function XPS({
                 </Section>
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={8} title="VBM 線性外推" hint="切線 x 基準線交點" defaultOpen={false}>
+                  <Section step={7} title="VBM 線性外推" hint="切線 x 基準線交點" defaultOpen={false}>
                     <p className="text-[10px] text-[var(--text-soft)]">先把你輸入的兩個 x 值映射到光譜點，再以各點附近 20% 搜尋窗挑選切線與基準線用點；切線取最大正斜率，基準線取最平斜率，兩條線交點就是 VBM。</p>
                     {vbmDataset ? (
                       <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
@@ -3360,7 +3364,7 @@ export default function XPS({
                 )}
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={9} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
+                  <Section step={8} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
                     <CustomSelect label="方法" value={bandOffsetMethod}
                       onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
                       options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
@@ -3464,7 +3468,7 @@ export default function XPS({
           <>
             {rawChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始光譜</p>
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">原始光譜</p>
                 {rawChartSourceFiles.length > 0 && (
                   <div className="mb-3">
                     <SeriesColorControls
@@ -3682,7 +3686,7 @@ export default function XPS({
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title={`2. ${stageDisplayLabel ? `${stageDisplayLabel}後` : '前處理後'}`}
+                  title={stageDisplayLabel ? `${stageDisplayLabel}後` : '前處理後'}
                   colorValue={chartLineColors.preprocess}
                   onColorChange={value => setChartLineColors(current => ({ ...current, preprocess: value }))}
                 />
@@ -3708,7 +3712,7 @@ export default function XPS({
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <ChartToolbar
-                      title="3. 背景扣除"
+                      title="背景扣除"
                       colorValue={chartLineColors.background}
                       onColorChange={value => setChartLineColors(current => ({ ...current, background: value }))}
                     />
@@ -3753,7 +3757,7 @@ export default function XPS({
             {processingViewMode === 'single' && normalizationChartTraces.length > 0 && hasNormalizationStage && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <ChartToolbar
-                  title="4. 歸一化"
+                  title="歸一化"
                   colorValue={chartLineColors.normalization}
                   onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
                 />
@@ -3820,7 +3824,7 @@ export default function XPS({
 
             {fitTargetDataset && currentFitResult && currentFitResult.peaks.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">5. 峰擬合光譜</p>
+                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">峰擬合光譜</p>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
                   {processingViewMode === 'overlay'
                     ? '疊圖平均模式下這裡會直接對「多檔平均後的單一結果」做擬合，避免拿多條未平均光譜一起擬合。'
@@ -4367,7 +4371,7 @@ export default function XPS({
                   套用疊圖選擇
                 </button>
               </div>
-              <p className="text-xs text-[var(--text-soft)]">多筆疊圖模式會使用獨立的一套內插、背景扣除與歸一化參數，不會沿用單筆資料處理時的設定；需要峰擬合或 RSF 時請在第 3 步啟用多檔平均。</p>
+              <p className="text-xs text-[var(--text-soft)]">多筆疊圖模式會使用獨立的一套內插、背景扣除與歸一化參數，不會沿用單筆資料處理時的設定；需要峰擬合或 RSF 時請在第 2 步啟用多檔平均。</p>
             </div>
           </div>
         </div>

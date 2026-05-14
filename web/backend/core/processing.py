@@ -324,7 +324,8 @@ def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20):
 def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
                      baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20,
                      tougaard_B=2866.0, tougaard_C=1643.0,
-                     manual_anchor_x=None, manual_anchor_y=None):
+                     manual_anchor_x=None, manual_anchor_y=None,
+                     strict=False):
     """
     Calculate and subtract background only within [bg_x_start, bg_x_end].
     Outside that region the background is extended as a constant
@@ -340,7 +341,11 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
 
     bg_full = np.zeros_like(y)
 
-    if method == "none" or not np.any(mask):
+    if method == "none":
+        return y.copy(), bg_full
+    if not np.any(mask):
+        if strict:
+            raise ValueError(f"Background subtraction failed for {method}: selected x range has no data")
         return y.copy(), bg_full
 
     xs, ys = x[mask], y[mask]
@@ -374,6 +379,8 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
     elif method == "tougaard":
         bg_seg = tougaard_background(xs, ys, B=tougaard_B, C=tougaard_C)
     else:
+        if strict:
+            raise ValueError(f"Unknown background method: {method}")
         return y.copy(), bg_full
 
     bg_full[mask] = bg_seg
@@ -737,12 +744,15 @@ def normalize_mean_region(x, y, region_x_start, region_x_end):
 
 
 def apply_normalization(x, y, norm_method="none",
-                        norm_x_start=None, norm_x_end=None):
+                        norm_x_start=None, norm_x_end=None,
+                        strict=False):
     """Normalization-only helper for spectra that do not need background subtraction."""
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
 
     if len(x) == 0 or len(y) == 0:
+        if strict and norm_method != "none":
+            raise ValueError("Normalization failed: spectrum is empty")
         return y.copy()
     try:
         y_out, _ = apply_normalization_with_diagnostics(
@@ -754,6 +764,8 @@ def apply_normalization(x, y, norm_method="none",
         )
         return y_out
     except ValueError:
+        if strict:
+            raise
         # Keep legacy callers outside Raman from crashing; Raman uses the
         # diagnostics helper directly so invalid factors still stop there.
         if norm_method in {"min_max", "max", "area", "range_max", "range_area", "si_520_height", "mean_region"}:

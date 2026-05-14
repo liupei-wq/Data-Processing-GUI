@@ -243,76 +243,88 @@ def process_xps(req: ProcessRequest):
     outputs: list[DatasetOutput] = []
 
     for ds in req.datasets:
-        x = np.array(ds.x, dtype=float)
-        y = np.array(ds.y, dtype=float)
+        try:
+            x = np.array(ds.x, dtype=float)
+            y = np.array(ds.y, dtype=float)
 
-        # energy shift
-        x = x + p.energy_shift
+            # energy shift
+            x = x + p.energy_shift
 
-        # interpolation
-        if p.interpolate:
-            x_grid = np.linspace(float(x.min()), float(x.max()), int(p.n_points))
-            y = np.interp(x_grid, x, y)
-            x = x_grid
+            # interpolation
+            if p.interpolate:
+                x_grid = np.linspace(float(x.min()), float(x.max()), int(p.n_points))
+                y = np.interp(x_grid, x, y)
+                x = x_grid
 
-        y_raw = y.copy()
-        y_bg: np.ndarray | None = None
+            y_raw = y.copy()
+            y_bg: np.ndarray | None = None
 
-        # background subtraction
-        if p.bg_enabled:
-            x_start = p.bg_x_start if p.bg_x_start is not None else float(x.min())
-            x_end = p.bg_x_end if p.bg_x_end is not None else float(x.max())
-            y_sub, bg_curve = apply_background(
-                x, y,
-                method=p.bg_method,
-                bg_x_start=x_start,
-                bg_x_end=x_end,
-                poly_deg=p.bg_poly_deg,
-                baseline_lambda=p.bg_baseline_lambda,
-                baseline_p=p.bg_baseline_p,
-                baseline_iter=p.bg_baseline_iter,
-                tougaard_B=p.bg_tougaard_B,
-                tougaard_C=p.bg_tougaard_C,
-            )
-            y = y_sub
-            y_bg = bg_curve
+            # background subtraction
+            if p.bg_enabled:
+                x_start = p.bg_x_start if p.bg_x_start is not None else float(x.min())
+                x_end = p.bg_x_end if p.bg_x_end is not None else float(x.max())
+                y_sub, bg_curve = apply_background(
+                    x, y,
+                    method=p.bg_method,
+                    bg_x_start=x_start,
+                    bg_x_end=x_end,
+                    poly_deg=p.bg_poly_deg,
+                    baseline_lambda=p.bg_baseline_lambda,
+                    baseline_p=p.bg_baseline_p,
+                    baseline_iter=p.bg_baseline_iter,
+                    tougaard_B=p.bg_tougaard_B,
+                    tougaard_C=p.bg_tougaard_C,
+                    strict=True,
+                )
+                y = y_sub
+                y_bg = bg_curve
 
-        # smoothing
-        if p.smooth_method != "none":
-            y = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
+            # smoothing
+            if p.smooth_method != "none":
+                y = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
 
-        # normalization
-        if p.norm_method != "none":
-            y = apply_normalization(
-                x, y,
-                norm_method=p.norm_method,
-                norm_x_start=p.norm_x_start,
-                norm_x_end=p.norm_x_end,
-            )
+            # normalization
+            if p.norm_method != "none":
+                y = apply_normalization(
+                    x, y,
+                    norm_method=p.norm_method,
+                    norm_x_start=p.norm_x_start,
+                    norm_x_end=p.norm_x_end,
+                    strict=True,
+                )
 
-        outputs.append(DatasetOutput(
-            name=ds.name,
-            x=x.tolist(),
-            y_raw=y_raw.tolist(),
-            y_background=y_bg.tolist() if y_bg is not None else None,
-            y_processed=y.tolist(),
-        ))
+            outputs.append(DatasetOutput(
+                name=ds.name,
+                x=x.tolist(),
+                y_raw=y_raw.tolist(),
+                y_background=y_bg.tolist() if y_bg is not None else None,
+                y_processed=y.tolist(),
+            ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"{ds.name}: {exc}") from exc
 
     # average
     average_out: DatasetOutput | None = None
     if p.average and len(outputs) > 1:
         try:
-            x_ref = np.array(outputs[0].x)
-            arrays = [np.interp(x_ref, np.array(d.x), np.array(d.y_processed)) for d in outputs]
-            y_avg = np.mean(arrays, axis=0)
+            x_ref = np.array(outputs[0].x, dtype=float)
+            processed_arrays = [np.interp(x_ref, np.array(d.x, dtype=float), np.array(d.y_processed, dtype=float)) for d in outputs]
+            raw_arrays = [np.interp(x_ref, np.array(d.x, dtype=float), np.array(d.y_raw, dtype=float)) for d in outputs]
+            background_arrays = None
+            if all(d.y_background is not None for d in outputs):
+                background_arrays = [
+                    np.interp(x_ref, np.array(d.x, dtype=float), np.array(d.y_background, dtype=float))
+                    for d in outputs
+                ]
             average_out = DatasetOutput(
                 name="平均",
                 x=x_ref.tolist(),
-                y_raw=y_avg.tolist(),
-                y_processed=y_avg.tolist(),
+                y_raw=np.mean(raw_arrays, axis=0).tolist(),
+                y_background=np.mean(background_arrays, axis=0).tolist() if background_arrays else None,
+                y_processed=np.mean(processed_arrays, axis=0).tolist(),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"多檔平均失敗：{exc}") from exc
 
     return ProcessResponse(datasets=outputs, average=average_out)
 
