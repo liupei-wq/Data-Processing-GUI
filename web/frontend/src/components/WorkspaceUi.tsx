@@ -69,6 +69,13 @@ export const MODULE_CONTENT: Record<
     uploadTitle: '上傳 XAS 光譜檔',
     formats: ['.TXT', '.CSV', '.DAT', '.XY'],
   },
+  athena: {
+    title: 'Athena',
+    subtitle: 'XAS Athena Processor',
+    description: 'Athena .xmu folder processing, normalized / flattened preview, manual removal, restore, and Origin export.',
+    uploadTitle: 'Upload Athena .xmu files',
+    formats: ['.XMU'],
+  },
 }
 
 export const LINE_COLOR_OPTIONS = [

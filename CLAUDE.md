@@ -1,3 +1,7 @@
+[2026-05-15] 變更：`Athena` 入口新增到分析頁左側 module tabs，顯示為 `Athena`，選取後進入既有 `tool-athena` workspace；右側 floating 選單依使用者要求暫時保留 Athena 入口。同步補 `MODULE_CONTENT.athena` metadata。驗證 `cd web/frontend && npm run build` 通過。
+
+[2026-05-15] 變更：`Athena` 入口改放到分析頁左側 module tabs，顯示為 `Athena`，選取後進入既有 `tool-athena` workspace；右側 floating 選單不再插入 Athena 入口。同步補 `MODULE_CONTENT.athena` metadata。驗證 `cd web/frontend && npm run build` 通過。
+
 [2026-05-15] 變更：`XAS Athena 處理` 的手動刪峰 / 加回資料 draft 區間支援直接在 Plotly 預覽圖上拖曳；藍色刪峰區與青綠色加回區可拖整塊或左右邊界，左側 start/end 拉桿數值會同步更新。`PlotlyChart.tsx` 兼容層新增 `onRelayout` 轉發。驗證 `cd web/frontend && npm run build` 通過。
 
 [2026-05-15] 變更：`XAS Athena 處理` 新增線性背景扣除與歸一化微調；左側新增全域微調卡，可開關線性扣背景並調整背景斜率/截距、歸一化倍率/平移。微調會套用到所有 scan 的 normalized / flattened 曲線，並同步進入平均、手動刪峰/加回、CSV 匯出與 OriginPro 產檔腳本。驗證 `cd web/frontend && npm run build` 通過。

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-export type AnalysisModuleId = 'raman' | 'xrd' | 'xps' | 'xas' | 'xes'
+export type AnalysisModuleId = 'raman' | 'xrd' | 'xps' | 'xas' | 'athena' | 'xes'
 
 export const ANALYSIS_MODULES: {
   id: AnalysisModuleId
@@ -11,6 +11,7 @@ export const ANALYSIS_MODULES: {
   { id: 'xrd', label: 'XRD', detail: 'X-ray Diffraction' },
   { id: 'xps', label: 'XPS', detail: 'X-ray Photoelectron Spectroscopy' },
   { id: 'xas', label: 'XAS', detail: 'X-ray Absorption Spectroscopy' },
+  { id: 'athena', label: 'Athena', detail: 'XAS Athena' },
   { id: 'xes', label: 'XES', detail: 'X-ray Emission Spectroscopy' },
 ]
 
