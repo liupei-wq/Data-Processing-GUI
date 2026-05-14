@@ -31,17 +31,8 @@ const DEFAULT_PARAMS: ProcessParams = {
   n_points: INTERP_POINTS_DEFAULT,
   average: false,
   energy_shift: 0,
-  bg_enabled: false,
-  bg_method: 'linear',
-  bg_tey_start: null,
-  bg_tey_end: null,
-  bg_tfy_start: null,
-  bg_tfy_end: null,
-  bg_poly_deg: 3,
-  bg_baseline_lambda: 1e5,
-  bg_baseline_p: 0.01,
-  bg_baseline_iter: 20,
   norm_method: 'none',
+  e0_override: null,
   norm_tey_start: null,
   norm_tey_end: null,
   norm_tfy_start: null,
@@ -56,13 +47,6 @@ const DEFAULT_PARAMS: ProcessParams = {
   gauss_channel: 'both',
   gauss_peaks: [],
   gauss_search: 0.5,
-}
-
-const BACKGROUND_METHOD_HELP: Record<Exclude<ProcessParams['bg_method'], 'none'>, string> = {
-  linear: '用選定區間的兩端連線作為背景，適合前後緩慢傾斜的 baseline。',
-  polynomial: '以多項式追蹤彎曲背景，適合較平滑但非線性的趨勢。',
-  asls: 'AsLS 透過不對稱加權與平滑懲罰估計背景，會盡量讓基線落在峰形下方。',
-  airpls: 'airPLS 是自適應迭代版的懲罰最小平方法，對複雜基線通常更穩健，手動參數也更少。',
 }
 
 const OVERLAY_COLORS = [
@@ -193,9 +177,9 @@ function getChannelAfterGaussian(dataset: ProcessedDataset, channel: 'TEY' | 'TF
   return channel === 'TEY' ? dataset.tey_after_gauss : dataset.tfy_after_gauss
 }
 
-function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw: boolean, showWhiteLineMarkers: boolean): Plotly.Data[] {
+function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw: boolean, showWhiteLineMarkers: boolean, yOverride?: number[]): Plotly.Data[] {
   const raw = getChannelRaw(dataset, channel)
-  const processed = getChannelProcessed(dataset, channel)
+  const processed = yOverride ?? getChannelProcessed(dataset, channel)
   const traces: Plotly.Data[] = []
   if (showRaw) {
     traces.push({ x: dataset.x, y: raw, type: 'scatter', mode: 'lines', name: '原始', line: { color: '#94a3b8', width: 1.4 } })
@@ -813,6 +797,11 @@ export default function XAS({
   const [sidebarResizing, setSidebarResizing] = useState(false)
 
   const [rawFiles, setRawFiles] = useState<ParsedXasFile[]>([])
+  const [columnMappings, setColumnMappings] = useState<Record<string, { energy: number; tey: number; tfy: number; io: number | null }>>({})
+  // column picker modal
+  const [showColModal, setShowColModal] = useState(false)
+  const [modalFileIdx, setModalFileIdx] = useState(0)
+  const [draftMappings, setDraftMappings] = useState<Record<string, { energy: number; tey: number; tfy: number; io: number | null }>>({})
   const [flipTfy, setFlipTfy] = useState(true)
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
   const [result, setResult] = useState<ProcessResult | null>(null)
@@ -821,8 +810,8 @@ export default function XAS({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(true)
-  const [showBgBefore, setShowBgBefore] = useState<{ TEY: boolean; TFY: boolean }>({ TEY: false, TFY: false })
-  const [showBgBaseline, setShowBgBaseline] = useState<{ TEY: boolean; TFY: boolean }>({ TEY: false, TFY: false })
+  const [normView, setNormView] = useState<'normalized' | 'flattened'>('normalized')
+  const [normChartMode, setNormChartMode] = useState<'background_fit' | 'normalized'>('normalized')
   const [showNormBefore, setShowNormBefore] = useState<{ TEY: boolean; TFY: boolean }>({ TEY: false, TFY: false })
   const [showWhiteLineMarkers, setShowWhiteLineMarkers] = useState(true)
   const [whiteLineEnabled, setWhiteLineEnabled] = useState(false)
@@ -869,15 +858,66 @@ export default function XAS({
   const overlayDatasets = getOverlayDatasets(result)
   const overlayPreprocessDatasets = getOverlayDatasets(preprocessResult)
   const overlayPreNormalizationDatasets = getOverlayDatasets(preNormalizationResult)
-  const lastEnabledNormMethodRef = useRef<Exclude<ProcessParams['norm_method'], 'none'>>('post_edge')
-  const estimatedInterpPoints = estimateInterpolationPoints(rawFiles)
+  const lastEnabledNormMethodRef = useRef<Exclude<ProcessParams['norm_method'], 'none'>>('athena_norm')
+
+  // ── effective files: apply confirmed per-file column mapping + I0 division ─
+  const effectiveFiles = useMemo((): ParsedXasFile[] => {
+    return rawFiles.flatMap(file => {
+      const map = columnMappings[file.name]
+      // Only include files where user has confirmed a mapping
+      if (!map) return []
+
+      const rawCols = file.raw_columns
+      const n = rawCols.length
+      const eIdx = Math.min(map.energy, n - 1)
+      const teyIdx = Math.min(map.tey, n - 1)
+      const tfyIdx = Math.min(map.tfy, n - 1)
+
+      const energyCol = rawCols[eIdx] ?? []
+      const teyRaw = rawCols[teyIdx] ?? []
+      const tfyRaw = rawCols[tfyIdx] ?? []
+      const ioRaw = (map.io != null && map.io < n) ? rawCols[map.io] : null
+
+      const len = energyCol.length
+      const energy: number[] = []
+      const teyOut: number[] = []
+      const tfyOut: number[] = []
+
+      for (let i = 0; i < len; i++) {
+        const e = energyCol[i]
+        let t = teyRaw[i] ?? NaN
+        let f = tfyRaw[i] ?? NaN
+        if (ioRaw) {
+          const io = ioRaw[i] ?? 0
+          if (Math.abs(io) > 1e-30) { t /= io; f /= io } else { t = NaN; f = NaN }
+        }
+        if (flipTfy) f = 1.0 - f
+        if (Number.isFinite(e) && Number.isFinite(t) && Number.isFinite(f)) {
+          energy.push(e); teyOut.push(t); tfyOut.push(f)
+        }
+      }
+
+      // sort by energy
+      const order = Array.from({ length: energy.length }, (_, i) => i)
+        .sort((a, b) => energy[a] - energy[b])
+
+      return [{
+        ...file,
+        x: order.map(i => energy[i]),
+        tey: order.map(i => teyOut[i]),
+        tfy: order.map(i => tfyOut[i]),
+      }]
+    })
+  }, [rawFiles, columnMappings, flipTfy])
+
+  const estimatedInterpPoints = estimateInterpolationPoints(effectiveFiles)
   const effectiveNPoints = autoInterpPoints ? estimatedInterpPoints : params.n_points
   const interpolationEnabled = params.interpolate
 
-  // Reprocess when rawFiles or params change. The stage requests are debounced,
+  // Reprocess when effectiveFiles or params change. The stage requests are debounced,
   // abortable, and only run when a distinct intermediate result is needed.
   useEffect(() => {
-    if (rawFiles.length === 0) {
+    if (effectiveFiles.length === 0) {
       setResult(null)
       setPreprocessResult(null)
       setPreNormalizationResult(null)
@@ -890,7 +930,7 @@ export default function XAS({
     const timer = setTimeout(() => {
       if (cancelled) return
       setIsLoading(true); setError(null)
-      const datasets: DatasetInput[] = rawFiles.map(f => ({ name: f.name, x: f.x, tey: f.tey, tfy: f.tfy }))
+      const datasets: DatasetInput[] = effectiveFiles.map(f => ({ name: f.name, x: f.x, tey: f.tey, tfy: f.tfy }))
       const effectiveParams: ProcessParams = {
         ...params,
         n_points: effectiveNPoints,
@@ -901,7 +941,6 @@ export default function XAS({
       }
       const preprocessParams: ProcessParams = {
         ...effectiveParams,
-        bg_enabled: false,
         norm_method: 'none',
         norm_tey_start: null,
         norm_tey_end: null,
@@ -933,7 +972,6 @@ export default function XAS({
       const hasPreprocessingStage = params.interpolate || params.average || params.energy_shift !== 0
       const hasGaussianStage = effectiveParams.gauss_enabled && effectiveParams.gauss_peaks.length > 0
       const needsPreNormalizationRequest = effectiveParams.norm_method !== 'none' && (
-        effectiveParams.bg_enabled ||
         hasGaussianStage ||
         !hasPreprocessingStage
       )
@@ -970,11 +1008,16 @@ export default function XAS({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [rawFiles, params, effectiveNPoints, whiteLineEnabled])
+  }, [effectiveFiles, params, effectiveNPoints, whiteLineEnabled])
 
   useEffect(() => {
     if (params.norm_method !== 'none') {
       lastEnabledNormMethodRef.current = params.norm_method
+    }
+    // Reset chart view states when switching away from athena_norm
+    if (params.norm_method !== 'athena_norm') {
+      setNormChartMode('normalized')
+      setNormView('normalized')
     }
   }, [params.norm_method])
 
@@ -1013,6 +1056,15 @@ export default function XAS({
       const res = await parseFiles(files, flipTfy)
       if (res.errors.length) setError(res.errors.join('; '))
       setRawFiles(res.files)
+      setColumnMappings({})  // clear confirmed mappings
+      // init draft with index-0 defaults (no auto-detection)
+      const initDraft: Record<string, { energy: number; tey: number; tfy: number; io: number | null }> = {}
+      res.files.forEach(f => {
+        initDraft[f.name] = { energy: 0, tey: 1, tfy: 2, io: null }
+      })
+      setDraftMappings(initDraft)
+      setModalFileIdx(0)
+      setShowColModal(true)
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally { setIsLoading(false) }
@@ -1054,7 +1106,8 @@ export default function XAS({
         sourceType: 'database',
         lock_center: true,
       }, maxY))
-      setFitPeakCandidates(prev => [...prev, ...newPeaks])
+      // Replace existing database peaks (avoid duplicates on re-import), keep manual peaks
+      setFitPeakCandidates(prev => [...prev.filter(p => p.sourceType !== 'database'), ...newPeaks])
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setSamplesLoading(false) }
   }, [selectedSample, selectedEdge, activeDataset, fitChannel])
@@ -1084,6 +1137,18 @@ export default function XAS({
       const initPeaks = buildXasFitPeakPayloads(activePeaks, datasetMax)
       const fitRange: [number, number] | null = fitRangeEnabled ? [fitRangeLo, fitRangeHi] : null
       const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label), fitNRestarts, fitRange)
+      // Update unlocked peak params with fitted values so next press refines from here (OriginPro style)
+      setFitPeakCandidates(prev => prev.map(pk => {
+        const activeIdx = activePeaks.indexOf(pk)
+        if (activeIdx < 0) return pk
+        const fitted = res.peaks[activeIdx]
+        if (!fitted) return pk
+        let updated = pk
+        if (!pk.lock_center) updated = updateXasPeakCenterSeed(updated, fitted.Center_eV, datasetMax)
+        if (!pk.lock_fwhm)   updated = updateXasPeakFwhmSeed(updated, fitted.FWHM_eV, datasetMax)
+        if (!pk.lock_area)   updated = updateXasPeakAmplitudeSeed(updated, fitted.Height, datasetMax)
+        return updated
+      }))
       setFitResult(res)
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setIsFitting(false) }
@@ -1092,7 +1157,7 @@ export default function XAS({
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
 
-  const energyBounds = getDatasetBounds(rawFiles)
+  const energyBounds = getDatasetBounds(effectiveFiles)
   const preprocessBounds = getDatasetBounds(isOverlayMode ? overlayPreprocessDatasets : [preprocessDataset])
   const backgroundBounds = getDatasetBounds(isOverlayMode ? overlayPreNormalizationDatasets : [preNormalizationDataset])
   const normalizationBounds = getDatasetBounds(isOverlayMode ? overlayDatasets : [activeDataset])
@@ -1104,10 +1169,6 @@ export default function XAS({
     ? { width: SIDEBAR_COLLAPSED_PEEK, minWidth: SIDEBAR_COLLAPSED_PEEK, overflow: 'hidden' }
     : { width: sidebarWidth, minWidth: SIDEBAR_MIN_WIDTH, maxWidth: SIDEBAR_MAX_WIDTH }
 
-  const getBackgroundRange = useCallback((channel: XasChannel, bounds: RangeBounds) => ({
-    start: channel === 'TEY' ? (params.bg_tey_start ?? bounds.min) : (params.bg_tfy_start ?? bounds.min),
-    end: channel === 'TEY' ? (params.bg_tey_end ?? bounds.max) : (params.bg_tfy_end ?? bounds.max),
-  }), [params.bg_tey_end, params.bg_tey_start, params.bg_tfy_end, params.bg_tfy_start])
   const getNormalizationRange = useCallback((channel: XasChannel, bounds: RangeBounds) => ({
     start: channel === 'TEY' ? (params.norm_tey_start ?? bounds.min) : (params.norm_tfy_start ?? bounds.min),
     end: channel === 'TEY' ? (params.norm_tey_end ?? bounds.max) : (params.norm_tfy_end ?? bounds.max),
@@ -1121,7 +1182,7 @@ export default function XAS({
       : (params.norm_tfy_pre_end ?? (bounds.min + (bounds.max - bounds.min) * 0.3)),
   }), [params.norm_tey_pre_end, params.norm_tey_pre_start, params.norm_tfy_pre_end, params.norm_tfy_pre_start])
   const getNormalizationRegions = useCallback((channel: XasChannel, bounds: RangeBounds) => {
-    if (params.norm_method === 'post_edge') {
+    if (params.norm_method === 'post_edge' || params.norm_method === 'athena_norm') {
       const pre = getPreEdgeRange(channel, bounds)
       const post = {
         start: channel === 'TEY'
@@ -1139,16 +1200,39 @@ export default function XAS({
     const range = getNormalizationRange(channel, bounds)
     return [{
       ...range,
-      label: params.norm_method === 'mean_region' ? 'Mean Region' : '歸一化區間',
+      label: '歸一化區間',
       color: '#14b8a6',
     }]
   }, [getNormalizationRange, getPreEdgeRange, params.norm_method, params.norm_tey_end, params.norm_tey_start, params.norm_tfy_end, params.norm_tfy_start])
   const plainTeyLayout = chartLayout('Energy (eV)', 'TEY Intensity')
   const plainTfyLayout = chartLayout('Energy (eV)', 'TFY Intensity')
-  const backgroundTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', [{ ...getBackgroundRange('TEY', energyBounds), label: '背景區間', color: '#f59e0b' }], true)
-  const backgroundTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', [{ ...getBackgroundRange('TFY', energyBounds), label: '背景區間', color: '#f59e0b' }], true)
   const normalizationTeyLayout = chartLayoutWithRegions('Energy (eV)', 'TEY Intensity', getNormalizationRegions('TEY', energyBounds), true)
   const normalizationTfyLayout = chartLayoutWithRegions('Energy (eV)', 'TFY Intensity', getNormalizationRegions('TFY', energyBounds), true)
+
+  // Background fit mode: dual axis — y1=raw intensity, y2=pre-edge subtracted
+  const makeBgFitLayout = (channel: 'TEY' | 'TFY') => {
+    const css = typeof window !== 'undefined' ? getComputedStyle(document.documentElement) : null
+    const text = css?.getPropertyValue('--chart-text').trim() || '#d9e4f0'
+    const base = chartLayoutWithRegions(
+      'Energy (eV)',
+      `${channel} Raw Intensity`,
+      getNormalizationRegions(channel, energyBounds),
+      false,
+    )
+    return {
+      ...base,
+      yaxis2: {
+        overlaying: 'y' as const,
+        side: 'right' as const,
+        showgrid: false,
+        zeroline: false,
+        color: text,
+        title: { text: 'Pre-edge 扣除後', font: { size: 11 } },
+      },
+    }
+  }
+  const bgFitTeyLayout = makeBgFitLayout('TEY')
+  const bgFitTfyLayout = makeBgFitLayout('TFY')
 
   const rawStageSource = preprocessDataset ?? activeDataset
   const rawOverlaySource = overlayPreprocessDatasets.length > 0 ? overlayPreprocessDatasets : overlayDatasets
@@ -1159,56 +1243,23 @@ export default function XAS({
     params.energy_shift !== 0 ? '能量校正' : null,
   ].filter(Boolean) as string[]
   const preprocessLabel = preprocessParts.length > 0 ? `（${preprocessParts.join('・')}）` : ''
-  const backgroundBeforeY = (dataset: ProcessedDataset, fallback: ProcessedDataset | null, channel: 'TEY' | 'TFY') => (
-    getChannelAfterGaussian(dataset, channel) ?? (fallback ? getChannelProcessed(fallback, channel) : getChannelRaw(dataset, channel))
-  )
 
-  // Build background chart traces with optional before/baseline (dual y-axis: after=y1, before/baseline=y2)
-  const buildBgTracesSingle = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
-    if (!preNormalizationDataset) return []
-    const color = CHANNEL_COLORS[channel]
-    const afterY = getChannelProcessed(preNormalizationDataset, channel)
-    const traces: Plotly.Data[] = [
-      { x: preNormalizationDataset.x, y: afterY, type: 'scatter', mode: 'lines', name: '扣背景後', line: { color, width: 2 } },
-    ]
-    if (showBgBefore[channel] && preprocessDataset) {
-      const beforeY = backgroundBeforeY(preNormalizationDataset, preprocessDataset, channel)
-      traces.push({ x: preNormalizationDataset.x, y: beforeY, type: 'scatter', mode: 'lines', name: '扣背景前', yaxis: 'y2' as const, line: { color: '#94a3b8', width: 1.4, dash: 'dot' as const }, opacity: 0.8 })
+  // Returns the y data for the "final view" — flattened when toggled AND athena_norm is active
+  const getChannelFinal = (dataset: ProcessedDataset, channel: 'TEY' | 'TFY') => {
+    if (normView === 'flattened' && params.norm_method === 'athena_norm') {
+      const flat = channel === 'TEY' ? dataset.tey_flattened : dataset.tfy_flattened
+      if (flat) return flat
     }
-    if (showBgBaseline[channel] && preprocessDataset) {
-      const beforeY = backgroundBeforeY(preNormalizationDataset, preprocessDataset, channel)
-      const baselineY = beforeY.map((v, i) => v - afterY[i])
-      traces.push({ x: preNormalizationDataset.x, y: baselineY, type: 'scatter', mode: 'lines', name: '背景基準線', yaxis: 'y2' as const, line: { color: '#f97316', width: 1.4, dash: 'dash' as const } })
-    }
-    return traces
-  }
-
-  // Build overlay background traces (filter before by channel toggle, put on y2)
-  const buildBgTracesOverlay = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
-    const preprocessByName = new Map(overlayPreprocessDatasets.map(ds => [ds.name, ds]))
-    const fallbackPre = overlayPreprocessDatasets[0]
-    const traces: Plotly.Data[] = []
-    overlayPreNormalizationDatasets.forEach((afterDs, i) => {
-      const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
-      const shortName = afterDs.name.replace(/\.[^.]+$/, '').slice(-24)
-      const afterY = getChannelProcessed(afterDs, channel)
-      traces.push({ x: afterDs.x, y: afterY, type: 'scatter', mode: 'lines', name: `${shortName} 扣背景後`, line: { color, width: 1.9 } })
-      if (showBgBefore[channel]) {
-        const beforeDs = preprocessByName.get(afterDs.name) ?? fallbackPre
-        const beforeY = beforeDs ? backgroundBeforeY(afterDs, beforeDs, channel) : null
-        if (beforeY) traces.push({ x: afterDs.x, y: beforeY, type: 'scatter', mode: 'lines', name: `${shortName} 扣背景前`, yaxis: 'y2' as const, line: { color, width: 1.1, dash: 'dot' as const }, opacity: 0.5 })
-      }
-    })
-    return traces
+    return getChannelProcessed(dataset, channel)
   }
 
   // Build normalization chart traces with optional before (dual y-axis: after=y1, before=y2)
   const buildNormTracesSingle = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
     if (!activeDataset) return []
     const color = CHANNEL_COLORS[channel]
-    const afterY = getChannelProcessed(activeDataset, channel)
+    const afterY = getChannelFinal(activeDataset, channel)
     const traces: Plotly.Data[] = [
-      { x: activeDataset.x, y: afterY, type: 'scatter', mode: 'lines', name: '歸一化後', line: { color, width: 2 } },
+      { x: activeDataset.x, y: afterY, type: 'scatter', mode: 'lines', name: (normView === 'flattened' && params.norm_method === 'athena_norm') ? 'Flattened' : '歸一化後', line: { color, width: 2 } },
     ]
     if (showNormBefore[channel] && preNormalizationDataset) {
       const beforeY = getChannelProcessed(preNormalizationDataset, channel)
@@ -1222,7 +1273,7 @@ export default function XAS({
     overlayDatasets.forEach((afterDs, i) => {
       const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
       const shortName = afterDs.name.replace(/\.[^.]+$/, '').slice(-24)
-      traces.push({ x: afterDs.x, y: getChannelProcessed(afterDs, channel), type: 'scatter', mode: 'lines', name: `${shortName} 歸一化後`, line: { color, width: 1.9 } })
+      traces.push({ x: afterDs.x, y: getChannelFinal(afterDs, channel), type: 'scatter', mode: 'lines', name: `${shortName} ${(normView === 'flattened' && params.norm_method === 'athena_norm') ? 'Flattened' : '歸一化後'}`, line: { color, width: 1.9 } })
     })
     if (showNormBefore[channel]) {
       overlayPreNormalizationDatasets.forEach((beforeDs, i) => {
@@ -1233,7 +1284,80 @@ export default function XAS({
     }
     return traces
   }
-  const hasBackgroundStage = params.bg_enabled && Boolean(preNormalizationDataset || overlayPreNormalizationDatasets.length > 0)
+  // Background fit traces — show raw spectrum + pre-edge line (left y1) + pre-subtracted + post-edge poly (right y2)
+  const buildBgFitTracesSingle = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
+    if (!activeDataset) return []
+    const color = CHANNEL_COLORS[channel]
+    const traces: Plotly.Data[] = []
+    // raw spectrum on y1
+    traces.push({
+      x: activeDataset.x, y: getChannelRaw(activeDataset, channel),
+      type: 'scatter', mode: 'lines', name: `原始 ${channel}`,
+      line: { color: '#94a3b8', width: 1.5 },
+    })
+    // pre-edge line on y1 (same raw intensity scale)
+    const preEdgeLine = channel === 'TEY' ? activeDataset.tey_pre_edge_line : activeDataset.tfy_pre_edge_line
+    if (preEdgeLine && preEdgeLine.length > 0) {
+      traces.push({
+        x: activeDataset.x, y: preEdgeLine,
+        type: 'scatter', mode: 'lines', name: 'Pre-edge 線性擬合',
+        line: { color: '#f97316', width: 1.8, dash: 'dash' },
+      })
+    }
+    // pre-subtracted spectrum on y2
+    const preSub = channel === 'TEY' ? activeDataset.tey_pre_subtracted : activeDataset.tfy_pre_subtracted
+    if (preSub && preSub.length > 0) {
+      traces.push({
+        x: activeDataset.x, y: preSub,
+        type: 'scatter', mode: 'lines', name: 'Pre-edge 扣除後',
+        line: { color, width: 1.6, dash: 'dot' },
+        yaxis: 'y2' as const,
+      })
+    }
+    // post-edge polynomial on y2 (same scale as preSub)
+    const postPoly = channel === 'TEY' ? activeDataset.tey_post_edge_poly : activeDataset.tfy_post_edge_poly
+    if (postPoly && postPoly.length > 0) {
+      traces.push({
+        x: activeDataset.x, y: postPoly,
+        type: 'scatter', mode: 'lines', name: 'Post-edge 多項式',
+        line: { color: '#14b8a6', width: 1.8, dash: 'dash' },
+        yaxis: 'y2' as const,
+      })
+    }
+    return traces
+  }
+
+  const buildBgFitTracesOverlay = (channel: 'TEY' | 'TFY'): Plotly.Data[] => {
+    const traces: Plotly.Data[] = []
+    overlayDatasets.forEach((ds, i) => {
+      const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
+      const shortName = ds.name.replace(/\.[^.]+$/, '').slice(-24)
+      traces.push({
+        x: ds.x, y: getChannelRaw(ds, channel),
+        type: 'scatter', mode: 'lines', name: `${shortName} 原始`,
+        line: { color: '#94a3b8', width: 1.2, dash: 'dot' }, opacity: 0.5,
+      })
+      const preEdgeLine = channel === 'TEY' ? ds.tey_pre_edge_line : ds.tfy_pre_edge_line
+      if (preEdgeLine && preEdgeLine.length > 0) {
+        traces.push({
+          x: ds.x, y: preEdgeLine,
+          type: 'scatter', mode: 'lines', name: `${shortName} Pre-edge線`,
+          line: { color, width: 1.5, dash: 'dash' },
+        })
+      }
+      const preSub = channel === 'TEY' ? ds.tey_pre_subtracted : ds.tfy_pre_subtracted
+      if (preSub && preSub.length > 0) {
+        traces.push({
+          x: ds.x, y: preSub,
+          type: 'scatter', mode: 'lines', name: `${shortName} 扣除後`,
+          line: { color, width: 1.5 },
+          yaxis: 'y2' as const,
+        })
+      }
+    })
+    return traces
+  }
+
   const hasNormalizationStage = params.norm_method !== 'none' && Boolean(activeDataset || overlayDatasets.length > 0)
   const whiteLineRangeLabel = `${(params.white_line_start ?? energyBounds.min).toFixed(1)} – ${(params.white_line_end ?? energyBounds.max).toFixed(1)} eV`
   const hasWhiteLineResult = Boolean(activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null)
@@ -1351,88 +1475,36 @@ export default function XAS({
     viewMode,
   ])
 
-  const renderBackgroundSidebarInputs = (channel: XasChannel) => {
-    const range = getBackgroundRange(channel, energyBounds)
-    return (
-      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
-        <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{channel} 區間</p>
-        <div className="grid grid-cols-2 gap-2">
-          <NumInput
-            label="起始 (eV)"
-            value={range.start}
-            onChange={value => setParams(current => ({
-              ...current,
-              ...(channel === 'TEY' ? { bg_tey_start: value } : { bg_tfy_start: value }),
-            }))}
-            step={0.1}
-          />
-          <NumInput
-            label="結束 (eV)"
-            value={range.end}
-            onChange={value => setParams(current => ({
-              ...current,
-              ...(channel === 'TEY' ? { bg_tey_end: value } : { bg_tfy_end: value }),
-            }))}
-            step={0.1}
-          />
-        </div>
-      </div>
-    )
-  }
-
   const renderNormalizationSidebarInputs = (channel: XasChannel) => {
     const range = getNormalizationRange(channel, energyBounds)
     const preRange = getPreEdgeRange(channel, energyBounds)
     return (
       <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3">
         <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{channel} 區間</p>
-        {params.norm_method === 'post_edge' ? (
-          <div className="space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <NumInput
-                label="Pre-edge 起始"
-                value={preRange.start}
-                onChange={value => setParams(current => ({
-                  ...current,
-                  ...(channel === 'TEY' ? { norm_tey_pre_start: value } : { norm_tfy_pre_start: value }),
-                }))}
-                step={0.1}
-              />
-              <NumInput
-                label="Pre-edge 結束"
-                value={preRange.end}
-                onChange={value => setParams(current => ({
-                  ...current,
-                  ...(channel === 'TEY' ? { norm_tey_pre_end: value } : { norm_tfy_pre_end: value }),
-                }))}
-                step={0.1}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <NumInput
-                label="Post-edge 起始"
-                value={range.start}
-                onChange={value => setParams(current => ({
-                  ...current,
-                  ...(channel === 'TEY' ? { norm_tey_start: value } : { norm_tfy_start: value }),
-                }))}
-                step={0.1}
-              />
-              <NumInput
-                label="Post-edge 結束"
-                value={range.end}
-                onChange={value => setParams(current => ({
-                  ...current,
-                  ...(channel === 'TEY' ? { norm_tey_end: value } : { norm_tfy_end: value }),
-                }))}
-                step={0.1}
-              />
-            </div>
-          </div>
-        ) : (
+        <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <NumInput
-              label="起始 (eV)"
+              label="Pre-edge 起始"
+              value={preRange.start}
+              onChange={value => setParams(current => ({
+                ...current,
+                ...(channel === 'TEY' ? { norm_tey_pre_start: value } : { norm_tfy_pre_start: value }),
+              }))}
+              step={0.1}
+            />
+            <NumInput
+              label="Pre-edge 結束"
+              value={preRange.end}
+              onChange={value => setParams(current => ({
+                ...current,
+                ...(channel === 'TEY' ? { norm_tey_pre_end: value } : { norm_tfy_pre_end: value }),
+              }))}
+              step={0.1}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <NumInput
+              label="Post-edge 起始"
               value={range.start}
               onChange={value => setParams(current => ({
                 ...current,
@@ -1441,7 +1513,7 @@ export default function XAS({
               step={0.1}
             />
             <NumInput
-              label="結束 (eV)"
+              label="Post-edge 結束"
               value={range.end}
               onChange={value => setParams(current => ({
                 ...current,
@@ -1450,27 +1522,8 @@ export default function XAS({
               step={0.1}
             />
           </div>
-        )}
+        </div>
       </div>
-    )
-  }
-
-  const renderBackgroundChartControls = (channel: XasChannel) => {
-    const range = getBackgroundRange(channel, energyBounds)
-    return (
-      <DualRangeInput
-        label={`${channel} 背景扣除區間`}
-        min={energyBounds.min}
-        max={energyBounds.max}
-        start={range.start}
-        end={range.end}
-        onChange={({ start, end }) => setParams(current => ({
-          ...current,
-          ...(channel === 'TEY'
-            ? { bg_tey_start: start, bg_tey_end: end }
-            : { bg_tfy_start: start, bg_tfy_end: end }),
-        }))}
-      />
     )
   }
 
@@ -1479,7 +1532,7 @@ export default function XAS({
     const preRange = getPreEdgeRange(channel, energyBounds)
     return (
       <div className="space-y-3">
-        {params.norm_method === 'post_edge' && (
+        {(params.norm_method === 'post_edge' || params.norm_method === 'athena_norm') && (
           <DualRangeInput
             label={`${channel} Pre-edge 區間`}
             min={energyBounds.min}
@@ -1495,7 +1548,7 @@ export default function XAS({
           />
         )}
         <DualRangeInput
-          label={`${channel} ${params.norm_method === 'post_edge' ? 'Post-edge' : params.norm_method === 'mean_region' ? 'Mean Region' : '歸一化'} 區間`}
+          label={`${channel} Post-edge 區間`}
           min={energyBounds.min}
           max={energyBounds.max}
           start={range.start}
@@ -1543,14 +1596,49 @@ export default function XAS({
                 <CheckRow label="TFY 使用 1 − TFY 翻轉" checked={flipTfy} onChange={v => { setFlipTfy(v); setRawFiles([]) }} />
                 {rawFiles.length > 0 && (
                   <div className="space-y-1">
-                    {rawFiles.map(f => (
-                      <div key={f.name} className="flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2.5 py-1.5 text-xs text-[var(--text-main)]">
-                        <span className="text-[var(--accent-tertiary)]">✓</span>
-                        <span className="truncate">{f.name}</span>
-                        <span className="ml-auto shrink-0 text-[var(--text-soft)]">{f.x.length} pts</span>
-                      </div>
-                    ))}
-                    <button onClick={() => { setRawFiles([]); setResult(null) }} className="text-xs text-rose-400 hover:text-rose-300">
+                    {rawFiles.map((f) => {
+                      const confirmed = columnMappings[f.name]
+                      const effFile = effectiveFiles.find(e => e.name === f.name)
+                      return (
+                        <div key={f.name} className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2.5 py-1.5 text-xs">
+                          {confirmed
+                            ? <span className="text-[var(--accent-tertiary)]">✓</span>
+                            : <span className="text-amber-400">!</span>
+                          }
+                          <span className="truncate flex-1 text-[var(--text-main)]" title={f.name}>{f.name}</span>
+                          {confirmed
+                            ? <span className="shrink-0 text-[var(--text-soft)]">{effFile?.x.length ?? 0} pts</span>
+                            : <span className="shrink-0 text-[9px] text-amber-400">未設定欄位</span>
+                          }
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDraftMappings(prev => ({
+                                ...prev,
+                                [f.name]: confirmed ? { ...confirmed } : { energy: 0, tey: 1, tfy: 2, io: null },
+                              }))
+                              setModalFileIdx(rawFiles.indexOf(f))
+                              setShowColModal(true)
+                            }}
+                            className="shrink-0 rounded border border-[var(--card-border)] px-1.5 py-0.5 text-[9px] text-[var(--text-soft)] hover:text-[var(--text-main)] hover:border-[var(--accent-strong)] transition-colors"
+                          >
+                            {confirmed ? '重設欄位' : '設定欄位'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRawFiles(prev => prev.filter(r => r.name !== f.name))
+                              setColumnMappings(prev => { const next = { ...prev }; delete next[f.name]; return next })
+                            }}
+                            className="shrink-0 text-rose-400 hover:text-rose-300 text-sm leading-none"
+                          >×</button>
+                        </div>
+                      )
+                    })}
+                    {rawFiles.some(f => !columnMappings[f.name]) && (
+                      <p className="text-[10px] text-amber-400">請為所有檔案設定欄位對應後才能繼續處理。</p>
+                    )}
+                    <button onClick={() => { setRawFiles([]); setResult(null); setColumnMappings({}) }} className="text-xs text-rose-400 hover:text-rose-300">
                       清除全部
                     </button>
                   </div>
@@ -1591,7 +1679,7 @@ export default function XAS({
                         <span className="text-right">Energy 範圍</span>
                         <span className="text-right">步距</span>
                       </div>
-                      {rawFiles.map(file => {
+                      {effectiveFiles.map(file => {
                         const stats = getFileStats(file)
                         if (!stats) return null
                         const newStep = interpolationEnabled && effectiveNPoints > 1 ? stats.span / (effectiveNPoints - 1) : null
@@ -1617,7 +1705,7 @@ export default function XAS({
                       })}
                     </div>
                     {interpolationEnabled && (() => {
-                      const statsAll = rawFiles.map(getFileStats)
+                      const statsAll = effectiveFiles.map(getFileStats)
                       const hasDenseStep = statsAll.some(stats => stats && effectiveNPoints > 1 && (stats.span / (effectiveNPoints - 1)) < stats.step * 0.9)
                       const hasSparseStep = statsAll.some(stats => stats && effectiveNPoints > 1 && (stats.span / (effectiveNPoints - 1)) > stats.step * 1.1)
                       if (!hasDenseStep && !hasSparseStep) return null
@@ -1656,7 +1744,7 @@ export default function XAS({
                           onClick={() => setShowOverlayModal(true)}
                           className="w-full rounded-lg border border-[var(--accent-soft)] py-1.5 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
                         >
-                          選擇疊圖資料（{overlaySelectedNames.length === 0 ? rawFiles.length : overlaySelectedNames.length} 筆）
+                          選擇疊圖資料（{overlaySelectedNames.length === 0 ? effectiveFiles.length : overlaySelectedNames.length} 筆）
                         </button>
                         <button
                           type="button"
@@ -1672,7 +1760,7 @@ export default function XAS({
                         label="顯示資料"
                         value={String(clampedIdx)}
                         onChange={v => setSelectedSingleIdx(Number(v))}
-                        options={rawFiles.map((f, i) => ({ value: String(i), label: f.name }))}
+                        options={effectiveFiles.map((f, i) => ({ value: String(i), label: f.name }))}
                       />
                     )}
                   </div>
@@ -1685,30 +1773,8 @@ export default function XAS({
                 <p className="text-[10px] text-[var(--text-soft)]">正值向高能方向移，負值向低能移。</p>
               </Section>
 
-              {/* 4. 背景扣除 */}
-              <Section step={4} title="背景扣除" hint="Linear / Polynomial / AsLS" defaultOpen={false}>
-                <TogglePill label="啟用背景扣除" checked={params.bg_enabled} onChange={set('bg_enabled')} />
-                {params.bg_enabled && (
-                  <>
-                    <SelectInput label="方法" value={params.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
-                      options={[{ value: 'linear', label: 'Linear' }, { value: 'polynomial', label: 'Polynomial' }, { value: 'asls', label: 'AsLS' }, { value: 'airpls', label: 'airPLS' }]}
-                    />
-                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
-                      {BACKGROUND_METHOD_HELP[params.bg_method as Exclude<ProcessParams['bg_method'], 'none'>]}
-                    </div>
-                    <div className="space-y-2">
-                      {renderBackgroundSidebarInputs('TEY')}
-                      {renderBackgroundSidebarInputs('TFY')}
-                    </div>
-                    {params.bg_method === 'polynomial' && (
-                      <NumInput label="多項式次數" value={params.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />
-                    )}
-                  </>
-                )}
-              </Section>
-
-              {/* 5. 歸一化 */}
-              <Section step={5} title="歸一化" hint="Post-edge Step / Mean Region / Min-Max" defaultOpen={false}>
+              {/* 4. 歸一化 */}
+              <Section step={4} title="歸一化" hint="Athena Norm / Post-edge Step" defaultOpen={false}>
                 <TogglePill
                   label="啟用歸一化"
                   checked={params.norm_method !== 'none'}
@@ -1718,81 +1784,78 @@ export default function XAS({
                       return
                     }
                     const method = lastEnabledNormMethodRef.current
-                    setParams(p => {
-                      if (method === 'post_edge') {
-                        const min = normalizationBounds.min
-                        const max = normalizationBounds.max
-                        return {
-                          ...p,
-                          norm_method: method,
-                          norm_tey_pre_start: p.norm_tey_pre_start ?? min,
-                          norm_tey_pre_end: p.norm_tey_pre_end ?? (min + (max - min) * 0.3),
-                          norm_tey_start: p.norm_tey_start ?? (min + (max - min) * 0.7),
-                          norm_tey_end: p.norm_tey_end ?? max,
-                          norm_tfy_pre_start: p.norm_tfy_pre_start ?? min,
-                          norm_tfy_pre_end: p.norm_tfy_pre_end ?? (min + (max - min) * 0.3),
-                          norm_tfy_start: p.norm_tfy_start ?? (min + (max - min) * 0.7),
-                          norm_tfy_end: p.norm_tfy_end ?? max,
-                        }
-                      }
-                      const min = normalizationBounds.min
-                      const max = normalizationBounds.max
-                      return {
-                        ...p,
-                        norm_method: method,
-                        norm_tey_start: p.norm_tey_start ?? min,
-                        norm_tey_end: p.norm_tey_end ?? max,
-                        norm_tfy_start: p.norm_tfy_start ?? min,
-                        norm_tfy_end: p.norm_tfy_end ?? max,
-                      }
-                    })
+                    const min = normalizationBounds.min
+                    const max = normalizationBounds.max
+                    setParams(p => ({
+                      ...p,
+                      norm_method: method,
+                      norm_tey_pre_start: p.norm_tey_pre_start ?? min,
+                      norm_tey_pre_end: p.norm_tey_pre_end ?? (min + (max - min) * 0.3),
+                      norm_tey_start: p.norm_tey_start ?? (min + (max - min) * 0.7),
+                      norm_tey_end: p.norm_tey_end ?? max,
+                      norm_tfy_pre_start: p.norm_tfy_pre_start ?? min,
+                      norm_tfy_pre_end: p.norm_tfy_pre_end ?? (min + (max - min) * 0.3),
+                      norm_tfy_start: p.norm_tfy_start ?? (min + (max - min) * 0.7),
+                      norm_tfy_end: p.norm_tfy_end ?? max,
+                    }))
                   }}
                 />
                 {params.norm_method !== 'none' && (
                   <>
                     <SelectInput label="方法" value={params.norm_method} onChange={v => {
                       const method = v as ProcessParams['norm_method']
-                      setParams(p => {
-                        if (method === 'post_edge') {
-                          const min = normalizationBounds.min
-                          const max = normalizationBounds.max
-                          return {
-                            ...p,
-                            norm_method: method,
-                            norm_tey_pre_start: p.norm_tey_pre_start ?? min,
-                            norm_tey_pre_end: p.norm_tey_pre_end ?? (min + (max - min) * 0.3),
-                            norm_tey_start: p.norm_tey_start ?? (min + (max - min) * 0.7),
-                            norm_tey_end: p.norm_tey_end ?? max,
-                            norm_tfy_pre_start: p.norm_tfy_pre_start ?? min,
-                            norm_tfy_pre_end: p.norm_tfy_pre_end ?? (min + (max - min) * 0.3),
-                            norm_tfy_start: p.norm_tfy_start ?? (min + (max - min) * 0.7),
-                            norm_tfy_end: p.norm_tfy_end ?? max,
-                          }
-                        }
-                        if (method === 'min_max' || method === 'max' || method === 'area' || method === 'mean_region') {
-                          const min = normalizationBounds.min
-                          const max = normalizationBounds.max
-                          return {
-                            ...p,
-                            norm_method: method,
-                            norm_tey_start: p.norm_tey_start ?? min,
-                            norm_tey_end: p.norm_tey_end ?? max,
-                            norm_tfy_start: p.norm_tfy_start ?? min,
-                            norm_tfy_end: p.norm_tfy_end ?? max,
-                          }
-                        }
-                        return { ...p, norm_method: method }
-                      })
+                      const min = normalizationBounds.min
+                      const max = normalizationBounds.max
+                      setParams(p => ({
+                        ...p,
+                        norm_method: method,
+                        norm_tey_pre_start: p.norm_tey_pre_start ?? min,
+                        norm_tey_pre_end: p.norm_tey_pre_end ?? (min + (max - min) * 0.3),
+                        norm_tey_start: p.norm_tey_start ?? (min + (max - min) * 0.7),
+                        norm_tey_end: p.norm_tey_end ?? max,
+                        norm_tfy_pre_start: p.norm_tfy_pre_start ?? min,
+                        norm_tfy_pre_end: p.norm_tfy_pre_end ?? (min + (max - min) * 0.3),
+                        norm_tfy_start: p.norm_tfy_start ?? (min + (max - min) * 0.7),
+                        norm_tfy_end: p.norm_tfy_end ?? max,
+                      }))
                     }}
                       options={[
                         { value: 'none', label: '不歸一化' },
-                        { value: 'min_max', label: 'Min–Max' },
-                        { value: 'max', label: 'Max' },
-                        { value: 'area', label: 'Area' },
+                        { value: 'athena_norm', label: 'Athena Norm（建議）' },
                         { value: 'post_edge', label: 'Post-edge Step' },
-                        { value: 'mean_region', label: 'Mean Region' },
                       ]}
                     />
+                    {params.norm_method === 'athena_norm' && (
+                      <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
+                        <p className="font-medium text-[var(--text-main)]">E₀ 邊緣能量</p>
+                        <p className="text-[var(--text-soft)]">
+                          自動偵測（一階微分最大值）；可覆寫：
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <NumInput
+                            label="E₀ (eV)"
+                            value={params.e0_override ?? (activeDataset?.e0_tey ?? 0)}
+                            onChange={v => setParams(p => ({ ...p, e0_override: v }))}
+                            step={0.1}
+                          />
+                          {params.e0_override !== null && (
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1 text-[10px] text-[var(--text-soft)] hover:text-[var(--text-main)]"
+                              onClick={() => setParams(p => ({ ...p, e0_override: null }))}
+                            >
+                              重設自動
+                            </button>
+                          )}
+                        </div>
+                        {activeDataset?.e0_tey != null && (
+                          <p className="text-[var(--text-soft)]">
+                            自動偵測：TEY {activeDataset.e0_tey.toFixed(2)} eV
+                            {activeDataset.e0_tfy != null && ` / TFY ${activeDataset.e0_tfy.toFixed(2)} eV`}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <div className="space-y-2">
                       {renderNormalizationSidebarInputs('TEY')}
                       {renderNormalizationSidebarInputs('TFY')}
@@ -2205,7 +2268,7 @@ export default function XAS({
           subtitle={moduleContent.subtitle}
           description={moduleContent.description}
           chips={[
-            { label: `資料量 ${rawFiles.length}` },
+            { label: `資料量 ${effectiveFiles.length}` },
             { label: `內插 ${params.interpolate ? `${effectiveNPoints} 點` : '未啟用'}` },
             { label: `平均 ${params.average ? '開啟' : '關閉'}` },
             { label: `White Line ${!whiteLineEnabled ? '關閉' : activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null ? '已計算' : '未設定'}` },
@@ -2214,7 +2277,7 @@ export default function XAS({
 
         <InfoCardGrid
           items={[
-            { label: '資料集', value: rawFiles.length > 0 ? `${rawFiles.length} 個` : '未載入' },
+            { label: '資料集', value: effectiveFiles.length > 0 ? `${effectiveFiles.length} 個` : '未載入' },
             { label: '平均模式', value: params.average ? '開啟' : '關閉' },
             { label: '內插點數', value: params.interpolate ? `${effectiveNPoints} 點${autoInterpPoints ? '（自動）' : ''}` : '未啟用' },
             { label: '能量範圍', value: activeDataset ? `${activeDataset.x[0].toFixed(1)} – ${activeDataset.x[activeDataset.x.length - 1].toFixed(1)} eV` : '未建立' },
@@ -2366,57 +2429,96 @@ export default function XAS({
                 )
             }
 
-            {/* 2. Background (only when enabled) */}
-            {params.bg_enabled && renderStagePair(
-              '2. 背景扣除',
-              isOverlayMode ? buildBgTracesOverlay('TEY') : buildBgTracesSingle('TEY'),
-              isOverlayMode ? buildBgTracesOverlay('TFY') : buildBgTracesSingle('TFY'),
-              backgroundTeyLayout,
-              backgroundTfyLayout,
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  <CheckRow label="疊加扣背景前（右軸）" checked={showBgBefore.TEY} onChange={v => setShowBgBefore(p => ({ ...p, TEY: v }))} />
-                  <CheckRow label="疊加背景基準線（右軸）" checked={showBgBaseline.TEY} onChange={v => setShowBgBaseline(p => ({ ...p, TEY: v }))} />
-                </div>
-                {renderBackgroundChartControls('TEY')}
-              </div>,
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  <CheckRow label="疊加扣背景前（右軸）" checked={showBgBefore.TFY} onChange={v => setShowBgBefore(p => ({ ...p, TFY: v }))} />
-                  <CheckRow label="疊加背景基準線（右軸）" checked={showBgBaseline.TFY} onChange={v => setShowBgBaseline(p => ({ ...p, TFY: v }))} />
-                </div>
-                {renderBackgroundChartControls('TFY')}
-              </div>,
-              '橘色區間為背景扣除範圍；左軸為扣背景後，右軸為原始強度。',
-            )}
+            {/* 2. Normalization (only when enabled) */}
+            {params.norm_method !== 'none' && (() => {
+              const isAthena = params.norm_method === 'athena_norm'
+              const showBgFit = isAthena && normChartMode === 'background_fit'
+              const teyTraces = showBgFit
+                ? (isOverlayMode ? buildBgFitTracesOverlay('TEY') : buildBgFitTracesSingle('TEY'))
+                : (isOverlayMode ? buildNormTracesOverlay('TEY') : buildNormTracesSingle('TEY'))
+              const tfyTraces = showBgFit
+                ? (isOverlayMode ? buildBgFitTracesOverlay('TFY') : buildBgFitTracesSingle('TFY'))
+                : (isOverlayMode ? buildNormTracesOverlay('TFY') : buildNormTracesSingle('TFY'))
+              const teyLayout = showBgFit ? bgFitTeyLayout : normalizationTeyLayout
+              const tfyLayout = showBgFit ? bgFitTfyLayout : normalizationTfyLayout
 
-            {/* 3. Normalization (only when enabled) */}
+              const modePills = isAthena ? (
+                <div className="flex gap-1">
+                  {([
+                    { value: 'background_fit' as const, label: '背景擬合' },
+                    { value: 'normalized' as const, label: '歸一化後' },
+                  ]).map(({ value, label }) => (
+                    <button key={value} type="button"
+                      className={`rounded-lg border px-2.5 py-0.5 text-[11px] transition-colors ${normChartMode === value ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--card-border)] text-[var(--text-soft)] hover:border-[var(--accent)]'}`}
+                      onClick={() => setNormChartMode(value)}
+                    >{label}</button>
+                  ))}
+                </div>
+              ) : null
+
+              const teyFooter = (
+                <div className="space-y-3">
+                  {modePills}
+                  {isAthena && normChartMode === 'normalized' && (
+                    <div className="flex gap-1">
+                      {(['normalized', 'flattened'] as const).map(v => (
+                        <button key={v} type="button"
+                          className={`rounded-lg border px-2.5 py-0.5 text-[11px] ${normView === v ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--card-border)] text-[var(--text-soft)]'}`}
+                          onClick={() => setNormView(v)}
+                        >{v === 'normalized' ? 'Normalized' : 'Flattened'}</button>
+                      ))}
+                    </div>
+                  )}
+                  {!showBgFit && <CheckRow label="疊加歸一化前（右軸）" checked={showNormBefore.TEY} onChange={v => setShowNormBefore(p => ({ ...p, TEY: v }))} />}
+                  {showBgFit && (
+                    <p className="text-[10px] text-[var(--text-soft)]">左軸：原始光譜 + Pre-edge 線性擬合（橘）；右軸：扣除後光譜 + Post-edge 多項式（綠）</p>
+                  )}
+                  {renderNormalizationChartControls('TEY')}
+                </div>
+              )
+
+              const tfyFooter = (
+                <div className="space-y-3">
+                  {modePills}
+                  {isAthena && normChartMode === 'normalized' && (
+                    <div className="flex gap-1">
+                      {(['normalized', 'flattened'] as const).map(v => (
+                        <button key={v} type="button"
+                          className={`rounded-lg border px-2.5 py-0.5 text-[11px] ${normView === v ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--card-border)] text-[var(--text-soft)]'}`}
+                          onClick={() => setNormView(v)}
+                        >{v === 'normalized' ? 'Normalized' : 'Flattened'}</button>
+                      ))}
+                    </div>
+                  )}
+                  {!showBgFit && <CheckRow label="疊加歸一化前（右軸）" checked={showNormBefore.TFY} onChange={v => setShowNormBefore(p => ({ ...p, TFY: v }))} />}
+                  {showBgFit && (
+                    <p className="text-[10px] text-[var(--text-soft)]">左軸：原始光譜 + Pre-edge 線性擬合（橘）；右軸：扣除後光譜 + Post-edge 多項式（綠）</p>
+                  )}
+                  {renderNormalizationChartControls('TFY')}
+                </div>
+              )
+
+              return renderStagePair(
+                showBgFit ? '2. 歸一化（背景擬合視圖）' : '2. 歸一化',
+                teyTraces, tfyTraces, teyLayout, tfyLayout,
+                teyFooter, tfyFooter,
+                showBgFit
+                  ? '橘色虛線 = Pre-edge 線性擬合；綠色虛線 = Post-edge 多項式；調整下方滑桿可即時看到擬合線移動。'
+                  : '綠色區間代表目前採樣的歸一化範圍；左軸為歸一化後，右軸為原始強度。',
+              )
+            })()}
+
+            {/* 3. Final spectrum — only when normalization is active */}
             {params.norm_method !== 'none' && renderStagePair(
-              '3. 歸一化',
-              isOverlayMode ? buildNormTracesOverlay('TEY') : buildNormTracesSingle('TEY'),
-              isOverlayMode ? buildNormTracesOverlay('TFY') : buildNormTracesSingle('TFY'),
-              normalizationTeyLayout,
-              normalizationTfyLayout,
-              <div className="space-y-3">
-                <CheckRow label="疊加歸一化前（右軸）" checked={showNormBefore.TEY} onChange={v => setShowNormBefore(p => ({ ...p, TEY: v }))} />
-                {renderNormalizationChartControls('TEY')}
-              </div>,
-              <div className="space-y-3">
-                <CheckRow label="疊加歸一化前（右軸）" checked={showNormBefore.TFY} onChange={v => setShowNormBefore(p => ({ ...p, TFY: v }))} />
-                {renderNormalizationChartControls('TFY')}
-              </div>,
-              '綠色區間代表目前採樣的歸一化範圍；左軸為歸一化後，右軸為原始強度。',
-            )}
-
-            {/* 4. Final spectrum – processed only (raw visible in stage 1) */}
-            {renderStagePair(
-              '4. 最終光譜',
+              params.norm_method === 'athena_norm'
+                ? `3. 最終光譜（${normView === 'flattened' ? 'Flattened' : 'Normalized'}）`
+                : '3. 最終光譜',
               isOverlayMode
                 ? buildMultiTraces(overlayDatasets, 'TEY', false, showWhiteLineMarkers && whiteLineEnabled)
-                : activeDataset ? buildTraces(activeDataset, 'TEY', false, showWhiteLineMarkers && whiteLineEnabled) : [],
+                : activeDataset ? buildTraces(activeDataset, 'TEY', false, showWhiteLineMarkers && whiteLineEnabled, getChannelFinal(activeDataset, 'TEY')) : [],
               isOverlayMode
                 ? buildMultiTraces(overlayDatasets, 'TFY', false, showWhiteLineMarkers && whiteLineEnabled)
-                : activeDataset ? buildTraces(activeDataset, 'TFY', false, showWhiteLineMarkers && whiteLineEnabled) : [],
+                : activeDataset ? buildTraces(activeDataset, 'TFY', false, showWhiteLineMarkers && whiteLineEnabled, getChannelFinal(activeDataset, 'TFY')) : [],
               plainTeyLayout,
               plainTfyLayout,
             )}
@@ -2700,6 +2802,172 @@ export default function XAS({
         </div>
       </main>
 
+      {/* ── Column picker modal ──────────────────────────────────────────────── */}
+      {showColModal && rawFiles.length > 0 && (() => {
+        const safeIdx = Math.min(modalFileIdx, rawFiles.length - 1)
+        const file = rawFiles[safeIdx]
+        const draft = draftMappings[file.name] ?? { energy: 0, tey: 1, tfy: 2, io: null }
+        const colNames = file.column_names ?? []
+        const colCount = colNames.length
+
+        const setDraft = (key: 'energy' | 'tey' | 'tfy' | 'io', val: number | null) =>
+          setDraftMappings(prev => ({ ...prev, [file.name]: { ...draft, [key]: val } }))
+
+        const applyToAll = () => {
+          const update: typeof draftMappings = {}
+          rawFiles.forEach(rf => { update[rf.name] = { ...draft } })
+          setDraftMappings(prev => ({ ...prev, ...update }))
+        }
+
+        const confirmAll = () => {
+          // confirm every file's draft as the final mapping
+          const confirmed: typeof columnMappings = {}
+          rawFiles.forEach(rf => {
+            const d = draftMappings[rf.name] ?? { energy: 0, tey: 1, tfy: 2, io: null }
+            confirmed[rf.name] = d
+          })
+          setColumnMappings(confirmed)
+          setShowColModal(false)
+        }
+
+        const allReady = rawFiles.every(rf => {
+          const d = draftMappings[rf.name]
+          return d && d.energy != null && d.tey != null && d.tfy != null
+        })
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+            <div className="flex w-full max-w-3xl flex-col rounded-2xl border border-[var(--card-border)] bg-[var(--panel-bg)] shadow-2xl overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
+              {/* title */}
+              <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-6 py-4">
+                <div>
+                  <h3 className="text-base font-semibold text-[var(--text-main)]">欄位對應設定</h3>
+                  <p className="text-xs text-[var(--text-soft)] mt-0.5">
+                    {rawFiles.length > 1 ? `檔案 ${safeIdx + 1} / ${rawFiles.length}：` : ''}{file.name}
+                  </p>
+                </div>
+                {rawFiles.length > 1 && (
+                  <div className="flex items-center gap-1.5">
+                    {rawFiles.map((_, i) => (
+                      <button key={i} type="button"
+                        onClick={() => setModalFileIdx(i)}
+                        className={`h-2.5 w-2.5 rounded-full transition-colors ${i === safeIdx ? 'bg-[var(--accent-strong)]' : draftMappings[rawFiles[i].name] ? 'bg-[var(--accent-tertiary)]' : 'bg-[var(--card-border)]'}`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+                {/* preview table */}
+                <div>
+                  <p className="text-xs uppercase tracking-[0.14em] text-[var(--text-soft)] mb-2">資料預覽（前 5 行）</p>
+                  <div className="overflow-x-auto rounded border border-[var(--card-border)]">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-[var(--accent-soft)]">
+                          <th className="px-2 py-1.5 text-left text-[var(--text-soft)] font-medium">#</th>
+                          {colNames.map((n, ci) => (
+                            <th key={ci} className="px-3 py-1.5 text-right font-medium whitespace-nowrap text-[var(--text-soft)]">
+                              <span className={
+                                ci === draft.energy ? 'text-[var(--accent-strong)]' :
+                                ci === draft.tey ? 'text-sky-400' :
+                                ci === draft.tfy ? 'text-violet-400' :
+                                ci === draft.io ? 'text-amber-400' : ''
+                              }>{
+                                ci === draft.energy ? '⚡ ' :
+                                ci === draft.tey ? 'T ' :
+                                ci === draft.tfy ? 'F ' :
+                                ci === draft.io ? '÷ ' : ''
+                              }</span>{n}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[0, 1, 2, 3, 4].map(row => (
+                          <tr key={row} className={row % 2 === 0 ? 'bg-[var(--card-bg)]' : 'bg-[var(--accent-soft)]'}>
+                            <td className="px-2 py-1.5 text-[var(--text-soft)]">{row + 1}</td>
+                            {(file.raw_columns ?? []).map((col, ci) => (
+                              <td key={ci} className="px-3 py-1.5 text-right tabular-nums text-[var(--text-main)] whitespace-nowrap">
+                                {col[row] != null ? Number(col[row]).toPrecision(4) : '—'}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* 2×2 selectors */}
+                <div>
+                  <p className="text-xs uppercase tracking-[0.14em] text-[var(--text-soft)] mb-2">指定各欄用途</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {([
+                      { key: 'energy' as const, label: 'Energy 軸', icon: '⚡', color: 'text-[var(--accent-strong)]', nullable: false },
+                      { key: 'io' as const, label: 'I₀ Monitor（可選）', icon: '÷', color: 'text-amber-400', nullable: true },
+                      { key: 'tey' as const, label: 'TEY 訊號', icon: 'T', color: 'text-sky-400', nullable: false },
+                      { key: 'tfy' as const, label: 'TFY 訊號', icon: 'F', color: 'text-violet-400', nullable: false },
+                    ]).map(({ key, label, icon, color, nullable }) => (
+                      <div key={key} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+                        <p className={`text-xs font-semibold mb-2 ${color}`}>{icon} {label}</p>
+                        <select
+                          value={(draft[key] as number | null) ?? -1}
+                          onChange={e => setDraft(key, Number(e.target.value) === -1 ? null : Number(e.target.value))}
+                          className="w-full rounded-lg border border-[var(--card-border)] bg-[var(--panel-bg)] px-2.5 py-2 text-sm text-[var(--text-main)]"
+                        >
+                          {nullable && <option value={-1}>（不使用）</option>}
+                          {Array.from({ length: colCount }, (_, i) => (
+                            <option key={i} value={i}>{i}: {colNames[i]}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* apply to all */}
+                {rawFiles.length > 1 && (
+                  <button type="button" onClick={applyToAll}
+                    className="w-full rounded-xl border border-[var(--accent-soft)] py-2.5 text-sm text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors">
+                    套用此對應到全部 {rawFiles.length} 個檔案
+                  </button>
+                )}
+              </div>
+
+              {/* footer */}
+              <div className="flex items-center justify-between gap-2 border-t border-[var(--card-divider)] px-6 py-4">
+                <button type="button"
+                  onClick={() => { setRawFiles([]); setColumnMappings({}); setShowColModal(false) }}
+                  className="text-sm text-rose-400 hover:text-rose-300">
+                  取消並清除
+                </button>
+                <div className="flex gap-2">
+                  {rawFiles.length > 1 && safeIdx > 0 && (
+                    <button type="button" onClick={() => setModalFileIdx(safeIdx - 1)}
+                      className="rounded-lg border border-[var(--card-border)] px-4 py-2 text-sm text-[var(--text-soft)] hover:text-[var(--text-main)] transition-colors">
+                      ← 上一個
+                    </button>
+                  )}
+                  {rawFiles.length > 1 && safeIdx < rawFiles.length - 1 ? (
+                    <button type="button" onClick={() => setModalFileIdx(safeIdx + 1)}
+                      className="rounded-lg bg-[var(--accent-strong)] px-5 py-2 text-sm font-semibold text-white hover:opacity-90">
+                      下一個 →
+                    </button>
+                  ) : (
+                    <button type="button" onClick={confirmAll} disabled={!allReady}
+                      className={`rounded-lg px-6 py-2 text-sm font-semibold transition-colors ${allReady ? 'bg-[var(--accent-strong)] text-white hover:opacity-90' : 'bg-[var(--card-border)] text-[var(--text-soft)] cursor-not-allowed'}`}>
+                      確認完成
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Overlay selection modal */}
       {showOverlayModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -2711,7 +2979,7 @@ export default function XAS({
               >✕</button>
             </div>
             <div className="max-h-64 space-y-2 overflow-y-auto">
-              {rawFiles.map(f => {
+              {effectiveFiles.map(f => {
                 const allSelected = overlaySelectedNames.length === 0
                 const isChecked = allSelected || overlaySelectedNames.includes(f.name)
                 return (
@@ -2723,10 +2991,10 @@ export default function XAS({
                       type="checkbox"
                       checked={isChecked}
                       onChange={e => {
-                        const current = allSelected ? rawFiles.map(x => x.name) : [...overlaySelectedNames]
+                        const current = allSelected ? effectiveFiles.map(x => x.name) : [...overlaySelectedNames]
                         if (e.target.checked) {
                           const next = current.includes(f.name) ? current : [...current, f.name]
-                          setOverlaySelectedNames(next.length === rawFiles.length ? [] : next)
+                          setOverlaySelectedNames(next.length === effectiveFiles.length ? [] : next)
                         } else {
                           setOverlaySelectedNames(current.filter(n => n !== f.name))
                         }

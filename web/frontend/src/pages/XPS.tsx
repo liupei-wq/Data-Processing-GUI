@@ -1114,6 +1114,13 @@ function ModuleDropdownTag({ activeModule, onSelect }: { activeModule: AnalysisM
 
 function createPeakId() { return `XP${Math.random().toString(36).slice(2, 7)}` }
 
+function formatMetric(value: number | null | undefined, decimals = 4): string {
+  if (value == null || !Number.isFinite(value)) return 'N/A'
+  const abs = Math.abs(value)
+  if (abs >= 1e5 || (abs > 0 && abs < 1e-3)) return value.toExponential(2)
+  return value.toFixed(decimals)
+}
+
 type PeakSourceType = 'database' | 'manual'
 
 interface PeakCandidate extends InitPeak {
@@ -1122,6 +1129,9 @@ interface PeakCandidate extends InitPeak {
   enabled: boolean
   sourceType: PeakSourceType
   cardLocked: boolean
+  originalCenter?: number
+  originalFwhm?: number
+  originalAmplitude?: number
 }
 
 function createPeakCandidate(
@@ -1165,6 +1175,9 @@ function createPeakCandidate(
     fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, fwhm * PEAK_FWHM_MIN_RATIO),
     fwhm_max: Math.max(fwhm * PEAK_FWHM_MAX_MULTIPLIER, fwhm + 0.2),
     amplitude_max: amplitudeMax,
+    originalCenter: center,
+    originalFwhm: fwhm,
+    originalAmplitude: amplitude,
   }
 }
 
@@ -1191,6 +1204,9 @@ function sanitizePeakCandidate(peak: PeakCandidate, datasetMax = 1000): PeakCand
     fwhm_min: peak.fwhm_min ?? base.fwhm_min,
     fwhm_max: peak.fwhm_max ?? base.fwhm_max,
     amplitude_max: peak.amplitude_max ?? Math.max(peak.amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+    originalCenter: peak.originalCenter ?? base.originalCenter,
+    originalFwhm: peak.originalFwhm ?? base.originalFwhm,
+    originalAmplitude: peak.originalAmplitude ?? base.originalAmplitude,
   }
 }
 
@@ -1263,7 +1279,7 @@ function buildFitPeakPayloads(peaks: PeakCandidate[], dataset: ProcessedDataset)
     }
   })
 
-  return payloads.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, cardLocked: _cardLocked, ...peak }) => peak)
+  return payloads.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, cardLocked: _cardLocked, originalCenter: _oC, originalFwhm: _oF, originalAmplitude: _oA, ...peak }) => peak)
 }
 
 interface DatasetSessionState {
@@ -1559,6 +1575,8 @@ export default function XPS({
   const [overlayFitResult, setOverlayFitResult] = useState<FitResult | null>(null)
   const [isFitting, setIsFitting] = useState(false)
   const [fitError, setFitError] = useState<string | null>(null)
+  const [fitHistory, setFitHistory] = useState<{ iter: number; r2: number; rmse: number; delta: number }[]>([])
+  const [autoConverging, setAutoConverging] = useState(false)
 
   // mode
   const [xpsMode, setXpsMode] = useState<'core_level' | 'valence_band'>('core_level')
@@ -2415,7 +2433,7 @@ export default function XPS({
         sourceType: 'database',
         theoretical_center: pk.be,
       }, fitTargetPeakScale))
-      setPeakCandidates(prev => [...prev, ...newPeaks])
+      setPeakCandidates(prev => [...prev.filter(p => p.sourceType !== 'database'), ...newPeaks])
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setElementsLoading(false) }
   }
@@ -2453,6 +2471,19 @@ export default function XPS({
         peakLabels,
         { maxfev: 8000, nRestarts: fitNRestarts },
       )
+      // Update unlocked peak params with fitted values so next press refines from here (OriginPro style)
+      const scale = fitTargetPeakScale
+      setPeakCandidates(prev => prev.map(pk => {
+        const activeIdx = activePeaks.indexOf(pk)
+        if (activeIdx < 0) return pk
+        const fitted = res.peaks[activeIdx]
+        if (!fitted) return pk
+        let updated = pk
+        if (!pk.lock_center) updated = updatePeakCenterSeed(updated, fitted.Center_eV, scale)
+        if (!pk.lock_fwhm)   updated = updatePeakFwhmSeed(updated, fitted.FWHM_eV, scale)
+        if (!pk.lock_area)   updated = updatePeakAmplitudeSeed(updated, fitted.Height, scale)
+        return updated
+      }))
       if (processingViewMode === 'overlay') {
         setOverlayFitResult(res)
       } else {

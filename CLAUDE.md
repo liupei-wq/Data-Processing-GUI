@@ -1,8 +1,22 @@
+[2026-05-15] 新增：XPS / XAS 峰擬合新增 OriginPro 風格迭代收斂。`handleFit` 在擬合成功後，將未鎖定的峰（`lock_center/lock_fwhm/lock_area = false`）的 Center、FWHM、Height 更新回 `peakCandidates`（透過 `updatePeakCenterSeed/FwhmSeed/AmplitudeSeed`），使下一次按「執行擬合」從上次結果出發，持續收斂至最佳解。影響檔案：`web/frontend/src/pages/XPS.tsx`、`web/frontend/src/pages/XAS.tsx`。驗證 `npm run build` 通過。
+
+[2026-05-15] 除錯：XAS 三項 bug 修正。① 峰擬合重複匯入：`loadSampleEdgePeaks` 改為先清除所有 `sourceType==='database'` 的舊峰再加入新峰，不再無限 append；② 歸一化方法切換時 trace 標籤錯誤：`buildNormTracesSingle`/`buildNormTracesOverlay` 的曲線名稱改為 `normView==='flattened' && norm_method==='athena_norm'` 才顯示 "Flattened"；③ `normChartMode`/`normView` 不隨方法切換重置：新增 `useEffect` 在 `norm_method !== 'athena_norm'` 時自動重置為 `'normalized'`，避免切換回 athena 時殘留舊狀態。影響檔案：`web/frontend/src/pages/XAS.tsx`。驗證 `npm run build` 通過。
+
+[2026-05-15] 變更：XAS 主圖精簡為常態 2 張，「3. 最終光譜」改為只在 `norm_method !== 'none'` 時才顯示；無歸一化時畫面只剩「1. 原始/前處理後」TEY + TFY 2 張，開啟歸一化後才追加「2. 歸一化」與「3. 最終光譜」共 4 張。影響檔案：`web/frontend/src/pages/XAS.tsx`。驗證 `npm run build` 通過。
+
+[2026-05-15] 變更：XAS 歸一化方法精簡，只保留 `athena_norm` 與 `post_edge`，移除 `min_max`、`max`、`area`、`mean_region`；`types/xas.ts` 的 `norm_method` union type 同步縮減；sidebar Section 4 選單、onChange 邏輯、renderNormalizationSidebarInputs 死碼分支、chart controls label 全部清理。驗證 `npm run build` 通過。
+
+[2026-05-15] 變更：XAS 模組歸一化圖新增「背景擬合視圖」。後端 `_normalize_athena()` 回傳值擴充為 7-tuple，新增 `pre_line`（pre-edge 線性擬合線）、`post_poly`（post-edge 多項式）、`y_sub`（扣 pre-edge 後光譜）；`ProcessedDataset` 新增 `tey/tfy_pre_edge_line`、`tey/tfy_post_edge_poly`、`tey/tfy_pre_subtracted` 六個欄位；前端 `types/xas.ts` 同步；`XAS.tsx` 加 `normChartMode` state，在歸一化卡片 footer 加「背景擬合 / 歸一化後」切換 pills，背景擬合模式顯示原始光譜 + 橘色 pre-edge 線（左 y 軸）及扣除後光譜 + 綠色 post-edge 多項式（右 y 軸），Pre-edge 滑桿條件從 `post_edge` 擴充至 `athena_norm`。驗證 `python3 -m py_compile`、`npm run build`、`git diff --check` 通過。
+
 [2026-05-15] 變更：`XAS Athena 處理` 的手動刪峰 / 加回資料 draft 區間支援直接在 Plotly 預覽圖上拖曳；藍色刪峰區與青綠色加回區可拖整塊或左右邊界，左側 start/end 拉桿數值會同步更新。`PlotlyChart.tsx` 兼容層新增 `onRelayout` 轉發。驗證 `cd web/frontend && npm run build` 通過。
 
 [2026-05-15] 變更：`XAS Athena 處理` 新增線性背景扣除與歸一化微調；左側新增全域微調卡，可開關線性扣背景並調整背景斜率/截距、歸一化倍率/平移。微調會套用到所有 scan 的 normalized / flattened 曲線，並同步進入平均、手動刪峰/加回、CSV 匯出與 OriginPro 產檔腳本。驗證 `cd web/frontend && npm run build` 通過。
 
 [2026-05-15] 變更：`XAS Athena 處理` 右側預覽新增最終結果圖；上方保留 raw/平均與可拖曳區間，下方獨立顯示目前 selected sample 經微調、刪峰/加回後的 clean scan1、clean scan2 與 final average 曲線，並跟 Normalized / Flattened 切換同步。驗證 `cd web/frontend && npm run build` 通過。
+
+[2026-05-15] 變更：XAS 模組欄位對應改為強制 Modal 選擇。上傳檔案後自動彈出「欄位對應設定」modal，停用自動偵測（下拉預設為索引 0/1/2），使用者必須逐檔手動指定 Energy / TEY / TFY 欄（I₀ 可選）；多檔時可「套用到全部」一次設定；`effectiveFiles` 改為只含已確認 mapping 的檔案，未設定欄位的檔案不會送入處理；Section 1 檔案清單改為顯示確認狀態（✓ / ! 未設定），並提供「設定欄位 / 重設欄位」按鈕可重開 modal。驗證 `npm run build` 通過。
+
+[2026-05-15] 變更：XAS 模組新增逐檔欄位對應選擇器。後端 `routers/xas.py` parser 改為回傳所有欄的原始數值陣列（`raw_columns`）、偵測到的欄位名稱（`column_names`）與自動猜測的 mapping（`default_mapping`，依 energy/tey/tfy/i0 關鍵字比對）；前端 `types/xas.ts` 擴充 `ParsedXasFile`，`XAS.tsx` 新增 `effectiveFiles` useMemo（依使用者選定欄位在前端計算 TEY/I₀、TFY/I₀ 並排序），Section 1 檔案清單每個檔案加入可展開「欄位 ▼」選擇器，含前 3 行預覽表、2×2 欄位下拉（Energy / I₀ / TEY / TFY）、套用到其他未設定檔案按鈕與還原自動按鈕；後續所有 process 呼叫使用 effectiveFiles。驗證 `python3 -m py_compile ...`、`npm run build`、`git diff --check` 通過。
 
 # Nigiro Pro 協作手冊
 
@@ -665,3 +679,7 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-12] 檢查：Raman reference peak 理論值/名稱編輯功能完成後，執行 git diff --check、default_raman_peaks JSON 解析，並在 npm 可用時執行前端 build。
 
 [2026-05-12] 實作完成：Raman 繪圖 overlay 參考峰新增可編輯理論值與自訂顯示名稱；每個參考峰可單獨還原，整體預設會還原所有理論值/名稱；圖中右上角 overlay legend 預設關閉並新增顯示開關。驗證 git diff --check 與 default_raman_peaks JSON 解析通過；工具環境找不到 npm，未執行 npm run build。
+
+[2026-05-15] 檢查：使用者要求「推下來，以 GitHub 為主」；先確認本地 `main` 狀態為 `ahead 1, behind 43`，本地多出 commit `2265a2b`，遠端 `origin/main` 為 `8a0ae72`。
+
+[2026-05-15] 同步完成：已建立本地備份分支 `backup_github_sync_20260515_2265a2b`，執行 `git fetch origin` 後以 `git reset --hard origin/main` 將 `main` 直接對齊 GitHub；目前 `HEAD=origin/main=8a0ae72`（`v25.3`）。
