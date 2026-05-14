@@ -216,15 +216,7 @@ function intersectVbmLines(edgeLine: VbmLineFit | null, baselineLine: VbmLineFit
   return { x, y }
 }
 
-function buildVbmPreviewWindow(
-  x: number[],
-  y: number[],
-  tangentLine: VbmLineFit | null,
-  baselineLine: VbmLineFit | null,
-  vbmPoint: { x: number; y: number } | null,
-  edgeRange: { start: number; end: number },
-  baselineRange: { start: number; end: number },
-) {
+function buildVbmStablePlotWindow(x: number[], y: number[]) {
   const points = x
     .map((xi, index) => ({ x: xi, y: y[index] }))
     .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
@@ -233,74 +225,15 @@ function buildVbmPreviewWindow(
 
   const datasetMinX = points[0].x
   const datasetMaxX = points[points.length - 1].x
-  const finiteValues = (values: Array<number | null | undefined>) => values.filter((value): value is number => Number.isFinite(value))
-
-  const coreXs = finiteValues([
-    edgeRange.start,
-    edgeRange.end,
-    baselineRange.start,
-    baselineRange.end,
-    tangentLine?.anchor_start_point.x,
-    tangentLine?.anchor_end_point.x,
-    tangentLine?.start_point.x,
-    tangentLine?.end_point.x,
-    baselineLine?.anchor_start_point.x,
-    baselineLine?.anchor_end_point.x,
-    baselineLine?.start_point.x,
-    baselineLine?.end_point.x,
-  ])
-  const seedXs = coreXs.length > 0 ? coreXs : [datasetMinX, datasetMaxX]
-  let focusMinX = Math.min(...seedXs)
-  let focusMaxX = Math.max(...seedXs)
-  const coreSpanX = Math.max(focusMaxX - focusMinX, 0.4)
-
-  if (vbmPoint && Number.isFinite(vbmPoint.x)) {
-    const vbmAllowance = Math.max(coreSpanX * 1.2, 0.8)
-    if (vbmPoint.x >= focusMinX - vbmAllowance && vbmPoint.x <= focusMaxX + vbmAllowance) {
-      focusMinX = Math.min(focusMinX, vbmPoint.x)
-      focusMaxX = Math.max(focusMaxX, vbmPoint.x)
-    }
-  }
-
-  const xPadding = Math.max(coreSpanX * 0.22, 0.25)
-  let xWindowMin = Math.max(datasetMinX, focusMinX - xPadding)
-  let xWindowMax = Math.min(datasetMaxX, focusMaxX + xPadding)
-  if (xWindowMax - xWindowMin < 0.35) {
-    const center = (xWindowMin + xWindowMax) / 2
-    const halfWidth = 0.175
-    xWindowMin = Math.max(datasetMinX, center - halfWidth)
-    xWindowMax = Math.min(datasetMaxX, center + halfWidth)
-  }
-
-  const lineX = Array.from({ length: 80 }, (_, index) => xWindowMin + (xWindowMax - xWindowMin) * index / 79)
-  const spectrumWindowY = points
-    .filter(point => point.x >= xWindowMin - 1e-9 && point.x <= xWindowMax + 1e-9)
-    .map(point => point.y)
-  const markerY = finiteValues([
-    tangentLine?.anchor_start_point.y,
-    tangentLine?.anchor_end_point.y,
-    tangentLine?.start_point.y,
-    tangentLine?.end_point.y,
-    baselineLine?.anchor_start_point.y,
-    baselineLine?.anchor_end_point.y,
-    baselineLine?.start_point.y,
-    baselineLine?.end_point.y,
-    vbmPoint?.y,
-  ])
-  const lineY = [
-    ...(tangentLine ? lineX.map(xi => tangentLine.slope * xi + tangentLine.intercept) : []),
-    ...(baselineLine ? lineX.map(xi => baselineLine.slope * xi + baselineLine.intercept) : []),
-  ].filter(value => Number.isFinite(value))
-  const yValues = [...spectrumWindowY, ...markerY, ...lineY]
-  const fallbackY = points.map(point => point.y)
-  const minY = Math.min(...(yValues.length > 0 ? yValues : fallbackY))
-  const maxY = Math.max(...(yValues.length > 0 ? yValues : fallbackY))
+  const spectrumY = points.map(point => point.y)
+  const minY = Math.min(...spectrumY)
+  const maxY = Math.max(...spectrumY)
   const ySpan = Math.max(maxY - minY, 1e-3)
-  const yPadding = Math.max(ySpan * 0.16, Math.max(Math.abs(minY), Math.abs(maxY), 1) * 0.04)
+  const yPadding = Math.max(ySpan * 0.08, Math.max(Math.abs(minY), Math.abs(maxY), 1) * 0.03)
 
   return {
-    lineX,
-    xAxisRange: [xWindowMax, xWindowMin] as [number, number],
+    lineX: [datasetMinX, datasetMaxX] as [number, number],
+    xAxisRange: [datasetMaxX, datasetMinX] as [number, number],
     yAxisRange: [minY - yPadding, maxY + yPadding] as [number, number],
   }
 }
@@ -1692,26 +1625,12 @@ export default function XPS({
   const vbmPreviewVbm = useMemo(() => {
     return intersectVbmLines(vbmPreviewTangent, vbmPreviewBaselineLine)
   }, [vbmPreviewTangent, vbmPreviewBaselineLine])
-  const vbmPreviewWindow = useMemo(() => {
+  const vbmPlotWindow = useMemo(() => {
     if (!vbmDataset || xpsMode !== 'valence_band') return null
-    return buildVbmPreviewWindow(
-      vbmDataset.x,
-      vbmDataset.y_processed,
-      vbmPreviewTangent,
-      vbmPreviewBaselineLine,
-      vbmPreviewVbm,
-      { start: vbmEdgeLo, end: vbmEdgeHi },
-      { start: vbmBaselineLo, end: vbmBaselineHi },
-    )
+    // Keep axes tied to the spectrum so dragging VBM handles only rotates the guide lines.
+    return buildVbmStablePlotWindow(vbmDataset.x, vbmDataset.y_processed)
   }, [
     vbmDataset,
-    vbmPreviewTangent,
-    vbmPreviewBaselineLine,
-    vbmPreviewVbm,
-    vbmEdgeLo,
-    vbmEdgeHi,
-    vbmBaselineLo,
-    vbmBaselineHi,
     xpsMode,
   ])
   const estimatedInterpPoints = estimateInterpolationPoints(processingViewMode === 'overlay' && overlayFiles.length > 0 ? overlayFiles : rawFiles)
@@ -3976,7 +3895,7 @@ export default function XPS({
                 <p className="mb-3 text-xs text-[var(--text-soft)]">空心 marker 是你輸入 x 值對應到的光譜點，實心 marker 是在附近 20% 搜尋窗中實際被拿來畫線的點。</p>
                 <Plot
                   data={(() => {
-                    const lineXArr = vbmPreviewWindow?.lineX ?? [beMin, beMax]
+                    const lineXArr = vbmPlotWindow?.lineX ?? [beMin, beMax]
                     return [
                       { x: vbmDataset.x, y: vbmDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
                       ...(vbmPreviewTangent ? [
@@ -4005,16 +3924,16 @@ export default function XPS({
                     return {
                       ...baseLayout,
                       margin: { l: 60, r: 20, t: 20, b: 50 },
-                      ...(vbmPreviewWindow ? {
+                      ...(vbmPlotWindow ? {
                         xaxis: {
                           ...(baseLayout.xaxis ?? {}),
                           autorange: false,
-                          range: vbmPreviewWindow.xAxisRange,
+                          range: vbmPlotWindow.xAxisRange,
                         },
                         yaxis: {
                           ...(baseLayout.yaxis ?? {}),
                           autorange: false,
-                          range: vbmPreviewWindow.yAxisRange,
+                          range: vbmPlotWindow.yAxisRange,
                         },
                       } : {}),
                       shapes: [

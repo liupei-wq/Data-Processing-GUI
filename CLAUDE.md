@@ -689,3 +689,4 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-15] XAS Athena manual removal/restore editor was unified behind a two-option mode selector. Only the selected mode now shows its editable draft range on the Plotly preview, and drag relayout updates only that active draft. Verification: `cd web/frontend && npm run build` passed.
 
 [2026-05-15] 合併：依使用者要求 merge GitHub 檔案；執行 `git fetch origin` 與 `git merge origin/main` 後，確認程式碼檔自動合併，僅 `CLAUDE.md` / `AGENTS.md` 發生文件衝突，已手動整併保留遠端 `v25.4/v25.5` 與本地 `v25.6` 紀錄。
+[2026-05-15] 除錯：修正 XPS `VBM 線性外推圖` 拉動切線/基準線 slider 時整張圖亂跑。根因是 `web/frontend/src/pages/XPS.tsx` 的 VBM 預覽視窗原本會依切線、基準線與 VBM 交點動態重算 `xaxis.range`、`yaxis.range` 與畫線用 `lineX`，導致使用者一調區間，圖框就跟著平移/縮放。現改為 `buildVbmStablePlotWindow()` 只根據光譜本身的 x/y 範圍建立固定座標窗，讓 slider 只影響切線/基準線旋轉與 marker 位置，不再改變整張數據圖視窗。影響檔案：`web/frontend/src/pages/XPS.tsx`；驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
