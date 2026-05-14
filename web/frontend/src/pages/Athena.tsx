@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import Plot from '../components/PlotlyChart'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import Plot, { type PlotRelayoutEvent } from '../components/PlotlyChart'
 import {
   buildAthenaAverageCsv,
   buildAthenaOriginProjectPython,
   buildAthenaRawCsv,
   buildAthenaSummaryTxt,
   DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS,
+  DEFAULT_ATHENA_REFINEMENT_SETTINGS,
+  applyAthenaRefinementToScan,
   downloadTextFile,
   makeAthenaAverage,
   processAthenaFiles,
@@ -15,6 +17,7 @@ import {
   type AthenaManualRemovalRegion,
   type AthenaManualRestoreRegion,
   type AthenaProcessResult,
+  type AthenaRefinementSettings,
   type AthenaSampleGroup,
   type AthenaScanResult,
 } from '../features/athena/athenaXmu'
@@ -23,6 +26,8 @@ type AthenaPreviewMode = 'normalized' | 'flattened'
 type RemovalDraft = { start: number; end: number; scan: AthenaManualRemovalRegion['scan'] }
 type RestoreDraft = { start: number; end: number; scan: AthenaManualRestoreRegion['scan'] }
 type AthenaRemovalSensitivity = 'standard' | 'loose' | 'very-loose' | 'extra-loose'
+type AthenaRefinementNumberKey = 'backgroundSlope' | 'backgroundOffset' | 'normalizationScale' | 'normalizationOffset'
+type EditablePlotlyShape = Partial<Plotly.Shape> & { editable?: boolean }
 
 const ATHENA_TRACE_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#be123c', '#4f46e5']
 const ATHENA_AVERAGE_COLOR = '#111827'
@@ -108,6 +113,47 @@ function formatEnergy(value: number) {
   return Number.isFinite(value) ? value.toFixed(3) : '-'
 }
 
+function formatSettingValue(value: number, digits = 6) {
+  if (!Number.isFinite(value)) return '0'
+  return Number(value.toFixed(digits)).toString()
+}
+
+function updateNumericSetting(
+  setter: Dispatch<SetStateAction<AthenaRefinementSettings>>,
+  key: AthenaRefinementNumberKey,
+  value: string,
+) {
+  const parsed = Number(value)
+  setter(current => ({
+    ...current,
+    [key]: Number.isFinite(parsed) ? parsed : DEFAULT_ATHENA_REFINEMENT_SETTINGS[key],
+  }))
+}
+
+function relayoutNumber(event: PlotRelayoutEvent, key: string) {
+  const value = event[key]
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function relayoutShapeRange(event: PlotRelayoutEvent, shapeIndex: number) {
+  const directX0 = relayoutNumber(event, `shapes[${shapeIndex}].x0`)
+  const directX1 = relayoutNumber(event, `shapes[${shapeIndex}].x1`)
+  if (directX0 != null || directX1 != null) return { x0: directX0, x1: directX1 }
+
+  const shape = event[`shapes[${shapeIndex}]`]
+  if (!shape || typeof shape !== 'object') return null
+  const maybeShape = shape as { x0?: unknown; x1?: unknown }
+  const x0 = typeof maybeShape.x0 === 'number' && Number.isFinite(maybeShape.x0) ? maybeShape.x0 : null
+  const x1 = typeof maybeShape.x1 === 'number' && Number.isFinite(maybeShape.x1) ? maybeShape.x1 : null
+  if (x0 == null && x1 == null) return null
+  return { x0, x1 }
+}
+
 function useDebouncedValue<T>(value: T, delayMs: number) {
   const [debouncedValue, setDebouncedValue] = useState(value)
 
@@ -154,6 +200,7 @@ export default function Athena() {
   const [removalDraft, setRemovalDraft] = useState<RemovalDraft>({ start: 0, end: 0, scan: 'both' })
   const [restoreDraft, setRestoreDraft] = useState<RestoreDraft>({ start: 0, end: 0, scan: 'both' })
   const [removalSensitivity, setRemovalSensitivity] = useState<AthenaRemovalSensitivity>('loose')
+  const [refinementSettings, setRefinementSettings] = useState<AthenaRefinementSettings>(DEFAULT_ATHENA_REFINEMENT_SETTINGS)
   const chartRemovalDraft = useDebouncedValue(removalDraft, 80)
   const chartRestoreDraft = useDebouncedValue(restoreDraft, 80)
   const autoRemovalOptions = useMemo(
@@ -164,10 +211,15 @@ export default function Athena() {
 
   const adjustedResult = useMemo<AthenaProcessResult | null>(() => {
     if (!result) return null
+    const refinedScans = result.scans.map(scan => applyAthenaRefinementToScan(scan, refinementSettings))
+    const refinedScanById = new Map(refinedScans.map(scan => [scan.id, scan]))
     return {
       ...result,
+      scans: refinedScans,
       groups: result.groups.map(group => {
-        const sortedScans = group.scans.slice().sort((a, b) => a.fileName.localeCompare(b.fileName))
+        const sortedScans = group.scans
+          .map(scan => refinedScanById.get(scan.id) ?? scan)
+          .sort((a, b) => a.fileName.localeCompare(b.fileName))
         if (sortedScans.length < 2) return group
         try {
           return {
@@ -187,7 +239,7 @@ export default function Athena() {
         }
       }),
     }
-  }, [autoRemovalOptions, manualRemovals, manualRestores, result])
+  }, [autoRemovalOptions, manualRemovals, manualRestores, refinementSettings, result])
 
   const selectedGroup = useMemo<AthenaSampleGroup | null>(() => {
     if (!adjustedResult?.groups.length) return null
@@ -251,7 +303,7 @@ export default function Athena() {
       })
     }
 
-    const removalShapes = selectedManualRemovals.map(region => ({
+    const removalShapes: EditablePlotlyShape[] = selectedManualRemovals.map(region => ({
       type: 'rect' as const,
       xref: 'x' as const,
       yref: 'paper' as const,
@@ -262,6 +314,7 @@ export default function Athena() {
       fillcolor: ATHENA_REMOVAL_FILL,
       line: { color: ATHENA_REMOVAL_LINE, width: 1 },
       layer: 'below' as const,
+      editable: false,
     }))
 
     for (const region of selectedManualRestores) {
@@ -276,6 +329,7 @@ export default function Athena() {
         fillcolor: ATHENA_RESTORE_FILL,
         line: { color: ATHENA_RESTORE_LINE, width: 1 },
         layer: 'below',
+        editable: false,
       })
     }
 
@@ -294,6 +348,7 @@ export default function Athena() {
           fillcolor: ATHENA_DRAFT_REMOVAL_FILL,
           line: { color: ATHENA_DRAFT_REMOVAL_LINE, width: 1.5 },
           layer: 'below',
+          editable: true,
         })
       }
 
@@ -311,6 +366,7 @@ export default function Athena() {
           fillcolor: ATHENA_DRAFT_RESTORE_FILL,
           line: { color: ATHENA_DRAFT_RESTORE_LINE, width: 1.5 },
           layer: 'below',
+          editable: true,
         })
       }
     }
@@ -338,7 +394,12 @@ export default function Athena() {
         },
         legend: { orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top' },
       } satisfies Partial<Plotly.Layout>,
-      config: { responsive: true, displaylogo: false } satisfies Partial<Plotly.Config>,
+      config: {
+        responsive: true,
+        displaylogo: false,
+        editable: true,
+        edits: { shapePosition: true },
+      } satisfies Partial<Plotly.Config>,
     }
   }, [
     previewMode,
@@ -351,6 +412,103 @@ export default function Athena() {
     selectedManualRemovals,
     selectedManualRestores,
   ])
+
+  const finalResultFigure = useMemo(() => {
+    if (!selectedGroup?.average) return null
+    const average = selectedGroup.average
+    const isNormalized = previewMode === 'normalized'
+    const yTitle = isNormalized ? 'Final Normalized mu(E)' : 'Final Flattened mu(E)'
+    const data: Plotly.Data[] = [
+      {
+        x: average.energy,
+        y: isNormalized ? average.scan1NormalizedClean : average.scan1FlattenedClean,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${average.sourceScan1} clean`,
+        line: { width: 1.4, color: ATHENA_TRACE_COLORS[0], dash: 'dot' },
+        opacity: 0.75,
+        hovertemplate: 'Energy: %{x:.3f} eV<br>Clean scan 1: %{y:.6f}<extra></extra>',
+      },
+      {
+        x: average.energy,
+        y: isNormalized ? average.scan2NormalizedClean : average.scan2FlattenedClean,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${average.sourceScan2} clean`,
+        line: { width: 1.4, color: ATHENA_TRACE_COLORS[1], dash: 'dot' },
+        opacity: 0.75,
+        hovertemplate: 'Energy: %{x:.3f} eV<br>Clean scan 2: %{y:.6f}<extra></extra>',
+      },
+      {
+        x: average.energy,
+        y: isNormalized ? average.averageNormalized : average.averageFlattened,
+        type: 'scatter',
+        mode: 'lines',
+        name: isNormalized ? 'Final average normalized' : 'Final average flattened',
+        line: { width: 3.4, color: ATHENA_AVERAGE_COLOR },
+        hovertemplate: 'Energy: %{x:.3f} eV<br>Final average: %{y:.6f}<extra></extra>',
+      },
+    ]
+
+    return {
+      data,
+      layout: {
+        autosize: true,
+        height: 360,
+        margin: { l: 66, r: 28, t: 42, b: 66 },
+        title: { text: `${selectedGroup.sampleName} final ${isNormalized ? 'normalized' : 'flattened'} result` },
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        font: { color: 'var(--text-main)' },
+        xaxis: {
+          title: { text: 'Energy (eV)' },
+          gridcolor: 'rgba(148,163,184,0.18)',
+          zerolinecolor: 'rgba(148,163,184,0.24)',
+        },
+        yaxis: {
+          title: { text: yTitle },
+          gridcolor: 'rgba(148,163,184,0.18)',
+          zerolinecolor: 'rgba(148,163,184,0.24)',
+        },
+        legend: { orientation: 'h', x: 0, y: -0.2, xanchor: 'left', yanchor: 'top' },
+      } satisfies Partial<Plotly.Layout>,
+      config: { responsive: true, displaylogo: false } satisfies Partial<Plotly.Config>,
+    }
+  }, [previewMode, selectedGroup])
+
+  const handlePreviewRelayout = (event: PlotRelayoutEvent) => {
+    if (!selectedEnergyRange) return
+
+    const draftIsVisible = (draft: RemovalDraft | RestoreDraft) => {
+      const start = clampRangeValue(draft.start, selectedEnergyRange.min, selectedEnergyRange.max)
+      const end = clampRangeValue(draft.end, selectedEnergyRange.min, selectedEnergyRange.max)
+      return Math.abs(end - start) > selectedEnergyRange.step / 2
+    }
+    const applyDraftRange = <T extends RemovalDraft | RestoreDraft>(
+      setter: Dispatch<SetStateAction<T>>,
+      currentDraft: T,
+      range: { x0: number | null; x1: number | null } | null,
+    ) => {
+      if (!range) return
+      const nextStart = clampRangeValue(range.x0 ?? currentDraft.start, selectedEnergyRange.min, selectedEnergyRange.max)
+      const nextEnd = clampRangeValue(range.x1 ?? currentDraft.end, selectedEnergyRange.min, selectedEnergyRange.max)
+      setter(current => ({ ...current, start: nextStart, end: nextEnd }))
+    }
+
+    const savedShapeCount = selectedManualRemovals.length + selectedManualRestores.length
+    const removalVisible = draftIsVisible(removalDraft)
+    const restoreVisible = draftIsVisible(restoreDraft)
+    if (removalVisible) {
+      applyDraftRange(setRemovalDraft, removalDraft, relayoutShapeRange(event, savedShapeCount))
+    }
+    if (restoreVisible) {
+      applyDraftRange(
+        setRestoreDraft,
+        restoreDraft,
+        relayoutShapeRange(event, savedShapeCount + (removalVisible ? 1 : 0)),
+      )
+    }
+  }
 
   const handleFiles = async (fileList: FileList | null) => {
     const files = Array.from(fileList ?? [])
@@ -372,8 +530,8 @@ export default function Athena() {
   }
 
   const exportAllRawScans = () => {
-    if (!result?.scans.length) return
-    result.scans.forEach(downloadRawScan)
+    if (!adjustedResult?.scans.length) return
+    adjustedResult.scans.forEach(downloadRawScan)
   }
 
   const exportAllAverages = () => {
@@ -524,7 +682,7 @@ export default function Athena() {
             <div className="grid gap-2">
               <button
                 type="button"
-                disabled={!result?.scans.length}
+                disabled={!adjustedResult?.scans.length}
                 onClick={exportAllRawScans}
                 className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-left text-xs font-semibold text-[var(--text-main)] disabled:opacity-40"
               >
@@ -557,7 +715,79 @@ export default function Athena() {
             </div>
           </Section>
 
-          <Section title="3. 手動刪峰" description="用滑桿選取要刪掉的 energy 區間。" compact>
+          <Section title="3. 線性背景 / 歸一化微調" description="套用到目前所有 Athena scan；平均、刪峰、CSV 與 Origin script 會同步使用微調後曲線。" compact>
+            <div className="space-y-3">
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-sm font-semibold text-[var(--text-main)]">
+                <span>線性扣背景</span>
+                <input
+                  type="checkbox"
+                  checked={refinementSettings.linearBackgroundEnabled}
+                  onChange={event => setRefinementSettings(current => ({ ...current, linearBackgroundEnabled: event.target.checked }))}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs font-semibold text-[var(--text-soft)]">
+                  背景斜率 / eV
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={formatSettingValue(refinementSettings.backgroundSlope)}
+                    onChange={event => updateNumericSetting(setRefinementSettings, 'backgroundSlope', event.target.value)}
+                    className="mt-1 w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--input-text)]"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-[var(--text-soft)]">
+                  背景截距
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={formatSettingValue(refinementSettings.backgroundOffset)}
+                    onChange={event => updateNumericSetting(setRefinementSettings, 'backgroundOffset', event.target.value)}
+                    className="mt-1 w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--input-text)]"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs font-semibold text-[var(--text-soft)]">
+                  歸一化倍率
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={formatSettingValue(refinementSettings.normalizationScale)}
+                    onChange={event => updateNumericSetting(setRefinementSettings, 'normalizationScale', event.target.value)}
+                    className="mt-1 w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--input-text)]"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-[var(--text-soft)]">
+                  歸一化平移
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={formatSettingValue(refinementSettings.normalizationOffset)}
+                    onChange={event => updateNumericSetting(setRefinementSettings, 'normalizationOffset', event.target.value)}
+                    className="mt-1 w-full rounded-xl border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 text-sm text-[var(--input-text)]"
+                  />
+                </label>
+              </div>
+
+              <div className="rounded-xl border border-[var(--card-border)] px-3 py-2 text-xs leading-5 text-[var(--text-soft)]">
+                線性背景以每筆 scan 的 E0 為中心；若檔案沒有 E0，則使用第一個 energy 點。
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setRefinementSettings(DEFAULT_ATHENA_REFINEMENT_SETTINGS)}
+                className="w-full rounded-xl border border-[var(--card-border)] px-3 py-2 text-xs font-semibold text-[var(--text-main)]"
+              >
+                重設微調參數
+              </button>
+            </div>
+          </Section>
+
+          <Section title="4. 手動刪峰" description="用滑桿選取要刪掉的 energy 區間。" compact>
             {selectedGroup && selectedEnergyRange ? (
               <div className="space-y-3">
                 <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
@@ -826,13 +1056,23 @@ export default function Athena() {
 
                     {previewFigure ? (
                       <div className="min-w-0 overflow-hidden rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2">
-                        <Plot data={previewFigure.data} layout={previewFigure.layout} config={previewFigure.config} />
+                        <Plot data={previewFigure.data} layout={previewFigure.layout} config={previewFigure.config} onRelayout={handlePreviewRelayout} />
                       </div>
                     ) : (
                       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">
                         讀取 Athena .xmu 資料夾後，預覽圖會顯示在這裡。
                       </div>
                     )}
+
+                    {finalResultFigure ? (
+                      <div className="mt-4 min-w-0 overflow-hidden rounded-2xl border border-[var(--accent-secondary)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_7%,var(--card-bg))] p-2">
+                        <Plot data={finalResultFigure.data} layout={finalResultFigure.layout} config={finalResultFigure.config} />
+                      </div>
+                    ) : selectedGroup ? (
+                      <div className="mt-4 flex min-h-[220px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 text-center text-sm leading-6 text-[var(--text-soft)]">
+                        需要同一樣品至少兩筆 .xmu，才會產生最終平均結果圖。
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : (

@@ -58,6 +58,14 @@ export interface AthenaAutoRemovalOptions {
   minPeakSegmentPoints?: number
 }
 
+export interface AthenaRefinementSettings {
+  linearBackgroundEnabled: boolean
+  backgroundSlope: number
+  backgroundOffset: number
+  normalizationScale: number
+  normalizationOffset: number
+}
+
 export interface AthenaSampleGroup {
   sampleName: string
   scans: AthenaScanResult[]
@@ -77,6 +85,14 @@ export const DEFAULT_ATHENA_AUTO_REMOVAL_OPTIONS: AthenaAutoRemovalOptions = {
   diffMadFactor: 3.0,
   edgeThresholdRatio: 0.25,
   minPeakSegmentPoints: 1,
+}
+
+export const DEFAULT_ATHENA_REFINEMENT_SETTINGS: AthenaRefinementSettings = {
+  linearBackgroundEnabled: false,
+  backgroundSlope: 0,
+  backgroundOffset: 0,
+  normalizationScale: 1,
+  normalizationOffset: 0,
 }
 
 function finiteNumber(value: string) {
@@ -245,6 +261,40 @@ function applyRemovalMasks(x: number[], y1: number[], y2: number[], removedFrom1
 
 function averageValues(y1: number[], y2: number[]) {
   return y1.map((value, index) => (value + y2[index]) / 2)
+}
+
+function hasRefinement(settings: AthenaRefinementSettings) {
+  return settings.linearBackgroundEnabled ||
+    settings.normalizationScale !== 1 ||
+    settings.normalizationOffset !== 0
+}
+
+function refineSeries(energy: number[], y: number[], e0: number | null, settings: AthenaRefinementSettings) {
+  if (!hasRefinement(settings)) return y.slice()
+  const pivot = e0 ?? energy[0] ?? 0
+  const scale = Number.isFinite(settings.normalizationScale) ? settings.normalizationScale : 1
+  const offset = Number.isFinite(settings.normalizationOffset) ? settings.normalizationOffset : 0
+  const backgroundSlope = Number.isFinite(settings.backgroundSlope) ? settings.backgroundSlope : 0
+  const backgroundOffset = Number.isFinite(settings.backgroundOffset) ? settings.backgroundOffset : 0
+
+  return y.map((value, index) => {
+    const background = settings.linearBackgroundEnabled
+      ? backgroundOffset + backgroundSlope * (energy[index] - pivot)
+      : 0
+    return (value - background) * scale + offset
+  })
+}
+
+export function applyAthenaRefinementToScan(
+  scan: AthenaScanResult,
+  settings: AthenaRefinementSettings = DEFAULT_ATHENA_REFINEMENT_SETTINGS,
+): AthenaScanResult {
+  if (!hasRefinement(settings)) return scan
+  return {
+    ...scan,
+    normalizedMu: refineSeries(scan.energy, scan.normalizedMu, scan.e0, settings),
+    flattenedMu: refineSeries(scan.energy, scan.flattenedMu, scan.e0, settings),
+  }
 }
 
 function applyManualRemovalRegions(
