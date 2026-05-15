@@ -793,6 +793,38 @@ def make_overlay_graph(items, coly, graph_title, y_title):
     return gp
 
 
+def make_final_average_graph(average, worksheet, mode):
+    is_normalized = mode == "normalized"
+    if is_normalized:
+        columns = [1, 2, 3]
+        graph_title = f'{average["sampleName"]}_final_normalized'
+        y_title = "Final Normalized mu(E)"
+    else:
+        columns = [4, 5, 6]
+        graph_title = f'{average["sampleName"]}_final_flattened'
+        y_title = "Final Flattened mu(E)"
+
+    colors = ["#2563eb", "#dc2626", "#111827"]
+    widths = [1.4, 1.4, 3.4]
+    gp = op.new_graph(template="line", lname=safe_origin_name(graph_title, max_len=60))
+    gl = gp[0]
+    for index, coly in enumerate(columns):
+        plot = gl.add_plot(worksheet, coly=coly, colx=0, type="line")
+        plot.width = widths[index]
+        try:
+            plot.color = colors[index]
+            plot.colorinc = 0
+        except Exception:
+            pass
+    gl.rescale()
+    try:
+        gl.axis("x").title = "Energy (eV)"
+        gl.axis("y").title = y_title
+    except Exception:
+        pass
+    return gp
+
+
 def main():
     op.new()
     average_items = []
@@ -803,6 +835,8 @@ def main():
         if group.get("average"):
             wks = import_average(group["average"])
             average_items.append({"sampleName": group["sampleName"], "worksheet": wks})
+            make_final_average_graph(group["average"], wks, "normalized")
+            make_final_average_graph(group["average"], wks, "flattened")
 
     make_overlay_graph(average_items, 3, "Overlay_Averaged_Normalized_mu", "Averaged Normalized mu(E)")
     make_overlay_graph(average_items, 6, "Overlay_Averaged_Flattened_mu", "Averaged Flattened mu(E)")

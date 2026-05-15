@@ -694,6 +694,8 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-15] 同步完成：已建立本地備份分支 `backup_github_sync_20260515_2265a2b`，執行 `git fetch origin` 後以 `git reset --hard origin/main` 將 `main` 直接對齊 GitHub；目前 `HEAD=origin/main=8a0ae72`（`v25.3`）。
 [2026-05-15] XAS Athena manual removal/restore editor was unified behind a two-option mode selector. Only the selected mode now shows its editable draft range on the Plotly preview, and drag relayout updates only that active draft. Verification: `cd web/frontend && npm run build` passed.
 
+[2026-05-15] XAS Athena OriginPro export script now creates per-sample final normalized and final flattened graphs that match the web final-result view: clean scan1, clean scan2, and final average. Existing all-sample average overlay graphs are still exported. Verification: `cd web/frontend && npm run build` passed.
+
 [2026-05-15] 合併：依使用者要求 merge GitHub 檔案；執行 `git fetch origin` 與 `git merge origin/main` 後，確認程式碼檔自動合併，僅 `CLAUDE.md` / `AGENTS.md` 發生文件衝突，已手動整併保留遠端 `v25.4/v25.5` 與本地 `v25.6` 紀錄。
 [2026-05-15] 除錯：修正 XPS `VBM 線性外推圖` 拉動切線/基準線 slider 時整張圖亂跑。根因是 `web/frontend/src/pages/XPS.tsx` 的 VBM 預覽視窗原本會依切線、基準線與 VBM 交點動態重算 `xaxis.range`、`yaxis.range` 與畫線用 `lineX`，導致使用者一調區間，圖框就跟著平移/縮放。現改為 `buildVbmStablePlotWindow()` 只根據光譜本身的 x/y 範圍建立固定座標窗，讓 slider 只影響切線/基準線旋轉與 marker 位置，不再改變整張數據圖視窗。影響檔案：`web/frontend/src/pages/XPS.tsx`；驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
 [2026-05-15] 調整：將 XPS 的「多檔平均」從獨立第 3 步併回第 2 步「內插 / 資料模式」，改成和 XAS 一樣在切到疊圖後就直接顯示「平均所有疊圖數據」按鈕；同時移除原本獨立的平均 section，將後續步驟編號整體前移，並把疊圖選擇 modal 的提示文案從「第 3 步」改為「第 2 步」。為了保留 XPS 現有能力，平均按鈕在啟用後可再切回「取消平均，改回疊圖比較」。影響檔案：`web/frontend/src/pages/XPS.tsx`；驗證 `cd web/frontend && npm run build`、`git diff --check` 通過。
