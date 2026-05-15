@@ -261,7 +261,7 @@ function applyRemovalMasks(x: number[], y1: number[], y2: number[], removedFrom1
   }
 }
 
-type AverageSourceOverride = 0 | 1 | 2 | 3
+type AverageSourceOverride = 0 | 1 | 2
 
 function averageValuesWithMasks(
   y1: number[],
@@ -274,8 +274,6 @@ function averageValuesWithMasks(
     const override = sourceOverride[index] ?? 0
     if (override === 1) return value
     if (override === 2) return y2[index]
-    if (override === 3) return (value + y2[index]) / 2
-
     const useScan1 = !removedFrom1[index]
     const useScan2 = !removedFrom2[index]
     if (useScan1 && !useScan2) return value
@@ -371,7 +369,7 @@ function buildRestoreSourceOverrides(
   for (const region of restoreRegions) {
     const start = Math.min(region.start, region.end)
     const end = Math.max(region.start, region.end)
-    const source: AverageSourceOverride = region.scan === 'scan1' ? 1 : region.scan === 'scan2' ? 2 : 3
+    const source: AverageSourceOverride = region.scan === 'scan1' ? 1 : region.scan === 'scan2' ? 2 : 0
     for (let index = 0; index < energy.length; index += 1) {
       if (energy[index] < start || energy[index] > end) continue
       sourceOverride[index] = source
