@@ -1,3 +1,5 @@
+import { formatUtc8Iso } from '../../utils/time'
+
 export interface AthenaScanResult {
   id: string
   fileName: string
@@ -259,8 +261,27 @@ function applyRemovalMasks(x: number[], y1: number[], y2: number[], removedFrom1
   }
 }
 
-function averageValues(y1: number[], y2: number[]) {
-  return y1.map((value, index) => (value + y2[index]) / 2)
+type AverageSourceOverride = 0 | 1 | 2 | 3
+
+function averageValuesWithMasks(
+  y1: number[],
+  y2: number[],
+  removedFrom1: number[],
+  removedFrom2: number[],
+  sourceOverride: AverageSourceOverride[] = [],
+) {
+  return y1.map((value, index) => {
+    const override = sourceOverride[index] ?? 0
+    if (override === 1) return value
+    if (override === 2) return y2[index]
+    if (override === 3) return (value + y2[index]) / 2
+
+    const useScan1 = !removedFrom1[index]
+    const useScan2 = !removedFrom2[index]
+    if (useScan1 && !useScan2) return value
+    if (!useScan1 && useScan2) return y2[index]
+    return (value + y2[index]) / 2
+  })
 }
 
 function hasRefinement(settings: AthenaRefinementSettings) {
@@ -339,6 +360,25 @@ function applyManualRestoreRegions(
   }
 
   return { removedFrom1: nextRemovedFrom1, removedFrom2: nextRemovedFrom2 }
+}
+
+function buildRestoreSourceOverrides(
+  energy: number[],
+  restoreRegions: AthenaManualRestoreRegion[] = [],
+): AverageSourceOverride[] {
+  const sourceOverride = Array(energy.length).fill(0) as AverageSourceOverride[]
+
+  for (const region of restoreRegions) {
+    const start = Math.min(region.start, region.end)
+    const end = Math.max(region.start, region.end)
+    const source: AverageSourceOverride = region.scan === 'scan1' ? 1 : region.scan === 'scan2' ? 2 : 3
+    for (let index = 0; index < energy.length; index += 1) {
+      if (energy[index] < start || energy[index] > end) continue
+      sourceOverride[index] = source
+    }
+  }
+
+  return sourceOverride
 }
 
 function sampleNameFromFile(file: FileWithRelativePath) {
@@ -436,6 +476,7 @@ export function makeAthenaAverage(
   const normClean = despikeTwoScans(energy, norm1, norm2, autoRemovalOptions)
   const manualRemovalMask = applyManualRemovalRegions(energy, normClean.removedFrom1, normClean.removedFrom2, manualRegions)
   const removalMask = applyManualRestoreRegions(energy, manualRemovalMask.removedFrom1, manualRemovalMask.removedFrom2, restoreRegions)
+  const restoreSourceOverride = buildRestoreSourceOverrides(energy, restoreRegions)
   const normCleanWithManual = applyRemovalMasks(energy, norm1, norm2, removalMask.removedFrom1, removalMask.removedFrom2)
   const flat1 = interpolateToGrid(scan1.energy, scan1.flattenedMu, energy)
   const flat2 = interpolateToGrid(scan2.energy, scan2.flattenedMu, energy)
@@ -449,10 +490,10 @@ export function makeAthenaAverage(
     energy,
     scan1NormalizedClean: normCleanWithManual.y1Clean,
     scan2NormalizedClean: normCleanWithManual.y2Clean,
-    averageNormalized: averageValues(normCleanWithManual.y1Clean, normCleanWithManual.y2Clean),
+    averageNormalized: averageValuesWithMasks(normCleanWithManual.y1Clean, normCleanWithManual.y2Clean, removalMask.removedFrom1, removalMask.removedFrom2, restoreSourceOverride),
     scan1FlattenedClean: flatClean.y1Clean,
     scan2FlattenedClean: flatClean.y2Clean,
-    averageFlattened: averageValues(flatClean.y1Clean, flatClean.y2Clean),
+    averageFlattened: averageValuesWithMasks(flatClean.y1Clean, flatClean.y2Clean, removalMask.removedFrom1, removalMask.removedFrom2, restoreSourceOverride),
     removedFromScan1Norm: removalMask.removedFrom1,
     removedFromScan2Norm: removalMask.removedFrom2,
     removedFromScan1Flat: removalMask.removedFrom1.slice(),
@@ -587,7 +628,7 @@ export function buildAthenaAverageCsv(average: AthenaAverageResult) {
 export function buildAthenaSummaryTxt(result: AthenaProcessResult) {
   const lines = [
     'Athena .xmu 資料夾處理摘要',
-    `產生時間：${new Date().toISOString()}`,
+    `產生時間：${formatUtc8Iso()}`,
     `樣品數：${result.groups.length}`,
     `有效 scan 數：${result.scans.length}`,
     '',
@@ -617,7 +658,7 @@ export function buildAthenaSummaryTxt(result: AthenaProcessResult) {
 
 export function buildAthenaOriginProjectPython(result: AthenaProcessResult) {
   const payload = {
-    generatedAt: new Date().toISOString(),
+    generatedAt: formatUtc8Iso(),
     groups: result.groups.map(group => ({
       sampleName: group.sampleName,
       scans: group.scans.map(scan => ({

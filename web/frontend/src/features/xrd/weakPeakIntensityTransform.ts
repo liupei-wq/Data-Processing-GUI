@@ -1,3 +1,5 @@
+import { formatUtc8Iso } from '../../utils/time'
+
 export type WeakPeakIntensityTransform =
   | 'raw'
   | 'log10'
@@ -97,7 +99,7 @@ export function buildTransformedWeakPeakSeriesTxt(
 ) {
   const lines = [
     'XRD 弱峰檢視轉換圖譜匯出',
-    `產生時間：${generatedAt.toISOString()}`,
+    `產生時間：${formatUtc8Iso(generatedAt)}`,
     `資料集：${datasetName || 'xrd'}`,
     `轉換方式：${series.label}`,
     `說明：${series.description}`,

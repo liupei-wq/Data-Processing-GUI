@@ -59,6 +59,7 @@ import {
   transformWeakPeakIntensity,
   type WeakPeakIntensityTransform,
 } from '../features/xrd/weakPeakIntensityTransform'
+import { formatUtc8Iso, timestampForUtc8Filename } from '../utils/time'
 
 type CsvCell = string | number | null | undefined
 
@@ -111,16 +112,7 @@ function safeFilenamePart(value: string | null | undefined) {
 }
 
 function timestampForFilename(date = new Date()) {
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate()),
-    '_',
-    pad(date.getHours()),
-    pad(date.getMinutes()),
-    pad(date.getSeconds()),
-  ].join('')
+  return timestampForUtc8Filename(date)
 }
 
 function formatNumber(value: number | null | undefined, digits = 4) {
@@ -1143,7 +1135,7 @@ export default function XRD({
   )
   const processingReport = {
     report_type: 'xrd_processing_report',
-    created_at: new Date().toISOString(),
+    created_at: formatUtc8Iso(),
     module: 'xrd',
     input_files: rawFiles.map(file => file.name),
     selected_dataset: activeDataset?.name ?? null,

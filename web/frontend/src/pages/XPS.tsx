@@ -25,6 +25,7 @@ import type {
   RsfRequestItem,
   RsfResultRow,
 } from '../types/xps'
+import { formatUtc8Iso } from '../utils/time'
 
 const SIDEBAR_MIN_WIDTH = 300
 const SIDEBAR_MAX_WIDTH = 540
@@ -4335,7 +4336,7 @@ export default function XPS({
                     <div className="mt-3 flex flex-col gap-2">
                       <ExportBtnSecondary label="處理報告 JSON" onClick={() => {
                         const report = {
-                          generated: new Date().toISOString(),
+                          generated: formatUtc8Iso(),
                           file: currentReportFileName,
                           processing_view_mode: processingViewMode,
                           overlay_selection: processingViewMode === 'overlay' ? overlayFiles.map(file => file.name) : null,

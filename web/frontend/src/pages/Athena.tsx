@@ -21,6 +21,7 @@ import {
   type AthenaSampleGroup,
   type AthenaScanResult,
 } from '../features/athena/athenaXmu'
+import { timestampForUtc8Filename } from '../utils/time'
 
 type AthenaPreviewMode = 'normalized' | 'flattened'
 type AthenaManualEditMode = 'remove' | 'restore'
@@ -78,7 +79,7 @@ const directoryInputProps = {
 } as Record<string, string>
 
 function timestampForFilename() {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_')
+  return timestampForUtc8Filename()
 }
 
 function triggerDownload(filename: string, content: string, type = 'text/plain;charset=utf-8') {

@@ -1,3 +1,5 @@
+import { formatUtc8Iso } from '../../utils/time'
+
 export type WeakPeakExportRow = Record<string, unknown>
 
 export interface BuildWeakPeaksTxtOptions {
@@ -62,7 +64,7 @@ export function buildWeakPeaksTxt({
 }: BuildWeakPeaksTxtOptions) {
   const header = [
     'XRD 弱峰分析資料匯出',
-    `產生時間：${generatedAt.toISOString()}`,
+    `產生時間：${formatUtc8Iso(generatedAt)}`,
     `資料集：${datasetName || 'xrd'}`,
     `波長：${wavelength == null ? '' : `${formatNumber(wavelength, 4)} Å`}`,
     '',
