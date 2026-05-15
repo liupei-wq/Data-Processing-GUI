@@ -657,12 +657,38 @@ type XasPeakSourceType = 'database' | 'manual'
 
 function createPeakId() { return `XA${Math.random().toString(36).slice(2, 7)}` }
 
+function formatMetric(value: number | null | undefined, decimals = 4): string {
+  if (value == null || !Number.isFinite(value)) return 'N/A'
+  const abs = Math.abs(value)
+  if (abs >= 1e5 || (abs > 0 && abs < 1e-3)) return value.toExponential(2)
+  return value.toFixed(decimals)
+}
+
+function parseTwoColumnText(text: string, fileName: string): { name: string; x: number[]; y: number[] } | null {
+  const pairs: [number, number][] = []
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim()
+    if (!t || t.startsWith('#') || t.startsWith('%') || t.startsWith('!') || t.startsWith('@')) continue
+    const cols = t.split(/[\s,;]+/)
+    if (cols.length < 2) continue
+    const x = parseFloat(cols[0])
+    const y = parseFloat(cols[1])
+    if (Number.isFinite(x) && Number.isFinite(y)) pairs.push([x, y])
+  }
+  if (pairs.length < 3) return null
+  pairs.sort((a, b) => a[0] - b[0])
+  return { name: fileName.replace(/\.[^.]+$/, ''), x: pairs.map(p => p[0]), y: pairs.map(p => p[1]) }
+}
+
 interface XasPeakCandidate extends XasInitPeak {
   id: string
   label: string
   enabled: boolean
   sourceType: XasPeakSourceType
   cardLocked: boolean
+  originalCenter?: number
+  originalFwhm?: number
+  originalAmplitude?: number
 }
 
 function createXasPeakCandidate(
@@ -704,6 +730,9 @@ function createXasPeakCandidate(
     fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, fwhm * PEAK_FWHM_MIN_RATIO),
     fwhm_max: Math.max(fwhm * PEAK_FWHM_MAX_MULTIPLIER, fwhm + 0.2),
     amplitude_max: amplitudeMax,
+    originalCenter: center,
+    originalFwhm: fwhm,
+    originalAmplitude: amplitude,
   }
 }
 
@@ -730,6 +759,9 @@ function sanitizeXasPeakCandidate(peak: XasPeakCandidate, datasetMax = 100): Xas
     fwhm_min: peak.fwhm_min ?? base.fwhm_min,
     fwhm_max: peak.fwhm_max ?? base.fwhm_max,
     amplitude_max: peak.amplitude_max ?? Math.max(peak.amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+    originalCenter: peak.originalCenter ?? base.originalCenter,
+    originalFwhm: peak.originalFwhm ?? base.originalFwhm,
+    originalAmplitude: peak.originalAmplitude ?? base.originalAmplitude,
   }
 }
 
@@ -767,7 +799,7 @@ function updateXasPeakAmplitudeSeed(peak: XasPeakCandidate, amplitude: number, d
 
 function buildXasFitPeakPayloads(peaks: XasPeakCandidate[], datasetMax: number): XasInitPeak[] {
   const sanitized = peaks.map(pk => sanitizeXasPeakCandidate(pk, datasetMax))
-  return sanitized.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, cardLocked: _cardLocked, ...peak }) => ({
+  return sanitized.map(({ id: _id, enabled: _enabled, sourceType: _sourceType, cardLocked: _cardLocked, originalCenter: _oC, originalFwhm: _oF, originalAmplitude: _oA, ...peak }) => ({
     ...peak,
     center_min: peak.lock_center ? peak.center : (peak.center_min ?? peak.center),
     center_max: peak.lock_center ? peak.center : (peak.center_max ?? peak.center),
@@ -831,6 +863,11 @@ export default function XAS({
   const [fitResult, setFitResult] = useState<XasFitResult | null>(null)
   const [isFitting, setIsFitting] = useState(false)
   const [fitError, setFitError] = useState<string | null>(null)
+  const [fitHistory, setFitHistory] = useState<{ iter: number; r2: number; rmse: number; delta: number }[]>([])
+  const [autoConverging, setAutoConverging] = useState(false)
+  const [importedFitDataset, setImportedFitDataset] = useState<{ name: string; x: number[]; y: number[] } | null>(null)
+  const [fitDataSource, setFitDataSource] = useState<'pipeline' | 'imported'>('pipeline')
+  const [importedFitError, setImportedFitError] = useState<string | null>(null)
   const [samplesList, setSamplesList] = useState<XasSampleListItem[]>([])
   const [selectedSample, setSelectedSample] = useState<string>('')
   const [selectedEdge, setSelectedEdge] = useState<string>('')
@@ -1085,19 +1122,34 @@ export default function XAS({
     }
   }, [])
 
-  const fitDatasetMax = useMemo(() => {
-    if (!activeDataset) return 1
+  // Unified fit data source: imported spectrum overrides pipeline output when selected
+  const fitEffective = useMemo(() => {
+    if (fitDataSource === 'imported' && importedFitDataset) {
+      return { x: importedFitDataset.x, y: importedFitDataset.y, name: importedFitDataset.name }
+    }
+    if (!activeDataset) return null
     const y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
-    return Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
-  }, [activeDataset, fitChannel])
+    return { x: activeDataset.x, y, name: activeDataset.name }
+  }, [fitDataSource, importedFitDataset, activeDataset, fitChannel])
+
+  const hasFitTarget = Boolean(fitEffective)
+
+  // Auto-load samples list when there's a fit target — handles imported mode where onOpen may not fire
+  useEffect(() => {
+    if (hasFitTarget) void loadSamplesList()
+  }, [hasFitTarget, loadSamplesList])
+
+  const fitDatasetMax = useMemo(() => {
+    if (!fitEffective) return 1
+    return Math.max(...fitEffective.y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+  }, [fitEffective])
 
   const loadSampleEdgePeaks = useCallback(async () => {
-    if (!selectedSample || !selectedEdge || !activeDataset) return
+    if (!selectedSample || !selectedEdge || !fitEffective) return
     setSamplesLoading(true); setFitError(null)
     try {
       const data = await fetchXasSamplePeaks(selectedSample, selectedEdge)
-      const yArr = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
-      const maxY = Math.max(...yArr.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+      const maxY = Math.max(...fitEffective.y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
       const newPeaks: XasPeakCandidate[] = data.peaks.map(pk => createXasPeakCandidate({
         label: pk.label,
         center: pk.energy_eV,
@@ -1110,12 +1162,11 @@ export default function XAS({
       setFitPeakCandidates(prev => [...prev.filter(p => p.sourceType !== 'database'), ...newPeaks])
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally { setSamplesLoading(false) }
-  }, [selectedSample, selectedEdge, activeDataset, fitChannel])
+  }, [selectedSample, selectedEdge, fitEffective])
 
   const addManualFitPeak = useCallback(() => {
-    const center = activeDataset
-      ? (activeDataset.x[0] + activeDataset.x[activeDataset.x.length - 1]) / 2
-      : 500
+    const xs = fitEffective?.x
+    const center = xs && xs.length > 0 ? (xs[0] + xs[xs.length - 1]) / 2 : 500
     setFitPeakCandidates(prev => [...prev, createXasPeakCandidate({
       label: `峰 ${prev.length + 1}`,
       center,
@@ -1124,20 +1175,26 @@ export default function XAS({
       sourceType: 'manual',
       lock_center: false,
     }, fitDatasetMax)])
-  }, [activeDataset, fitDatasetMax])
+  }, [fitEffective, fitDatasetMax])
 
-  const handleFit = useCallback(async () => {
-    if (!activeDataset) return
+  const handleFit = useCallback(async (): Promise<XasFitResult | null> => {
+    if (!fitEffective) return null
     const activePeaks = fitPeakCandidates.filter(p => p.enabled)
-    if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
+    if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return null }
     setIsFitting(true); setFitError(null); setFitResult(null)
     try {
-      const y = fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+      const { x, y } = fitEffective
       const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
       const initPeaks = buildXasFitPeakPayloads(activePeaks, datasetMax)
       const fitRange: [number, number] | null = fitRangeEnabled ? [fitRangeLo, fitRangeHi] : null
-      const res = await fitXasPeaks(activeDataset.x, y, initPeaks, fitProfile, activePeaks.map(p => p.label), fitNRestarts, fitRange)
-      // Update unlocked peak params with fitted values so next press refines from here (OriginPro style)
+      const res = await fitXasPeaks(x, y, initPeaks, fitProfile, activePeaks.map(p => p.label), fitNRestarts, fitRange)
+      const r2 = res.r_squared ?? 0
+      const rmse = res.rmse ?? 0
+      setFitHistory(prev => {
+        const delta = prev.length > 0 ? Math.abs(r2 - prev[prev.length - 1].r2) : 1
+        return [...prev, { iter: prev.length + 1, r2, rmse, delta }]
+      })
+      // Update unlocked peak params with fitted values (OriginPro-style iterative refinement)
       setFitPeakCandidates(prev => prev.map(pk => {
         const activeIdx = activePeaks.indexOf(pk)
         if (activeIdx < 0) return pk
@@ -1150,9 +1207,50 @@ export default function XAS({
         return updated
       }))
       setFitResult(res)
-    } catch (e: unknown) { setFitError((e as Error).message) }
+      return res
+    } catch (e: unknown) { setFitError((e as Error).message); return null }
     finally { setIsFitting(false) }
-  }, [activeDataset, fitChannel, fitPeakCandidates, fitProfile, fitNRestarts, fitRangeEnabled, fitRangeLo, fitRangeHi])
+  }, [fitEffective, fitPeakCandidates, fitProfile, fitNRestarts, fitRangeEnabled, fitRangeLo, fitRangeHi])
+
+  const handleAutoConverge = useCallback(async () => {
+    if (!fitEffective) return
+    setAutoConverging(true); setIsFitting(true); setFitError(null); setFitHistory([])
+    const { x, y } = fitEffective
+    const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
+    let currentCandidates = fitPeakCandidates
+    let prevR2 = 0
+    try {
+      for (let iter = 0; iter < 10; iter++) {
+        const activePeaks = currentCandidates.filter(p => p.enabled)
+        if (activePeaks.length === 0) break
+        const initPeaks = buildXasFitPeakPayloads(activePeaks, datasetMax)
+        const fitRange: [number, number] | null = fitRangeEnabled ? [fitRangeLo, fitRangeHi] : null
+        const res = await fitXasPeaks(x, y, initPeaks, fitProfile, activePeaks.map(p => p.label), 1, fitRange)
+        const r2 = res.r_squared ?? 0
+        const rmse = res.rmse ?? 0
+        const delta = Math.abs(r2 - prevR2)
+        setFitHistory(prev => [...prev, { iter: iter + 1, r2, rmse, delta }])
+        currentCandidates = currentCandidates.map(pk => {
+          const activeIdx = activePeaks.indexOf(pk)
+          if (activeIdx < 0) return pk
+          const fitted = res.peaks[activeIdx]
+          if (!fitted) return pk
+          let updated = pk
+          if (!pk.lock_center) updated = updateXasPeakCenterSeed(updated, fitted.Center_eV, datasetMax)
+          if (!pk.lock_fwhm)   updated = updateXasPeakFwhmSeed(updated, fitted.FWHM_eV, datasetMax)
+          if (!pk.lock_area)   updated = updateXasPeakAmplitudeSeed(updated, fitted.Height, datasetMax)
+          return updated
+        })
+        setFitResult(res)
+        if (delta < 0.00005 && iter > 0) break
+        prevR2 = r2
+      }
+    } catch (e: unknown) { setFitError((e as Error).message) }
+    finally {
+      setFitPeakCandidates(currentCandidates)
+      setAutoConverging(false); setIsFitting(false)
+    }
+  }, [fitEffective, fitPeakCandidates, fitProfile, fitRangeEnabled, fitRangeLo, fitRangeHi])
 
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
@@ -1164,6 +1262,9 @@ export default function XAS({
   const whiteLineBounds = normalizationBounds
   const energyMin = energyBounds.min
   const energyMax = energyBounds.max
+  // Energy bounds for the active fit target (may be imported spectrum)
+  const fitEnergyMin = fitEffective && fitEffective.x.length > 0 ? fitEffective.x[0] : energyMin
+  const fitEnergyMax = fitEffective && fitEffective.x.length > 0 ? fitEffective.x[fitEffective.x.length - 1] : energyMax
 
   const sidebarStyle: CSSProperties = sidebarCollapsed
     ? { width: SIDEBAR_COLLAPSED_PEEK, minWidth: SIDEBAR_COLLAPSED_PEEK, overflow: 'hidden' }
@@ -1975,17 +2076,83 @@ export default function XAS({
               {/* 8. 峰擬合 */}
               <Section
                 step={8}
-                title={isOverlayMode ? '峰擬合（疊圖模式停用）' : '峰擬合'}
+                title="峰擬合"
                 hint="Voigt / Gaussian / Lorentzian"
                 defaultOpen={false}
-                onOpen={!isOverlayMode && activeDataset ? loadSamplesList : undefined}
+                onOpen={hasFitTarget ? loadSamplesList : undefined}
               >
-                {!activeDataset ? (
-                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3 text-[10px] leading-6 text-[var(--text-soft)]">
-                    請先載入資料並完成處理後，再使用峰擬合。
+                {/* ── 資料來源選擇 ── */}
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2.5 space-y-2">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">資料來源</p>
+                  <div className="flex gap-2">
+                    {(['pipeline', 'imported'] as const).map(src => (
+                      <button
+                        key={src}
+                        type="button"
+                        onClick={() => { setFitDataSource(src); setFitResult(null); setFitHistory([]) }}
+                        className={[
+                          'flex-1 rounded-full py-1 text-[10px] font-medium transition-colors',
+                          fitDataSource === src
+                            ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                            : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                        ].join(' ')}
+                      >
+                        {src === 'pipeline' ? '處理流程結果' : '匯入已處理光譜'}
+                      </button>
+                    ))}
                   </div>
-                ) : isOverlayMode ? (
-                  <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下不可用。請切回單筆模式，或先平均數據後再擬合。</p>
+                  {fitDataSource === 'imported' && (
+                    <div className="space-y-2">
+                      <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-[var(--card-border)] px-3 py-2 text-[10px] text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] transition-colors">
+                        <input
+                          type="file"
+                          accept=".txt,.csv,.dat,.xy,.xmu"
+                          className="hidden"
+                          onChange={e => {
+                            const file = e.target.files?.[0]
+                            if (!file) return
+                            setImportedFitError(null)
+                            file.text().then(text => {
+                              const parsed = parseTwoColumnText(text, file.name)
+                              if (!parsed) {
+                                setImportedFitError('無法解析：請確認檔案為兩欄數值（Energy, Intensity），至少 3 個數據點')
+                                return
+                              }
+                              setImportedFitDataset(parsed)
+                              setFitResult(null); setFitHistory([])
+                            }).catch(() => setImportedFitError('讀取檔案失敗'))
+                            e.target.value = ''
+                          }}
+                        />
+                        ＋ 點擊上傳處理後光譜（2 欄 CSV / TXT / DAT）
+                      </label>
+                      {importedFitError && <p className="text-[10px] text-rose-400">{importedFitError}</p>}
+                      {importedFitDataset && (
+                        <div className="rounded-lg border border-[color:color-mix(in_srgb,var(--accent-secondary)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--accent-secondary)_6%,transparent)] px-3 py-2 text-[10px] space-y-0.5">
+                          <p className="font-medium text-[var(--accent-secondary)]">{importedFitDataset.name}</p>
+                          <p className="text-[var(--text-soft)]">
+                            {importedFitDataset.x.length} 個數據點 ·&nbsp;
+                            {importedFitDataset.x[0].toFixed(2)} – {importedFitDataset.x[importedFitDataset.x.length - 1].toFixed(2)} eV
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => { setImportedFitDataset(null); setFitResult(null); setFitHistory([]) }}
+                            className="text-rose-400 hover:text-rose-300"
+                          >移除</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {!hasFitTarget ? (
+                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3 text-[10px] leading-6 text-[var(--text-soft)]">
+                    {fitDataSource === 'pipeline'
+                      ? '請先載入資料並完成處理，或切換到「匯入已處理光譜」直接上傳。'
+                      : '請上傳一個已處理的光譜檔案（兩欄：Energy eV, Intensity）。'}
+                  </div>
+                ) : isOverlayMode && fitDataSource !== 'imported' ? (
+                  <p className="text-[10px] text-[var(--text-soft)]">疊圖模式下不可用。請切回單筆模式，或先平均數據後再擬合；或切換至「匯入已處理光譜」。</p>
                 ) : (<>
                   <SelectInput label="擬合通道" value={fitChannel}
                     onChange={v => { setFitChannel(v as 'TEY' | 'TFY'); setFitResult(null) }}
@@ -2007,8 +2174,17 @@ export default function XAS({
                         type="button"
                         onClick={() => {
                           if (!fitRangeEnabled) {
-                            setFitRangeLo(energyMin)
-                            setFitRangeHi(energyMax)
+                            // Default to peak coverage ± 5 eV; fall back to full energy range
+                            const enabled = fitPeakCandidates.filter(p => p.enabled)
+                            if (enabled.length > 0) {
+                              const centers = enabled.map(p => p.center)
+                              const pad = 5.0
+                              setFitRangeLo(Math.max(fitEnergyMin, Math.min(...centers) - pad))
+                              setFitRangeHi(Math.min(fitEnergyMax, Math.max(...centers) + pad))
+                            } else {
+                              setFitRangeLo(fitEnergyMin)
+                              setFitRangeHi(fitEnergyMax)
+                            }
                           }
                           setFitRangeEnabled(v => !v)
                         }}
@@ -2025,8 +2201,8 @@ export default function XAS({
                     {fitRangeEnabled ? (
                       <DualRangeInput
                         label=""
-                        min={energyMin}
-                        max={energyMax}
+                        min={fitEnergyMin}
+                        max={fitEnergyMax}
                         start={fitRangeLo}
                         end={fitRangeHi}
                         step={0.1}
@@ -2139,6 +2315,19 @@ export default function XAS({
                         >
                           {pk.cardLocked ? '🔒' : '🔓'}
                         </button>
+                        {(pk.originalCenter != null || pk.originalFwhm != null || pk.originalAmplitude != null) && (
+                          <button
+                            type="button"
+                            title="重設為初始值"
+                            onClick={() => setFitPeakCandidates(prev => prev.map(p => p.id !== pk.id ? p : {
+                              ...p,
+                              center: p.originalCenter ?? p.center,
+                              fwhm: p.originalFwhm ?? p.fwhm,
+                              amplitude: p.originalAmplitude ?? p.amplitude,
+                            }))}
+                            className="text-sky-400 hover:text-sky-300 text-xs px-1"
+                          >↺</button>
+                        )}
                         <button type="button" onClick={() => setFitPeakCandidates(prev => prev.filter(p => p.id !== pk.id))} className="text-rose-400 hover:text-rose-300">✕</button>
                       </div>
                       {/* 來源標籤 + 約束切換 */}
@@ -2217,9 +2406,22 @@ export default function XAS({
                       <p className="text-[10px] leading-5 text-[var(--text-soft)]">
                         鎖定只限制擬合時的自由度；你仍可先手動改 seed。
                       </p>
-                      {fitPeakCandidates.length > 1 && (
-                        <button type="button" onClick={() => setFitPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
-                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFitPeakCandidates(prev => prev.map(pk => ({
+                            ...pk,
+                            center: pk.originalCenter ?? pk.center,
+                            fwhm: pk.originalFwhm ?? pk.fwhm,
+                            amplitude: pk.originalAmplitude ?? pk.amplitude,
+                          })))}
+                          className="text-xs text-sky-400 hover:text-sky-300"
+                          title="重設所有峰的中心/FWHM/強度回初始值"
+                        >↺ 重設所有峰</button>
+                        {fitPeakCandidates.length > 1 && (
+                          <button type="button" onClick={() => setFitPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
+                        )}
+                      </div>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)] shrink-0">嘗試次數</span>
                         {([1, 3, 5] as const).map(n => (
@@ -2232,14 +2434,44 @@ export default function XAS({
                           >{n}</button>
                         ))}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleFit()}
-                        disabled={isFitting || !activeDataset}
-                        className="w-full rounded-lg bg-[var(--accent-strong)] py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-                      >
-                        {isFitting ? `擬合中… ${fitNRestarts > 1 ? `(最多 ${fitNRestarts} 次)` : ''}` : '執行峰擬合'}
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleFit()}
+                          disabled={isFitting || autoConverging || !hasFitTarget}
+                          className="flex-1 rounded-lg bg-[var(--accent-strong)] py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                        >
+                          {isFitting && !autoConverging ? `擬合中… ${fitNRestarts > 1 ? `(最多 ${fitNRestarts} 次)` : ''}` : '執行峰擬合'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setFitHistory([]); void handleAutoConverge() }}
+                          disabled={isFitting || autoConverging || !hasFitTarget}
+                          title="自動重複擬合直到 R² 不再提升（最多 10 次）"
+                          className="rounded-lg border border-[var(--accent-secondary)] px-3 py-2 text-xs font-medium text-[var(--accent-secondary)] hover:opacity-80 disabled:opacity-50"
+                        >
+                          {autoConverging ? '收斂中…' : '自動收斂'}
+                        </button>
+                      </div>
+                      {fitHistory.length > 0 && (
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">收斂歷史</p>
+                          <div className="flex flex-wrap gap-1">
+                            {fitHistory.map(h => (
+                              <span key={h.iter} className={[
+                                'rounded-full px-2 py-0.5 text-[10px] font-mono',
+                                h.r2 >= 0.99 ? 'bg-emerald-500/10 text-emerald-400'
+                                : h.r2 >= 0.97 ? 'bg-sky-500/10 text-sky-400'
+                                : h.r2 >= 0.90 ? 'bg-amber-500/10 text-amber-400'
+                                : 'bg-rose-500/10 text-rose-400',
+                              ].join(' ')}>
+                                #{h.iter} R²={formatMetric(h.r2, 4)}
+                                {h.iter > 1 && ` Δ${h.delta < 1e-5 ? h.delta.toExponential(1) : h.delta.toFixed(5)}`}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                   {fitError && <p className="text-[10px] text-rose-400">{fitError}</p>}
@@ -2300,13 +2532,36 @@ export default function XAS({
         )}
 
         {/* empty state */}
-        {!result && !isLoading && (
+        {!result && !isLoading && !(fitDataSource === 'imported' && importedFitDataset) && (
           <EmptyWorkspaceState
             module="xas"
             title={moduleContent.uploadTitle}
             description="左側已提供內插、多檔平均、背景扣除、歸一化、White Line 搜尋、高斯模板扣除與峰擬合。上傳之後會在這裡顯示 XAS / XANES 圖譜與分析結果。"
             formats={['.DAT', '.XMU', '.NOR', '.TXT', '.CSV']}
           />
+        )}
+
+        {/* Imported spectrum preview — shows when no pipeline result but imported data loaded */}
+        {fitDataSource === 'imported' && importedFitDataset && !fitResult && (
+          <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+            <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">匯入光譜預覽 — {importedFitDataset.name}</p>
+            <p className="mb-3 text-[10px] text-[var(--text-soft)]">
+              {importedFitDataset.x.length} 個數據點 · {importedFitDataset.x[0].toFixed(2)} – {importedFitDataset.x[importedFitDataset.x.length - 1].toFixed(2)} eV
+            </p>
+            <Plot
+              data={[{
+                x: importedFitDataset.x,
+                y: importedFitDataset.y,
+                type: 'scatter',
+                mode: 'lines',
+                name: importedFitDataset.name,
+                line: { color: 'var(--accent-strong)', width: 2 },
+              }] as Plotly.Data[]}
+              layout={chartLayout('Energy (eV)', '強度') as Plotly.Layout}
+              config={withPlotFullscreen()}
+              style={{ width: '100%', height: 320 }}
+            />
+          </div>
         )}
 
         {result && (activeDataset != null || overlayDatasets.length > 0) && (
@@ -2562,167 +2817,6 @@ export default function XAS({
             </div>
             )}
 
-            {/* Peak fitting result */}
-            {fitResult && activeDataset && (() => {
-              const r2 = fitResult.r_squared ?? 0
-              const rmse = fitResult.rmse ?? 0
-              const chiRed = fitResult.chi_red ?? null
-              return (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-                <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
-                  <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果（{fitChannel}）</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
-                      {fitProfile.toUpperCase()} · {fitResult.peaks.length} 峰
-                    </span>
-                    <span className={[
-                      'rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
-                      r2 >= 0.99 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
-                      : r2 >= 0.97 ? 'border-sky-500/40 bg-sky-500/10 text-sky-400'
-                      : r2 >= 0.90 ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
-                      : 'border-rose-500/40 bg-rose-500/10 text-rose-400',
-                    ].join(' ')}>
-                      R² = {r2.toFixed(4)}
-                    </span>
-                    <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
-                      RMSE = {rmse.toFixed(4)}
-                    </span>
-                    {chiRed != null && (
-                      <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
-                        χ²ᵣ = {chiRed.toFixed(4)}
-                      </span>
-                    )}
-                    <button type="button" onClick={() => setFitResult(null)} className="text-[10px] text-rose-400 hover:text-rose-300">清除</button>
-                  </div>
-                </div>
-                <Plot
-                  data={[
-                    {
-                      x: activeDataset.x,
-                      y: fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed,
-                      type: 'scatter', mode: 'lines', name: '原始',
-                      line: { color: '#94a3b8', width: 1.4 },
-                    },
-                    {
-                      x: activeDataset.x,
-                      y: fitResult.y_fit,
-                      type: 'scatter', mode: 'lines', name: '總擬合',
-                      line: { color: '#38bdf8', width: 2.2 },
-                    },
-                    {
-                      x: activeDataset.x,
-                      y: fitResult.residuals,
-                      type: 'scatter', mode: 'lines', name: '殘差',
-                      line: { color: '#f97316', width: 1.2, dash: 'dot' as const },
-                    },
-                    ...fitResult.peaks.map((pk, i) => ({
-                      x: activeDataset.x,
-                      y: fitResult.y_individual[i] ?? [],
-                      type: 'scatter' as const,
-                      mode: 'lines' as const,
-                      name: pk.Peak_Name,
-                      line: { width: 1.6 },
-                      opacity: 0.80,
-                      fill: 'tozeroy' as const,
-                    })),
-                  ] as Plotly.Data[]}
-                  layout={(() => {
-                    const base = chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout
-                    if (fitRangeEnabled) {
-                      base.shapes = [{
-                        type: 'rect', xref: 'x', yref: 'paper',
-                        x0: fitRangeLo, x1: fitRangeHi, y0: 0, y1: 1,
-                        fillcolor: 'rgba(34,211,238,0.08)',
-                        line: { color: 'rgba(34,211,238,0.5)', width: 1.2, dash: 'dash' },
-                      } as Plotly.Shape]
-                      base.annotations = [{
-                        xref: 'x', yref: 'paper',
-                        x: (fitRangeLo + fitRangeHi) / 2, y: 1.0,
-                        text: '擬合範圍', showarrow: false,
-                        font: { size: 10, color: 'rgba(34,211,238,0.8)' },
-                        yanchor: 'bottom',
-                      } as Plotly.Annotations]
-                    }
-                    return base
-                  })()}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 360 }}
-                />
-                {/* result table */}
-                <div className="mt-3 overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
-                        <th className="pb-2 text-left font-medium">峰名稱</th>
-                        <th className="pb-2 text-right font-medium">中心 (eV)</th>
-                        <th className="pb-2 text-right font-medium">FWHM (eV)</th>
-                        <th className="pb-2 text-right font-medium">面積</th>
-                        <th className="pb-2 text-right font-medium">面積%</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-[var(--text-main)]">
-                      {fitResult.peaks.map(pk => (
-                        <tr key={pk.Peak_Name} className="border-b border-[var(--card-divider)]">
-                          <td className="py-1.5 font-mono">{pk.Peak_Name}</td>
-                          <td className="py-1.5 text-right">{pk.Center_eV.toFixed(3)}</td>
-                          <td className="py-1.5 text-right">{pk.FWHM_eV.toFixed(3)}</td>
-                          <td className="py-1.5 text-right">{pk.Area.toFixed(2)}</td>
-                          <td className="py-1.5 text-right text-[var(--accent-strong)]">{pk.Area_pct?.toFixed(1) ?? '—'}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {/* export */}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {/* 光譜數據 TXT for Origin Pro */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const peakHeaders = fitResult.peaks.map(pk => pk.Peak_Name)
-                      const header = ['Energy_eV', 'Observed', 'Total_Fit', 'Residuals', ...peakHeaders].join('\t')
-                      const lines = activeDataset.x.map((x, i) => {
-                        const obs = (fitChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed)[i] ?? ''
-                        const fit = fitResult.y_fit[i] ?? ''
-                        const res = fitResult.residuals[i] ?? ''
-                        const pkVals = fitResult.y_individual.map(yi => yi[i] ?? '')
-                        return [x, obs, fit, res, ...pkVals].join('\t')
-                      })
-                      downloadFile([header, ...lines].join('\n'), 'xas_fit_spectra.txt', 'text/plain')
-                    }}
-                    className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
-                  >
-                    光譜數據 TXT（Origin Pro）
-                  </button>
-                  {/* 分析報告 Excel */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void downloadFitReport({
-                        channel: fitChannel,
-                        profile: fitProfile,
-                        r2,
-                        rmse,
-                        chi_red: chiRed,
-                        peaks: fitResult.peaks.map(pk => ({
-                          name: pk.Peak_Name,
-                          center: pk.Center_eV,
-                          fwhm: pk.FWHM_eV,
-                          area: pk.Area,
-                          height: pk.Height,
-                          area_pct: pk.Area_pct,
-                        })),
-                      })
-                    }}
-                    className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
-                  >
-                    分析報告 Excel
-                  </button>
-                </div>
-              </div>
-              )
-            })()}
-
             {/* edge step table */}
             {activeDataset.edge_step_tey != null && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
@@ -2799,6 +2893,169 @@ export default function XAS({
             )}
           </>
         )}
+
+        {/* Peak fitting result — shown in both pipeline and imported mode */}
+        {fitResult && fitEffective && (() => {
+          const fEff = fitEffective
+          const r2 = fitResult.r_squared ?? 0
+          const rmse = fitResult.rmse ?? 0
+          const chiRed = fitResult.chi_red ?? null
+          return (
+          <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+            <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
+              <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果（{fitChannel}）</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
+                  {fitProfile.toUpperCase()} · {fitResult.peaks.length} 峰
+                </span>
+                <span className={[
+                  'rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+                  r2 >= 0.99 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                  : r2 >= 0.97 ? 'border-sky-500/40 bg-sky-500/10 text-sky-400'
+                  : r2 >= 0.90 ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+                  : 'border-rose-500/40 bg-rose-500/10 text-rose-400',
+                ].join(' ')}>
+                  R² = {formatMetric(r2)}
+                </span>
+                <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
+                  RMSE = {formatMetric(rmse)}
+                </span>
+                {chiRed != null && (
+                  <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
+                    χ²ᵣ = {formatMetric(chiRed)}
+                  </span>
+                )}
+                <button type="button" onClick={() => setFitResult(null)} className="text-[10px] text-rose-400 hover:text-rose-300">清除</button>
+              </div>
+            </div>
+            <Plot
+              data={[
+                {
+                  x: fEff.x,
+                  y: fEff.y,
+                  type: 'scatter', mode: 'lines', name: '原始',
+                  line: { color: '#94a3b8', width: 1.4 },
+                },
+                {
+                  x: fEff.x,
+                  y: fitResult.y_fit,
+                  type: 'scatter', mode: 'lines', name: '總擬合',
+                  line: { color: '#38bdf8', width: 2.2 },
+                },
+                {
+                  x: fEff.x,
+                  y: fitResult.residuals,
+                  type: 'scatter', mode: 'lines', name: '殘差',
+                  line: { color: '#f97316', width: 1.2, dash: 'dot' as const },
+                },
+                ...fitResult.peaks.map((pk, i) => ({
+                  x: fEff.x,
+                  y: fitResult.y_individual[i] ?? [],
+                  type: 'scatter' as const,
+                  mode: 'lines' as const,
+                  name: pk.Peak_Name,
+                  line: { width: 1.6 },
+                  opacity: 0.80,
+                  fill: 'tozeroy' as const,
+                })),
+              ] as Plotly.Data[]}
+              layout={(() => {
+                const base = chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout
+                if (fitRangeEnabled) {
+                  base.shapes = [{
+                    type: 'rect', xref: 'x', yref: 'paper',
+                    x0: fitRangeLo, x1: fitRangeHi, y0: 0, y1: 1,
+                    fillcolor: 'rgba(34,211,238,0.08)',
+                    line: { color: 'rgba(34,211,238,0.5)', width: 1.2, dash: 'dash' },
+                  } as Plotly.Shape]
+                  base.annotations = [{
+                    xref: 'x', yref: 'paper',
+                    x: (fitRangeLo + fitRangeHi) / 2, y: 1.0,
+                    text: '擬合範圍', showarrow: false,
+                    font: { size: 10, color: 'rgba(34,211,238,0.8)' },
+                    yanchor: 'bottom',
+                  } as Plotly.Annotations]
+                }
+                return base
+              })()}
+              config={withPlotFullscreen()}
+              style={{ width: '100%', height: 360 }}
+            />
+            {/* result table */}
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
+                    <th className="pb-2 text-left font-medium">峰名稱</th>
+                    <th className="pb-2 text-right font-medium">中心 (eV)</th>
+                    <th className="pb-2 text-right font-medium">FWHM (eV)</th>
+                    <th className="pb-2 text-right font-medium">面積</th>
+                    <th className="pb-2 text-right font-medium">面積%</th>
+                  </tr>
+                </thead>
+                <tbody className="text-[var(--text-main)]">
+                  {fitResult.peaks.map(pk => (
+                    <tr key={pk.Peak_Name} className="border-b border-[var(--card-divider)]">
+                      <td className="py-1.5 font-mono">{pk.Peak_Name}</td>
+                      <td className="py-1.5 text-right">{pk.Center_eV.toFixed(3)}</td>
+                      <td className="py-1.5 text-right">{pk.FWHM_eV.toFixed(3)}</td>
+                      <td className="py-1.5 text-right">{pk.Area.toFixed(2)}</td>
+                      <td className="py-1.5 text-right text-[var(--accent-strong)]">{pk.Area_pct?.toFixed(1) ?? '—'}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* export */}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {/* 光譜數據 TXT for Origin Pro */}
+              <button
+                type="button"
+                onClick={() => {
+                  const peakHeaders = fitResult.peaks.map(pk => pk.Peak_Name)
+                  const header = ['Energy_eV', 'Observed', 'Total_Fit', 'Residuals', ...peakHeaders].join('\t')
+                  const lines = fEff.x.map((x, i) => {
+                    const obs = fEff.y[i] ?? ''
+                    const fit = fitResult.y_fit[i] ?? ''
+                    const res = fitResult.residuals[i] ?? ''
+                    const pkVals = fitResult.y_individual.map(yi => yi[i] ?? '')
+                    return [x, obs, fit, res, ...pkVals].join('\t')
+                  })
+                  downloadFile([header, ...lines].join('\n'), 'xas_fit_spectra.txt', 'text/plain')
+                }}
+                className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+              >
+                光譜數據 TXT（Origin Pro）
+              </button>
+              {/* 分析報告 Excel */}
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadFitReport({
+                    channel: fitChannel,
+                    profile: fitProfile,
+                    r2,
+                    rmse,
+                    chi_red: chiRed,
+                    peaks: fitResult.peaks.map(pk => ({
+                      name: pk.Peak_Name,
+                      center: pk.Center_eV,
+                      fwhm: pk.FWHM_eV,
+                      area: pk.Area,
+                      height: pk.Height,
+                      area_pct: pk.Area_pct,
+                    })),
+                  })
+                }}
+                className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
+              >
+                分析報告 Excel
+              </button>
+            </div>
+          </div>
+          )
+        })()}
+
         </div>
       </main>
 

@@ -911,7 +911,9 @@ def fit_xas_peaks(req: XasFitRequest):
             "center_min": pk.center_min,
             "center_max": pk.center_max,
             "fwhm_min": pk.fwhm_min,
-            "fwhm_max": pk.fwhm_max,
+            # Cap fwhm_max: if not provided, limit to 4× initial FWHM (max 15 eV)
+            # to prevent peaks from growing unboundedly wide during XAS fitting.
+            "fwhm_max": pk.fwhm_max if pk.fwhm_max is not None else min(max(pk.fwhm * 4.0, 2.0), 15.0),
             "amplitude_max": pk.amplitude_max,
             "theoretical_center": pk.theoretical_center,
             "label": pk.label,
@@ -923,7 +925,8 @@ def fit_xas_peaks(req: XasFitRequest):
     if fit_range is None and req.peaks:
         centers = np.array([pk.center for pk in req.peaks], dtype=float)
         fwhms = np.array([max(pk.fwhm, 0.05) for pk in req.peaks], dtype=float)
-        padding = max(3.0, float(np.max(fwhms)) * 6.0)
+        # Use median FWHM * 3 for padding, capped at 15 eV, to avoid including far background
+        padding = min(max(5.0, float(np.median(fwhms)) * 3.0), 15.0)
         fit_lo = max(float(np.min(x)), float(np.min(centers)) - padding)
         fit_hi = min(float(np.max(x)), float(np.max(centers)) + padding)
         fit_range = [fit_lo, fit_hi]

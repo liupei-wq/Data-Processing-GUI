@@ -2375,14 +2375,14 @@ export default function XPS({
     }, fitTargetPeakScale)])
   }
 
-  const handleFit = async () => {
+  const handleFit = async (): Promise<FitResult | null> => {
     if (processingViewMode === 'overlay' && !overlayState.params.average) {
       setFitError('疊圖不平均模式下峰擬合已停用。請先啟用多檔平均，或切回單筆資料。')
-      return
+      return null
     }
-    if (!fitTargetDataset) return
+    if (!fitTargetDataset) return null
     const activePeaks = peakCandidates.filter(p => p.enabled)
-    if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return }
+    if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return null }
     setIsFitting(true); setFitError(null)
     try {
       const initPeaks = buildFitPeakPayloads(activePeaks, fitTargetDataset)
@@ -2395,7 +2395,13 @@ export default function XPS({
         peakLabels,
         { maxfev: 8000, nRestarts: fitNRestarts },
       )
-      // Update unlocked peak params with fitted values so next press refines from here (OriginPro style)
+      const r2 = res.r_squared ?? 0
+      const rmse = res.rmse ?? 0
+      setFitHistory(prev => {
+        const delta = prev.length > 0 ? Math.abs(r2 - prev[prev.length - 1].r2) : 1
+        return [...prev, { iter: prev.length + 1, r2, rmse, delta }]
+      })
+      // Update unlocked peak params with fitted values (OriginPro-style iterative refinement)
       const scale = fitTargetPeakScale
       setPeakCandidates(prev => prev.map(pk => {
         const activeIdx = activePeaks.indexOf(pk)
@@ -2413,8 +2419,60 @@ export default function XPS({
       } else {
         setFitResult(res)
       }
-    } catch (e: unknown) { setFitError((e as Error).message) }
+      return res
+    } catch (e: unknown) { setFitError((e as Error).message); return null }
     finally { setIsFitting(false) }
+  }
+
+  const handleAutoConverge = async () => {
+    if (processingViewMode === 'overlay' && !overlayState.params.average) {
+      setFitError('疊圖不平均模式下自動收斂已停用。')
+      return
+    }
+    if (!fitTargetDataset) return
+    setAutoConverging(true); setIsFitting(true); setFitError(null); setFitHistory([])
+    let currentCandidates = peakCandidates
+    let prevR2 = 0
+    const scale = fitTargetPeakScale
+    try {
+      for (let iter = 0; iter < 10; iter++) {
+        const activePeaks = currentCandidates.filter(p => p.enabled)
+        if (activePeaks.length === 0) break
+        const initPeaks = buildFitPeakPayloads(activePeaks, fitTargetDataset)
+        const peakLabels = initPeaks.map(p => p.label ?? '')
+        const res = await fitPeaks(
+          fitTargetDataset.x,
+          fitTargetDataset.y_processed,
+          initPeaks,
+          fitProfile,
+          peakLabels,
+          { maxfev: 8000, nRestarts: 1 },
+        )
+        const r2 = res.r_squared ?? 0
+        const rmse = res.rmse ?? 0
+        const delta = Math.abs(r2 - prevR2)
+        setFitHistory(prev => [...prev, { iter: iter + 1, r2, rmse, delta }])
+        currentCandidates = currentCandidates.map(pk => {
+          const activeIdx = activePeaks.indexOf(pk)
+          if (activeIdx < 0) return pk
+          const fitted = res.peaks[activeIdx]
+          if (!fitted) return pk
+          let updated = pk
+          if (!pk.lock_center) updated = updatePeakCenterSeed(updated, fitted.Center_eV, scale)
+          if (!pk.lock_fwhm)   updated = updatePeakFwhmSeed(updated, fitted.FWHM_eV, scale)
+          if (!pk.lock_area)   updated = updatePeakAmplitudeSeed(updated, fitted.Height, scale)
+          return updated
+        })
+        if (processingViewMode === 'overlay') setOverlayFitResult(res)
+        else setFitResult(res)
+        if (delta < 0.00005 && iter > 0) break
+        prevR2 = r2
+      }
+    } catch (e: unknown) { setFitError((e as Error).message) }
+    finally {
+      setPeakCandidates(currentCandidates)
+      setAutoConverging(false); setIsFitting(false)
+    }
   }
 
   const stageDisplayLabel = getStageDisplayLabel(currentParams)
@@ -3142,6 +3200,19 @@ export default function XPS({
                         >
                           {pk.cardLocked ? '🔒' : '🔓'}
                         </button>
+                        {(pk.originalCenter != null || pk.originalFwhm != null || pk.originalAmplitude != null) && (
+                          <button
+                            type="button"
+                            title="重設為初始值"
+                            onClick={() => setPeakCandidates(prev => prev.map(p => p.id !== pk.id ? p : {
+                              ...p,
+                              center: p.originalCenter ?? p.center,
+                              fwhm: p.originalFwhm ?? p.fwhm,
+                              amplitude: p.originalAmplitude ?? p.amplitude,
+                            }))}
+                            className="text-sky-400 hover:text-sky-300 text-xs px-1"
+                          >↺</button>
+                        )}
                         <button type="button" onClick={() => setPeakCandidates(prev => prev.filter(p => p.id !== pk.id))} className="text-rose-400 hover:text-rose-300">✕</button>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -3216,9 +3287,22 @@ export default function XPS({
                       <p className="text-[10px] leading-5 text-[var(--text-soft)]">
                         鎖定只限制擬合時的自由度；你仍可先手動改 seed。若同時放開多個峰，系統會自動維持最小峰距，避免峰位互相交叉。
                       </p>
-                      {peakCandidates.length > 1 && (
-                        <button type="button" onClick={() => setPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
-                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPeakCandidates(prev => prev.map(pk => ({
+                            ...pk,
+                            center: pk.originalCenter ?? pk.center,
+                            fwhm: pk.originalFwhm ?? pk.fwhm,
+                            amplitude: pk.originalAmplitude ?? pk.amplitude,
+                          })))}
+                          className="text-xs text-sky-400 hover:text-sky-300"
+                          title="重設所有峰的中心/FWHM/強度回初始值"
+                        >↺ 重設所有峰</button>
+                        {peakCandidates.length > 1 && (
+                          <button type="button" onClick={() => setPeakCandidates([])} className="text-xs text-rose-400 hover:text-rose-300">清除全部峰</button>
+                        )}
+                      </div>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)] shrink-0">嘗試次數</span>
                         {([1, 3, 5] as const).map(n => (
@@ -3231,11 +3315,41 @@ export default function XPS({
                           >{n}</button>
                         ))}
                       </div>
-                      <button type="button" onClick={handleFit} disabled={isFitting}
-                        className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50"
-                      >
-                        {isFitting ? `擬合中… ${fitNRestarts > 1 ? `(最多 ${fitNRestarts} 次)` : ''}` : '執行擬合'}
-                      </button>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={handleFit} disabled={isFitting || autoConverging}
+                          className="flex-1 rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50"
+                        >
+                          {isFitting && !autoConverging ? `擬合中… ${fitNRestarts > 1 ? `(最多 ${fitNRestarts} 次)` : ''}` : '執行擬合'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setFitHistory([]); void handleAutoConverge() }}
+                          disabled={isFitting || autoConverging}
+                          title="自動重複擬合直到 R² 不再提升（最多 10 次）"
+                          className="rounded-lg border border-[var(--accent-secondary)] px-3 py-2 text-xs font-medium text-[var(--accent-secondary)] hover:opacity-80 disabled:opacity-50"
+                        >
+                          {autoConverging ? '收斂中…' : '自動收斂'}
+                        </button>
+                      </div>
+                      {fitHistory.length > 0 && (
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">收斂歷史</p>
+                          <div className="flex flex-wrap gap-1">
+                            {fitHistory.map(h => (
+                              <span key={h.iter} className={[
+                                'rounded-full px-2 py-0.5 text-[10px] font-mono',
+                                h.r2 >= 0.99 ? 'bg-emerald-500/10 text-emerald-400'
+                                : h.r2 >= 0.97 ? 'bg-sky-500/10 text-sky-400'
+                                : h.r2 >= 0.90 ? 'bg-amber-500/10 text-amber-400'
+                                : 'bg-rose-500/10 text-rose-400',
+                              ].join(' ')}>
+                                #{h.iter} R²={formatMetric(h.r2, 4)}
+                                {h.iter > 1 && ` Δ${h.delta < 1e-5 ? h.delta.toExponential(1) : h.delta.toFixed(5)}`}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                   </div>
@@ -3856,14 +3970,14 @@ export default function XPS({
                     : r2 >= 0.90 ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
                     : 'border-rose-500/40 bg-rose-500/10 text-rose-400',
                   ].join(' ')}>
-                    R² = {r2.toFixed(4)}
+                    R² = {formatMetric(r2)}
                   </span>
                   <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
-                    RMSE = {rmse.toFixed(4)}
+                    RMSE = {formatMetric(rmse)}
                   </span>
                   {chiRed != null && (
                     <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
-                      χ²ᵣ = {chiRed.toFixed(4)}
+                      χ²ᵣ = {formatMetric(chiRed)}
                     </span>
                   )}
                 </div>
