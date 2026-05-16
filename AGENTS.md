@@ -189,3 +189,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-16：同步 rebase origin/main 時僅 AGENTS.md / CLAUDE.md 發生文件紀錄衝突；已保留遠端 2026-05-15 紀錄、本地 2026-05-14 Raman Y 軸範圍紀錄與 2026-05-16 同步檢查紀錄。
 - 2026-05-16：同步完成，已將 Raman 繪圖 Y 軸範圍控制變更 rebase 到 origin/main v26.1 後推送；遠端 main 由 e59617f 更新到 59aaa37。推送前確認 conflict marker 掃描、git diff --check origin/main..HEAD 與 default_raman_peaks JSON 解析通過；工具環境仍找不到 node/npm，未執行 npm run build。
 - 2026-05-16：XES 新增能量校正檔上傳與自動套用 table calibration；前端可解析 channel-energy 校正檔、顯示校正摘要與 Energy order，後端依點數相同一對一或點數不同插值產生 `x_ev`。XES 分點扣背新增每筆 sample 量測序號與總量測次數，權重採 `(order-1)/(total-1)`，例如第 5/10 筆為 5/9 BG1 + 4/9 BG2。新增 calibrated CSV 匯出欄位 energy_eV、intensity、sampleName、original_x。驗證 `uv run python -m py_compile web/backend/routers/xes.py` 與 XES 相關檔案 `git diff --check` 通過；目前環境找不到 npm，未執行 `npm run build`。
+
+- 2026-05-16：修正 XES process 500：後端對 sample x/y 長度、有限值、點數與 table calibration 後 x_ev/y 長度加防護，未知資料形狀改回 422 詳細錯誤；背景扣除缺 BG 檔時明確報錯。前端 BG1/BG2 overlay 在 Energy calibrated 模式下改用同一組 eV 校正軸。驗證 `uv run python -m py_compile web/backend/routers/xes.py` 與 XES 相關檔案 `git diff --check` 通過；目前環境找不到 npm，未執行 `npm run build`。

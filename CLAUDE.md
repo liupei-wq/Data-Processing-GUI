@@ -731,3 +731,9 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-16] 檢查：XES 分點扣背與能量校正改動完成初版，開始執行後端 py_compile、前端 npm build 與 diff 檢查。
 
 [2026-05-16] 實作完成：XES 新增能量校正檔上傳與自動套用 table calibration。前端 `XES.tsx` 可解析 .dat/.txt/.csv 的 channel-energy 兩欄校正檔，顯示 points、energy min/max 與遞增/遞減方向，支援 Energy order increasing/decreasing/original，未上傳時顯示「目前 XES 尚未套用能量校正，X 軸可能為 channel / pixel。」；後端 `routers/xes.py` 新增 `calibration_points`，點數相同時一對一使用 calibration energy，點數不同時依 raw channel 插值，raw intensity-only 檔案 fallback 以 index 作 channel。XES 分點扣背新增每筆 sample `measurement_order` 與 `total_measurements`，權重改為 `(order-1)/(total-1)`，例如第 5/10 筆為 5/9 BG1 + 4/9 BG2。匯出新增 `Export calibrated XES data`，欄位含 energy_eV、intensity、sampleName、original_x。驗證：`uv run python -m py_compile .\web\backend\routers\xes.py`（需非沙盒 uv cache 權限）通過，`git diff --check -- web/backend/routers/xes.py web/frontend/src/pages/XES.tsx web/frontend/src/types/xes.ts` 通過；目前環境找不到 npm，未能執行 `cd web/frontend && npm run build`。
+
+[2026-05-16] 檢查：使用者回報 XES process 500；開始以最小 process_xes request 重現，重點檢查 table calibration 與 energy_order 排序時的 x_ev/y 長度一致性。
+
+[2026-05-16] 實作：針對 XES process 500 補強。判斷可能來自校正後 x/y 長度或未知資料形狀造成未捕捉例外，準備加入長度一致性檢查、per-dataset 422 錯誤回報，以及前端 BG overlay 使用校正後 x 軸。
+
+[2026-05-16] 修正：XES process 500 補強完成。web/backend/routers/xes.py 對每筆 sample 加入 x/y 長度、有限值、點數檢查，table calibration 與排序前會確保 x_ev/y arrays 長度一致，未知資料形狀改回 422 詳細錯誤而非 500；背景扣除缺 BG 檔時也明確回報。web/frontend/src/pages/XES.tsx 新增 calibrated BG overlay 軸轉換，Energy calibrated 模式下 BG1/BG2 參考線與主圖同用 eV 軸。驗證 uv run python -m py_compile .\web\backend\routers\xes.py 與 XES 相關檔案 git diff --check 通過；目前工具環境仍找不到 node/npm，未執行 npm run build。

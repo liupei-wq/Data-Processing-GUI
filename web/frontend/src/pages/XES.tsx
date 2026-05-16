@@ -119,6 +119,39 @@ function estimateBgWeights(order: number | null | undefined, total: number | nul
   return { bg1: 1 - wBg2, bg2: wBg2 }
 }
 
+function buildCalibratedAxis(originalX: number[], calibration: CalibrationPoint[]): number[] | null {
+  if (calibration.length < 2 || originalX.length === 0) return null
+  if (originalX.length === calibration.length) {
+    return calibration.map(p => p.energy)
+  }
+  const sorted = [...calibration].sort((a, b) => a.channel - b.channel)
+  const first = sorted[0]
+  const last = sorted[sorted.length - 1]
+  const result: number[] = []
+  for (const x of originalX) {
+    if (x <= first.channel) {
+      result.push(first.energy)
+      continue
+    }
+    if (x >= last.channel) {
+      result.push(last.energy)
+      continue
+    }
+    let lo = 0
+    let hi = sorted.length - 1
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (sorted[mid].channel <= x) lo = mid
+      else hi = mid
+    }
+    const p0 = sorted[lo]
+    const p1 = sorted[hi]
+    const t = (x - p0.channel) / (p1.channel - p0.channel)
+    result.push(p0.energy + t * (p1.energy - p0.energy))
+  }
+  return result
+}
+
 function cssVar(name: string, fallback: string) {
   if (typeof window === 'undefined') return fallback
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
@@ -430,6 +463,10 @@ export default function XES({
 
   const getX = (ds: ProcessedDataset) =>
     useEv && ds.x_ev ? ds.x_ev : ds.x_pixel
+  const getReferenceX = (s: ParsedSpectrum) =>
+    useEv && params.calibration_points.length > 0
+      ? (buildCalibratedAxis(s.x, params.calibration_points) ?? s.x)
+      : s.x
 
   const hasSamples = samples.length > 0
   const hasProcessed = processed.length > 0
@@ -453,12 +490,12 @@ export default function XES({
           line: { color: '#f59e0b', width: 2.5, dash: 'dot' as const },
         }] : []),
         ...(bg1 && params.bg_method !== 'none' ? [{
-          x: bg1.x, y: bg1.y,
+          x: getReferenceX(bg1), y: bg1.y,
           type: 'scatter' as const, mode: 'lines' as const, name: 'BG1',
           line: { color: '#19D3F3', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
         }] : []),
         ...(bg2 && params.bg_method !== 'none' ? [{
-          x: bg2.x, y: bg2.y,
+          x: getReferenceX(bg2), y: bg2.y,
           type: 'scatter' as const, mode: 'lines' as const, name: 'BG2',
           line: { color: '#FFA15A', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
         }] : []),
@@ -974,12 +1011,12 @@ export default function XES({
                     }] : []),
                     // BG reference overlays
                     ...(bg1 && params.bg_method !== 'none' ? [{
-                      x: bg1.x, y: bg1.y,
+                      x: getReferenceX(bg1), y: bg1.y,
                       type: 'scatter' as const, mode: 'lines' as const, name: 'BG1',
                       line: { color: '#19D3F3', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
                     }] : []),
                     ...(bg2 && params.bg_method !== 'none' ? [{
-                      x: bg2.x, y: bg2.y,
+                      x: getReferenceX(bg2), y: bg2.y,
                       type: 'scatter' as const, mode: 'lines' as const, name: 'BG2',
                       line: { color: '#FFA15A', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
                     }] : []),

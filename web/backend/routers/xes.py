@@ -220,12 +220,27 @@ def _apply_table_calibration(x_pixel: np.ndarray, channels: np.ndarray, energies
     return np.interp(x_pixel, channels, energies, left=energies[0], right=energies[-1])
 
 
+def _ensure_axis_length(axis: np.ndarray | None, target_len: int, label: str) -> np.ndarray | None:
+    if axis is None:
+        return None
+    if len(axis) == target_len:
+        return axis
+    if len(axis) < 2 or target_len < 2:
+        raise ValueError(f"{label} 長度與光譜強度不一致。")
+    src_idx = np.linspace(0.0, 1.0, len(axis))
+    dst_idx = np.linspace(0.0, 1.0, target_len)
+    return np.interp(dst_idx, src_idx, axis)
+
+
 def _sort_for_energy_order(
     energy_order: str,
     x: np.ndarray,
     x_ev: np.ndarray | None,
     arrays: list[np.ndarray | None],
 ) -> tuple[np.ndarray, np.ndarray | None, list[np.ndarray | None]]:
+    target_len = len(x)
+    x_ev = _ensure_axis_length(x_ev, target_len, "XES energy axis")
+    arrays = [_ensure_axis_length(arr, target_len, "XES data array") for arr in arrays]
     if x_ev is None or energy_order == "original":
         return x, x_ev, arrays
     if energy_order == "increasing":
@@ -308,82 +323,100 @@ def process_xes(req: ProcessRequest):
     outputs: list[DatasetOutput] = []
 
     for idx, ds in enumerate(req.samples):
-        x = np.array(ds.x, dtype=float)
-        y = np.array(ds.y, dtype=float)
+        try:
+            x = np.array(ds.x, dtype=float)
+            y = np.array(ds.y, dtype=float)
+            if len(x) != len(y):
+                n_xy = min(len(x), len(y))
+                if n_xy < 2:
+                    raise ValueError("x/y 有效點數不足。")
+                x = x[:n_xy]
+                y = y[:n_xy]
+            if len(x) < 2:
+                raise ValueError("資料點不足。")
+            if np.any(~np.isfinite(x)) or np.any(~np.isfinite(y)):
+                raise ValueError("資料包含非數值或無限值。")
 
-        if p.interpolate:
-            x_grid = np.linspace(float(x.min()), float(x.max()), int(p.n_points))
-            y = np.interp(x_grid, x, y)
-            x = x_grid
+            order = np.argsort(x)
+            x = x[order]
+            y = y[order]
 
-        y_raw = y.copy()
+            if p.interpolate:
+                x_grid = np.linspace(float(x.min()), float(x.max()), int(p.n_points))
+                y = np.interp(x_grid, x, y)
+                x = x_grid
 
-        # I0 normalization (per-dataset monitor signal)
-        i0_val = p.i0_values.get(ds.name)
-        if i0_val and i0_val > 0:
-            y = y / i0_val
-            y_raw = y_raw / i0_val
+            y_raw = y.copy()
 
-        # BG1/BG2 subtraction
-        y_bg: np.ndarray | None = None
-        bg_weight: float | None = None
-        if p.bg_method != "none":
-            bg1_interp = _interp_to(bg1_x, bg1_y, x) if (bg1_x is not None) else None
-            bg2_interp = _interp_to(bg2_x, bg2_y, x) if (bg2_x is not None) else None
+            # I0 normalization (per-dataset monitor signal)
+            i0_val = p.i0_values.get(ds.name)
+            if i0_val and i0_val > 0:
+                y = y / i0_val
+                y_raw = y_raw / i0_val
 
-            if p.bg_method == "bg1" and bg1_interp is not None:
-                y_bg = bg1_interp
-            elif p.bg_method == "bg2" and bg2_interp is not None:
-                y_bg = bg2_interp
-            elif p.bg_method == "average" and bg1_interp is not None and bg2_interp is not None:
-                y_bg = 0.5 * (bg1_interp + bg2_interp)
-            elif p.bg_method == "interpolated" and bg1_interp is not None and bg2_interp is not None:
-                try:
+            # BG1/BG2 subtraction
+            y_bg: np.ndarray | None = None
+            bg_weight: float | None = None
+            if p.bg_method != "none":
+                bg1_interp = _interp_to(bg1_x, bg1_y, x) if (bg1_x is not None and bg1_y is not None) else None
+                bg2_interp = _interp_to(bg2_x, bg2_y, x) if (bg2_x is not None and bg2_y is not None) else None
+
+                if p.bg_method == "bg1" and bg1_interp is not None:
+                    y_bg = bg1_interp
+                elif p.bg_method == "bg2" and bg2_interp is not None:
+                    y_bg = bg2_interp
+                elif p.bg_method == "average" and bg1_interp is not None and bg2_interp is not None:
+                    y_bg = 0.5 * (bg1_interp + bg2_interp)
+                elif p.bg_method == "interpolated" and bg1_interp is not None and bg2_interp is not None:
                     bg_weight = _bg_weight_from_measurement(ds.measurement_order, p.total_measurements, idx, n)
-                except ValueError as exc:
-                    raise HTTPException(status_code=422, detail=str(exc)) from exc
-                y_bg = (1.0 - bg_weight) * bg1_interp + bg_weight * bg2_interp
+                    y_bg = (1.0 - bg_weight) * bg1_interp + bg_weight * bg2_interp
+                else:
+                    raise ValueError(f"背景扣除方式 {p.bg_method} 需要對應的 BG1/BG2 檔案。")
 
-            if y_bg is not None:
-                y = np.nan_to_num(y - y_bg, nan=0.0)
+                if y_bg is not None:
+                    y = np.nan_to_num(y - y_bg, nan=0.0)
 
-        y_corrected = y.copy()
+            y_corrected = y.copy()
 
-        # smoothing
-        if p.smooth_method != "none":
-            y, _ = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
+            # smoothing
+            if p.smooth_method != "none":
+                y, _ = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
 
-        # normalization
-        if p.norm_method != "none":
-            _, y = apply_normalization(x, y, norm_method=p.norm_method, x_start=p.norm_x_start, x_end=p.norm_x_end)
+            # normalization
+            if p.norm_method != "none":
+                _, y = apply_normalization(x, y, norm_method=p.norm_method, x_start=p.norm_x_start, x_end=p.norm_x_end)
 
-        # X-axis calibration
-        x_ev: np.ndarray | None = None
-        if p.axis_calibration == "linear":
-            x_ev = _apply_calibration(x, p.energy_offset, p.energy_slope)
-        elif p.axis_calibration == "table" and calibration_channels is not None and calibration_energies is not None:
-            x_ev = _apply_table_calibration(x, calibration_channels, calibration_energies)
+            # X-axis calibration
+            x_ev: np.ndarray | None = None
+            if p.axis_calibration == "linear":
+                x_ev = _apply_calibration(x, p.energy_offset, p.energy_slope)
+            elif p.axis_calibration == "table" and calibration_channels is not None and calibration_energies is not None:
+                x_ev = _apply_table_calibration(x, calibration_channels, calibration_energies)
 
-        x_out, x_ev_out, sorted_arrays = _sort_for_energy_order(
-            p.energy_order,
-            x,
-            x_ev,
-            [y_raw, y_bg, y_corrected, y],
-        )
-        y_raw_out, y_bg_out, y_corrected_out, y_processed_out = sorted_arrays
+            x_out, x_ev_out, sorted_arrays = _sort_for_energy_order(
+                p.energy_order,
+                x,
+                x_ev,
+                [y_raw, y_bg, y_corrected, y],
+            )
+            y_raw_out, y_bg_out, y_corrected_out, y_processed_out = sorted_arrays
 
-        outputs.append(DatasetOutput(
-            name=ds.name,
-            x_pixel=x_out.tolist(),
-            x_ev=x_ev_out.tolist() if x_ev_out is not None else None,
-            y_raw=y_raw_out.tolist() if y_raw_out is not None else [],
-            y_bg=y_bg_out.tolist() if y_bg_out is not None else None,
-            y_corrected=y_corrected_out.tolist() if y_corrected_out is not None else [],
-            y_processed=y_processed_out.tolist() if y_processed_out is not None else [],
-            original_x=x_out.tolist(),
-            measurement_order=ds.measurement_order,
-            bg_weight=bg_weight,
-        ))
+            outputs.append(DatasetOutput(
+                name=ds.name,
+                x_pixel=x_out.tolist(),
+                x_ev=x_ev_out.tolist() if x_ev_out is not None else None,
+                y_raw=y_raw_out.tolist() if y_raw_out is not None else [],
+                y_bg=y_bg_out.tolist() if y_bg_out is not None else None,
+                y_corrected=y_corrected_out.tolist() if y_corrected_out is not None else [],
+                y_processed=y_processed_out.tolist() if y_processed_out is not None else [],
+                original_x=x_out.tolist(),
+                measurement_order=ds.measurement_order,
+                bg_weight=bg_weight,
+            ))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"{ds.name} XES 資料處理失敗：{exc}") from exc
 
     # average
     average_out: DatasetOutput | None = None
