@@ -9,6 +9,8 @@ import { parseFiles, processData, detectPeaks, listReferences, getReferencePeaks
 import type {
   BandAlignParams,
   BandAlignResult,
+  CalibrationPoint,
+  CalibrationSummary,
   DatasetInput,
   DetectedPeak,
   ParsedSpectrum,
@@ -28,6 +30,7 @@ const DEFAULT_PARAMS: ProcessParams = {
   average: false,
   bg_method: 'none',
   bg_order: 'upload',
+  total_measurements: null,
   smooth_method: 'none',
   smooth_window: 5,
   smooth_poly: 3,
@@ -38,6 +41,8 @@ const DEFAULT_PARAMS: ProcessParams = {
   axis_calibration: 'none',
   energy_offset: 0,
   energy_slope: 1,
+  energy_order: 'increasing',
+  calibration_points: [],
 }
 
 const DEFAULT_BAND: BandAlignParams = {
@@ -59,7 +64,59 @@ const BG_SUBTRACTION_HELP: Record<string, string> = {
   bg1: '只用上傳的 BG1 當背景，適合前背景最接近樣品條件時。',
   bg2: '只用上傳的 BG2 當背景，適合後背景比較穩定時。',
   average: '把 BG1 與 BG2 平均後再扣除，適合前後背景都可信時。',
-  interpolated: '依上傳順序在 BG1 與 BG2 之間逐點內插，適合背景隨量測時間漂移的情況。',
+  interpolated: '依每筆樣品的量測序號與總量測次數，在 BG1 與 BG2 之間分點插值扣背。',
+}
+
+function parseNumericTable(text: string): number[][] {
+  const rows: number[][] = []
+  const lines = text.split(/\r?\n/)
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    if (trimmed.startsWith('#') || trimmed.startsWith('//')) continue
+    const parts = trimmed.split(/[,\t\s]+/).filter(Boolean)
+    const nums = parts.map(v => Number(v))
+    if (nums.length >= 2 && nums.slice(0, 2).every(Number.isFinite)) {
+      rows.push(nums)
+    }
+  }
+  return rows
+}
+
+function parseXesCalibrationFile(text: string): CalibrationPoint[] {
+  const rows = parseNumericTable(text)
+  if (rows.length < 10) {
+    throw new Error('校正檔有效點數過少，無法進行 XES 能量校正。')
+  }
+  const points = rows.map(row => ({ channel: row[0], energy: row[1] }))
+  points.sort((a, b) => a.channel - b.channel)
+  for (let i = 1; i < points.length; i += 1) {
+    if (points[i].channel === points[i - 1].channel) {
+      throw new Error('校正檔中有重複的 channel / pixel index。')
+    }
+  }
+  return points
+}
+
+function getCalibrationSummary(calibration: CalibrationPoint[]): CalibrationSummary {
+  const energies = calibration.map(p => p.energy)
+  const channels = calibration.map(p => p.channel)
+  const inc = energies.every((e, i) => i === 0 || e >= energies[i - 1])
+  const dec = energies.every((e, i) => i === 0 || e <= energies[i - 1])
+  return {
+    points: calibration.length,
+    channelMin: Math.min(...channels),
+    channelMax: Math.max(...channels),
+    energyMin: Math.min(...energies),
+    energyMax: Math.max(...energies),
+    direction: inc ? 'increasing' : dec ? 'decreasing' : 'non-monotonic',
+  }
+}
+
+function estimateBgWeights(order: number | null | undefined, total: number | null | undefined) {
+  if (!order || !total || total < 2) return null
+  const wBg2 = Math.min(1, Math.max(0, (order - 1) / (total - 1)))
+  return { bg1: 1 - wBg2, bg2: wBg2 }
 }
 
 function cssVar(name: string, fallback: string) {
@@ -215,10 +272,14 @@ export default function XES({
   const [bandParams, setBandParams] = useState<BandAlignParams>(DEFAULT_BAND)
 
   const [sampleFiles, setSampleFiles] = useState<File[]>([])
+  const [sampleOrders, setSampleOrders] = useState<Record<string, number>>({})
   const [i0CsvText, setI0CsvText] = useState('')
   const [i0ParseError, setI0ParseError] = useState<string | null>(null)
   const [bg1File, setBg1File] = useState<File | null>(null)
   const [bg2File, setBg2File] = useState<File | null>(null)
+  const [calibrationFile, setCalibrationFile] = useState<File | null>(null)
+  const [calibrationSummary, setCalibrationSummary] = useState<CalibrationSummary | null>(null)
+  const [calibrationError, setCalibrationError] = useState<string | null>(null)
 
   // load references on mount
   useEffect(() => {
@@ -235,6 +296,31 @@ export default function XES({
   }
   const handleBg1Upload = (files: File[]) => { setBg1File(files[0] ?? null) }
   const handleBg2Upload = (files: File[]) => { setBg2File(files[0] ?? null) }
+  const handleCalibrationUpload = async (files: File[]) => {
+    const file = files[0] ?? null
+    setCalibrationFile(file)
+    setCalibrationSummary(null)
+    setCalibrationError(null)
+    if (!file) {
+      setParams(prev => ({ ...prev, axis_calibration: 'none', calibration_points: [] }))
+      return
+    }
+    try {
+      const text = await file.text()
+      const points = parseXesCalibrationFile(text)
+      const summary = getCalibrationSummary(points)
+      setCalibrationSummary(summary)
+      setParams(prev => ({
+        ...prev,
+        axis_calibration: 'table',
+        calibration_points: points,
+        energy_order: prev.energy_order ?? 'increasing',
+      }))
+    } catch (e) {
+      setCalibrationError((e as Error).message)
+      setParams(prev => ({ ...prev, axis_calibration: 'none', calibration_points: [] }))
+    }
+  }
 
   const handleParse = useCallback(async () => {
     if (sampleFiles.length === 0) return
@@ -244,6 +330,17 @@ export default function XES({
       setBg1(res.bg1)
       setBg2(res.bg2)
       setParseErrors(res.errors)
+      setSampleOrders(prev => {
+        const next: Record<string, number> = {}
+        res.samples.forEach((s, idx) => {
+          next[s.name] = prev[s.name] ?? idx + 2
+        })
+        return next
+      })
+      setParams(prev => ({
+        ...prev,
+        total_measurements: prev.total_measurements ?? res.samples.length + 2,
+      }))
       setProcessed([])
       setAverage(null)
       setDetectedPeaks([])
@@ -257,7 +354,12 @@ export default function XES({
     setProcessing(true)
     setProcessError(null)
     try {
-      const dsInputs: DatasetInput[] = samples.map(s => ({ name: s.name, x: s.x, y: s.y }))
+      const dsInputs: DatasetInput[] = samples.map(s => ({
+        name: s.name,
+        x: s.x,
+        y: s.y,
+        measurement_order: sampleOrders[s.name] ?? null,
+      }))
       const bg1Input = bg1 ? { name: bg1.name, x: bg1.x, y: bg1.y } : null
       const bg2Input = bg2 ? { name: bg2.name, x: bg2.x, y: bg2.y } : null
       const res = await processData(dsInputs, bg1Input, bg2Input, params)
@@ -269,12 +371,12 @@ export default function XES({
     } finally {
       setProcessing(false)
     }
-  }, [samples, bg1, bg2, params])
+  }, [samples, bg1, bg2, params, sampleOrders])
 
   const handleDetectPeaks = useCallback(async () => {
     const target = average ?? processed[0]
     if (!target) return
-    const xArr = params.axis_calibration === 'linear' && target.x_ev ? target.x_ev : target.x_pixel
+    const xArr = params.axis_calibration !== 'none' && target.x_ev ? target.x_ev : target.x_pixel
     try {
       const peaks = await detectPeaks(xArr, target.y_processed, peakParams.prominence, peakParams.minDistance, peakParams.maxPeaks)
       setDetectedPeaks(peaks)
@@ -301,8 +403,10 @@ export default function XES({
     setParams(prev => ({ ...prev, i0_values: result }))
   }
 
-  const useEv = params.axis_calibration === 'linear'
-  const xLabel = useEv ? 'Emission Energy (eV)' : 'Input X'
+  const energyCalibrated = params.axis_calibration === 'table' && params.calibration_points.length > 0
+  const useEv = params.axis_calibration !== 'none'
+  const xLabel = useEv ? 'Energy (eV)' : 'Input X'
+  const yLabel = params.norm_method === 'none' ? 'Intensity (arb. units)' : 'Normalized Intensity (arb. units)'
 
   const bandResult = bandParams.enabled ? computeBandAlign(bandParams) : null
 
@@ -318,7 +422,7 @@ export default function XES({
     font: { color: textColor, size: 12 },
     title: { text: title, font: { size: 13 }, x: 0.02 },
     xaxis: { title: { text: xTitle }, gridcolor: gridColor, zerolinecolor: gridColor },
-    yaxis: { title: { text: 'Intensity' }, gridcolor: gridColor, zerolinecolor: gridColor },
+    yaxis: { title: { text: yLabel }, gridcolor: gridColor, zerolinecolor: gridColor },
     legend: { orientation: 'h' as const, y: -0.15, font: { size: 11 } },
     margin: { l: 55, r: 20, t: 46, b: 50 },
     height: 340,
@@ -422,6 +526,22 @@ export default function XES({
                 <FileUpload onFiles={handleBg1Upload} moduleLabel="BG1" />
                 <Label>BG2（樣品後背景，可選）</Label>
                 <FileUpload onFiles={handleBg2Upload} moduleLabel="BG2" />
+                <Label>XES 能量校正檔 (.dat / .txt / .csv)</Label>
+                <FileUpload onFiles={handleCalibrationUpload} moduleLabel="XES 能量校正" accept={['.dat', '.txt', '.csv']} />
+                {calibrationFile && (
+                  <div className="mt-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-soft)]">
+                    <div className="font-medium text-[var(--text-main)]">{calibrationFile.name}</div>
+                    {calibrationSummary && (
+                      <div className="mt-1 leading-5">
+                        points {calibrationSummary.points}；energy {calibrationSummary.energyMin.toFixed(3)}–{calibrationSummary.energyMax.toFixed(3)} eV；
+                        {calibrationSummary.direction === 'increasing' ? '遞增' : calibrationSummary.direction === 'decreasing' ? '遞減' : '非單調'}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {calibrationError && (
+                  <div className="mt-2 rounded-lg bg-red-900/30 px-3 py-1.5 text-xs text-red-300">{calibrationError}</div>
+                )}
                 <button
                   type="button"
                   onClick={handleParse}
@@ -467,6 +587,51 @@ export default function XES({
                 <div className="mt-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
                   {BG_SUBTRACTION_HELP[params.bg_method]}
                 </div>
+                {params.bg_method === 'interpolated' && (
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <Label>量測數據總數（含 BG1 / BG2）</Label>
+                      <Input
+                        type="number"
+                        min={2}
+                        step={1}
+                        value={params.total_measurements ?? samples.length + 2}
+                        onChange={e => p('total_measurements', e.target.value === '' ? null : Number(e.target.value))}
+                      />
+                    </div>
+                    {samples.length > 0 && (
+                      <div className="space-y-2">
+                        {samples.map((s, idx) => {
+                          const order = sampleOrders[s.name] ?? idx + 2
+                          const weights = estimateBgWeights(order, params.total_measurements ?? samples.length + 2)
+                          return (
+                            <div key={s.name} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
+                              <div className="mb-1 truncate text-xs font-medium text-[var(--text-main)]">{s.name}</div>
+                              <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+                                <div>
+                                  <Label>上傳檔案量測序號</Label>
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={order}
+                                    onChange={e => setSampleOrders(prev => ({ ...prev, [s.name]: Number(e.target.value) }))}
+                                  />
+                                </div>
+                                {weights && (
+                                  <div className="pb-1 text-right font-mono text-[11px] text-[var(--accent)]">
+                                    {(weights.bg1 * 100).toFixed(1)}% BG1<br />
+                                    {(weights.bg2 * 100).toFixed(1)}% BG2
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </SidebarCard>
 
               {/* Step 4 */}
@@ -562,23 +727,46 @@ export default function XES({
 
               {/* Step 7 */}
               <SidebarCard step={7} title="X 軸校正（pixel → eV）" defaultOpen={false}>
-                <Label>校正方式</Label>
-                <Select value={params.axis_calibration} onChange={e => p('axis_calibration', e.target.value as ProcessParams['axis_calibration'])}>
-                  <option value="none">不校正（保留 pixel / 原始 X）</option>
-                  <option value="linear">線性：eV = offset + slope × X</option>
+                <Label>校正狀態</Label>
+                <Select
+                  value={params.axis_calibration === 'table' ? 'table' : 'none'}
+                  onChange={e => p('axis_calibration', e.target.value as ProcessParams['axis_calibration'])}
+                >
+                  <option value="none">不校正（保留 channel / pixel）</option>
+                  <option value="table" disabled={params.calibration_points.length === 0}>使用上傳校正檔</option>
                 </Select>
-                {params.axis_calibration === 'linear' && (
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <div>
-                      <Label>Offset (eV)</Label>
-                      <Input type="number" step="any" value={params.energy_offset}
-                        onChange={e => p('energy_offset', Number(e.target.value))} />
+                {params.calibration_points.length === 0 ? (
+                  <div className="mt-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-200">
+                    目前 XES 尚未套用能量校正，X 軸可能為 channel / pixel。
+                  </div>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    <div className={`rounded-xl border px-3 py-2 text-xs ${
+                      params.axis_calibration === 'table'
+                        ? 'border-green-500/40 bg-green-500/10 text-green-300'
+                        : 'border-amber-400/40 bg-amber-400/10 text-amber-200'
+                    }`}>
+                      {params.axis_calibration === 'table' ? 'Energy calibrated' : '已解析校正檔，尚未套用校正'}
                     </div>
                     <div>
-                      <Label>Slope</Label>
-                      <Input type="number" step="any" value={params.energy_slope}
-                        onChange={e => p('energy_slope', Number(e.target.value))} />
+                      <Label>Energy order</Label>
+                      <Select
+                        value={params.energy_order}
+                        onChange={e => p('energy_order', e.target.value as ProcessParams['energy_order'])}
+                      >
+                        <option value="increasing">increasing（建議）</option>
+                        <option value="decreasing">decreasing</option>
+                        <option value="original">original</option>
+                      </Select>
                     </div>
+                    {calibrationSummary && (
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-5 text-[var(--text-soft)]">
+                        calibration points：{calibrationSummary.points}<br />
+                        channel：{calibrationSummary.channelMin.toFixed(3)}–{calibrationSummary.channelMax.toFixed(3)}<br />
+                        energy：{calibrationSummary.energyMin.toFixed(3)}–{calibrationSummary.energyMax.toFixed(3)} eV<br />
+                        direction：{calibrationSummary.direction}
+                      </div>
+                    )}
                   </div>
                 )}
               </SidebarCard>
@@ -728,7 +916,13 @@ export default function XES({
               {bg1 && <span className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">BG1: {bg1.name}</span>}
               {bg2 && <span className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">BG2: {bg2.name}</span>}
               {hasProcessed && <span className="rounded-full border border-green-500/40 bg-green-500/10 px-3 py-1 text-xs text-green-400">已處理</span>}
-              {useEv && <span className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">X 軸校正 ON</span>}
+              {energyCalibrated ? (
+                <span className="rounded-full border border-green-500/40 bg-green-500/10 px-3 py-1 text-xs text-green-400">Energy calibrated</span>
+              ) : (
+                <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-200">
+                  目前 XES 尚未套用能量校正，X 軸可能為 channel / pixel。
+                </span>
+              )}
             </div>
           )}
 
@@ -980,6 +1174,28 @@ export default function XES({
                   >
                     處理後光譜 CSV
                   </button>
+                  {energyCalibrated && (
+                    <button
+                      type="button"
+                      className="pressable rounded-xl border border-[var(--card-border)] bg-[var(--panel-bg)] px-4 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)]"
+                      onClick={() => {
+                        if (processed.length === 0) return
+                        const rows = processed.flatMap(ds => {
+                          const energy = ds.x_ev ?? []
+                          const original = ds.original_x ?? ds.x_pixel
+                          return energy.map((e, i) => ({
+                            energy_eV: e,
+                            intensity: ds.y_processed[i] ?? '',
+                            sampleName: ds.name,
+                            original_x: original[i] ?? '',
+                          }))
+                        })
+                        downloadFile('xes_calibrated.csv', toCsv(rows))
+                      }}
+                    >
+                      Export calibrated XES data
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="pressable rounded-xl border border-[var(--card-border)] bg-[var(--panel-bg)] px-4 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)]"

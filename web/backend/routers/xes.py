@@ -37,6 +37,12 @@ class DatasetInput(BaseModel):
     name: str
     x: List[float]
     y: List[float]
+    measurement_order: Optional[int] = None
+
+
+class CalibrationPoint(BaseModel):
+    channel: float
+    energy: float
 
 
 class ProcessParams(BaseModel):
@@ -46,6 +52,7 @@ class ProcessParams(BaseModel):
     # BG1/BG2 subtraction
     bg_method: str = "none"       # none | bg1 | bg2 | average | interpolated
     bg_order: str = "upload"      # upload | filename (weights for interpolated)
+    total_measurements: Optional[int] = None
     # smoothing
     smooth_method: str = "none"   # none | moving_average | savitzky_golay
     smooth_window: int = 5
@@ -56,10 +63,12 @@ class ProcessParams(BaseModel):
     norm_x_end: Optional[float] = None
     # I0 normalization (divide raw y by per-dataset monitor value before BG subtraction)
     i0_values: Dict[str, float] = Field(default_factory=dict)
-    # X-axis calibration (pixel → eV)
-    axis_calibration: str = "none"  # none | linear
+    # X-axis calibration (pixel/channel → eV)
+    axis_calibration: str = "none"  # none | linear | table
     energy_offset: float = 0.0
     energy_slope: float = 1.0
+    energy_order: str = "increasing"  # increasing | decreasing | original
+    calibration_points: List[CalibrationPoint] = Field(default_factory=list)
 
 
 class ProcessRequest(BaseModel):
@@ -77,6 +86,9 @@ class DatasetOutput(BaseModel):
     y_bg: Optional[List[float]] = None
     y_corrected: List[float]
     y_processed: List[float]
+    original_x: Optional[List[float]] = None
+    measurement_order: Optional[int] = None
+    bg_weight: Optional[float] = None
 
 
 class ProcessResponse(BaseModel):
@@ -125,7 +137,11 @@ class ReferencePeaksResponse(BaseModel):
 def _parse_spectrum_bytes(raw: bytes, name: str) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
     x, y, err = parse_two_column_spectrum_bytes(raw)
     if err or x is None or y is None:
-        return None, None, err or "解析失敗"
+        y_only = _parse_single_column_spectrum(raw)
+        if y_only is None:
+            return None, None, err or "解析失敗"
+        x = np.arange(len(y_only), dtype=float)
+        y = y_only
     if len(x) < 2:
         return None, None, "資料點不足"
     # ensure ascending x, no duplicates
@@ -133,6 +149,31 @@ def _parse_spectrum_bytes(raw: bytes, name: str) -> tuple[np.ndarray | None, np.
     x, y = x[order], y[order]
     mask = np.concatenate(([True], np.diff(x) > 1e-12))
     return x[mask].astype(float), y[mask].astype(float), None
+
+
+def _parse_single_column_spectrum(raw: bytes) -> np.ndarray | None:
+    for enc in ("utf-8", "utf-8-sig", "big5", "cp950", "latin-1", "utf-16"):
+        try:
+            text = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        values: list[float] = []
+        for line in text.splitlines():
+            trimmed = line.strip()
+            if not trimmed or trimmed.startswith(("#", "//", "%", ";", "!")):
+                continue
+            parts = [p for p in trimmed.replace(",", " ").split() if p]
+            if len(parts) != 1:
+                continue
+            try:
+                val = float(parts[0])
+            except ValueError:
+                continue
+            if np.isfinite(val):
+                values.append(val)
+        if len(values) >= 2:
+            return np.array(values, dtype=float)
+    return None
 
 
 def _interp_to(x_src: np.ndarray, y_src: np.ndarray, x_target: np.ndarray) -> np.ndarray:
@@ -148,6 +189,60 @@ def _bg_weight(pos: int, total: int) -> float:
 
 def _apply_calibration(x_pixel: np.ndarray, offset: float, slope: float) -> np.ndarray:
     return offset + slope * x_pixel
+
+
+def _bg_weight_from_measurement(order: Optional[int], total: Optional[int], fallback_pos: int, fallback_total: int) -> float:
+    if order is not None and total is not None:
+        if total < 2:
+            raise ValueError("量測數據總數至少需為 2，才能使用 BG1/BG2 分點扣背。")
+        if order < 1 or order > total:
+            raise ValueError(f"量測序號 {order} 超出總量測次數 1–{total}。")
+        return float(np.clip((order - 1) / (total - 1), 0.0, 1.0))
+    return _bg_weight(fallback_pos, fallback_total)
+
+
+def _calibration_arrays(points: list[CalibrationPoint]) -> tuple[np.ndarray, np.ndarray]:
+    if len(points) < 10:
+        raise ValueError("校正檔有效點數過少，無法進行 XES 能量校正。")
+    sorted_points = sorted(points, key=lambda p: p.channel)
+    channels = np.array([p.channel for p in sorted_points], dtype=float)
+    energies = np.array([p.energy for p in sorted_points], dtype=float)
+    if np.any(~np.isfinite(channels)) or np.any(~np.isfinite(energies)):
+        raise ValueError("校正檔包含無效數值。")
+    if np.any(np.diff(channels) <= 0):
+        raise ValueError("校正檔中有重複的 channel / pixel index。")
+    return channels, energies
+
+
+def _apply_table_calibration(x_pixel: np.ndarray, channels: np.ndarray, energies: np.ndarray) -> np.ndarray:
+    if len(x_pixel) == len(energies):
+        return energies.copy()
+    return np.interp(x_pixel, channels, energies, left=energies[0], right=energies[-1])
+
+
+def _sort_for_energy_order(
+    energy_order: str,
+    x: np.ndarray,
+    x_ev: np.ndarray | None,
+    arrays: list[np.ndarray | None],
+) -> tuple[np.ndarray, np.ndarray | None, list[np.ndarray | None]]:
+    if x_ev is None or energy_order == "original":
+        return x, x_ev, arrays
+    if energy_order == "increasing":
+        order = np.argsort(x_ev)
+    elif energy_order == "decreasing":
+        order = np.argsort(x_ev)[::-1]
+    else:
+        return x, x_ev, arrays
+    sorted_arrays = [arr[order] if arr is not None else None for arr in arrays]
+    return x[order], x_ev[order], sorted_arrays
+
+
+def _interp_processed_to_x(x_ref: np.ndarray, d: DatasetOutput) -> np.ndarray:
+    x_src = np.array(d.x_pixel, dtype=float)
+    y_src = np.array(d.y_processed, dtype=float)
+    order = np.argsort(x_src)
+    return np.interp(x_ref, x_src[order], y_src[order])
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -196,6 +291,14 @@ def process_xes(req: ProcessRequest):
     if not req.samples:
         raise HTTPException(status_code=400, detail="沒有 sample 資料集")
 
+    calibration_channels: np.ndarray | None = None
+    calibration_energies: np.ndarray | None = None
+    if p.axis_calibration == "table":
+        try:
+            calibration_channels, calibration_energies = _calibration_arrays(p.calibration_points)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     bg1_x = np.array(req.bg1.x) if req.bg1 else None
     bg1_y = np.array(req.bg1.y) if req.bg1 else None
     bg2_x = np.array(req.bg2.x) if req.bg2 else None
@@ -223,6 +326,7 @@ def process_xes(req: ProcessRequest):
 
         # BG1/BG2 subtraction
         y_bg: np.ndarray | None = None
+        bg_weight: float | None = None
         if p.bg_method != "none":
             bg1_interp = _interp_to(bg1_x, bg1_y, x) if (bg1_x is not None) else None
             bg2_interp = _interp_to(bg2_x, bg2_y, x) if (bg2_x is not None) else None
@@ -234,8 +338,11 @@ def process_xes(req: ProcessRequest):
             elif p.bg_method == "average" and bg1_interp is not None and bg2_interp is not None:
                 y_bg = 0.5 * (bg1_interp + bg2_interp)
             elif p.bg_method == "interpolated" and bg1_interp is not None and bg2_interp is not None:
-                w = _bg_weight(idx, n)
-                y_bg = bg1_interp + w * (bg2_interp - bg1_interp)
+                try:
+                    bg_weight = _bg_weight_from_measurement(ds.measurement_order, p.total_measurements, idx, n)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                y_bg = (1.0 - bg_weight) * bg1_interp + bg_weight * bg2_interp
 
             if y_bg is not None:
                 y = np.nan_to_num(y - y_bg, nan=0.0)
@@ -254,15 +361,28 @@ def process_xes(req: ProcessRequest):
         x_ev: np.ndarray | None = None
         if p.axis_calibration == "linear":
             x_ev = _apply_calibration(x, p.energy_offset, p.energy_slope)
+        elif p.axis_calibration == "table" and calibration_channels is not None and calibration_energies is not None:
+            x_ev = _apply_table_calibration(x, calibration_channels, calibration_energies)
+
+        x_out, x_ev_out, sorted_arrays = _sort_for_energy_order(
+            p.energy_order,
+            x,
+            x_ev,
+            [y_raw, y_bg, y_corrected, y],
+        )
+        y_raw_out, y_bg_out, y_corrected_out, y_processed_out = sorted_arrays
 
         outputs.append(DatasetOutput(
             name=ds.name,
-            x_pixel=x.tolist(),
-            x_ev=x_ev.tolist() if x_ev is not None else None,
-            y_raw=y_raw.tolist(),
-            y_bg=y_bg.tolist() if y_bg is not None else None,
-            y_corrected=y_corrected.tolist(),
-            y_processed=y.tolist(),
+            x_pixel=x_out.tolist(),
+            x_ev=x_ev_out.tolist() if x_ev_out is not None else None,
+            y_raw=y_raw_out.tolist() if y_raw_out is not None else [],
+            y_bg=y_bg_out.tolist() if y_bg_out is not None else None,
+            y_corrected=y_corrected_out.tolist() if y_corrected_out is not None else [],
+            y_processed=y_processed_out.tolist() if y_processed_out is not None else [],
+            original_x=x_out.tolist(),
+            measurement_order=ds.measurement_order,
+            bg_weight=bg_weight,
         ))
 
     # average
@@ -270,7 +390,7 @@ def process_xes(req: ProcessRequest):
     if p.average and len(outputs) > 1:
         try:
             x_ref = np.array(outputs[0].x_pixel)
-            arrs = [np.interp(x_ref, np.array(d.x_pixel), np.array(d.y_processed)) for d in outputs]
+            arrs = [_interp_processed_to_x(x_ref, d) for d in outputs]
             y_avg = np.mean(arrs, axis=0)
             x_ev_ref = np.array(outputs[0].x_ev) if outputs[0].x_ev else None
             average_out = DatasetOutput(
@@ -280,9 +400,10 @@ def process_xes(req: ProcessRequest):
                 y_raw=y_avg.tolist(),
                 y_corrected=y_avg.tolist(),
                 y_processed=y_avg.tolist(),
+                original_x=x_ref.tolist(),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"XES 多檔平均失敗：{exc}") from exc
 
     return ProcessResponse(datasets=outputs, average=average_out)
 

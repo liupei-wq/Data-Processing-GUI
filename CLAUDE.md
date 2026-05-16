@@ -723,3 +723,11 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-16] 重要判斷：同步 rebase origin/main 時僅 AGENTS.md / CLAUDE.md 發生文件紀錄衝突；已移除 conflict marker 並保留遠端 2026-05-15 紀錄、本地 2026-05-14 Raman Y 軸範圍紀錄與 2026-05-16 同步檢查紀錄。
 
 [2026-05-16] 同步完成：已將 Raman 繪圖 Y 軸範圍控制變更 rebase 到 origin/main v26.1 後推送；遠端 main 由 e59617f 更新到 59aaa37。推送前確認 conflict marker 掃描、git diff --check origin/main..HEAD 與 default_raman_peaks JSON 解析通過；工具環境仍找不到 node/npm，未執行 npm run build。
+
+[2026-05-16] 檢查：開始修改 XES 分點扣背與能量校正；已確認現有 XES 後端 interpolated 背景權重依 sample index 計算，X 軸校正仍為線性 offset/slope。接續改為可填量測序號/總量測次數與上傳 pixel-energy 校正檔。
+
+[2026-05-16] 實作：準備修改 XES 前後端。後端新增 measurement_order/total_measurements 計算 BG 權重與 table calibration；前端新增能量校正檔 parser、校正摘要、energy order、逐 sample 量測序號與 calibrated CSV 匯出。
+
+[2026-05-16] 檢查：XES 分點扣背與能量校正改動完成初版，開始執行後端 py_compile、前端 npm build 與 diff 檢查。
+
+[2026-05-16] 實作完成：XES 新增能量校正檔上傳與自動套用 table calibration。前端 `XES.tsx` 可解析 .dat/.txt/.csv 的 channel-energy 兩欄校正檔，顯示 points、energy min/max 與遞增/遞減方向，支援 Energy order increasing/decreasing/original，未上傳時顯示「目前 XES 尚未套用能量校正，X 軸可能為 channel / pixel。」；後端 `routers/xes.py` 新增 `calibration_points`，點數相同時一對一使用 calibration energy，點數不同時依 raw channel 插值，raw intensity-only 檔案 fallback 以 index 作 channel。XES 分點扣背新增每筆 sample `measurement_order` 與 `total_measurements`，權重改為 `(order-1)/(total-1)`，例如第 5/10 筆為 5/9 BG1 + 4/9 BG2。匯出新增 `Export calibrated XES data`，欄位含 energy_eV、intensity、sampleName、original_x。驗證：`uv run python -m py_compile .\web\backend\routers\xes.py`（需非沙盒 uv cache 權限）通過，`git diff --check -- web/backend/routers/xes.py web/frontend/src/pages/XES.tsx web/frontend/src/types/xes.ts` 通過；目前環境找不到 npm，未能執行 `cd web/frontend && npm run build`。

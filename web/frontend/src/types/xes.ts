@@ -16,6 +16,21 @@ export interface DatasetInput {
   name: string
   x: number[]
   y: number[]
+  measurement_order?: number | null
+}
+
+export interface CalibrationPoint {
+  channel: number
+  energy: number
+}
+
+export interface CalibrationSummary {
+  points: number
+  channelMin: number
+  channelMax: number
+  energyMin: number
+  energyMax: number
+  direction: 'increasing' | 'decreasing' | 'non-monotonic'
 }
 
 export interface ProcessParams {
@@ -24,6 +39,7 @@ export interface ProcessParams {
   average: boolean
   bg_method: 'none' | 'bg1' | 'bg2' | 'average' | 'interpolated'
   bg_order: 'upload' | 'filename'
+  total_measurements: number | null
   smooth_method: 'none' | 'moving_average' | 'savitzky_golay'
   smooth_window: number
   smooth_poly: number
@@ -31,9 +47,11 @@ export interface ProcessParams {
   norm_x_start: number | null
   norm_x_end: number | null
   i0_values: Record<string, number>
-  axis_calibration: 'none' | 'linear'
+  axis_calibration: 'none' | 'linear' | 'table'
   energy_offset: number
   energy_slope: number
+  energy_order: 'increasing' | 'decreasing' | 'original'
+  calibration_points: CalibrationPoint[]
 }
 
 export interface ProcessedDataset {
@@ -44,6 +62,9 @@ export interface ProcessedDataset {
   y_bg: number[] | null
   y_corrected: number[]
   y_processed: number[]
+  original_x?: number[] | null
+  measurement_order?: number | null
+  bg_weight?: number | null
 }
 
 export interface ProcessResult {
