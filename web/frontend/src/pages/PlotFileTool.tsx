@@ -171,6 +171,8 @@ interface RamanFigureStyle {
   componentOpacity: number
   xLeft: number | null
   xRight: number | null
+  yBottom: number | null
+  yTop: number | null
   normalize: boolean
   showRaw: boolean
   showCorrected: boolean
@@ -401,6 +403,8 @@ const DEFAULT_RAMAN_STYLE: RamanFigureStyle = {
   componentOpacity: 0.46,
   xLeft: null,
   xRight: null,
+  yBottom: null,
+  yTop: null,
   normalize: true,
   showRaw: true,
   showCorrected: true,
@@ -1046,6 +1050,13 @@ function formatRamanShift(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '')
 }
 
+function manualRamanYRange(style: RamanFigureStyle, fallback: [number, number] | null = null): [number, number] | undefined {
+  const y0 = Number.isFinite(style.yBottom ?? NaN) ? Number(style.yBottom) : fallback?.[0]
+  const y1 = Number.isFinite(style.yTop ?? NaN) ? Number(style.yTop) : fallback?.[1]
+  if (!Number.isFinite(y0) || !Number.isFinite(y1) || y0 === y1) return undefined
+  return [Number(y0), Number(y1)]
+}
+
 function formatRamanReferencePeakLabel(peak: RamanReferencePeak, mode: RamanReferenceLabelMode, index: number) {
   const shiftLabel = formatRamanShift(peak.shift)
   const resonance = peak.displayLabel || peak.resonanceState || peak.mode.split(',')[0] || peak.label
@@ -1123,6 +1134,7 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
   const xMax = Math.max(...file.x)
   const x0 = style.xLeft ?? xMin
   const x1 = style.xRight ?? xMax
+  const yRange = manualRamanYRange(style)
   const data: Plotly.Data[] = []
 
   if (style.showRaw) {
@@ -1242,6 +1254,7 @@ function buildRamanPublicationFigure(file: RamanFitPlotFile, style: RamanFigureS
       yaxis: {
         ...axisBase,
         domain: [0, 1],
+        ...(yRange ? { range: yRange } : {}),
         title: { text: style.normalize ? 'Normalized intensity' : 'Intensity (arb. units)', standoff: 18, font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' } },
       },
       annotations: [
@@ -1377,6 +1390,8 @@ function buildRamanOverlayFigure(
   const yMin = plottedValues.length > 0 ? Math.min(...plottedValues) : 0
   const yMax = plottedValues.length > 0 ? Math.max(...plottedValues) : unitSpan
   const pad = Math.max((yMax - yMin) * 0.08, unitSpan * 0.08)
+  const mainYRange: [number, number] = [yMin - pad, yMax + pad]
+  const displayYRange = manualRamanYRange(style, mainYRange) ?? mainYRange
   const zoomYMin = zoomValues.length > 0 ? Math.min(...zoomValues) : yMin
   const zoomYMax = zoomValues.length > 0 ? Math.max(...zoomValues) : yMax
   const zoomPad = Math.max((zoomYMax - zoomYMin) * 0.1, unitSpan * 0.06)
@@ -1484,7 +1499,7 @@ function buildRamanOverlayFigure(
       yaxis: {
         ...axisBase,
         domain: mainDomain,
-        range: [yMin - pad, yMax + pad],
+        range: displayYRange,
         showticklabels: offsetStep <= 1e-12,
         title: { text: style.normalize ? 'Normalized intensity + offset' : 'Intensity + offset', standoff: 18, font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' } },
       },
@@ -2676,6 +2691,15 @@ export default function PlotFileTool({
         : null,
     [activeRamanFile, ramanFiles, ramanPlotMode, ramanStyle, selectedRamanReferencePeaks, ramanReferencePeakStyles],
   )
+  const ramanDisplayedYRange = useMemo<[number, number]>(() => {
+    const range = (ramanFigure?.layout as Partial<Plotly.Layout> | undefined)?.yaxis?.range
+    if (Array.isArray(range) && range.length >= 2) {
+      const y0 = Number(range[0])
+      const y1 = Number(range[1])
+      if (Number.isFinite(y0) && Number.isFinite(y1) && y0 !== y1) return [y0, y1]
+    }
+    return [0, 1]
+  }, [ramanFigure])
 
   const importFiles = async (fileList: FileList | null) => {
     if (!fileList) return
@@ -3278,6 +3302,24 @@ export default function PlotFileTool({
                 <div className="grid grid-cols-2 gap-2">
                   <NumInput label="X 左端" value={ramanStyle.xLeft ?? (activeRamanFile ? Math.min(...activeRamanFile.x) : 80)} onChange={value => setRamanStyle(prev => ({ ...prev, xLeft: value }))} step={1} />
                   <NumInput label="X 右端" value={ramanStyle.xRight ?? (activeRamanFile ? Math.max(...activeRamanFile.x) : 800)} onChange={value => setRamanStyle(prev => ({ ...prev, xRight: value }))} step={1} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput
+                    label="Y 下限"
+                    value={ramanStyle.yBottom ?? ramanDisplayedYRange[0]}
+                    onChange={value => setRamanStyle(prev => ({ ...prev, yBottom: value, yTop: prev.yTop ?? ramanDisplayedYRange[1] }))}
+                    step={0.05}
+                  />
+                  <NumInput
+                    label="Y 上限"
+                    value={ramanStyle.yTop ?? ramanDisplayedYRange[1]}
+                    onChange={value => setRamanStyle(prev => ({ ...prev, yBottom: prev.yBottom ?? ramanDisplayedYRange[0], yTop: value }))}
+                    step={0.05}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setRamanStyle(prev => ({ ...prev, xLeft: null, xRight: null }))} className="rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">X 自動</button>
+                  <button type="button" onClick={() => setRamanStyle(prev => ({ ...prev, yBottom: null, yTop: null }))} className="rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">Y 自動</button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <NumInput label="刻度字體" value={ramanStyle.fontSize} onChange={value => setRamanStyle(prev => ({ ...prev, fontSize: value }))} min={8} max={34} step={1} />

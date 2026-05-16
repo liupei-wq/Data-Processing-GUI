@@ -704,3 +704,20 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 [2026-05-15] Change: Web export/report timestamps now use a fixed UTC+8 timezone. Added `web/frontend/src/utils/time.ts` for `+08:00` ISO strings and UTC+8 filename timestamps, then applied it to Athena, XRD, and XPS exports/reports. Verification: `cd web/frontend && npm run build` passed.
 [2026-05-15] Change: XAS Athena final average now respects manual removal/restore source selection. Removed points no longer contribute through interpolated clean curves, and restoring only scan1 or scan2 forces the final average in that interval to use that selected scan as the source. Verification: `cd web/frontend && npm run build` passed.
+[2026-05-14] 檢查：使用者要求可設定 X、Y 軸顯示範圍；先檢查繪製圖檔 Raman 圖面設定與 Plotly layout 目前的 x/y range 實作。
+
+[2026-05-14] 實作：準備在 RamanFigureStyle 加入 yBottom/yTop，讓 Raman single 與 overlay 主圖可手動指定 Y 軸顯示範圍，並在 UI 提供自動 Y 還原。
+
+[2026-05-14] 實作：新增 Raman 手動 Y 軸範圍 helper，並套用到 publication plot 與 overlay plot 的主 Y 軸 range。
+
+[2026-05-14] 實作：在 Raman 圖面設定 UI 新增 Y 下限/Y 上限輸入，並新增 X 自動與 Y 自動按鈕；Y 單端修改時用目前圖面範圍補齊另一端。
+
+[2026-05-14] 檢查：完成 Raman X/Y 顯示範圍 UI 後，執行關鍵字掃描、git diff --check、Raman reference JSON 解析，並在 npm 可用時執行前端 build。
+
+[2026-05-14] 實作完成：Raman 繪圖區新增 Y 下限/Y 上限與 X 自動/Y 自動控制；X 左端/X 右端維持既有功能，Y 軸手動範圍套用到 single publication plot 與 overlay 主圖。驗證關鍵字掃描、git diff --check、default_raman_peaks JSON 解析通過；工具環境找不到 npm，未執行 npm run build。
+
+[2026-05-16] 檢查：使用者要求同步到 git；同步前先檢查本地 Raman 繪圖 Y 軸範圍變更、文件紀錄與 git 狀態，準備執行 diff/JSON/build 驗證後再提交、接遠端並推送。
+
+[2026-05-16] 檢查：同步到 git 前執行 git diff --check 與 default_raman_peaks JSON 解析，兩者通過；目前工具環境找不到 node/npm，未執行 cd web/frontend && npm run build。
+
+[2026-05-16] 重要判斷：同步 rebase origin/main 時僅 AGENTS.md / CLAUDE.md 發生文件紀錄衝突；已移除 conflict marker 並保留遠端 2026-05-15 紀錄、本地 2026-05-14 Raman Y 軸範圍紀錄與 2026-05-16 同步檢查紀錄。
