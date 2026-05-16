@@ -260,6 +260,13 @@ def _interp_processed_to_x(x_ref: np.ndarray, d: DatasetOutput) -> np.ndarray:
     return np.interp(x_ref, x_src[order], y_src[order])
 
 
+def _xes_normalization_method(method: str) -> str:
+    # XES UI uses a friendlier label for mean-in-region normalization.
+    if method == "reference_region":
+        return "mean_region"
+    return method
+
+
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/parse", response_model=ParseResponse)
@@ -384,7 +391,14 @@ def process_xes(req: ProcessRequest):
 
             # normalization
             if p.norm_method != "none":
-                _, y = apply_normalization(x, y, norm_method=p.norm_method, x_start=p.norm_x_start, x_end=p.norm_x_end)
+                y = apply_normalization(
+                    x,
+                    y,
+                    norm_method=_xes_normalization_method(p.norm_method),
+                    norm_x_start=p.norm_x_start,
+                    norm_x_end=p.norm_x_end,
+                    strict=True,
+                )
 
             # X-axis calibration
             x_ev: np.ndarray | None = None

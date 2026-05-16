@@ -1,4 +1,4 @@
-[2026-05-15] 除錯：修正 XAS Section 8「匯入已處理光譜」模式下中間欄空白的三個問題。① 修正 empty state 條件加入 `!(fitDataSource === 'imported' && importedFitDataset)` 保護，避免匯入資料時仍顯示空狀態；② 新增匯入光譜預覽圖卡（在無 pipeline result 且未完成擬合時顯示，含點數/能量範圍摘要與 Plotly 折線預覽）；③ 將 `{/* Peak fitting result */}` block 從 `result && (activeDataset != null || ...)` 大 block 內部移出，放置於其後，使匯入模式下執行擬合後仍能正常渲染結果。影響檔案：`web/frontend/src/pages/XAS.tsx`；驗證 `npm run build` 通過（無 TypeScript 錯誤）。
+﻿[2026-05-15] 除錯：修正 XAS Section 8「匯入已處理光譜」模式下中間欄空白的三個問題。① 修正 empty state 條件加入 `!(fitDataSource === 'imported' && importedFitDataset)` 保護，避免匯入資料時仍顯示空狀態；② 新增匯入光譜預覽圖卡（在無 pipeline result 且未完成擬合時顯示，含點數/能量範圍摘要與 Plotly 折線預覽）；③ 將 `{/* Peak fitting result */}` block 從 `result && (activeDataset != null || ...)` 大 block 內部移出，放置於其後，使匯入模式下執行擬合後仍能正常渲染結果。影響檔案：`web/frontend/src/pages/XAS.tsx`；驗證 `npm run build` 通過（無 TypeScript 錯誤）。
 
 [2026-05-15] 新增：XAS Section 8 峰擬合支援「匯入已處理光譜」資料來源。① 新增 `parseTwoColumnText` 前端 helper，解析任意分隔 2 欄 TXT/CSV，自動跳過 #/%/!/@ 開頭的注釋行，sort by x，少於 3 個有效點時回傳 null；② 新增 states：`importedFitDataset`、`fitDataSource`（'pipeline'|'imported'）、`importedFitError`；③ 新增 `fitEffective` useMemo：`fitDataSource==='imported'` 時使用匯入光譜，否則使用 activeDataset TEY/TFY，回傳 `{x, y, name} | null`；④ 新增 `fitEnergyMin/fitEnergyMax`，由 `fitEffective.x` 的首末值決定（fallback 到 energyMin/Max）；⑤ `handleFit`、`handleAutoConverge`、`loadSampleEdgePeaks`、`addManualFitPeak` 全部改用 `fitEffective.x/y`；⑥ Section 8 頂部新增資料來源切換卡（「處理流程結果」/「匯入已處理光譜」pill），匯入模式下顯示檔案選擇器、解析摘要（名稱/點數/能量範圍）與移除按鈕；疊圖模式鎖定條件改為 `isOverlayMode && fitDataSource !== 'imported'`；DualRangeInput 的 min/max 與 reset 按鈕改用 `fitEnergyMin/fitEnergyMax`。影響檔案：`web/frontend/src/pages/XAS.tsx`。驗證 `npm run build` 通過。
 
@@ -737,3 +737,8 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-16] 實作：針對 XES process 500 補強。判斷可能來自校正後 x/y 長度或未知資料形狀造成未捕捉例外，準備加入長度一致性檢查、per-dataset 422 錯誤回報，以及前端 BG overlay 使用校正後 x 軸。
 
 [2026-05-16] 修正：XES process 500 補強完成。web/backend/routers/xes.py 對每筆 sample 加入 x/y 長度、有限值、點數檢查，table calibration 與排序前會確保 x_ev/y arrays 長度一致，未知資料形狀改回 422 詳細錯誤而非 500；背景扣除缺 BG 檔時也明確回報。web/frontend/src/pages/XES.tsx 新增 calibrated BG overlay 軸轉換，Energy calibrated 模式下 BG1/BG2 參考線與主圖同用 eV 軸。驗證 uv run python -m py_compile .\web\backend\routers\xes.py 與 XES 相關檔案 git diff --check 通過；目前工具環境仍找不到 node/npm，未執行 npm run build。
+
+[2026-05-16] 實作：定位並修正 XES 歸一化錯誤。`routers/xes.py` 仍以舊介面呼叫 `apply_normalization`（錯用 `x_start/x_end` 且嘗試解包回傳值），導致啟用 Max/Min-Max/Area/參考區間歸一化時失敗；已改成新參數 `norm_x_start/norm_x_end` 與單一回傳 `y`，並將 XES UI 的 `reference_region` 對應為後端 `mean_region`。
+
+
+[2026-05-16] 檢查：XES 歸一化修正後完成驗證。uv run python -m py_compile .\web\backend\routers\xes.py 通過，git diff --check -- web/backend/routers/xes.py web/frontend/src/pages/XES.tsx web/frontend/src/types/xes.ts AGENTS.md 通過，conflict marker 掃描通過；目前環境找不到 npm，未執行 npm run build。

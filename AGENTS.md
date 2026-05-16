@@ -1,4 +1,4 @@
-# Nigiro Pro — AI Agent 快速參考
+﻿# Nigiro Pro — AI Agent 快速參考
 
 > 這份文件與 `CLAUDE.md` 同步，提供給 AI Agent 快速了解本專案核心資訊。
 
@@ -191,3 +191,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-16：XES 新增能量校正檔上傳與自動套用 table calibration；前端可解析 channel-energy 校正檔、顯示校正摘要與 Energy order，後端依點數相同一對一或點數不同插值產生 `x_ev`。XES 分點扣背新增每筆 sample 量測序號與總量測次數，權重採 `(order-1)/(total-1)`，例如第 5/10 筆為 5/9 BG1 + 4/9 BG2。新增 calibrated CSV 匯出欄位 energy_eV、intensity、sampleName、original_x。驗證 `uv run python -m py_compile web/backend/routers/xes.py` 與 XES 相關檔案 `git diff --check` 通過；目前環境找不到 npm，未執行 `npm run build`。
 
 - 2026-05-16：修正 XES process 500：後端對 sample x/y 長度、有限值、點數與 table calibration 後 x_ev/y 長度加防護，未知資料形狀改回 422 詳細錯誤；背景扣除缺 BG 檔時明確報錯。前端 BG1/BG2 overlay 在 Energy calibrated 模式下改用同一組 eV 校正軸。驗證 `uv run python -m py_compile web/backend/routers/xes.py` 與 XES 相關檔案 `git diff --check` 通過；目前環境找不到 npm，未執行 `npm run build`。
+- 2026-05-16：修正 XES 歸一化失敗：`web/backend/routers/xes.py` 改用新版 `apply_normalization()` 呼叫方式（`norm_x_start/norm_x_end`、單一回傳 `y`），解決 Max/Min-Max/Area/參考區間歸一化啟用時失敗；XES UI 的 `reference_region` 會映射為後端 `mean_region`。驗證 `uv run python -m py_compile web/backend/routers/xes.py` 通過；目前環境找不到 npm，未執行 `npm run build`。
