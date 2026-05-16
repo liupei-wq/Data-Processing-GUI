@@ -187,3 +187,4 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-14：Raman 繪圖區新增 Y 下限/Y 上限與 X 自動/Y 自動控制；X 左端/X 右端維持既有功能，Y 軸手動範圍套用到 single publication plot 與 overlay 主圖。驗證 git diff --check 與 JSON 解析通過；目前工具環境找不到 npm，未執行 npm run build。
 - 2026-05-16：同步到 git 前執行 git diff --check 與 default_raman_peaks JSON 解析，兩者通過；目前工具環境找不到 node/npm，未執行 cd web/frontend && npm run build。
 - 2026-05-16：同步 rebase origin/main 時僅 AGENTS.md / CLAUDE.md 發生文件紀錄衝突；已保留遠端 2026-05-15 紀錄、本地 2026-05-14 Raman Y 軸範圍紀錄與 2026-05-16 同步檢查紀錄。
+- 2026-05-16：同步完成，已將 Raman 繪圖 Y 軸範圍控制變更 rebase 到 origin/main v26.1 後推送；遠端 main 由 e59617f 更新到 59aaa37。推送前確認 conflict marker 掃描、git diff --check origin/main..HEAD 與 default_raman_peaks JSON 解析通過；工具環境仍找不到 node/npm，未執行 npm run build。

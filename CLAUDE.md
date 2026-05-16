@@ -721,3 +721,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-16] 檢查：同步到 git 前執行 git diff --check 與 default_raman_peaks JSON 解析，兩者通過；目前工具環境找不到 node/npm，未執行 cd web/frontend && npm run build。
 
 [2026-05-16] 重要判斷：同步 rebase origin/main 時僅 AGENTS.md / CLAUDE.md 發生文件紀錄衝突；已移除 conflict marker 並保留遠端 2026-05-15 紀錄、本地 2026-05-14 Raman Y 軸範圍紀錄與 2026-05-16 同步檢查紀錄。
+
+[2026-05-16] 同步完成：已將 Raman 繪圖 Y 軸範圍控制變更 rebase 到 origin/main v26.1 後推送；遠端 main 由 e59617f 更新到 59aaa37。推送前確認 conflict marker 掃描、git diff --check origin/main..HEAD 與 default_raman_peaks JSON 解析通過；工具環境仍找不到 node/npm，未執行 npm run build。
