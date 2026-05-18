@@ -323,6 +323,18 @@ interface XasBandFigureStyle {
   xasTitle: string
   xAxisTitle: string
   yAxisTitle: string
+  xesTitleXPaper: number
+  xesTitleYPaper: number
+  xasTitleXPaper: number
+  xasTitleYPaper: number
+  sampleLabelXPaper: number
+  sampleLabelYFraction: number
+  vbmLabelXShift: number
+  vbmLabelYFraction: number
+  cbmLabelXShift: number
+  cbmLabelYFraction: number
+  egLabelYFraction: number
+  egLineYFraction: number
   xesLineWidth: number
   xasLineWidth: number
   fitLineWidth: number
@@ -531,6 +543,18 @@ const DEFAULT_XAS_BAND_STYLE: XasBandFigureStyle = {
   xasTitle: 'XAS',
   xAxisTitle: 'Photon energy / Emission energy (eV)',
   yAxisTitle: 'Normalized intensity + offset (a.u.)',
+  xesTitleXPaper: 0.07,
+  xesTitleYPaper: 0.97,
+  xasTitleXPaper: 0.88,
+  xasTitleYPaper: 0.97,
+  sampleLabelXPaper: 0.97,
+  sampleLabelYFraction: 0.78,
+  vbmLabelXShift: 0,
+  vbmLabelYFraction: 0.96,
+  cbmLabelXShift: 0,
+  cbmLabelYFraction: 0.96,
+  egLabelYFraction: 0.52,
+  egLineYFraction: 0.44,
   xesLineWidth: 2.2,
   xasLineWidth: 2.2,
   fitLineWidth: 1.2,
@@ -2031,7 +2055,8 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
     const yRef = `y${suffix}`
     const yDomainStart = 1 - (index + 1) * panelHeight - index * gap
     const yDomainEnd = yDomainStart + panelHeight
-    const panelY = yMax * 0.44
+    const panelY = yMax * clamp(style.egLineYFraction, 0.02, 0.98)
+    const sampleLabelY = yDomainStart + panelHeight * clamp(style.sampleLabelYFraction, 0, 1.2)
     const color = result.pair.color || result.xes.file.color || XAS_BAND_COLORS[index % XAS_BAND_COLORS.length]
     const xesFitStart = Math.min(result.xes.file.tangentStart, result.xes.file.tangentEnd, result.xes.edge) - 0.1
     const xesFitEnd = Math.max(result.xes.file.baselineStart, result.xes.file.baselineEnd, result.xes.edge) + 0.1
@@ -2117,15 +2142,15 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
     }
 
     annotations.push(
-      { x: result.xes.edge, y: yMax * 0.96, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>VBM<br>${result.xes.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'right', font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
-      { x: result.xas.edge, y: yMax * 0.96, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>CBM<br>${result.xas.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'left', font: { size: style.annotationFontSize, family: style.fontFamily, color: style.cbmColor } },
-      { x: (result.xes.edge + result.xas.edge) / 2, y: panelY + yMax * 0.08, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, font: { size: style.annotationFontSize, family: style.fontFamily, color: '#6b5600' } },
-      { x: 0.97, y: yDomainEnd - panelHeight * 0.22, xref: 'paper', yref: 'paper', text: `<b>${result.pair.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color } },
+      { x: result.xes.edge + style.vbmLabelXShift, y: yMax * clamp(style.vbmLabelYFraction, 0, 1.2), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>VBM<br>${result.xes.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'right', font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.xas.edge + style.cbmLabelXShift, y: yMax * clamp(style.cbmLabelYFraction, 0, 1.2), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>CBM<br>${result.xas.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'left', font: { size: style.annotationFontSize, family: style.fontFamily, color: style.cbmColor } },
+      { x: (result.xes.edge + result.xas.edge) / 2, y: yMax * clamp(style.egLabelYFraction, 0, 1.2), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, font: { size: style.annotationFontSize, family: style.fontFamily, color: '#6b5600' } },
+      { x: style.sampleLabelXPaper, y: sampleLabelY, xref: 'paper', yref: 'paper', text: `<b>${result.pair.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color } },
     )
     if (index === 0) {
       annotations.push(
-        { x: 0.07, y: 0.97, xref: 'paper', yref: 'paper', text: `<b>${style.xesTitle}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
-        { x: 0.88, y: 0.97, xref: 'paper', yref: 'paper', text: `<b>${style.xasTitle}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
+        { x: style.xesTitleXPaper, y: style.xesTitleYPaper, xref: 'paper', yref: 'paper', text: `<b>${style.xesTitle}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
+        { x: style.xasTitleXPaper, y: style.xasTitleYPaper, xref: 'paper', yref: 'paper', text: `<b>${style.xasTitle}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
       )
     }
   })
@@ -4171,6 +4196,16 @@ export default function PlotFileTool({
                   </select>
                 </label>
                 <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">XES 標題</span>
+                    <input value={xasBandStyle.xesTitle} onChange={event => setXasBandStyle(prev => ({ ...prev, xesTitle: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">XAS 標題</span>
+                    <input value={xasBandStyle.xasTitle} onChange={event => setXasBandStyle(prev => ({ ...prev, xasTitle: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
                   <NumInput label="X 左端" value={xasBandStyle.xLeft} onChange={value => setXasBandStyle(prev => ({ ...prev, xLeft: value }))} step={0.1} />
                   <NumInput label="X 右端" value={xasBandStyle.xRight} onChange={value => setXasBandStyle(prev => ({ ...prev, xRight: value }))} step={0.1} />
                 </div>
@@ -4181,7 +4216,35 @@ export default function PlotFileTool({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <NumInput label="Panel 標題" value={xasBandStyle.panelTitleFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, panelTitleFontSize: clamp(value, 12, 48) }))} min={12} max={48} step={1} />
-                  <NumInput label="標註字體" value={xasBandStyle.annotationFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, annotationFontSize: clamp(value, 8, 34) }))} min={8} max={34} step={1} />
+                  <NumInput label="樣品標籤字體" value={xasBandStyle.sampleFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, sampleFontSize: clamp(value, 8, 42) }))} min={8} max={42} step={1} />
+                </div>
+                <NumInput label="標註字體" value={xasBandStyle.annotationFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, annotationFontSize: clamp(value, 8, 34) }))} min={8} max={34} step={1} />
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">Panel 標題位置</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="XES X" value={xasBandStyle.xesTitleXPaper} onChange={value => setXasBandStyle(prev => ({ ...prev, xesTitleXPaper: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                    <NumInput label="XES Y" value={xasBandStyle.xesTitleYPaper} onChange={value => setXasBandStyle(prev => ({ ...prev, xesTitleYPaper: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                    <NumInput label="XAS X" value={xasBandStyle.xasTitleXPaper} onChange={value => setXasBandStyle(prev => ({ ...prev, xasTitleXPaper: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                    <NumInput label="XAS Y" value={xasBandStyle.xasTitleYPaper} onChange={value => setXasBandStyle(prev => ({ ...prev, xasTitleYPaper: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">樣品標籤位置</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="標籤 X" value={xasBandStyle.sampleLabelXPaper} onChange={value => setXasBandStyle(prev => ({ ...prev, sampleLabelXPaper: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                    <NumInput label="標籤 Y" value={xasBandStyle.sampleLabelYFraction} onChange={value => setXasBandStyle(prev => ({ ...prev, sampleLabelYFraction: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">VBM / CBM / Eg 標註位置</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="VBM X 偏移" value={xasBandStyle.vbmLabelXShift} onChange={value => setXasBandStyle(prev => ({ ...prev, vbmLabelXShift: clamp(value, -5, 5) }))} min={-5} max={5} step={0.02} />
+                    <NumInput label="VBM Y" value={xasBandStyle.vbmLabelYFraction} onChange={value => setXasBandStyle(prev => ({ ...prev, vbmLabelYFraction: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                    <NumInput label="CBM X 偏移" value={xasBandStyle.cbmLabelXShift} onChange={value => setXasBandStyle(prev => ({ ...prev, cbmLabelXShift: clamp(value, -5, 5) }))} min={-5} max={5} step={0.02} />
+                    <NumInput label="CBM Y" value={xasBandStyle.cbmLabelYFraction} onChange={value => setXasBandStyle(prev => ({ ...prev, cbmLabelYFraction: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                    <NumInput label="Eg 文字 Y" value={xasBandStyle.egLabelYFraction} onChange={value => setXasBandStyle(prev => ({ ...prev, egLabelYFraction: clamp(value, -0.2, 1.2) }))} min={-0.2} max={1.2} step={0.01} />
+                    <NumInput label="Eg 線 Y" value={xasBandStyle.egLineYFraction} onChange={value => setXasBandStyle(prev => ({ ...prev, egLineYFraction: clamp(value, 0.02, 0.98) }))} min={0.02} max={0.98} step={0.01} />
+                  </div>
                 </div>
                 <NumInput label="框線粗細" value={xasBandStyle.axisLineWidth} onChange={value => setXasBandStyle(prev => ({ ...prev, axisLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
                 <div className="grid grid-cols-2 gap-2">

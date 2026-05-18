@@ -784,3 +784,11 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-19] 檢查：清理同步過程中暫存的 pull 後紀錄 stash，避免留下不再需要的暫存項目。
 
 [2026-05-19] 檢查：提交前最終確認 git diff --check 通過、conflict marker 掃描無結果；差異為 AGENTS.md、CLAUDE.md 與 PlotFileTool.tsx 的 XES/XAS band gap 繪圖功能。
+
+[2026-05-19] 檢查：使用者要求繪製圖檔 XAS/XES band gap 圖新增 Panel 標題、標籤、標註的位置調整；準備檢查 PlotFileTool 目前 XasBandFigureStyle 與 UI。
+
+[2026-05-19] 實作：準備在 XasBandFigureStyle 加入 panel 標題、樣品標籤與 VBM/CBM/Eg 標註位置控制，並套用到 Plotly annotations。
+
+[2026-05-19] 實作：XAS/XES band gap 圖面設定新增 Panel 標題文字與位置、樣品標籤字體/位置，以及 VBM/CBM/Eg 標註位置控制；Plotly annotation 已改用這些設定。
+
+[2026-05-19] 檢查完成：Panel 標題/標籤/標註位置控制完成後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 node/npm/pnpm/yarn，未執行 npm run build。

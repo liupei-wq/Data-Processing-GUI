@@ -196,3 +196,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-19：繪製圖檔 XAS 分頁新增 XES/XAS band gap 疊圖工具；支援匯入兩欄式 XES 與 XAS 檔案、自動/手動樣品配對、XES 下降邊 VBM 與 XAS 上升邊 CBM 線性外推、Eg 計算、白底 stacked 圖與 PNG/SVG/CSV/TXT 匯出。驗證 git diff --check 與 conflict marker 掃描通過；目前環境找不到 node/npm，未執行 npm run build。
 
 - 2026-05-19：同步至 Git 前已接上 origin/main v26.5，保留本地繪製圖檔 XAS/XES band gap 變更；git diff --check 與 conflict marker 掃描通過。目前 PowerShell 環境找不到 npm，未執行 npm run build。
+
+- 2026-05-19：繪製圖檔 XAS/XES band gap 圖新增 Panel 標題文字與位置、樣品標籤字體/位置、VBM/CBM/Eg 標註位置控制；右側 XAS 圖面設定可調整 XES/XAS 標題座標、樣品標籤座標、VBM/CBM X 偏移與 Y 位置、Eg 文字與水平線 Y 位置。驗證 git diff --check 通過；目前環境找不到 npm，未執行 npm run build。
