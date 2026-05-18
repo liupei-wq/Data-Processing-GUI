@@ -766,34 +766,27 @@ function sanitizeXasPeakCandidate(peak: XasPeakCandidate, datasetMax = 100): Xas
 }
 
 function updateXasPeakCenterSeed(peak: XasPeakCandidate, center: number, datasetMax = 100): XasPeakCandidate {
-  const sourceType = peak.sourceType ?? 'database'
-  const theoreticalCenter = center
-  const centerTolerance = sourceType === 'database' ? PEAK_CENTER_DB_TOLERANCE_EV : PEAK_CENTER_MANUAL_TOLERANCE_EV
+  // Only update the seed value; preserve existing center_min/center_max (may be user-set)
   return sanitizeXasPeakCandidate({
     ...peak,
     center,
-    theoretical_center: theoreticalCenter,
-    center_min: theoreticalCenter - centerTolerance,
-    center_max: theoreticalCenter + centerTolerance,
+    theoretical_center: center,
   }, datasetMax)
 }
 
 function updateXasPeakFwhmSeed(peak: XasPeakCandidate, fwhm: number, datasetMax = 100): XasPeakCandidate {
-  const nextFwhm = Math.max(fwhm, PEAK_FWHM_MIN_ABS)
+  // Only update the seed value; preserve existing fwhm_min/fwhm_max (may be user-set)
   return sanitizeXasPeakCandidate({
     ...peak,
-    fwhm: nextFwhm,
-    fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, nextFwhm * PEAK_FWHM_MIN_RATIO),
-    fwhm_max: Math.max(nextFwhm * PEAK_FWHM_MAX_MULTIPLIER, nextFwhm + 0.2),
+    fwhm: Math.max(fwhm, PEAK_FWHM_MIN_ABS),
   }, datasetMax)
 }
 
 function updateXasPeakAmplitudeSeed(peak: XasPeakCandidate, amplitude: number, datasetMax = 100): XasPeakCandidate {
-  const nextAmplitude = Math.max(amplitude, 0)
+  // Only update the seed value; preserve existing amplitude_max (may be user-set)
   return sanitizeXasPeakCandidate({
     ...peak,
-    amplitude: nextAmplitude,
-    amplitude_max: Math.max(nextAmplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+    amplitude: Math.max(amplitude, 0),
   }, datasetMax)
 }
 
@@ -804,8 +797,8 @@ function buildXasFitPeakPayloads(peaks: XasPeakCandidate[], datasetMax: number):
     center_min: peak.lock_center ? peak.center : (peak.center_min ?? peak.center),
     center_max: peak.lock_center ? peak.center : (peak.center_max ?? peak.center),
     fwhm_min: peak.lock_fwhm ? peak.fwhm : Math.max(peak.fwhm_min ?? PEAK_FWHM_MIN_ABS, PEAK_FWHM_MIN_ABS),
-    fwhm_max: peak.lock_fwhm ? peak.fwhm : Math.max(peak.fwhm_max ?? peak.fwhm, peak.fwhm + 0.05),
-    amplitude_max: peak.lock_area ? Math.max(peak.amplitude, 1) : Math.max(peak.amplitude_max ?? 0, peak.amplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
+    fwhm_max: peak.lock_fwhm ? peak.fwhm : Math.max(peak.fwhm_max ?? peak.fwhm, PEAK_FWHM_MIN_ABS),
+    amplitude_max: peak.lock_area ? Math.max(peak.amplitude, 1) : Math.max(peak.amplitude_max ?? peak.amplitude, 1e-9),
   }))
 }
 
@@ -2384,20 +2377,56 @@ export default function XAS({
                         <NumInput label="FWHM(eV)" value={pk.fwhm} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? updateXasPeakFwhmSeed(p, v, fitDatasetMax) : p))} min={0.01} step={0.1} />
                         <NumInput label="強度" value={pk.amplitude} onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? updateXasPeakAmplitudeSeed(p, v, fitDatasetMax) : p))} min={0} step={0.01} />
                       </div>
-                      {/* 約束資訊 */}
-                      <p className="text-[10px] leading-5 text-[var(--text-soft)]">
-                        {pk.lock_center
-                          ? `中心將固定在 ${pk.center.toFixed(3)} eV`
-                          : `中心可在 ${(pk.center_min ?? pk.center).toFixed(3)} – ${(pk.center_max ?? pk.center).toFixed(3)} eV 內位移`}
-                        {' · '}
-                        {pk.lock_fwhm
-                          ? `FWHM 固定為 ${pk.fwhm.toFixed(3)} eV`
-                          : `FWHM 可在 ${(pk.fwhm_min ?? pk.fwhm).toFixed(3)} – ${(pk.fwhm_max ?? pk.fwhm).toFixed(3)} eV 內調整`}
-                        {' · '}
-                        {pk.lock_area
-                          ? `高度固定為 ${pk.amplitude.toFixed(4)}`
-                          : `高度上限約 ${(pk.amplitude_max ?? pk.amplitude).toFixed(4)}`}
-                      </p>
+                      {/* 約束範圍 */}
+                      {(!pk.lock_center || !pk.lock_fwhm || !pk.lock_area) && (
+                        <div className="space-y-1.5">
+                          {!pk.lock_center && (
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-14 shrink-0 text-[10px] text-[var(--text-soft)]">中心範圍</span>
+                              <NumInput label="min" value={pk.center_min ?? pk.center} step={0.1}
+                                onChange={v => setFitPeakCandidates(prev => prev.map(p => {
+                                  if (p.id !== pk.id) return p
+                                  const curMax = p.center_max ?? p.center
+                                  return { ...p, center_min: v, center_max: Math.max(curMax, v) }
+                                }))} />
+                              <span className="text-[10px] text-[var(--text-soft)]">–</span>
+                              <NumInput label="max" value={pk.center_max ?? pk.center} step={0.1}
+                                onChange={v => setFitPeakCandidates(prev => prev.map(p => {
+                                  if (p.id !== pk.id) return p
+                                  const curMin = p.center_min ?? p.center
+                                  return { ...p, center_max: v, center_min: Math.min(curMin, v) }
+                                }))} />
+                              <span className="text-[10px] text-[var(--text-soft)]">eV</span>
+                            </div>
+                          )}
+                          {!pk.lock_fwhm && (
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-14 shrink-0 text-[10px] text-[var(--text-soft)]">FWHM 範圍</span>
+                              <NumInput label="min" value={pk.fwhm_min ?? pk.fwhm} step={0.1} min={0.01}
+                                onChange={v => setFitPeakCandidates(prev => prev.map(p => {
+                                  if (p.id !== pk.id) return p
+                                  const curMax = p.fwhm_max ?? p.fwhm
+                                  return { ...p, fwhm_min: Math.max(v, PEAK_FWHM_MIN_ABS), fwhm_max: Math.max(curMax, v) }
+                                }))} />
+                              <span className="text-[10px] text-[var(--text-soft)]">–</span>
+                              <NumInput label="max" value={pk.fwhm_max ?? pk.fwhm} step={0.1} min={0.01}
+                                onChange={v => setFitPeakCandidates(prev => prev.map(p => {
+                                  if (p.id !== pk.id) return p
+                                  const curMin = p.fwhm_min ?? p.fwhm
+                                  return { ...p, fwhm_max: Math.max(v, PEAK_FWHM_MIN_ABS), fwhm_min: Math.min(curMin, v) }
+                                }))} />
+                              <span className="text-[10px] text-[var(--text-soft)]">eV</span>
+                            </div>
+                          )}
+                          {!pk.lock_area && (
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-14 shrink-0 text-[10px] text-[var(--text-soft)]">高度上限</span>
+                              <NumInput label="max" value={pk.amplitude_max ?? pk.amplitude} step={0.01} min={0}
+                                onChange={v => setFitPeakCandidates(prev => prev.map(p => p.id === pk.id ? { ...p, amplitude_max: Math.max(v, 0) } : p))} />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
 

@@ -591,6 +591,10 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 - 2026-05-10 CST：XAS 峰擬合新增「擬合範圍」設定。後端 `XasFitRequest.fit_range` 已存在；前端新增 `fitRangeEnabled / fitRangeLo / fitRangeHi` state，`web/frontend/src/api/xas.ts` 的 `fitXasPeaks()` 新增 `fitRange?: [number, number] | null` 參數，啟用時傳入 `body.fit_range`；峰形選單下方加入「擬合範圍」卡片（停用時顯示「自動」說明，啟用後改為 `DualRangeInput` 雙把手拉桿，範圍由 energyMin/energyMax 決定）；擬合結果圖在啟用時疊加青色陰影（`rgba(34,211,238,0.08)`）與虛線框標示擬合範圍，並加上「擬合範圍」標籤 annotation；`handleFit` 依賴項補上 `fitNRestarts`（原本遺漏）。影響檔案：`web/frontend/src/api/xas.ts`、`web/frontend/src/pages/XAS.tsx`；後端語法 `python3 -m py_compile` 通過。
 
+- 2026-05-18 CST：XAS 峰擬合峰卡新增各參數獨立手動約束範圍輸入。將原本「中心可在 X–Y eV 內位移」灰色唯讀文字改為可編輯的 min/max 欄位：「中心可調」展開中心範圍 min/max 兩個 NumInput、「寬度可調」展開 FWHM 範圍 min/max 兩個 NumInput、「高度可調」展開高度上限 max 一個 NumInput；三個參數完全獨立，只有對應參數解鎖時才顯示，預填自動計算值；`buildXasFitPeakPayloads` 同步修正：解鎖時直接使用使用者輸入的 amplitude_max，不再強制套 `PEAK_AMPLITUDE_MAX_MULTIPLIER` 或 `datasetMax * 1.5` 覆蓋值。影響檔案：`web/frontend/src/pages/XAS.tsx`；後端語法 `python3 -m py_compile` 通過。
+
+- 2026-05-18 CST：修正 XAS 峰擬合兩個邏輯 bug。① `updateXasPeakCenterSeed / updateXasPeakFwhmSeed / updateXasPeakAmplitudeSeed` 原本在每次擬合後更新 seed 值時會同時以公式重算並覆蓋 `center_min/max`、`fwhm_min/max`、`amplitude_max`，導致使用者手動輸入的約束範圍在第一次擬合後即被清除；修正為三個函式只更新 seed 值本身，保留既有的 min/max 欄位不重算。② 約束範圍 UI 輸入欄新增 min ≤ max 防呆：修改 min 時若新值大於現有 max 則自動將 max 拉高、修改 max 時若新值小於現有 min 則自動將 min 壓低；FWHM 欄同時保持 `≥ PEAK_FWHM_MIN_ABS` 下限。影響檔案：`web/frontend/src/pages/XAS.tsx`；後端語法 `python3 -m py_compile` 通過。
+
 - 2026-05-11 CST：開始處理 Raman 圖表需求：結果圖全螢幕、標籤避讓、繪製圖檔峰顯示篩選/可信度篩選、移除 Raman publication residual panel，以及預留多樣品疊圖顯示。範圍先限定 web/frontend Raman 分析頁與 PlotFileTool。
 
 - 2026-05-11 CST：準備實作 Raman 分析頁結果圖全螢幕與 peak label 避讓；判斷以 React overlay 呈現全螢幕，避免恢復舊版 Plotly 自訂 modebar fullscreen 造成 bundle/runtime 風險。
