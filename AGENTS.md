@@ -192,3 +192,7 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 
 - 2026-05-16：修正 XES process 500：後端對 sample x/y 長度、有限值、點數與 table calibration 後 x_ev/y 長度加防護，未知資料形狀改回 422 詳細錯誤；背景扣除缺 BG 檔時明確報錯。前端 BG1/BG2 overlay 在 Energy calibrated 模式下改用同一組 eV 校正軸。驗證 `uv run python -m py_compile web/backend/routers/xes.py` 與 XES 相關檔案 `git diff --check` 通過；目前環境找不到 npm，未執行 `npm run build`。
 - 2026-05-16：修正 XES 歸一化失敗：`web/backend/routers/xes.py` 改用新版 `apply_normalization()` 呼叫方式（`norm_x_start/norm_x_end`、單一回傳 `y`），解決 Max/Min-Max/Area/參考區間歸一化啟用時失敗；XES UI 的 `reference_region` 會映射為後端 `mean_region`。驗證 `uv run python -m py_compile web/backend/routers/xes.py` 通過；目前環境找不到 npm，未執行 `npm run build`。
+
+- 2026-05-19：繪製圖檔 XAS 分頁新增 XES/XAS band gap 疊圖工具；支援匯入兩欄式 XES 與 XAS 檔案、自動/手動樣品配對、XES 下降邊 VBM 與 XAS 上升邊 CBM 線性外推、Eg 計算、白底 stacked 圖與 PNG/SVG/CSV/TXT 匯出。驗證 git diff --check 與 conflict marker 掃描通過；目前環境找不到 node/npm，未執行 npm run build。
+
+- 2026-05-19：同步至 Git 前已接上 origin/main v26.5，保留本地繪製圖檔 XAS/XES band gap 變更；git diff --check 與 conflict marker 掃描通過。目前 PowerShell 環境找不到 npm，未執行 npm run build。

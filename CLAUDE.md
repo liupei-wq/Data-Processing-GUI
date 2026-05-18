@@ -746,3 +746,41 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 
 
 [2026-05-16] 檢查：XES 歸一化修正後完成驗證。uv run python -m py_compile .\web\backend\routers\xes.py 通過，git diff --check -- web/backend/routers/xes.py web/frontend/src/pages/XES.tsx web/frontend/src/types/xes.ts AGENTS.md 通過，conflict marker 掃描通過；目前環境找不到 npm，未執行 npm run build。
+
+[2026-05-19] 檢查：開始新增繪製圖檔 XAS 模塊的 XES/XAS 疊圖與 Band gap 線性外推功能；先定位 PlotFileTool 現有 XAS/XES 繪圖架構。
+
+[2026-05-19] 重要判斷：繪製圖檔 XAS band gap 功能採前端純計算；XES VBM 使用下降邊最陡切線與 baseline 交點，XAS CBM 使用上升邊最陡切線與 baseline 交點，兩者差值為 Eg。
+
+[2026-05-19] 實作：在繪製圖檔 XAS 分頁啟用 XES/XAS band gap overlay。新增 XES/XAS 檔案匯入、樣品配對、VBM/CBM 線性外推、Eg 計算、白底 stacked 疊圖、PNG/SVG 與 CSV/TXT 匯出設定。
+
+[2026-05-19] 檢查：前端 build 首次執行失敗；原因一是工作目錄在 web/frontend 時讀取 .\\CLAUDE.md 路徑錯誤，原因二是目前 PowerShell 環境找不到 npm。接續改以 root 路徑讀取紀錄並做靜態檢查。
+
+[2026-05-19] 檢查：XAS/XES band gap 改動後執行 git diff --check 通過，conflict marker 掃描無結果；目前環境找不到 node/npm/pnpm/yarn，因此無法執行 npm run build。
+
+[2026-05-19] 實作：同步更新 AGENTS.md，記錄繪製圖檔 XAS 分頁新增 XES/XAS band gap 疊圖、VBM/CBM 線性外推與匯出功能。
+
+[2026-05-19] 檢查：清理前端 build 失敗時誤建立的 web/frontend/CLAUDE.md 暫存殘留，避免留下非專案文件。
+
+[2026-05-19] 檢查完成：XAS/XES band gap 繪圖改動完成後，git diff --check 通過、conflict marker 掃描無結果、工作樹僅 AGENTS.md / CLAUDE.md / PlotFileTool.tsx 有預期修改；目前環境找不到 node/npm，未執行 npm run build。
+
+[2026-05-19] 檢查：開始同步至 Git；目前 main 比 origin/main behind 1，且本地有 AGENTS.md、CLAUDE.md、web/frontend/src/pages/PlotFileTool.tsx 修改，先檢查差異避免覆蓋使用者變更。
+
+[2026-05-19] 檢查：本地主要變更為 PlotFileTool.tsx 新增 XES/XAS band gap 繪圖功能，文件有同步紀錄；遠端 origin/main 位於 v26.5，本地 main 位於 v26.4，準備檢查遠端提交後再整合。
+
+[2026-05-19] 檢查：執行 git fetch origin，確認同步前遠端 main 是否仍停在 v26.5 或已有更新。
+
+[2026-05-19] 檢查：git fetch origin 因 .git/FETCH_HEAD 權限遭拒，改用非沙盒執行以完成遠端同步檢查。
+
+[2026-05-19] 重要判斷：遠端只領先 1 個提交（v26.5，主要修改 XAS.tsx 與文件），本地變更在 PlotFileTool.tsx 與文件；採用 stash → fast-forward pull → stash pop，避免覆蓋本地未提交變更。
+
+[2026-05-19] 檢查：git stash 因 .git/index.lock 權限遭拒，改用非沙盒執行 stash 以保護本地變更後接上遠端。
+
+[2026-05-19] 檢查：已將本地 XES/XAS band gap 繪圖變更套回 origin/main v26.5 後的工作目錄，未出現程式碼衝突；待檢查後提交並推送。
+
+[2026-05-19] 檢查：同步提交前嘗試在 web/frontend 執行 npm run build，但目前 PowerShell 環境找不到 npm；另外從 web/frontend 寫回根目錄 CLAUDE.md 被拒，已回到 repo root 補記錄。
+
+[2026-05-19] 檢查：同步提交前 git diff --check 通過，conflict marker 掃描無結果；npm 仍不可用，未能執行 npm run build。
+
+[2026-05-19] 檢查：清理同步過程中暫存的 pull 後紀錄 stash，避免留下不再需要的暫存項目。
+
+[2026-05-19] 檢查：提交前最終確認 git diff --check 通過、conflict marker 掃描無結果；差異為 AGENTS.md、CLAUDE.md 與 PlotFileTool.tsx 的 XES/XAS band gap 繪圖功能。

@@ -9,6 +9,7 @@ type RamanPlotMode = 'single' | 'overlay'
 type RamanConfidenceFilter = 'all' | 'high' | 'medium-up' | 'low-only'
 type RamanReferenceLabelMode = 'full' | 'material-shift' | 'shift' | 'index'
 type RamanReferenceLineDash = 'solid' | 'dash' | 'dot' | 'dashdot'
+type XasBandFileKind = 'xes' | 'xas'
 
 interface FitSpectrumFile {
   id: string
@@ -32,6 +33,30 @@ interface VbmSpectrumFile {
   baselineEnd: number
   tangentStart: number
   tangentEnd: number
+}
+
+interface XasBandEdgeFile {
+  id: string
+  name: string
+  sampleLabel: string
+  kind: XasBandFileKind
+  xColumn: string
+  yColumn: string
+  x: number[]
+  y: number[]
+  baselineStart: number
+  baselineEnd: number
+  tangentStart: number
+  tangentEnd: number
+  color: string
+}
+
+interface XasBandPair {
+  id: string
+  sampleLabel: string
+  xesFileId: string
+  xasFileId: string
+  color: string
 }
 
 interface RamanComponentCurve {
@@ -245,6 +270,24 @@ interface VbmFitResult {
   vbm: number
 }
 
+interface XasBandEdgeResult {
+  file: XasBandEdgeFile
+  edgeLabel: 'VBM' | 'CBM'
+  x: number[]
+  yNorm: number[]
+  edgeY: number
+  edge: number
+  tangentLine: VbmLineFit
+  baselineLine: VbmLineFit
+}
+
+interface XasBandPairResult {
+  pair: XasBandPair
+  xes: XasBandEdgeResult
+  xas: XasBandEdgeResult
+  bandGap: number
+}
+
 interface VbmLinePoint {
   x: number
   y: number
@@ -263,6 +306,40 @@ interface VbmLineFit {
   endPoint: VbmLinePoint
 }
 
+interface XasBandFigureStyle {
+  fontFamily: string
+  fontSize: number
+  axisTitleFontSize: number
+  panelTitleFontSize: number
+  sampleFontSize: number
+  annotationFontSize: number
+  xAxisTitleStandoff: number
+  yAxisTitleStandoff: number
+  axisLineWidth: number
+  xLeft: number
+  xRight: number
+  yMax: number
+  xesTitle: string
+  xasTitle: string
+  xAxisTitle: string
+  yAxisTitle: string
+  xesLineWidth: number
+  xasLineWidth: number
+  fitLineWidth: number
+  vbmColor: string
+  cbmColor: string
+  gapColor: string
+  baselineColor: string
+  tangentColor: string
+  regionOpacity: number
+  gapOpacity: number
+  showFitGuides: boolean
+  showLegend: boolean
+  exportWidth: number
+  exportHeight: number
+  exportScale: number
+}
+
 type PlotlyExportApi = {
   newPlot: (root: HTMLDivElement, data: Plotly.Data[], layout: Partial<Plotly.Layout>, config?: Partial<Plotly.Config>) => Promise<unknown>
   toImage: (root: HTMLDivElement, opts: { format: string; width: number; height: number; scale?: number }) => Promise<string>
@@ -273,7 +350,7 @@ const MODULES: { id: PlotModule; label: string; detail: string; enabled: boolean
   { id: 'xps', label: 'XPS', detail: 'fit spectra / VBM', enabled: true },
   { id: 'raman', label: 'Raman', detail: 'fit deconvolution', enabled: true },
   { id: 'xrd', label: 'XRD', detail: '預留：繞射峰與 stacked patterns', enabled: false },
-  { id: 'xas', label: 'XAS', detail: '預留：TEY / TFY 與 edge 圖', enabled: false },
+  { id: 'xas', label: 'XAS', detail: 'XES/XAS overlay + band gap', enabled: true },
   { id: 'xes', label: 'XES', detail: '預留：發射光譜比較', enabled: false },
 ]
 
@@ -433,6 +510,42 @@ const DEFAULT_RAMAN_STYLE: RamanFigureStyle = {
   exportWidth: 1600,
   exportHeight: 900,
   exportScale: 4,
+}
+
+const XAS_BAND_COLORS = ['#1f77b4', '#2ca25f', '#c0392b', '#9467bd', '#f97316', '#0f766e', '#be123c', '#4b5563']
+
+const DEFAULT_XAS_BAND_STYLE: XasBandFigureStyle = {
+  fontFamily: 'Times New Roman, Times, serif',
+  fontSize: 16,
+  axisTitleFontSize: 22,
+  panelTitleFontSize: 28,
+  sampleFontSize: 22,
+  annotationFontSize: 16,
+  xAxisTitleStandoff: 16,
+  yAxisTitleStandoff: 18,
+  axisLineWidth: 1.5,
+  xLeft: 519,
+  xRight: 545,
+  yMax: 1.18,
+  xesTitle: 'XES',
+  xasTitle: 'XAS',
+  xAxisTitle: 'Photon energy / Emission energy (eV)',
+  yAxisTitle: 'Normalized intensity + offset (a.u.)',
+  xesLineWidth: 2.2,
+  xasLineWidth: 2.2,
+  fitLineWidth: 1.2,
+  vbmColor: '#1f77b4',
+  cbmColor: '#e53935',
+  gapColor: '#f4d35e',
+  baselineColor: '#6b7280',
+  tangentColor: '#ef4444',
+  regionOpacity: 0.08,
+  gapOpacity: 0.2,
+  showFitGuides: true,
+  showLegend: true,
+  exportWidth: 1500,
+  exportHeight: 780,
+  exportScale: 3,
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -746,6 +859,76 @@ function parseVbmSpectrumText(text: string, fileName: string): VbmSpectrumFile {
     baselineEnd: 1.6,
     tangentStart: 4.2,
     tangentEnd: 5.2,
+  }
+}
+
+function inferXasBandSampleLabel(fileName: string) {
+  return safeFileStem(fileName)
+    .replace(/(^|[_-])(xes|xas|tfy|tey|xanes|normalized|flattened)([_-]|$)/ig, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '') || safeFileStem(fileName)
+}
+
+function defaultXasBandRanges(x: number[], kind: XasBandFileKind) {
+  const xMin = Math.min(...x)
+  const xMax = Math.max(...x)
+  const span = Math.max(xMax - xMin, 1)
+  if (kind === 'xes') {
+    return {
+      baselineStart: xMin + span * 0.72,
+      baselineEnd: xMin + span * 0.92,
+      tangentStart: xMin + span * 0.58,
+      tangentEnd: xMin + span * 0.72,
+    }
+  }
+  return {
+    baselineStart: xMin + span * 0.05,
+    baselineEnd: xMin + span * 0.22,
+    tangentStart: xMin + span * 0.22,
+    tangentEnd: xMin + span * 0.42,
+  }
+}
+
+function parseXasBandSpectrumText(text: string, fileName: string, kind: XasBandFileKind, color: string): XasBandEdgeFile {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !/^(#|%|!|\/\/)/.test(line))
+  if (lines.length < 3) throw new Error(`${fileName}: 資料列不足`)
+  const headerLine = lines[0].replace(/^\uFEFF/, '')
+  const delimiter = headerLine.includes('\t') ? '\t' : (headerLine.includes(',') ? ',' : 'whitespace')
+  const firstCells = splitDelimitedLine(headerLine, delimiter)
+  const firstRowIsNumeric = firstCells.length >= 2 && firstCells.filter(cell => Number.isFinite(Number(cell))).length >= 2
+  const headers = firstRowIsNumeric ? firstCells.map((_, index) => `Column ${index + 1}`) : firstCells
+  const dataLines = firstRowIsNumeric ? lines : lines.slice(1)
+  const rows = dataLines.map(line => splitDelimitedLine(line, delimiter))
+  const { xIndex, yIndex } = chooseVbmColumns(headers, rows, fileName)
+  const points = rows
+    .map(row => ({ x: Number(row[xIndex]), y: Number(row[yIndex]) }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  const cleanX: number[] = []
+  const cleanY: number[] = []
+  const seen = new Set<number>()
+  points.forEach(point => {
+    if (seen.has(point.x)) return
+    seen.add(point.x)
+    cleanX.push(point.x)
+    cleanY.push(point.y)
+  })
+  if (cleanX.length < 3) throw new Error(`${fileName}: 有效資料點不足`)
+  const ranges = defaultXasBandRanges(cleanX, kind)
+  return {
+    id: `${kind}-${fileName}-${Math.random().toString(36).slice(2, 8)}`,
+    name: fileName,
+    sampleLabel: inferXasBandSampleLabel(fileName),
+    kind,
+    xColumn: headers[xIndex] ?? `Column ${xIndex + 1}`,
+    yColumn: headers[yIndex] ?? `Column ${yIndex + 1}`,
+    x: cleanX,
+    y: cleanY,
+    color,
+    ...ranges,
   }
 }
 
@@ -1634,6 +1817,320 @@ function calculateVbm(file: VbmSpectrumFile): VbmFitResult {
     baselineLine,
     vbm,
   }
+}
+
+function fitXasBandPlotLine(x: number[], y: number[], start: number, end: number, mode: 'baseline' | 'rising' | 'falling'): VbmLineFit | null {
+  if (x.length !== y.length) return null
+  const lo = Math.min(start, end)
+  const hi = Math.max(start, end)
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 2) return null
+
+  const nearestPoint = (targetX: number) => {
+    let bestIndex = 0
+    let bestDistance = Infinity
+    for (let i = 0; i < points.length; i += 1) {
+      const distance = Math.abs(points[i].x - targetX)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = i
+      }
+    }
+    return { index: bestIndex, point: points[bestIndex] }
+  }
+
+  const anchorStart = nearestPoint(lo)
+  const anchorEnd = nearestPoint(hi)
+  const spanPoints = Math.max(Math.abs(anchorEnd.index - anchorStart.index) + 1, 5)
+  const windowPointCount = Math.max(3, Math.min(points.length, Math.round(spanPoints * 0.2)))
+  const buildWindow = (anchorIndex: number) => {
+    const startIndex = Math.max(0, Math.min(points.length - windowPointCount, anchorIndex - Math.floor(windowPointCount / 2)))
+    return points.slice(startIndex, startIndex + windowPointCount)
+  }
+
+  const startWindow = buildWindow(anchorStart.index)
+  const endWindow = buildWindow(anchorEnd.index)
+  let bestPair: { startPoint: VbmLinePoint; endPoint: VbmLinePoint; slope: number; span: number; meanY: number } | null = null
+  let candidatePairCount = 0
+  for (const startPoint of startWindow) {
+    for (const endPoint of endWindow) {
+      const dx = endPoint.x - startPoint.x
+      if (Math.abs(dx) <= 1e-10) continue
+      const slope = (endPoint.y - startPoint.y) / dx
+      const span = Math.abs(dx)
+      const meanY = (startPoint.y + endPoint.y) / 2
+      candidatePairCount += 1
+      if (!bestPair) {
+        bestPair = { startPoint, endPoint, slope, span, meanY }
+        continue
+      }
+      if (mode === 'rising') {
+        if (slope > bestPair.slope + 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span)) {
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+        }
+      } else if (mode === 'falling') {
+        if (slope < bestPair.slope - 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span)) {
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+        }
+      } else {
+        const absSlope = Math.abs(slope)
+        const bestAbsSlope = Math.abs(bestPair.slope)
+        if (
+          absSlope < bestAbsSlope - 1e-10
+          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && meanY < bestPair.meanY - 1e-10)
+          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && Math.abs(meanY - bestPair.meanY) <= 1e-10 && span > bestPair.span)
+        ) {
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+        }
+      }
+    }
+  }
+
+  if (!bestPair) return null
+  const intercept = bestPair.startPoint.y - bestPair.slope * bestPair.startPoint.x
+  return {
+    slope: bestPair.slope,
+    intercept,
+    pointCount: startWindow.length + endWindow.length,
+    startWindowPointCount: startWindow.length,
+    endWindowPointCount: endWindow.length,
+    candidatePairCount,
+    anchorStartPoint: anchorStart.point,
+    anchorEndPoint: anchorEnd.point,
+    startPoint: bestPair.startPoint,
+    endPoint: bestPair.endPoint,
+  }
+}
+
+function normalizeBandIntensity(y: number[]) {
+  const finite = y.filter(Number.isFinite)
+  const low = percentile(finite, 0.02)
+  const high = percentile(finite, 0.98)
+  const span = high - low
+  if (!Number.isFinite(span) || Math.abs(span) < 1e-15) return y.map(() => 0)
+  return y.map(value => (value - low) / span)
+}
+
+function calculateXasBandEdge(file: XasBandEdgeFile): XasBandEdgeResult {
+  const validPoints = file.x
+    .map((xValue, index) => ({ x: xValue, y: file.y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (validPoints.length < 3) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: 有效資料點不足`)
+  const x = validPoints.map(point => point.x)
+  const yNorm = normalizeBandIntensity(validPoints.map(point => point.y))
+  const tangentLine = fitXasBandPlotLine(x, yNorm, file.tangentStart, file.tangentEnd, file.kind === 'xes' ? 'falling' : 'rising')
+  const baselineLine = fitXasBandPlotLine(x, yNorm, file.baselineStart, file.baselineEnd, 'baseline')
+  if (!tangentLine) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: tangent 區間內資料點不足`)
+  if (!baselineLine) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: baseline 區間內資料點不足`)
+  const slopeDelta = tangentLine.slope - baselineLine.slope
+  if (Math.abs(slopeDelta) < 1e-10) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: 切線與 baseline 斜率過於接近`)
+  const edge = (baselineLine.intercept - tangentLine.intercept) / slopeDelta
+  const edgeY = tangentLine.slope * edge + tangentLine.intercept
+  if (!Number.isFinite(edge) || !Number.isFinite(edgeY)) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: band edge 計算結果非有限值`)
+  return {
+    file,
+    edgeLabel: file.kind === 'xes' ? 'VBM' : 'CBM',
+    x,
+    yNorm,
+    edge,
+    edgeY,
+    tangentLine,
+    baselineLine,
+  }
+}
+
+function xasBandLinePoints(result: XasBandEdgeResult, line: VbmLineFit, xMin: number, xMax: number, points = 160) {
+  const xLine = Array.from({ length: points }, (_, index) => xMin + (xMax - xMin) * (index / Math.max(points - 1, 1)))
+  return { x: xLine, y: xLine.map(value => line.slope * value + line.intercept) }
+}
+
+function calculateXasBandPairs(files: XasBandEdgeFile[], pairs: XasBandPair[]) {
+  const results: XasBandPairResult[] = []
+  const errors: string[] = []
+  pairs.forEach(pair => {
+    try {
+      const xesFile = files.find(file => file.id === pair.xesFileId && file.kind === 'xes')
+      const xasFile = files.find(file => file.id === pair.xasFileId && file.kind === 'xas')
+      if (!xesFile || !xasFile) throw new Error(`${pair.sampleLabel}: XES 或 XAS 檔案不存在`)
+      const xes = calculateXasBandEdge(xesFile)
+      const xas = calculateXasBandEdge(xasFile)
+      const bandGap = xas.edge - xes.edge
+      if (!Number.isFinite(bandGap)) throw new Error(`${pair.sampleLabel}: Eg 計算結果非有限值`)
+      results.push({ pair, xes, xas, bandGap })
+    } catch (fitError: unknown) {
+      errors.push(String((fitError as Error).message ?? fitError))
+    }
+  })
+  return { results, errors }
+}
+
+function autoBuildXasBandPairs(files: XasBandEdgeFile[]) {
+  const xesFiles = files.filter(file => file.kind === 'xes')
+  const xasFiles = files.filter(file => file.kind === 'xas')
+  const unusedXas = new Set(xasFiles.map(file => file.id))
+  const pairs: XasBandPair[] = []
+  xesFiles.forEach((xesFile, index) => {
+    const normalizedLabel = xesFile.sampleLabel.trim().toLowerCase()
+    const matchedXas = xasFiles.find(file => unusedXas.has(file.id) && file.sampleLabel.trim().toLowerCase() === normalizedLabel)
+      ?? xasFiles.find(file => unusedXas.has(file.id))
+    if (!matchedXas) return
+    unusedXas.delete(matchedXas.id)
+    pairs.push({
+      id: `xas-band-pair-${xesFile.id}-${matchedXas.id}`,
+      sampleLabel: normalizedLabel && normalizedLabel === matchedXas.sampleLabel.trim().toLowerCase()
+        ? xesFile.sampleLabel
+        : `${xesFile.sampleLabel} / ${matchedXas.sampleLabel}`,
+      xesFileId: xesFile.id,
+      xasFileId: matchedXas.id,
+      color: XAS_BAND_COLORS[index % XAS_BAND_COLORS.length],
+    })
+  })
+  return pairs
+}
+
+function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandFigureStyle) {
+  const allX = results.flatMap(result => [...result.xes.x, ...result.xas.x, result.xes.edge, result.xas.edge])
+  const data: Plotly.Data[] = []
+  const annotations: Partial<Plotly.Annotations>[] = []
+  const shapes: Partial<Plotly.Shape>[] = []
+  const xMin = Number.isFinite(style.xLeft) ? style.xLeft : Math.min(...allX)
+  const xMax = Number.isFinite(style.xRight) ? style.xRight : Math.max(...allX)
+  const n = Math.max(results.length, 1)
+  const gap = 0.028
+  const panelHeight = (1 - gap * Math.max(n - 1, 0)) / n
+  const yMax = Math.max(style.yMax, 0.3)
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    showlegend: style.showLegend,
+    legend: {
+      x: 0.02,
+      y: 0.94,
+      xanchor: 'left',
+      yanchor: 'top',
+      bgcolor: 'rgba(255,255,255,0)',
+      font: { size: Math.max(10, style.fontSize - 2), family: style.fontFamily, color: '#4b5563' },
+    },
+    hovermode: 'closest',
+    margin: { l: 92, r: 34, t: 34, b: 76 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    annotations: annotations as unknown as Plotly.Layout['annotations'],
+    shapes: shapes as Plotly.Shape[],
+  }
+
+  results.forEach((result, index) => {
+    const suffix = index === 0 ? '' : String(index + 1)
+    const xAxisName = `xaxis${suffix}`
+    const yAxisName = `yaxis${suffix}`
+    const xRef = `x${suffix}`
+    const yRef = `y${suffix}`
+    const yDomainStart = 1 - (index + 1) * panelHeight - index * gap
+    const yDomainEnd = yDomainStart + panelHeight
+    const panelY = yMax * 0.44
+    const color = result.pair.color || result.xes.file.color || XAS_BAND_COLORS[index % XAS_BAND_COLORS.length]
+    const xesFitStart = Math.min(result.xes.file.tangentStart, result.xes.file.tangentEnd, result.xes.edge) - 0.1
+    const xesFitEnd = Math.max(result.xes.file.baselineStart, result.xes.file.baselineEnd, result.xes.edge) + 0.1
+    const xasFitStart = Math.min(result.xas.file.baselineStart, result.xas.file.baselineEnd, result.xas.edge) - 0.1
+    const xasFitEnd = Math.max(result.xas.file.tangentStart, result.xas.file.tangentEnd, result.xas.edge) + 0.1
+    const xesBaseline = xasBandLinePoints(result.xes, result.xes.baselineLine, xesFitStart, xesFitEnd)
+    const xesTangent = xasBandLinePoints(result.xes, result.xes.tangentLine, xesFitStart, xesFitEnd)
+    const xasBaseline = xasBandLinePoints(result.xas, result.xas.baselineLine, xasFitStart, xasFitEnd)
+    const xasTangent = xasBandLinePoints(result.xas, result.xas.tangentLine, xasFitStart, xasFitEnd)
+
+    ;(layout as Record<string, unknown>)[xAxisName] = {
+      range: [xMin, xMax],
+      anchor: yRef,
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      title: index === n - 1 ? { text: style.xAxisTitle, font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff } : undefined,
+      showticklabels: index === n - 1,
+      minor: { ticks: 'inside' },
+    } as Plotly.Layout['xaxis']
+    ;(layout as Record<string, unknown>)[yAxisName] = {
+      domain: [yDomainStart, yDomainEnd],
+      anchor: xRef,
+      range: [-0.04, yMax],
+      title: index === Math.floor(n / 2) ? { text: style.yAxisTitle, font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff } : undefined,
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      showticklabels: false,
+      minor: { ticks: 'inside' },
+    } as Plotly.Layout['yaxis']
+
+    shapes.push(
+      { type: 'rect', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xas.edge, y0: -0.02, y1: yMax, fillcolor: hexToRgba(style.gapColor, style.gapOpacity), line: { width: 0 }, layer: 'below' },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xes.edge, y0: -0.02, y1: yMax, line: { color: style.vbmColor, width: 1.2, dash: 'dash' } },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xas.edge, x1: result.xas.edge, y0: -0.02, y1: yMax, line: { color: style.cbmColor, width: 1.2, dash: 'dash' } },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xas.edge, y0: panelY, y1: panelY, line: { color: '#8a6d00', width: 1.2 } },
+    )
+
+    data.push(
+      {
+        x: result.xes.x,
+        y: result.xes.yNorm,
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'solid: O K-edge XES',
+        showlegend: index === 0 && style.showLegend,
+        line: { color, width: style.xesLineWidth, dash: 'solid' },
+        hovertemplate: `${result.pair.sampleLabel} XES<br>%{x:.3f} eV<br>%{y:.4f}<extra></extra>`,
+      },
+      {
+        x: result.xas.x,
+        y: result.xas.yNorm,
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'dashed: O K-edge XAS TFY',
+        showlegend: index === 0 && style.showLegend,
+        line: { color, width: style.xasLineWidth, dash: 'dash' },
+        hovertemplate: `${result.pair.sampleLabel} XAS<br>%{x:.3f} eV<br>%{y:.4f}<extra></extra>`,
+      },
+    )
+
+    if (style.showFitGuides) {
+      data.push(
+        { x: xesBaseline.x, y: xesBaseline.y, xaxis: xRef as never, yaxis: yRef as never, type: 'scatter', mode: 'lines', name: 'XES baseline', showlegend: false, line: { color: style.baselineColor, width: style.fitLineWidth, dash: 'dot' }, hoverinfo: 'skip' },
+        { x: xesTangent.x, y: xesTangent.y, xaxis: xRef as never, yaxis: yRef as never, type: 'scatter', mode: 'lines', name: 'XES tangent', showlegend: false, line: { color: color, width: style.fitLineWidth, dash: 'dot' }, hoverinfo: 'skip' },
+        { x: xasBaseline.x, y: xasBaseline.y, xaxis: xRef as never, yaxis: yRef as never, type: 'scatter', mode: 'lines', name: 'XAS baseline', showlegend: false, line: { color: style.baselineColor, width: style.fitLineWidth, dash: 'dot' }, hoverinfo: 'skip' },
+        { x: xasTangent.x, y: xasTangent.y, xaxis: xRef as never, yaxis: yRef as never, type: 'scatter', mode: 'lines', name: 'XAS tangent', showlegend: false, line: { color: style.tangentColor, width: style.fitLineWidth, dash: 'dot' }, hoverinfo: 'skip' },
+      )
+    }
+
+    annotations.push(
+      { x: result.xes.edge, y: yMax * 0.96, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>VBM<br>${result.xes.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'right', font: { size: style.annotationFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.xas.edge, y: yMax * 0.96, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>CBM<br>${result.xas.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'left', font: { size: style.annotationFontSize, family: style.fontFamily, color: style.cbmColor } },
+      { x: (result.xes.edge + result.xas.edge) / 2, y: panelY + yMax * 0.08, xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, font: { size: style.annotationFontSize, family: style.fontFamily, color: '#6b5600' } },
+      { x: 0.97, y: yDomainEnd - panelHeight * 0.22, xref: 'paper', yref: 'paper', text: `<b>${result.pair.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color } },
+    )
+    if (index === 0) {
+      annotations.push(
+        { x: 0.07, y: 0.97, xref: 'paper', yref: 'paper', text: `<b>${style.xesTitle}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
+        { x: 0.88, y: 0.97, xref: 'paper', yref: 'paper', text: `<b>${style.xasTitle}</b>`, showarrow: false, xanchor: 'left', font: { size: style.panelTitleFontSize, family: style.fontFamily, color: '#111827' } },
+      )
+    }
+  })
+
+  return { data, layout }
 }
 
 function vbmLinePoints(result: VbmFitResult, line: VbmLineFit, points = 500) {
@@ -2595,6 +3092,9 @@ export default function PlotFileTool({
   const [componentStyles, setComponentStyles] = useState<Record<string, ComponentStyle>>({})
   const [vbmFiles, setVbmFiles] = useState<VbmSpectrumFile[]>([])
   const [vbmStyle, setVbmStyle] = useState<VbmFigureStyle>(DEFAULT_VBM_STYLE)
+  const [xasBandFiles, setXasBandFiles] = useState<XasBandEdgeFile[]>([])
+  const [xasBandPairs, setXasBandPairs] = useState<XasBandPair[]>([])
+  const [xasBandStyle, setXasBandStyle] = useState<XasBandFigureStyle>(DEFAULT_XAS_BAND_STYLE)
   const [ramanFiles, setRamanFiles] = useState<RamanFitPlotFile[]>([])
   const [ramanStyle, setRamanStyle] = useState<RamanFigureStyle>(DEFAULT_RAMAN_STYLE)
   const [selectedRamanId, setSelectedRamanId] = useState<string>('')
@@ -2656,6 +3156,8 @@ export default function PlotFileTool({
   }, [vbmFiles])
   const vbmStackedFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmStackedFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
   const vbmSummaryFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmSummaryFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
+  const xasBandResults = useMemo(() => calculateXasBandPairs(xasBandFiles, xasBandPairs), [xasBandFiles, xasBandPairs])
+  const xasBandFigure = useMemo(() => xasBandResults.results.length > 0 ? buildXasBandOverlayFigure(xasBandResults.results, xasBandStyle) : null, [xasBandResults.results, xasBandStyle])
   const activeRamanFile = useMemo(
     () => ramanFiles.find(file => file.id === selectedRamanId) ?? ramanFiles[0] ?? null,
     [ramanFiles, selectedRamanId],
@@ -2747,6 +3249,27 @@ export default function PlotFileTool({
       }
     }
     setVbmFiles(current => [...current, ...imported])
+    if (errors.length > 0) setError(errors.join('; '))
+  }
+
+  const importXasBandFiles = async (fileList: FileList | null, kind: XasBandFileKind) => {
+    if (!fileList) return
+    setError(null)
+    const imported: XasBandEdgeFile[] = []
+    const errors: string[] = []
+    for (const [index, file] of Array.from(fileList).entries()) {
+      try {
+        const text = await file.text()
+        imported.push(parseXasBandSpectrumText(text, file.name, kind, XAS_BAND_COLORS[(xasBandFiles.length + index) % XAS_BAND_COLORS.length]))
+      } catch (importError: unknown) {
+        errors.push(String((importError as Error).message ?? importError))
+      }
+    }
+    setXasBandFiles(current => {
+      const next = [...current, ...imported]
+      setXasBandPairs(autoBuildXasBandPairs(next))
+      return next
+    })
     if (errors.length > 0) setError(errors.join('; '))
   }
 
@@ -2877,7 +3400,7 @@ export default function PlotFileTool({
     }))
   }
 
-  const exportPlot = async (kind: 'panels' | 'summary' | 'vbm-stacked' | 'vbm-summary' | `vbm-single:${string}`, format: 'png' | 'svg') => {
+  const exportPlot = async (kind: 'panels' | 'summary' | 'vbm-stacked' | 'vbm-summary' | 'xas-band' | `vbm-single:${string}`, format: 'png' | 'svg') => {
     const singleVbmId = kind.startsWith('vbm-single:') ? kind.slice('vbm-single:'.length) : ''
     const singleVbmResult = singleVbmId ? vbmResults.results.find(result => result.file.id === singleVbmId) : null
     const figure = kind === 'panels'
@@ -2888,19 +3411,25 @@ export default function PlotFileTool({
           ? vbmStackedFigure
           : kind === 'vbm-summary'
             ? vbmSummaryFigure
-            : singleVbmResult
-              ? buildVbmSingleFigure(singleVbmResult, vbmStyle)
-              : null
+            : kind === 'xas-band'
+              ? xasBandFigure
+              : singleVbmResult
+                ? buildVbmSingleFigure(singleVbmResult, vbmStyle)
+                : null
     if (!figure) return
     setExporting(true)
     setError(null)
     const container = document.createElement('div')
-    const width = kind.startsWith('vbm')
+    const width = kind === 'xas-band'
+      ? xasBandStyle.exportWidth
+      : kind.startsWith('vbm')
       ? vbmStyle.exportWidth
       : kind === 'panels'
         ? style.exportWidth
         : Math.max(style.exportWidth, 1200)
-    const height = kind.startsWith('vbm')
+    const height = kind === 'xas-band'
+      ? xasBandStyle.exportHeight
+      : kind.startsWith('vbm')
       ? (kind === 'vbm-summary' ? Math.max(420, Math.round(vbmStyle.exportHeight * 0.45)) : vbmStyle.exportHeight)
       : kind === 'panels'
         ? style.exportHeight
@@ -2914,8 +3443,10 @@ export default function PlotFileTool({
     try {
       const plotly = PlotlyApi as unknown as PlotlyExportApi
       await plotly.newPlot(container, figure.data, { ...figure.layout, autosize: false, width, height }, { staticPlot: true, displayModeBar: false, responsive: false })
-      const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? (kind.startsWith('vbm') ? vbmStyle.exportScale : style.exportScale) : 1 })
-      const exportName = kind.startsWith('vbm-single:')
+      const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? (kind === 'xas-band' ? xasBandStyle.exportScale : kind.startsWith('vbm') ? vbmStyle.exportScale : style.exportScale) : 1 })
+      const exportName = kind === 'xas-band'
+        ? `xas_xes_band_gap_overlay.${format}`
+        : kind.startsWith('vbm-single:')
         ? `xps_vbm_${safeFileStem(singleVbmResult?.file.sampleLabel ?? 'single')}.${format}`
         : `xps_${kind.replace('-', '_')}_figure.${format}`
       downloadDataUrl(dataUrl, exportName)
@@ -2997,6 +3528,41 @@ export default function PlotFileTool({
     downloadTextFile(lines.join('\n'), 'VBM_results_summary.txt')
   }
 
+  const exportXasBandSummaryCsv = () => {
+    const rows = xasBandResults.results.map(result => ({
+      Sample: result.pair.sampleLabel,
+      XES_file: result.xes.file.name,
+      XAS_file: result.xas.file.name,
+      VBM_eV: result.xes.edge.toFixed(6),
+      CBM_eV: result.xas.edge.toFixed(6),
+      Eg_eV: result.bandGap.toFixed(6),
+      XES_baseline_range_eV: `${result.xes.file.baselineStart}-${result.xes.file.baselineEnd}`,
+      XES_tangent_range_eV: `${result.xes.file.tangentStart}-${result.xes.file.tangentEnd}`,
+      XES_baseline_slope: result.xes.baselineLine.slope.toFixed(8),
+      XES_tangent_slope: result.xes.tangentLine.slope.toFixed(8),
+      XAS_baseline_range_eV: `${result.xas.file.baselineStart}-${result.xas.file.baselineEnd}`,
+      XAS_tangent_range_eV: `${result.xas.file.tangentStart}-${result.xas.file.tangentEnd}`,
+      XAS_baseline_slope: result.xas.baselineLine.slope.toFixed(8),
+      XAS_tangent_slope: result.xas.tangentLine.slope.toFixed(8),
+    }))
+    const headers = ['Sample', 'XES_file', 'XAS_file', 'VBM_eV', 'CBM_eV', 'Eg_eV', 'XES_baseline_range_eV', 'XES_tangent_range_eV', 'XES_baseline_slope', 'XES_tangent_slope', 'XAS_baseline_range_eV', 'XAS_tangent_range_eV', 'XAS_baseline_slope', 'XAS_tangent_slope']
+    downloadTextFile(rowsToCsv(headers, rows), 'xas_xes_band_gap_summary.csv', 'text/csv;charset=utf-8')
+  }
+
+  const exportXasBandSummaryTxt = () => {
+    const lines = [
+      'XAS/XES band gap linear extrapolation results',
+      'XES VBM: baseline intersection with the steepest falling tangent.',
+      'XAS CBM: baseline intersection with the steepest rising tangent.',
+      '',
+      ...xasBandResults.results.map(result => `${result.pair.sampleLabel}: VBM=${result.xes.edge.toFixed(3)} eV, CBM=${result.xas.edge.toFixed(3)} eV, Eg=${result.bandGap.toFixed(3)} eV`),
+    ]
+    downloadTextFile(lines.join('\n'), 'xas_xes_band_gap_summary.txt')
+  }
+
+  const xesBandFiles = xasBandFiles.filter(file => file.kind === 'xes')
+  const xasAbsorptionBandFiles = xasBandFiles.filter(file => file.kind === 'xas')
+
   return (
     <div className="flex min-h-screen flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
       <ModuleTopBar
@@ -3005,9 +3571,9 @@ export default function PlotFileTool({
         description="集中管理 Raman、XRD、XPS、XAS、XES 的投稿圖輸出；Raman 圖檔輸出已集中到此工作區。"
         chips={[
           { label: `目前 ${activeModule.toUpperCase()}` },
-          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : (xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
-          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : (xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
-          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : (xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : activeModule === 'xas' ? 'XES/XAS band gap' : (xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
+          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : activeModule === 'xas' ? xasBandFiles.length : (xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : activeModule === 'xas' ? `Eg ${xasBandResults.results.length}` : (xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
         ]}
       />
 
@@ -3435,6 +4001,229 @@ export default function PlotFileTool({
                 <NumInput label="PNG 倍率" value={ramanStyle.exportScale} onChange={value => setRamanStyle(prev => ({ ...prev, exportScale: clamp(value, 1, 8) }))} min={1} max={8} step={0.5} />
               </div>
               <p className="mt-2 text-[10px] leading-4 text-[var(--text-soft)]">PNG 以高倍率輸出供投稿排版；向量圖請使用 SVG。</p>
+            </div>
+          </aside>
+        </div>
+      ) : activeModule === 'xas' ? (
+        <div className="mb-4 grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
+          <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <p className="text-sm font-semibold text-[var(--text-main)]">XES / XAS 光譜檔</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">支援兩欄式 TXT / CSV / DAT / TSV；XES 用下降邊外推 VBM，XAS 用上升邊外推 CBM。</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                <label className="block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-4 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
+                  上傳 XES
+                  <input type="file" multiple accept=".txt,.csv,.dat,.tsv" className="hidden" onChange={event => { void importXasBandFiles(event.target.files, 'xes'); event.target.value = '' }} />
+                </label>
+                <label className="block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-4 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
+                  上傳 XAS
+                  <input type="file" multiple accept=".txt,.csv,.dat,.tsv" className="hidden" onChange={event => { void importXasBandFiles(event.target.files, 'xas'); event.target.value = '' }} />
+                </label>
+              </div>
+              {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
+              {xasBandResults.errors.length > 0 && (
+                <div className="mt-3 space-y-1">
+                  {xasBandResults.errors.map(item => <p key={item} className="text-xs text-amber-400">{item}</p>)}
+                </div>
+              )}
+            </div>
+
+            {(['xes', 'xas'] as XasBandFileKind[]).map(kind => {
+              const list = kind === 'xes' ? xesBandFiles : xasAbsorptionBandFiles
+              return (
+                <div key={kind} className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-[var(--text-main)]">{kind.toUpperCase()} 檔案</p>
+                    <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">{list.length}</span>
+                  </div>
+                  <div className="space-y-3">
+                    {list.map(file => {
+                      const edgeResult = xasBandResults.results.flatMap(result => [result.xes, result.xas]).find(result => result.file.id === file.id)
+                      const update = (patch: Partial<XasBandEdgeFile>) => setXasBandFiles(current => current.map(item => item.id === file.id ? { ...item, ...patch } : item))
+                      return (
+                        <div key={file.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                          <input
+                            value={file.sampleLabel}
+                            onChange={event => update({ sampleLabel: event.target.value })}
+                            className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs font-semibold text-[var(--input-text)] focus:outline-none"
+                          />
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <ColorInput label="線色" value={file.color} onChange={value => update({ color: value })} />
+                            <button type="button" onClick={() => setXasBandFiles(current => current.filter(item => item.id !== file.id))} className="mt-4 rounded-lg border border-rose-400/50 px-3 py-1.5 text-xs font-semibold text-rose-400">移除</button>
+                          </div>
+                          <p className="mt-2 text-[10px] leading-4 text-[var(--text-soft)]">{file.name}<br />X: {file.xColumn} / Y: {file.yColumn} / {file.x.length} pts</p>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <NumInput label="Baseline 起" value={file.baselineStart} onChange={value => update({ baselineStart: value })} step={0.05} />
+                            <NumInput label="Baseline 迄" value={file.baselineEnd} onChange={value => update({ baselineEnd: value })} step={0.05} />
+                            <NumInput label="Tangent 起" value={file.tangentStart} onChange={value => update({ tangentStart: value })} step={0.05} />
+                            <NumInput label="Tangent 迄" value={file.tangentEnd} onChange={value => update({ tangentEnd: value })} step={0.05} />
+                          </div>
+                          {edgeResult && <p className="mt-2 text-xs font-semibold text-[var(--accent-secondary)]">{edgeResult.edgeLabel} = {edgeResult.edge.toFixed(3)} eV</p>}
+                        </div>
+                      )
+                    })}
+                    {list.length === 0 && <p className="text-xs leading-5 text-[var(--text-soft)]">尚未上傳 {kind.toUpperCase()} 檔案。</p>}
+                  </div>
+                </div>
+              )
+            })}
+          </aside>
+
+          <section className="space-y-4">
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-[var(--text-main)]">XES / XAS band gap 疊圖</p>
+                  <p className="mt-1 text-xs text-[var(--text-soft)]">圖形以 XES 實線、XAS 虛線呈現；淡黃色區塊為 VBM 到 CBM 的 Eg。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={!xasBandFigure || exporting} onClick={() => { void exportPlot('xas-band', 'png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">PNG</button>
+                  <button type="button" disabled={!xasBandFigure || exporting} onClick={() => { void exportPlot('xas-band', 'svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">SVG</button>
+                  <button type="button" disabled={xasBandResults.results.length === 0} onClick={exportXasBandSummaryCsv} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">CSV</button>
+                  <button type="button" disabled={xasBandResults.results.length === 0} onClick={exportXasBandSummaryTxt} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">TXT</button>
+                </div>
+              </div>
+              {xasBandFigure ? (
+                <Plot data={xasBandFigure.data} layout={xasBandFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: Math.max(460, 245 * xasBandResults.results.length) }} />
+              ) : (
+                <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">上傳並配對 XES / XAS 光譜後，Band gap 疊圖會顯示在這裡。</div>
+              )}
+            </div>
+
+            {xasBandResults.results.length > 0 && (
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">Band gap 結果</p>
+                <div className="grid gap-3 md:grid-cols-3">
+                  {xasBandResults.results.map(result => (
+                    <div key={result.pair.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                      <p className="text-xs font-semibold text-[var(--text-main)]">{result.pair.sampleLabel}</p>
+                      <p className="mt-2 text-lg font-semibold text-[var(--accent-secondary)]">{result.bandGap.toFixed(3)} eV</p>
+                      <p className="mt-1 text-[10px] leading-4 text-[var(--text-soft)]">VBM {result.xes.edge.toFixed(3)} eV / CBM {result.xas.edge.toFixed(3)} eV</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-[var(--text-main)]">樣品配對</p>
+                <button type="button" onClick={() => setXasBandPairs(autoBuildXasBandPairs(xasBandFiles))} className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">自動配對</button>
+              </div>
+              <div className="space-y-3">
+                {xasBandPairs.map(pair => {
+                  const update = (patch: Partial<XasBandPair>) => setXasBandPairs(current => current.map(item => item.id === pair.id ? { ...item, ...patch } : item))
+                  const result = xasBandResults.results.find(item => item.pair.id === pair.id)
+                  return (
+                    <div key={pair.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                      <input value={pair.sampleLabel} onChange={event => update({ sampleLabel: event.target.value })} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs font-semibold text-[var(--input-text)] focus:outline-none" />
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">XES</span>
+                          <select value={pair.xesFileId} onChange={event => update({ xesFileId: event.target.value })} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                            {xesBandFiles.map(file => <option key={file.id} value={file.id}>{file.sampleLabel}</option>)}
+                          </select>
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">XAS</span>
+                          <select value={pair.xasFileId} onChange={event => update({ xasFileId: event.target.value })} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                            {xasAbsorptionBandFiles.map(file => <option key={file.id} value={file.id}>{file.sampleLabel}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <ColorInput label="樣品色" value={pair.color} onChange={value => update({ color: value })} />
+                        <button type="button" onClick={() => setXasBandPairs(current => current.filter(item => item.id !== pair.id))} className="mt-4 rounded-lg border border-rose-400/50 px-3 py-1.5 text-xs font-semibold text-rose-400">移除配對</button>
+                      </div>
+                      {result && <p className="mt-2 text-xs font-semibold text-[var(--accent-secondary)]">Eg = {result.bandGap.toFixed(3)} eV</p>}
+                    </div>
+                  )
+                })}
+                {xasBandPairs.length === 0 && <p className="text-xs leading-5 text-[var(--text-soft)]">上傳 XES 與 XAS 後會自動建立同名配對，也可用自動配對重新整理。</p>}
+                <button
+                  type="button"
+                  disabled={xesBandFiles.length === 0 || xasAbsorptionBandFiles.length === 0}
+                  onClick={() => setXasBandPairs(current => [...current, {
+                    id: `xas-band-pair-${Date.now()}`,
+                    sampleLabel: `Pair ${current.length + 1}`,
+                    xesFileId: xesBandFiles[0]?.id ?? '',
+                    xasFileId: xasAbsorptionBandFiles[0]?.id ?? '',
+                    color: XAS_BAND_COLORS[current.length % XAS_BAND_COLORS.length],
+                  }])}
+                  className="rounded-full border border-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-[var(--accent-secondary)] disabled:opacity-40"
+                >
+                  新增配對
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">XAS 圖面設定</p>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <label className="block">
+                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">字體</span>
+                  <select value={xasBandStyle.fontFamily} onChange={event => setXasBandStyle(prev => ({ ...prev, fontFamily: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                    <option value="Times New Roman, Times, serif">Times / Serif</option>
+                    <option value="Arial, Helvetica, sans-serif">Arial / Sans</option>
+                    <option value="Georgia, serif">Georgia</option>
+                  </select>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="X 左端" value={xasBandStyle.xLeft} onChange={value => setXasBandStyle(prev => ({ ...prev, xLeft: value }))} step={0.1} />
+                  <NumInput label="X 右端" value={xasBandStyle.xRight} onChange={value => setXasBandStyle(prev => ({ ...prev, xRight: value }))} step={0.1} />
+                </div>
+                <NumInput label="Y 軸上限" value={xasBandStyle.yMax} onChange={value => setXasBandStyle(prev => ({ ...prev, yMax: Math.max(0.3, value) }))} min={0.3} max={3} step={0.02} />
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="刻度字體" value={xasBandStyle.fontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, fontSize: clamp(value, 8, 34) }))} min={8} max={34} step={1} />
+                  <NumInput label="軸標題字體" value={xasBandStyle.axisTitleFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, axisTitleFontSize: clamp(value, 10, 42) }))} min={10} max={42} step={1} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="Panel 標題" value={xasBandStyle.panelTitleFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, panelTitleFontSize: clamp(value, 12, 48) }))} min={12} max={48} step={1} />
+                  <NumInput label="標註字體" value={xasBandStyle.annotationFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, annotationFontSize: clamp(value, 8, 34) }))} min={8} max={34} step={1} />
+                </div>
+                <NumInput label="框線粗細" value={xasBandStyle.axisLineWidth} onChange={value => setXasBandStyle(prev => ({ ...prev, axisLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                <div className="grid grid-cols-2 gap-2">
+                  <ColorInput label="VBM" value={xasBandStyle.vbmColor} onChange={value => setXasBandStyle(prev => ({ ...prev, vbmColor: value }))} />
+                  <ColorInput label="CBM" value={xasBandStyle.cbmColor} onChange={value => setXasBandStyle(prev => ({ ...prev, cbmColor: value }))} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <ColorInput label="Eg 區塊" value={xasBandStyle.gapColor} onChange={value => setXasBandStyle(prev => ({ ...prev, gapColor: value }))} />
+                  <ColorInput label="Baseline" value={xasBandStyle.baselineColor} onChange={value => setXasBandStyle(prev => ({ ...prev, baselineColor: value }))} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="XES 線寬" value={xasBandStyle.xesLineWidth} onChange={value => setXasBandStyle(prev => ({ ...prev, xesLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                  <NumInput label="XAS 線寬" value={xasBandStyle.xasLineWidth} onChange={value => setXasBandStyle(prev => ({ ...prev, xasLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="擬合線寬" value={xasBandStyle.fitLineWidth} onChange={value => setXasBandStyle(prev => ({ ...prev, fitLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                  <NumInput label="Eg 透明度" value={xasBandStyle.gapOpacity} onChange={value => setXasBandStyle(prev => ({ ...prev, gapOpacity: clamp(value, 0, 0.6) }))} min={0} max={0.6} step={0.02} />
+                </div>
+                {[
+                  ['showFitGuides', '顯示外推輔助線'],
+                  ['showLegend', '顯示圖例'],
+                ].map(([key, label]) => (
+                  <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                    <span>{label}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(xasBandStyle[key as keyof XasBandFigureStyle])}
+                      onChange={event => setXasBandStyle(prev => ({ ...prev, [key]: event.target.checked }))}
+                      className="accent-[var(--accent-secondary)]"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出尺寸</p>
+              <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                <NumInput label="圖寬(px)" value={xasBandStyle.exportWidth} onChange={value => setXasBandStyle(prev => ({ ...prev, exportWidth: Math.max(700, value) }))} min={700} max={4000} step={20} />
+                <NumInput label="圖高(px)" value={xasBandStyle.exportHeight} onChange={value => setXasBandStyle(prev => ({ ...prev, exportHeight: Math.max(420, value) }))} min={420} max={4000} step={20} />
+                <NumInput label="PNG 倍率" value={xasBandStyle.exportScale} onChange={value => setXasBandStyle(prev => ({ ...prev, exportScale: clamp(value, 1, 8) }))} min={1} max={8} step={0.5} />
+              </div>
             </div>
           </aside>
         </div>
