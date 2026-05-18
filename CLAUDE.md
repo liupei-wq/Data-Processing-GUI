@@ -792,3 +792,15 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-19] 實作：XAS/XES band gap 圖面設定新增 Panel 標題文字與位置、樣品標籤字體/位置，以及 VBM/CBM/Eg 標註位置控制；Plotly annotation 已改用這些設定。
 
 [2026-05-19] 檢查完成：Panel 標題/標籤/標註位置控制完成後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 node/npm/pnpm/yarn，未執行 npm run build。
+
+[2026-05-19] 檢查：使用者要求新增 VBM / CBM / Eg 標註文字大小獨立控制；準備修改 PlotFileTool XasBandFigureStyle 與右側設定 UI。
+
+[2026-05-19] 實作：XAS/XES band gap 圖新增 VBM、CBM、Eg 標註文字大小獨立控制；右側設定新增 VBM 字體、CBM 字體、Eg 字體，Plotly annotations 改用各自字體大小。
+
+[2026-05-19] 檢查完成：VBM/CBM/Eg 標註字體大小控制完成後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 node/npm/pnpm/yarn，未執行 npm run build。
+
+[2026-05-19] 檢查：使用者要求新增 XES 檔與 XAS 檔各自 X 軸顯示範圍；準備在 PlotFileTool 的 XasBandEdgeFile 加入 per-file display range，並讓圖上曲線依各自範圍裁切。
+
+[2026-05-19] 實作：XAS/XES band gap 的每個 XES/XAS 檔案新增獨立顯示 X 起/迄控制；圖上 XES 與 XAS 曲線會各自依 display range 裁切，CSV/TXT summary 也輸出 display range。
+
+[2026-05-19] 檢查完成：XES/XAS 各自 X 軸顯示範圍控制完成後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 node/npm/pnpm/yarn，未執行 npm run build。
