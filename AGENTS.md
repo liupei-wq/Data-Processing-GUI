@@ -202,3 +202,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-19：繪製圖檔 XAS/XES band gap 圖新增 VBM、CBM、Eg 標註文字大小獨立控制；右側 XAS 圖面設定可分別調整 VBM 字體、CBM 字體與 Eg 字體。
 
 - 2026-05-19：繪製圖檔 XAS/XES band gap 圖新增 XES 檔與 XAS 檔各自的 X 軸顯示範圍控制；每個檔案卡可調整顯示 X 起/迄並一鍵還原完整範圍，圖上曲線依各自範圍裁切，CSV/TXT summary 會輸出 display range。
+
+- 2026-05-19：修正繪製圖檔 XAS/XES band gap 疊圖的強度處理；已歸一化到峰值 1 的上傳資料不再被 2%/98% 百分位數重新縮放，XAS 與 XES 最終圖會保留原始 normalized peak。驗證衝突標記掃描與 git diff --check 通過；目前工具環境找不到 node/npm/pnpm/yarn，未能執行 npm run build。

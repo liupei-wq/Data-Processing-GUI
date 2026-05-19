@@ -1943,11 +1943,13 @@ function fitXasBandPlotLine(x: number[], y: number[], start: number, end: number
 
 function normalizeBandIntensity(y: number[]) {
   const finite = y.filter(Number.isFinite)
-  const low = percentile(finite, 0.02)
-  const high = percentile(finite, 0.98)
-  const span = high - low
-  if (!Number.isFinite(span) || Math.abs(span) < 1e-15) return y.map(() => 0)
-  return y.map(value => (value - low) / span)
+  if (finite.length === 0) return y.map(() => 0)
+  const maxValue = Math.max(...finite)
+  if (!Number.isFinite(maxValue) || Math.abs(maxValue) < 1e-15) return y.map(() => 0)
+  if (maxValue > 0 && maxValue <= 1.25) {
+    return y.map(value => (Number.isFinite(value) ? value : 0))
+  }
+  return y.map(value => (Number.isFinite(value) ? value / maxValue : 0))
 }
 
 function calculateXasBandEdge(file: XasBandEdgeFile): XasBandEdgeResult {

@@ -804,3 +804,11 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-19] 實作：XAS/XES band gap 的每個 XES/XAS 檔案新增獨立顯示 X 起/迄控制；圖上 XES 與 XAS 曲線會各自依 display range 裁切，CSV/TXT summary 也輸出 display range。
 
 [2026-05-19] 檢查完成：XES/XAS 各自 X 軸顯示範圍控制完成後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 node/npm/pnpm/yarn，未執行 npm run build。
+
+[2026-05-19] 檢查：使用者回報 XAS/XES band gap 圖中已歸一化資料峰值未維持 1；準備檢查並修正 PlotFileTool 的 band intensity normalization。
+
+[2026-05-19] 實作：修正繪製圖檔 XAS/XES band gap 圖強制百分位數重歸一化，改為保留已歸一化資料峰值。
+
+[2026-05-19] 檢查：修正 XAS/XES band intensity normalization 後，執行衝突標記、diff whitespace 與前端建置可用性檢查。
+
+[2026-05-19] 檢查結果：XAS/XES band gap 強度修正後，衝突標記掃描無結果、git diff --check 通過；目前工具環境找不到 node/npm/pnpm/yarn，未能執行 npm run build。
