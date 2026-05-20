@@ -208,3 +208,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-21：XPS 峰擬合區新增「限制擬合範圍」功能；前端新增擬合範圍開關、DualRange slider、起迄 BE 數值輸入與全範圍重設，執行擬合 / 自動收斂時會傳送 fitRange 給既有 /api/xps/fit，單筆 dataset session 與處理報告 JSON 會保存範圍設定。驗證 git diff --check 通過、conflict marker 掃描無結果；目前環境找不到 npm/node/pnpm/yarn，未執行 npm run build。
 
 - 2026-05-21：確認 XPS 擬合範圍功能已在 origin/main v26.9；為避免折疊狀態不易發現，將 XPS 第 6 步峰擬合 section hint 加上「擬合範圍」。
+
+- 2026-05-21：同步完成，XPS 擬合範圍可見性補強已推送到 origin/main；遠端原 v26.9 已含功能本體，本次補強第 6 步峰擬合折疊 hint 顯示「擬合範圍」。

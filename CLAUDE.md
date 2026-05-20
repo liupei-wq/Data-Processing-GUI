@@ -832,3 +832,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-21] 實作：為提高 XPS 擬合範圍功能可見性，將第 6 步峰擬合 section hint 改為包含「擬合範圍」，讓折疊狀態也能看出此功能位置。
 
 [2026-05-21] 檢查：XPS 擬合範圍可見性補強後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 npm/node/pnpm/yarn，未執行 npm run build。
+
+[2026-05-21] 同步完成：已將 XPS 擬合範圍可見性補強推送到 origin/main；提交從 3d0a8e1 更新到 8da1810。遠端 v26.9 原本已包含功能本體，本次補強讓第 6 步峰擬合折疊 hint 顯示「擬合範圍」。
