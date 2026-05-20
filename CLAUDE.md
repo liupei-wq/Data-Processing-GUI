@@ -836,3 +836,9 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-21] 檢查：XPS 擬合範圍可見性補強後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 npm/node/pnpm/yarn，未執行 npm run build。
 
 [2026-05-21] 同步完成：已將 XPS 擬合範圍可見性補強推送到 origin/main；提交從 3d0a8e1 更新到 8da1810。遠端 v26.9 原本已包含功能本體，本次補強讓第 6 步峰擬合折疊 hint 顯示「擬合範圍」。
+
+[2026-05-21] 檢查：使用者要求重新新增 XPS 有效數據範圍功能，改為背景扣除後新增獨立處理程序，使 XPS 整體流程為 7 項；開始檢查 XPS 前端 stage 流程與現有擬合範圍實作。
+
+[2026-05-21] 實作：準備將 XPS 舊的峰擬合 fitRange UI 改為背景扣除後的獨立有效數據範圍處理程序；新增 valid_range_enabled/valid_x_start/valid_x_end 參數，後端在背景扣除後裁切 x/y/y_raw/y_background，前端新增第 5 步與對應圖卡。
+
+[2026-05-21] 檢查：XPS 有效數據範圍改動後，git diff --check 通過、conflict marker 掃描無結果；後端 uv run python -m py_compile web/backend/routers/xps.py 通過。python 指令本身在目前 shell 回報 logon session 問題，改用 uv 驗證；目前環境仍找不到 npm/node/pnpm/yarn，未執行 npm run build。

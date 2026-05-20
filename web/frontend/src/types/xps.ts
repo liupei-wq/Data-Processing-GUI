@@ -31,6 +31,9 @@ export interface ProcessParams {
   bg_baseline_iter: number
   bg_tougaard_B: number
   bg_tougaard_C: number
+  valid_range_enabled: boolean
+  valid_x_start: number | null
+  valid_x_end: number | null
   smooth_method: 'none' | 'moving_average' | 'savitzky_golay'
   smooth_window: number
   smooth_poly: number

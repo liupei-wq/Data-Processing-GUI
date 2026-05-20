@@ -103,6 +103,9 @@ const DEFAULT_PARAMS: ProcessParams = {
   bg_baseline_iter: 20,
   bg_tougaard_B: 2866,
   bg_tougaard_C: 1643,
+  valid_range_enabled: false,
+  valid_x_start: null,
+  valid_x_end: null,
   smooth_method: 'none',
   smooth_window: 5,
   smooth_poly: 3,
@@ -1249,9 +1252,6 @@ interface DatasetSessionState {
   manualEnergyShiftEnabled: boolean
   selectedElement: string
   fitProfile: string
-  fitRangeEnabled: boolean
-  fitRangeStart: number | null
-  fitRangeEnd: number | null
   peakCandidates: PeakCandidate[]
   fitResult: FitResult | null
   rsfRows: { peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]
@@ -1261,6 +1261,7 @@ interface DatasetPipelineBundle {
   final: ProcessResult | null
   preprocess: ProcessResult | null
   background: ProcessResult | null
+  validRange: ProcessResult | null
   normalization: ProcessResult | null
   signature: string
   error: string | null
@@ -1283,9 +1284,6 @@ function createDefaultSession(): DatasetSessionState {
     manualEnergyShiftEnabled: false,
     selectedElement: '',
     fitProfile: 'voigt',
-    fitRangeEnabled: false,
-    fitRangeStart: null,
-    fitRangeEnd: null,
     peakCandidates: [],
     fitResult: null,
     rsfRows: [],
@@ -1297,6 +1295,7 @@ function createEmptyBundle(signature = ''): DatasetPipelineBundle {
     final: null,
     preprocess: null,
     background: null,
+    validRange: null,
     normalization: null,
     signature,
     error: null,
@@ -1479,6 +1478,7 @@ export default function XPS({
   const [result, setResult] = useState<ProcessResult | null>(null)
   const [preprocessResult, setPreprocessResult] = useState<ProcessResult | null>(null)
   const [backgroundResult, setBackgroundResult] = useState<ProcessResult | null>(null)
+  const [validRangeResult, setValidRangeResult] = useState<ProcessResult | null>(null)
   const [normalizationResult, setNormalizationResult] = useState<ProcessResult | null>(null)
   const [datasetSessions, setDatasetSessions] = useState<Record<string, DatasetSessionState>>({})
   const [datasetBundles, setDatasetBundles] = useState<Record<string, DatasetPipelineBundle>>({})
@@ -1512,9 +1512,11 @@ export default function XPS({
   const [rawHidden, setRawHidden] = useState<string[]>([])
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
   const [overlayBgHidden, setOverlayBgHidden] = useState<string[]>([])
+  const [overlayValidRangeHidden, setOverlayValidRangeHidden] = useState<string[]>([])
   const [overlayNormHidden, setOverlayNormHidden] = useState<string[]>([])
   const [preprocessHidden, setPreprocessHidden] = useState<string[]>([])
   const [bgHidden, setBgHidden] = useState<string[]>([])
+  const [validRangeHidden, setValidRangeHidden] = useState<string[]>([])
   const [normHidden, setNormHidden] = useState<string[]>([])
   const [finalHidden, setFinalHidden] = useState<string[]>([])
   const [fitHidden, setFitHidden] = useState<string[]>([])
@@ -1537,9 +1539,6 @@ export default function XPS({
   // fitting
   const [fitProfile, setFitProfile] = useState<string>('voigt')
   const [fitNRestarts, setFitNRestarts] = useState<number>(1)
-  const [fitRangeEnabled, setFitRangeEnabled] = useState(false)
-  const [fitRangeStart, setFitRangeStart] = useState<number | null>(null)
-  const [fitRangeEnd, setFitRangeEnd] = useState<number | null>(null)
   const [peakCandidates, setPeakCandidates] = useState<PeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [overlayFitResult, setOverlayFitResult] = useState<FitResult | null>(null)
@@ -1606,6 +1605,7 @@ export default function XPS({
   const activeDataset = getStageDataset(result, activeDatasetIdx, false)
   const preprocessDataset = getStageDataset(preprocessResult, activeDatasetIdx, false)
   const backgroundDataset = getStageDataset(backgroundResult, activeDatasetIdx, false)
+  const validRangeDataset = getStageDataset(validRangeResult, activeDatasetIdx, false)
   const normalizationDataset = getStageDataset(normalizationResult, activeDatasetIdx, false)
   const activeSessionForProcessing = activeDatasetKey
     ? {
@@ -1615,9 +1615,6 @@ export default function XPS({
         manualEnergyShiftEnabled,
         selectedElement,
         fitProfile,
-        fitRangeEnabled,
-        fitRangeStart,
-        fitRangeEnd,
         peakCandidates,
         fitResult,
         rsfRows,
@@ -1648,19 +1645,17 @@ export default function XPS({
       ? `${overlayState.params.average ? 'overlay_average' : 'overlay'}__${overlayFiles.map(file => file.name).join('__')}`
       : (overlayState.params.average ? 'overlay_average' : 'overlay'))
     : (activeFile?.name ?? '')
+  const axisRangeDataset = processingViewMode === 'overlay'
+    ? (getStageDataset(overlayBundle?.preprocess ?? null, 0, overlayState.params.average) ?? overlayPrimaryDataset)
+    : (preprocessDataset ?? activeDataset)
   const beMin = processingViewMode === 'overlay'
-    ? (overlayPrimaryDataset ? Math.min(...overlayPrimaryDataset.x) : 0)
-    : (activeDataset ? Math.min(...activeDataset.x) : 0)
+    ? (axisRangeDataset ? Math.min(...axisRangeDataset.x) : 0)
+    : (axisRangeDataset ? Math.min(...axisRangeDataset.x) : 0)
   const beMax = processingViewMode === 'overlay'
-    ? (overlayPrimaryDataset ? Math.max(...overlayPrimaryDataset.x) : 1000)
-    : (activeDataset ? Math.max(...activeDataset.x) : 1000)
+    ? (axisRangeDataset ? Math.max(...axisRangeDataset.x) : 1000)
+    : (axisRangeDataset ? Math.max(...axisRangeDataset.x) : 1000)
   const fitDataMin = fitTargetDataset ? Math.min(...fitTargetDataset.x) : beMin
   const fitDataMax = fitTargetDataset ? Math.max(...fitTargetDataset.x) : beMax
-  const fitRangeLow = Math.min(fitRangeStart ?? fitDataMin, fitRangeEnd ?? fitDataMax)
-  const fitRangeHigh = Math.max(fitRangeStart ?? fitDataMin, fitRangeEnd ?? fitDataMax)
-  const activeFitRange: [number, number] | undefined = fitRangeEnabled
-    ? [Math.max(fitDataMin, fitRangeLow), Math.min(fitDataMax, fitRangeHigh)]
-    : undefined
   const vbmGlobalExtrema = effectiveVbmDataset
     ? findSpectrumExtrema(effectiveVbmDataset.x, effectiveVbmDataset.y_processed)
     : null
@@ -1689,12 +1684,6 @@ export default function XPS({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveVbmDataset, xpsMode])
 
-  useEffect(() => {
-    if (!fitTargetDataset) return
-    setFitRangeStart(current => Number.isFinite(current ?? NaN) ? clamp(current as number, fitDataMin, fitDataMax) : fitDataMin)
-    setFitRangeEnd(current => Number.isFinite(current ?? NaN) ? clamp(current as number, fitDataMin, fitDataMax) : fitDataMax)
-  }, [fitTargetDataset, fitDataMin, fitDataMax])
-
   const estimatedInterpPoints = estimateInterpolationPoints(processingViewMode === 'overlay' && overlayFiles.length > 0 ? overlayFiles : rawFiles)
   const effectiveNPoints = currentAutoInterpPoints ? estimatedInterpPoints : currentParams.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
@@ -1702,6 +1691,7 @@ export default function XPS({
   const interpolationEnabled = currentParams.interpolate || (processingViewMode === 'overlay' && currentParams.average)
   const hasPreprocessStage = interpolationEnabled || Math.abs(currentParams.energy_shift) > 1e-8
   const hasBackgroundStage = currentParams.bg_enabled
+  const hasValidRangeStage = currentParams.valid_range_enabled
   const hasNormalizationStage = currentParams.norm_method !== 'none'
   const rawPreview = processingViewMode === 'overlay'
     ? (overlayFiles[0] ?? null)
@@ -1775,6 +1765,7 @@ export default function XPS({
       setResult(null)
       setPreprocessResult(null)
       setBackgroundResult(null)
+      setValidRangeResult(null)
       setNormalizationResult(null)
       setOverlayBundle(null)
       setOverlayState(createDefaultOverlayState())
@@ -1798,9 +1789,6 @@ export default function XPS({
     setManualEnergyShiftEnabled(session.manualEnergyShiftEnabled)
     setSelectedElement(session.selectedElement)
     setFitProfile(session.fitProfile)
-    setFitRangeEnabled(session.fitRangeEnabled)
-    setFitRangeStart(session.fitRangeStart)
-    setFitRangeEnd(session.fitRangeEnd)
     setPeakCandidates(session.peakCandidates.map(pk => sanitizePeakCandidate(pk, fitTargetPeakScale)))
     setFitResult(session.fitResult)
     setRsfRows(session.rsfRows)
@@ -1819,28 +1807,25 @@ export default function XPS({
         manualEnergyShiftEnabled,
         selectedElement,
         fitProfile,
-        fitRangeEnabled,
-        fitRangeStart,
-        fitRangeEnd,
         peakCandidates,
         fitResult,
         rsfRows,
       },
     }))
-  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, manualEnergyShiftEnabled, selectedElement, fitProfile, fitRangeEnabled, fitRangeStart, fitRangeEnd, peakCandidates, fitResult, rsfRows])
+  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, manualEnergyShiftEnabled, selectedElement, fitProfile, peakCandidates, fitResult, rsfRows])
 
   useEffect(() => {
     if (processingViewMode !== 'single' || !activeDatasetKey) return
     if (restoringSessionRef.current) return
     setFitResult(current => (current ? null : current))
     setRsfRows(current => (current.length > 0 ? [] : current))
-  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, fitRangeEnabled, fitRangeStart, fitRangeEnd])
+  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints])
 
   useEffect(() => {
     if (processingViewMode !== 'overlay') return
     setOverlayFitResult(current => (current ? null : current))
     setOverlayRsfRows(current => (current.length > 0 ? [] : current))
-  }, [processingViewMode, overlaySelection, overlayState.params, overlayState.autoInterpPoints, fitRangeEnabled, fitRangeStart, fitRangeEnd])
+  }, [processingViewMode, overlaySelection, overlayState.params, overlayState.autoInterpPoints])
 
   // process active single dataset
   useEffect(() => {
@@ -1849,6 +1834,7 @@ export default function XPS({
       setResult(null)
       setPreprocessResult(null)
       setBackgroundResult(null)
+      setValidRangeResult(null)
       setNormalizationResult(null)
       return
     }
@@ -1891,6 +1877,7 @@ export default function XPS({
         const sessionInterpolationEnabled = session.params.interpolate || session.params.average
         const sessionHasPreprocessStage = sessionInterpolationEnabled || Math.abs(session.params.energy_shift) > 1e-8
         const sessionHasBackgroundStage = session.params.bg_enabled
+        const sessionHasValidRangeStage = session.params.valid_range_enabled
         const sessionHasNormalizationStage = session.params.norm_method !== 'none'
         const effectiveParams = { ...session.params, n_points: sessionNPoints }
         const preprocessParams: ProcessParams = {
@@ -1913,18 +1900,25 @@ export default function XPS({
           bg_tougaard_B: session.params.bg_tougaard_B,
           bg_tougaard_C: session.params.bg_tougaard_C,
         }
-        const normalizationParams: ProcessParams = {
+        const validRangeParams: ProcessParams = {
           ...backgroundParams,
+          valid_range_enabled: sessionHasValidRangeStage,
+          valid_x_start: session.params.valid_x_start,
+          valid_x_end: session.params.valid_x_end,
+        }
+        const normalizationParams: ProcessParams = {
+          ...validRangeParams,
           norm_method: session.params.norm_method,
           norm_x_start: session.params.norm_x_start,
           norm_x_end: session.params.norm_x_end,
         }
 
         try {
-          const [finalResult, preprocessStage, backgroundStage, normalizationStage] = await Promise.all([
+          const [finalResult, preprocessStage, backgroundStage, validRangeStage, normalizationStage] = await Promise.all([
             processData(datasets, effectiveParams),
-            sessionHasPreprocessStage || sessionHasBackgroundStage || sessionHasNormalizationStage ? processData(datasets, preprocessParams) : Promise.resolve(null),
+            sessionHasPreprocessStage || sessionHasBackgroundStage || sessionHasValidRangeStage || sessionHasNormalizationStage ? processData(datasets, preprocessParams) : Promise.resolve(null),
             sessionHasBackgroundStage ? processData(datasets, backgroundParams) : Promise.resolve(null),
+            sessionHasValidRangeStage ? processData(datasets, validRangeParams) : Promise.resolve(null),
             sessionHasNormalizationStage ? processData(datasets, normalizationParams) : Promise.resolve(null),
           ])
 
@@ -1934,6 +1928,7 @@ export default function XPS({
               final: finalResult,
               preprocess: preprocessStage,
               background: backgroundStage,
+              validRange: validRangeStage,
               normalization: normalizationStage,
               signature,
               error: null,
@@ -2002,6 +1997,7 @@ export default function XPS({
     const overlayInterpolationEnabled = overlayParams.interpolate || overlayParams.average
     const overlayHasPreprocessStage = overlayInterpolationEnabled || Math.abs(overlayParams.energy_shift) > 1e-8
     const overlayHasBackgroundStage = overlayParams.bg_enabled
+    const overlayHasValidRangeStage = overlayParams.valid_range_enabled
     const overlayHasNormalizationStage = overlayParams.norm_method !== 'none'
     const overlayPreprocessParams: ProcessParams = {
       ...DEFAULT_PARAMS,
@@ -2023,8 +2019,14 @@ export default function XPS({
       bg_tougaard_B: overlayParams.bg_tougaard_B,
       bg_tougaard_C: overlayParams.bg_tougaard_C,
     }
-    const overlayNormalizationParams: ProcessParams = {
+    const overlayValidRangeParams: ProcessParams = {
       ...overlayBackgroundParams,
+      valid_range_enabled: overlayHasValidRangeStage,
+      valid_x_start: overlayParams.valid_x_start,
+      valid_x_end: overlayParams.valid_x_end,
+    }
+    const overlayNormalizationParams: ProcessParams = {
+      ...overlayValidRangeParams,
       norm_method: overlayParams.norm_method,
       norm_x_start: overlayParams.norm_x_start,
       norm_x_end: overlayParams.norm_x_end,
@@ -2032,16 +2034,18 @@ export default function XPS({
 
     Promise.all([
       processData(datasets, overlayParams),
-      overlayHasPreprocessStage || overlayHasBackgroundStage || overlayHasNormalizationStage ? processData(datasets, overlayPreprocessParams) : Promise.resolve(null),
+      overlayHasPreprocessStage || overlayHasBackgroundStage || overlayHasValidRangeStage || overlayHasNormalizationStage ? processData(datasets, overlayPreprocessParams) : Promise.resolve(null),
       overlayHasBackgroundStage ? processData(datasets, overlayBackgroundParams) : Promise.resolve(null),
+      overlayHasValidRangeStage ? processData(datasets, overlayValidRangeParams) : Promise.resolve(null),
       overlayHasNormalizationStage ? processData(datasets, overlayNormalizationParams) : Promise.resolve(null),
     ])
-      .then(([finalResult, preprocessStage, backgroundStage, normalizationStage]) => {
+      .then(([finalResult, preprocessStage, backgroundStage, validRangeStage, normalizationStage]) => {
         if (cancelled) return
         setOverlayBundle({
           final: finalResult,
           preprocess: preprocessStage,
           background: backgroundStage,
+          validRange: validRangeStage,
           normalization: normalizationStage,
           signature,
           error: null,
@@ -2068,6 +2072,7 @@ export default function XPS({
       setResult(null)
       setPreprocessResult(null)
       setBackgroundResult(null)
+      setValidRangeResult(null)
       setNormalizationResult(null)
       setError(null)
       return
@@ -2076,6 +2081,7 @@ export default function XPS({
     setResult(bundle?.final ?? null)
     setPreprocessResult(bundle?.preprocess ?? null)
     setBackgroundResult(bundle?.background ?? null)
+    setValidRangeResult(bundle?.validRange ?? null)
     setNormalizationResult(bundle?.normalization ?? null)
     setError(bundle?.error ?? null)
   }, [processingViewMode, activeDatasetKey, datasetBundles])
@@ -2431,7 +2437,7 @@ export default function XPS({
   }
 
   const addManualPeak = () => {
-    const center = fitTargetDataset ? ((activeFitRange?.[0] ?? fitDataMin) + (activeFitRange?.[1] ?? fitDataMax)) / 2 : 500
+    const center = fitTargetDataset ? (fitDataMin + fitDataMax) / 2 : 500
     setPeakCandidates(prev => [...prev, createPeakCandidate({
       label: `峰 ${prev.length + 1}`,
       center,
@@ -2451,10 +2457,6 @@ export default function XPS({
     if (!fitTargetDataset) return null
     const activePeaks = peakCandidates.filter(p => p.enabled)
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return null }
-    if (activeFitRange && activeFitRange[1] - activeFitRange[0] <= 0.01) {
-      setFitError('擬合範圍太窄，請拉開起點與終點。')
-      return null
-    }
     setIsFitting(true); setFitError(null)
     try {
       const initPeaks = buildFitPeakPayloads(activePeaks, fitTargetDataset)
@@ -2465,7 +2467,7 @@ export default function XPS({
         initPeaks,
         fitProfile,
         peakLabels,
-        { maxfev: 8000, nRestarts: fitNRestarts, fitRange: activeFitRange },
+        { maxfev: 8000, nRestarts: fitNRestarts },
       )
       const r2 = res.r_squared ?? 0
       const rmse = res.rmse ?? 0
@@ -2502,10 +2504,6 @@ export default function XPS({
       return
     }
     if (!fitTargetDataset) return
-    if (activeFitRange && activeFitRange[1] - activeFitRange[0] <= 0.01) {
-      setFitError('擬合範圍太窄，請拉開起點與終點。')
-      return
-    }
     setAutoConverging(true); setIsFitting(true); setFitError(null); setFitHistory([])
     let currentCandidates = peakCandidates
     let prevR2 = 0
@@ -2522,7 +2520,7 @@ export default function XPS({
           initPeaks,
           fitProfile,
           peakLabels,
-          { maxfev: 8000, nRestarts: 1, fitRange: activeFitRange },
+          { maxfev: 8000, nRestarts: 1 },
         )
         const r2 = res.r_squared ?? 0
         const rmse = res.rmse ?? 0
@@ -2572,6 +2570,9 @@ export default function XPS({
   const backgroundStageDatasets = backgroundDataset
     ? [{ name: backgroundDataset.name, x: backgroundDataset.x, y: backgroundDataset.y_processed }]
     : []
+  const validRangeStageDatasets = validRangeDataset
+    ? [{ name: validRangeDataset.name, x: validRangeDataset.x, y: validRangeDataset.y_processed }]
+    : []
   const normalizationStageDatasets = normalizationDataset
     ? [{ name: normalizationDataset.name, x: normalizationDataset.x, y: normalizationDataset.y_processed }]
     : []
@@ -2616,6 +2617,7 @@ export default function XPS({
   }
   const overlayFinalDatasets = getOverlayStageDatasets(overlayBundle?.final ?? null, overlayState.params.average)
   const overlayBackgroundDatasets = getOverlayStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
+  const overlayValidRangeDatasets = getOverlayStageDatasets(overlayBundle?.validRange ?? null, overlayState.params.average)
   const overlayNormalizationDatasets = getOverlayStageDatasets(overlayBundle?.normalization ?? null, overlayState.params.average)
   const overlayPreprocessDatasets = getOverlayStageDatasets(overlayBundle?.preprocess ?? null, overlayState.params.average)
   const overlayBackgroundProcessedDatasets = getOverlayProcessedStageDatasets(overlayBundle?.background ?? null, overlayState.params.average)
@@ -2661,7 +2663,16 @@ export default function XPS({
         },
       ]
     : []
-  const normalizationInput = hasBackgroundStage ? backgroundDataset : preprocessDataset
+  const validRangeInput = hasBackgroundStage ? backgroundDataset : preprocessDataset
+  const validRangeChartTraces = validRangeDataset && validRangeInput
+    ? buildPipelineOverlayTraces(
+        { x: validRangeInput.x, y: validRangeInput.y_processed, name: '有效範圍前' },
+        { x: validRangeDataset.x, y: validRangeDataset.y_processed, name: '有效範圍後' },
+        '有效範圍後',
+        chartLineColors.normalization,
+      )
+    : []
+  const normalizationInput = hasValidRangeStage ? validRangeDataset : (hasBackgroundStage ? backgroundDataset : preprocessDataset)
   const usesAreaNormalization = currentParams.norm_method === 'area'
   const normalizationChartTraces = normalizationDataset && normalizationInput
     ? buildPipelineOverlayTraces(
@@ -2676,6 +2687,8 @@ export default function XPS({
   const bgDataXMax = backgroundChartOutput ? Math.max(...backgroundChartOutput.x) : beMax
   const normDataXMin = normalizationInput ? Math.min(...normalizationInput.x) : beMin
   const normDataXMax = normalizationInput ? Math.max(...normalizationInput.x) : beMax
+  const validRangeDataXMin = validRangeInput ? Math.min(...validRangeInput.x) : beMin
+  const validRangeDataXMax = validRangeInput ? Math.max(...validRangeInput.x) : beMax
   const backgroundLayout = {
     ...(chartLayout() as Plotly.Layout),
     shapes: buildRegionShapes(currentParams.bg_x_start ?? bgDataXMin, currentParams.bg_x_end ?? bgDataXMax, '#f59e0b'),
@@ -2688,6 +2701,11 @@ export default function XPS({
     shapes: buildRegionShapes(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '#14b8a6'),
     annotations: buildRegionAnnotations(currentParams.norm_x_start ?? normDataXMin, currentParams.norm_x_end ?? normDataXMax, '歸一化區間', '#14b8a6'),
   }
+  const validRangeLayout = {
+    ...(chartLayout() as Plotly.Layout),
+    shapes: buildRegionShapes(currentParams.valid_x_start ?? validRangeDataXMin, currentParams.valid_x_end ?? validRangeDataXMax, '#38bdf8'),
+    annotations: buildRegionAnnotations(currentParams.valid_x_start ?? validRangeDataXMin, currentParams.valid_x_end ?? validRangeDataXMax, '有效數據範圍', '#38bdf8'),
+  }
   const overlayBgLayout = {
     ...(chartLayout() as Plotly.Layout),
     shapes: buildRegionShapes(overlayState.params.bg_x_start ?? beMin, overlayState.params.bg_x_end ?? beMax, '#f59e0b'),
@@ -2697,6 +2715,11 @@ export default function XPS({
     ...(chartLayout() as Plotly.Layout),
     shapes: buildRegionShapes(overlayState.params.norm_x_start ?? beMin, overlayState.params.norm_x_end ?? beMax, '#14b8a6'),
     annotations: buildRegionAnnotations(overlayState.params.norm_x_start ?? beMin, overlayState.params.norm_x_end ?? beMax, '歸一化區間', '#14b8a6'),
+  }
+  const overlayValidRangeLayout = {
+    ...(chartLayout() as Plotly.Layout),
+    shapes: buildRegionShapes(overlayState.params.valid_x_start ?? beMin, overlayState.params.valid_x_end ?? beMax, '#38bdf8'),
+    annotations: buildRegionAnnotations(overlayState.params.valid_x_start ?? beMin, overlayState.params.valid_x_end ?? beMax, '有效數據範圍', '#38bdf8'),
   }
   const renderRangeControlCard = (
     label: string,
@@ -3147,7 +3170,36 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={5} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
+                <Section step={5} title="有效數據範圍" hint="背景後裁切有效 BE 區間" defaultOpen={false} infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">有效數據範圍</p>
+                    <p>此步驟會在背景扣除後裁切資料，只保留指定 BE 區間。後續歸一化、峰擬合、RSF 與匯出都會使用裁切後的有效資料。</p>
+                  </div>
+                }>
+                  <TogglePill label="啟用有效數據範圍" checked={currentParams.valid_range_enabled} onChange={set('valid_range_enabled')} />
+                  {currentParams.valid_range_enabled && (
+                    <>
+                      <DualRangeInput
+                        label="有效數據範圍"
+                        min={beMin}
+                        max={beMax}
+                        start={currentParams.valid_x_start ?? beMin}
+                        end={currentParams.valid_x_end ?? beMax}
+                        step={0.1}
+                        onChange={({ start, end }) => {
+                          set('valid_x_start')(start)
+                          set('valid_x_end')(end)
+                        }}
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumInput label="起始 BE (eV)" value={currentParams.valid_x_start ?? beMin} onChange={v => set('valid_x_start')(clamp(v, beMin, beMax))} step={0.1} />
+                        <NumInput label="結束 BE (eV)" value={currentParams.valid_x_end ?? beMax} onChange={v => set('valid_x_end')(clamp(v, beMin, beMax))} step={0.1} />
+                      </div>
+                    </>
+                  )}
+                </Section>
+
+                <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">歸一化方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">不歸一化 (None)</span> — 保留原始強度。適合已完成儀器強度校正的資料，或需比較絕對強度的情況。</div>
@@ -3177,7 +3229,7 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={6} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="擬合範圍 / 元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
+                <Section step={7} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
                   {overlayNonAverageMode && (
                     <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-3 text-[10px] leading-5 text-amber-300">
                       不平均疊圖模式下會同時存在多條處理後光譜，峰擬合與 RSF 需要單一輸入光譜，因此這裡先鎖定。請啟用「平均所有疊圖數據」，或切回單筆資料後再擬合。
@@ -3187,61 +3239,6 @@ export default function XPS({
                   <CustomSelect label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
-                  <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
-                    <TogglePill label="限制擬合範圍" checked={fitRangeEnabled} onChange={setFitRangeEnabled} />
-                    {fitRangeEnabled && (
-                      <>
-                        <DualRangeInput
-                          label="擬合範圍"
-                          min={fitDataMin}
-                          max={fitDataMax}
-                          start={fitRangeStart ?? fitDataMin}
-                          end={fitRangeEnd ?? fitDataMax}
-                          step={0.1}
-                          disabled={!fitTargetDataset}
-                          onChange={({ start, end }) => {
-                            setFitRangeStart(start)
-                            setFitRangeEnd(end)
-                          }}
-                        />
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumInput
-                            label="起始 BE (eV)"
-                            value={fitRangeStart ?? fitDataMin}
-                            min={fitDataMin}
-                            max={fitDataMax}
-                            onChange={v => setFitRangeStart(clamp(v, fitDataMin, fitDataMax))}
-                            step={0.1}
-                            disabled={!fitTargetDataset}
-                          />
-                          <NumInput
-                            label="結束 BE (eV)"
-                            value={fitRangeEnd ?? fitDataMax}
-                            min={fitDataMin}
-                            max={fitDataMax}
-                            onChange={v => setFitRangeEnd(clamp(v, fitDataMin, fitDataMax))}
-                            step={0.1}
-                            disabled={!fitTargetDataset}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-[10px] leading-5 text-[var(--text-soft)]">
-                            只用此 BE 區間內的資料做峰擬合；峰 seed 與約束仍可照常設定。
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setFitRangeStart(fitDataMin)
-                              setFitRangeEnd(fitDataMax)
-                            }}
-                            className="shrink-0 text-xs text-sky-400 hover:text-sky-300"
-                          >
-                            全範圍
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
                   <div className="space-y-2">
                     <div className="flex items-end gap-2">
                       <div className="flex-1">
@@ -3488,7 +3485,7 @@ export default function XPS({
                 </Section>
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={7} title="VBM 線性外推" hint="切線 x 基準線交點" defaultOpen={false}>
+                  <Section step={8} title="VBM 線性外推" hint="切線 x 基準線交點" defaultOpen={false}>
                     <p className="text-[10px] text-[var(--text-soft)]">先把你輸入的兩個 x 值映射到光譜點，再以各點附近 20% 搜尋窗挑選切線與基準線用點；切線取最大正斜率，基準線取最平斜率，兩條線交點就是 VBM。</p>
 
                     {/* data source toggle */}
@@ -3660,7 +3657,7 @@ export default function XPS({
                 )}
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={8} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
+                  <Section step={9} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
                     <CustomSelect label="方法" value={bandOffsetMethod}
                       onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
                       options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
@@ -3891,6 +3888,59 @@ export default function XPS({
               </div>
             )}
 
+            {/* ── overlay: effective range stage ── */}
+            {overlayFinalDatasets.length >= overlayMinCount && overlayValidRangeDatasets.length >= overlayMinCount && overlayState.params.valid_range_enabled && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <ChartToolbar
+                  title="多筆疊圖：有效數據範圍後"
+                  colorValue={chartLineColors.overlayNorm}
+                  onColorChange={value => {
+                    setChartLineColors(current => ({ ...current, overlayNorm: value }))
+                    applyOverlayPalette(value)
+                  }}
+                />
+                <div className="mb-3">
+                  <SeriesColorControls
+                    items={overlaySeriesItems}
+                    colorKeys={overlaySeriesColorKeys}
+                    onColorChange={handleSeriesColorChange}
+                  />
+                </div>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">
+                  {overlayState.params.average ? '多檔平均光譜裁切有效 BE 區間後的結果。' : '各筆資料裁切有效 BE 區間後的結果疊圖。'}藍色區塊是目前保留的有效資料範圍。
+                </p>
+                <Plot
+                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayValidRangeDatasets, getDatasetColorKey) as Plotly.Data[], overlayValidRangeHidden)}
+                  layout={overlayValidRangeLayout as Plotly.Layout}
+                  config={withPlotFullscreen()}
+                  style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setOverlayValidRangeHidden) as never}
+                  onLegendDoubleClick={() => false}
+                />
+                {renderRangeControlCard(
+                  '有效數據範圍',
+                  '共用這組 BE 區間裁切所有疊圖資料',
+                  beMin,
+                  beMax,
+                  overlayState.params.valid_x_start ?? beMin,
+                  overlayState.params.valid_x_end ?? beMax,
+                  ({ start, end }) => {
+                    setOverlayState(current => ({
+                      ...current,
+                      params: {
+                        ...current.params,
+                        valid_x_start: start,
+                        valid_x_end: end,
+                      },
+                    }))
+                  },
+                )}
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayValidRangeDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_valid_range.csv', 'text/csv')} />
+                </div>
+              </div>
+            )}
+
             {/* ── overlay: normalization stage ── */}
             {overlayFinalDatasets.length >= overlayMinCount && overlayNormalizationDatasets.length >= overlayMinCount && hasNormalizationStage && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
@@ -4045,6 +4095,43 @@ export default function XPS({
                   <ExportBtn
                     label="下載此步驟 CSV"
                     onClick={() => downloadFile(buildStageCsv(backgroundStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_background_stage.csv', 'text/csv')}
+                  />
+                </div>
+              </div>
+            )}
+
+            {processingViewMode === 'single' && validRangeChartTraces.length > 0 && hasValidRangeStage && (
+              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <ChartToolbar
+                  title="有效數據範圍"
+                  colorValue={chartLineColors.normalization}
+                  onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
+                />
+                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。藍色區塊是保留並送往後續步驟的有效資料範圍。</p>
+                <Plot
+                  data={applyHidden(validRangeChartTraces as Plotly.Data[], validRangeHidden)}
+                  layout={validRangeLayout as Plotly.Layout}
+                  config={withPlotFullscreen()}
+                  style={{ width: '100%', height: 340 }}
+                  onLegendClick={makeLegendClick(setValidRangeHidden) as never}
+                  onLegendDoubleClick={() => false}
+                />
+                {renderRangeControlCard(
+                  '有效數據範圍',
+                  '直接在圖下微調要保留的 BE 區間',
+                  validRangeDataXMin,
+                  validRangeDataXMax,
+                  currentParams.valid_x_start ?? validRangeDataXMin,
+                  currentParams.valid_x_end ?? validRangeDataXMax,
+                  ({ start, end }) => {
+                    set('valid_x_start')(start)
+                    set('valid_x_end')(end)
+                  },
+                )}
+                <div className="mt-3 flex justify-start">
+                  <ExportBtn
+                    label="下載此步驟 CSV"
+                    onClick={() => downloadFile(buildStageCsv(validRangeStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_valid_range_stage.csv', 'text/csv')}
                   />
                 </div>
               </div>
@@ -4527,7 +4614,6 @@ export default function XPS({
                           effective_n_points: effectiveNPoints,
                           peaks: peakCandidates,
                           fit_profile: fitProfile,
-                          fit_range: fitRangeEnabled && activeFitRange ? activeFitRange : null,
                           fit_result: currentFitResult ? { peaks: currentFitResult.peaks } : null,
                           vbm: vbmResult?.success ? {
                             vbm_ev: vbmResult.vbm_ev,

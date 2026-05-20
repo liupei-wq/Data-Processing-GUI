@@ -52,6 +52,9 @@ class ProcessParams(BaseModel):
     bg_baseline_iter: int = 20
     bg_tougaard_B: float = 2866.0
     bg_tougaard_C: float = 1643.0
+    valid_range_enabled: bool = False
+    valid_x_start: Optional[float] = None
+    valid_x_end: Optional[float] = None
     smooth_method: str = "none"      # none | moving_average | savitzky_golay
     smooth_window: int = 5
     smooth_poly: int = 3
@@ -278,6 +281,20 @@ def process_xps(req: ProcessRequest):
                 )
                 y = y_sub
                 y_bg = bg_curve
+
+            # effective data range after background subtraction
+            if p.valid_range_enabled:
+                range_start = p.valid_x_start if p.valid_x_start is not None else float(x.min())
+                range_end = p.valid_x_end if p.valid_x_end is not None else float(x.max())
+                range_lo, range_hi = min(float(range_start), float(range_end)), max(float(range_start), float(range_end))
+                valid_mask = (x >= range_lo) & (x <= range_hi)
+                if int(np.sum(valid_mask)) < 3:
+                    raise ValueError("有效數據範圍內點數不足，請拉開起點與終點。")
+                x = x[valid_mask]
+                y = y[valid_mask]
+                y_raw = y_raw[valid_mask]
+                if y_bg is not None:
+                    y_bg = y_bg[valid_mask]
 
             # smoothing
             if p.smooth_method != "none":
