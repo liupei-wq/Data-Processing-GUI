@@ -3751,7 +3751,7 @@ export default function XPS({
           </div>
         )}
 
-        {rawFiles.length === 0 && !isBusy && (
+        {rawFiles.length === 0 && !isBusy && !(vbmDataSource === 'imported' && importedVbmDataset) && (
           <EmptyWorkspaceState
             module="xps"
             title={moduleContent.uploadTitle}
@@ -3760,7 +3760,7 @@ export default function XPS({
           />
         )}
 
-        {rawFiles.length > 0 && (
+        {(rawFiles.length > 0 || (vbmDataSource === 'imported' && !!importedVbmDataset)) && (
           <>
             {rawChartTraces.length > 0 && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
