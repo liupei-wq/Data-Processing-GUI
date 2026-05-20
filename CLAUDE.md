@@ -844,3 +844,5 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-21] 檢查：XPS 有效數據範圍改動後，git diff --check 通過、conflict marker 掃描無結果；後端 uv run python -m py_compile web/backend/routers/xps.py 通過。python 指令本身在目前 shell 回報 logon session 問題，改用 uv 驗證；目前環境仍找不到 npm/node/pnpm/yarn，未執行 npm run build。
 
 [2026-05-21] 同步完成：XPS 有效數據範圍第 5 步改動已提交並推送到 origin/main，提交 6702836。Core Level 流程為 7 項，VBM/能帶偏移在 Valence Band 模式下接續為第 8/9 步。
+
+[2026-05-21] 檢查：使用者要求同步到 Git；fetch origin 後確認 main 與 origin/main 差異為 0/0，最新提交為 f55aa91（Record XPS effective range sync）。準備補同步檢查紀錄並推送。

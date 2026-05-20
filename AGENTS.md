@@ -214,3 +214,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-21：XPS 移除峰擬合內部的限制擬合範圍 UI，改為背景扣除後新增第 5 步「有效數據範圍」處理程序；Core Level 流程現在為 7 項：載入檔案、內插/資料模式、能量校正、背景扣除、有效數據範圍、歸一化、峰擬合。後端 /api/xps/process 新增 valid_range_enabled/valid_x_start/valid_x_end，在背景扣除後裁切 x/y/y_raw/y_background，後續歸一化、峰擬合、匯出都使用裁切後資料。驗證 git diff --check、conflict marker 掃描、uv run python -m py_compile web/backend/routers/xps.py 通過；目前環境找不到 npm/node/pnpm/yarn，未執行 npm run build。
 
 - 2026-05-21：同步完成，XPS 有效數據範圍第 5 步改動已推送到 origin/main（6702836）；Core Level 流程為 7 項，VBM/能帶偏移在 Valence Band 模式下接續為第 8/9 步。
+
+- 2026-05-21：同步檢查：main 與 origin/main 差異為 0/0，最新提交為 f55aa91（Record XPS effective range sync）；補記本次同步確認紀錄。
