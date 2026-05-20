@@ -777,6 +777,33 @@ function DualRangeInput({
   )
 }
 
+function parseTwoColumnText(text: string, fileName: string): { x: number[]; y: number[]; name: string } | null {
+  const lines = text.split(/\r?\n/)
+  const dataLines: string[] = []
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || /^[#%!@]/.test(trimmed)) continue
+    dataLines.push(trimmed)
+  }
+  if (dataLines.length < 2) return null
+  const firstLine = dataLines[0]
+  const sep = firstLine.includes('\t') ? '\t' : ','
+  const parts0 = firstLine.split(sep)
+  let startIdx = 0
+  if (parts0.length >= 2 && isNaN(parseFloat(parts0[0].trim()))) startIdx = 1
+  const pairs: [number, number][] = []
+  for (let i = startIdx; i < dataLines.length; i++) {
+    const parts = dataLines[i].split(sep)
+    if (parts.length < 2) continue
+    const x = parseFloat(parts[0].trim())
+    const y = parseFloat(parts[1].trim())
+    if (Number.isFinite(x) && Number.isFinite(y)) pairs.push([x, y])
+  }
+  if (pairs.length < 3) return null
+  pairs.sort((a, b) => a[0] - b[0])
+  return { x: pairs.map(p => p[0]), y: pairs.map(p => p[1]), name: fileName.replace(/\.[^/.]+$/, '') }
+}
+
 function csvEscape(v: string | number | null | undefined): string {
   if (v == null) return ''
   const s = String(v)
@@ -1532,6 +1559,9 @@ export default function XPS({
   const [vbmResult, setVbmResult] = useState<VbmResult | null>(null)
   const [vbmLoading, setVbmLoading] = useState(false)
   const [vbmError, setVbmError] = useState<string | null>(null)
+  const [vbmDataSource, setVbmDataSource] = useState<'pipeline' | 'imported'>('pipeline')
+  const [importedVbmDataset, setImportedVbmDataset] = useState<{ x: number[]; y: number[]; name: string } | null>(null)
+  const [importedVbmError, setImportedVbmError] = useState<string | null>(null)
 
   // Band Offset
   const [bandOffsetMethod, setBandOffsetMethod] = useState<'vbm_diff' | 'kraut'>('vbm_diff')
@@ -1607,6 +1637,12 @@ export default function XPS({
   const vbmDataset = processingViewMode === 'overlay'
     ? overlayPrimaryDataset
     : activeDataset
+  const effectiveVbmDataset: { x: number[]; y_processed: number[] } | null =
+    vbmDataSource === 'imported' && importedVbmDataset
+      ? { x: importedVbmDataset.x, y_processed: importedVbmDataset.y }
+      : vbmDataset
+  const effectiveVbmBeMin = effectiveVbmDataset ? Math.min(...effectiveVbmDataset.x) : 0
+  const effectiveVbmBeMax = effectiveVbmDataset ? Math.max(...effectiveVbmDataset.x) : 1000
   const currentReportFileName = processingViewMode === 'overlay'
     ? (overlayFiles.length > 0
       ? `${overlayState.params.average ? 'overlay_average' : 'overlay'}__${overlayFiles.map(file => file.name).join('__')}`
@@ -1625,34 +1661,33 @@ export default function XPS({
   const activeFitRange: [number, number] | undefined = fitRangeEnabled
     ? [Math.max(fitDataMin, fitRangeLow), Math.min(fitDataMax, fitRangeHigh)]
     : undefined
-  const vbmGlobalExtrema = vbmDataset
-    ? findSpectrumExtrema(vbmDataset.x, vbmDataset.y_processed)
+  const vbmGlobalExtrema = effectiveVbmDataset
+    ? findSpectrumExtrema(effectiveVbmDataset.x, effectiveVbmDataset.y_processed)
     : null
-  const vbmEdgeExtrema = vbmDataset
-    ? findSpectrumExtrema(vbmDataset.x, vbmDataset.y_processed, { start: vbmEdgeLo, end: vbmEdgeHi })
+  const vbmEdgeExtrema = effectiveVbmDataset
+    ? findSpectrumExtrema(effectiveVbmDataset.x, effectiveVbmDataset.y_processed, { start: vbmEdgeLo, end: vbmEdgeHi })
     : null
 
   const vbmPreviewTangent = useMemo(() => {
-    if (!vbmDataset || xpsMode !== 'valence_band') return null
-    return fitVbmLine(vbmDataset.x, vbmDataset.y_processed, vbmEdgeLo, vbmEdgeHi, 'tangent')
-  }, [vbmDataset, vbmEdgeLo, vbmEdgeHi, xpsMode])
+    if (!effectiveVbmDataset || xpsMode !== 'valence_band') return null
+    return fitVbmLine(effectiveVbmDataset.x, effectiveVbmDataset.y_processed, vbmEdgeLo, vbmEdgeHi, 'tangent')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveVbmDataset, vbmEdgeLo, vbmEdgeHi, xpsMode])
 
   const vbmPreviewBaselineLine = useMemo(() => {
-    if (!vbmDataset || xpsMode !== 'valence_band') return null
-    return fitVbmLine(vbmDataset.x, vbmDataset.y_processed, vbmBaselineLo, vbmBaselineHi, 'baseline')
-  }, [vbmDataset, vbmBaselineLo, vbmBaselineHi, xpsMode])
+    if (!effectiveVbmDataset || xpsMode !== 'valence_band') return null
+    return fitVbmLine(effectiveVbmDataset.x, effectiveVbmDataset.y_processed, vbmBaselineLo, vbmBaselineHi, 'baseline')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveVbmDataset, vbmBaselineLo, vbmBaselineHi, xpsMode])
 
   const vbmPreviewVbm = useMemo(() => {
     return intersectVbmLines(vbmPreviewTangent, vbmPreviewBaselineLine)
   }, [vbmPreviewTangent, vbmPreviewBaselineLine])
   const vbmPlotWindow = useMemo(() => {
-    if (!vbmDataset || xpsMode !== 'valence_band') return null
-    // Keep axes tied to the spectrum so dragging VBM handles only rotates the guide lines.
-    return buildVbmStablePlotWindow(vbmDataset.x, vbmDataset.y_processed)
-  }, [
-    vbmDataset,
-    xpsMode,
-  ])
+    if (!effectiveVbmDataset || xpsMode !== 'valence_band') return null
+    return buildVbmStablePlotWindow(effectiveVbmDataset.x, effectiveVbmDataset.y_processed)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveVbmDataset, xpsMode])
 
   useEffect(() => {
     if (!fitTargetDataset) return
@@ -2328,10 +2363,10 @@ export default function XPS({
   }
 
   const computeVbmFn = async () => {
-    if (!vbmDataset) return
+    if (!effectiveVbmDataset) return
     setVbmLoading(true); setVbmError(null)
     try {
-      const res = await computeVbm(vbmDataset.x, vbmDataset.y_processed, vbmEdgeLo, vbmEdgeHi, vbmBaselineLo, vbmBaselineHi)
+      const res = await computeVbm(effectiveVbmDataset.x, effectiveVbmDataset.y_processed, vbmEdgeLo, vbmEdgeHi, vbmBaselineLo, vbmBaselineHi)
       setVbmResult(res)
       if (!res.success) setVbmError(res.message || '計算失敗')
     } catch (e: unknown) { setVbmError((e as Error).message) }
@@ -3455,7 +3490,58 @@ export default function XPS({
                 {xpsMode === 'valence_band' && (
                   <Section step={7} title="VBM 線性外推" hint="切線 x 基準線交點" defaultOpen={false}>
                     <p className="text-[10px] text-[var(--text-soft)]">先把你輸入的兩個 x 值映射到光譜點，再以各點附近 20% 搜尋窗挑選切線與基準線用點；切線取最大正斜率，基準線取最平斜率，兩條線交點就是 VBM。</p>
-                    {vbmDataset ? (
+
+                    {/* data source toggle */}
+                    <div className="flex rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-1 gap-1">
+                      {(['pipeline', 'imported'] as const).map(src => (
+                        <button key={src} type="button"
+                          onClick={() => setVbmDataSource(src)}
+                          className={['flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors',
+                            vbmDataSource === src
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                              : 'text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                        >
+                          {src === 'pipeline' ? '處理流程結果' : '匯入已處理光譜'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* import file picker */}
+                    {vbmDataSource === 'imported' && (
+                      <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
+                        <p className="text-[var(--text-soft)]">支援 CSV / TXT，第一欄為 x（eV），第二欄為 intensity；自動跳過 # 開頭注釋行。</p>
+                        <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-[var(--card-border)] px-3 py-2 text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] transition-colors">
+                          <span>＋ 選擇檔案</span>
+                          <input type="file" accept=".csv,.txt,.dat" className="hidden"
+                            onChange={async e => {
+                              const file = e.target.files?.[0]
+                              if (!file) return
+                              setImportedVbmError(null)
+                              try {
+                                const text = await file.text()
+                                const parsed = parseTwoColumnText(text, file.name)
+                                if (!parsed) { setImportedVbmError('無法解析：需要至少 3 個有效數據點（兩欄數值）'); return }
+                                setImportedVbmDataset(parsed)
+                              } catch { setImportedVbmError('讀取檔案失敗') }
+                            }}
+                          />
+                        </label>
+                        {importedVbmError && <p className="text-rose-400">{importedVbmError}</p>}
+                        {importedVbmDataset && (
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="font-medium text-[var(--text-main)]">{importedVbmDataset.name}</p>
+                              <p className="text-[var(--text-soft)]">{importedVbmDataset.x.length} 點 · {Math.min(...importedVbmDataset.x).toFixed(2)}–{Math.max(...importedVbmDataset.x).toFixed(2)} eV</p>
+                            </div>
+                            <button type="button" onClick={() => setImportedVbmDataset(null)}
+                              className="shrink-0 rounded-lg border border-rose-500/30 px-2 py-1 text-rose-400 hover:bg-rose-500/10 text-[10px]">移除</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {effectiveVbmDataset ? (
                       <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
                         {processingViewMode === 'overlay' && (
                           <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-[11px] text-[var(--text-soft)]">
@@ -3486,7 +3572,7 @@ export default function XPS({
                       </div>
                     ) : (
                       <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs text-[var(--text-soft)]">
-                        請先載入可用的 Valence Band 光譜，系統才會提示 leading edge 的高低點並畫出切線/基準線。
+                        {vbmDataSource === 'imported' ? '請先匯入光譜檔案。' : '請先載入可用的 Valence Band 光譜，系統才會提示 leading edge 的高低點並畫出切線/基準線。'}
                       </div>
                     )}
                     <div className="grid grid-cols-2 gap-2">
@@ -3524,7 +3610,7 @@ export default function XPS({
                         </div>
                       ))}
                     </div>
-                    <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !vbmDataset}
+                    <button type="button" onClick={computeVbmFn} disabled={vbmLoading || !effectiveVbmDataset}
                       className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
                     >
                       {vbmLoading ? '計算中…' : '計算 VBM（後端確認）'}
@@ -4103,15 +4189,15 @@ export default function XPS({
               )
             })()}
 
-            {xpsMode === 'valence_band' && vbmDataset && (
+            {xpsMode === 'valence_band' && effectiveVbmDataset && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                 <p className="mb-1 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推圖</p>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">空心 marker 是你輸入 x 值對應到的光譜點，實心 marker 是在附近 20% 搜尋窗中實際被拿來畫線的點。</p>
                 <Plot
                   data={(() => {
-                    const lineXArr = vbmPlotWindow?.lineX ?? [beMin, beMax]
+                    const lineXArr = vbmPlotWindow?.lineX ?? [effectiveVbmBeMin, effectiveVbmBeMax]
                     return [
-                      { x: vbmDataset.x, y: vbmDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
+                      { x: effectiveVbmDataset.x, y: effectiveVbmDataset.y_processed, type: 'scatter', mode: 'lines', name: '光譜', line: { color: '#38bdf8', width: 1.8 } },
                       ...(vbmPreviewTangent ? [
                         { x: [vbmPreviewTangent.anchor_start_point.x], y: [vbmPreviewTangent.anchor_start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線輸入起點', marker: { color: '#f97316', size: 11, symbol: 'circle-open' as const, line: { color: '#f97316', width: 2 } } },
                         { x: [vbmPreviewTangent.anchor_end_point.x], y: [vbmPreviewTangent.anchor_end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線輸入終點', marker: { color: '#fb923c', size: 11, symbol: 'circle-open' as const, line: { color: '#fb923c', width: 2 } } },
@@ -4173,8 +4259,8 @@ export default function XPS({
                   {renderRangeControlCard(
                     '切線區間',
                     '看著 leading edge 直接微調切線範圍',
-                    beMin,
-                    beMax,
+                    effectiveVbmBeMin,
+                    effectiveVbmBeMax,
                     vbmEdgeLo,
                     vbmEdgeHi,
                     ({ start, end }) => {
@@ -4185,8 +4271,8 @@ export default function XPS({
                   {renderRangeControlCard(
                     '基準線區間',
                     '在圖下調整 baseline 採樣範圍',
-                    beMin,
-                    beMax,
+                    effectiveVbmBeMin,
+                    effectiveVbmBeMax,
                     vbmBaselineLo,
                     vbmBaselineHi,
                     ({ start, end }) => {
