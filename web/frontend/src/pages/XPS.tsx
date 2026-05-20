@@ -1222,6 +1222,9 @@ interface DatasetSessionState {
   manualEnergyShiftEnabled: boolean
   selectedElement: string
   fitProfile: string
+  fitRangeEnabled: boolean
+  fitRangeStart: number | null
+  fitRangeEnd: number | null
   peakCandidates: PeakCandidate[]
   fitResult: FitResult | null
   rsfRows: { peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]
@@ -1253,6 +1256,9 @@ function createDefaultSession(): DatasetSessionState {
     manualEnergyShiftEnabled: false,
     selectedElement: '',
     fitProfile: 'voigt',
+    fitRangeEnabled: false,
+    fitRangeStart: null,
+    fitRangeEnd: null,
     peakCandidates: [],
     fitResult: null,
     rsfRows: [],
@@ -1504,6 +1510,9 @@ export default function XPS({
   // fitting
   const [fitProfile, setFitProfile] = useState<string>('voigt')
   const [fitNRestarts, setFitNRestarts] = useState<number>(1)
+  const [fitRangeEnabled, setFitRangeEnabled] = useState(false)
+  const [fitRangeStart, setFitRangeStart] = useState<number | null>(null)
+  const [fitRangeEnd, setFitRangeEnd] = useState<number | null>(null)
   const [peakCandidates, setPeakCandidates] = useState<PeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [overlayFitResult, setOverlayFitResult] = useState<FitResult | null>(null)
@@ -1576,6 +1585,9 @@ export default function XPS({
         manualEnergyShiftEnabled,
         selectedElement,
         fitProfile,
+        fitRangeEnabled,
+        fitRangeStart,
+        fitRangeEnd,
         peakCandidates,
         fitResult,
         rsfRows,
@@ -1606,6 +1618,13 @@ export default function XPS({
   const beMax = processingViewMode === 'overlay'
     ? (overlayPrimaryDataset ? Math.max(...overlayPrimaryDataset.x) : 1000)
     : (activeDataset ? Math.max(...activeDataset.x) : 1000)
+  const fitDataMin = fitTargetDataset ? Math.min(...fitTargetDataset.x) : beMin
+  const fitDataMax = fitTargetDataset ? Math.max(...fitTargetDataset.x) : beMax
+  const fitRangeLow = Math.min(fitRangeStart ?? fitDataMin, fitRangeEnd ?? fitDataMax)
+  const fitRangeHigh = Math.max(fitRangeStart ?? fitDataMin, fitRangeEnd ?? fitDataMax)
+  const activeFitRange: [number, number] | undefined = fitRangeEnabled
+    ? [Math.max(fitDataMin, fitRangeLow), Math.min(fitDataMax, fitRangeHigh)]
+    : undefined
   const vbmGlobalExtrema = vbmDataset
     ? findSpectrumExtrema(vbmDataset.x, vbmDataset.y_processed)
     : null
@@ -1634,6 +1653,13 @@ export default function XPS({
     vbmDataset,
     xpsMode,
   ])
+
+  useEffect(() => {
+    if (!fitTargetDataset) return
+    setFitRangeStart(current => Number.isFinite(current ?? NaN) ? clamp(current as number, fitDataMin, fitDataMax) : fitDataMin)
+    setFitRangeEnd(current => Number.isFinite(current ?? NaN) ? clamp(current as number, fitDataMin, fitDataMax) : fitDataMax)
+  }, [fitTargetDataset, fitDataMin, fitDataMax])
+
   const estimatedInterpPoints = estimateInterpolationPoints(processingViewMode === 'overlay' && overlayFiles.length > 0 ? overlayFiles : rawFiles)
   const effectiveNPoints = currentAutoInterpPoints ? estimatedInterpPoints : currentParams.n_points
   const standardDataset = standardFiles[calibrationDatasetIdx] ?? standardFiles[0] ?? null
@@ -1737,6 +1763,9 @@ export default function XPS({
     setManualEnergyShiftEnabled(session.manualEnergyShiftEnabled)
     setSelectedElement(session.selectedElement)
     setFitProfile(session.fitProfile)
+    setFitRangeEnabled(session.fitRangeEnabled)
+    setFitRangeStart(session.fitRangeStart)
+    setFitRangeEnd(session.fitRangeEnd)
     setPeakCandidates(session.peakCandidates.map(pk => sanitizePeakCandidate(pk, fitTargetPeakScale)))
     setFitResult(session.fitResult)
     setRsfRows(session.rsfRows)
@@ -1755,25 +1784,28 @@ export default function XPS({
         manualEnergyShiftEnabled,
         selectedElement,
         fitProfile,
+        fitRangeEnabled,
+        fitRangeStart,
+        fitRangeEnd,
         peakCandidates,
         fitResult,
         rsfRows,
       },
     }))
-  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, manualEnergyShiftEnabled, selectedElement, fitProfile, peakCandidates, fitResult, rsfRows])
+  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, manualEnergyShiftEnabled, selectedElement, fitProfile, fitRangeEnabled, fitRangeStart, fitRangeEnd, peakCandidates, fitResult, rsfRows])
 
   useEffect(() => {
     if (processingViewMode !== 'single' || !activeDatasetKey) return
     if (restoringSessionRef.current) return
     setFitResult(current => (current ? null : current))
     setRsfRows(current => (current.length > 0 ? [] : current))
-  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints])
+  }, [processingViewMode, activeDatasetKey, params, autoInterpPoints, fitRangeEnabled, fitRangeStart, fitRangeEnd])
 
   useEffect(() => {
     if (processingViewMode !== 'overlay') return
     setOverlayFitResult(current => (current ? null : current))
     setOverlayRsfRows(current => (current.length > 0 ? [] : current))
-  }, [processingViewMode, overlaySelection, overlayState.params, overlayState.autoInterpPoints])
+  }, [processingViewMode, overlaySelection, overlayState.params, overlayState.autoInterpPoints, fitRangeEnabled, fitRangeStart, fitRangeEnd])
 
   // process active single dataset
   useEffect(() => {
@@ -2364,7 +2396,7 @@ export default function XPS({
   }
 
   const addManualPeak = () => {
-    const center = fitTargetDataset ? (beMin + beMax) / 2 : 500
+    const center = fitTargetDataset ? ((activeFitRange?.[0] ?? fitDataMin) + (activeFitRange?.[1] ?? fitDataMax)) / 2 : 500
     setPeakCandidates(prev => [...prev, createPeakCandidate({
       label: `峰 ${prev.length + 1}`,
       center,
@@ -2384,6 +2416,10 @@ export default function XPS({
     if (!fitTargetDataset) return null
     const activePeaks = peakCandidates.filter(p => p.enabled)
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return null }
+    if (activeFitRange && activeFitRange[1] - activeFitRange[0] <= 0.01) {
+      setFitError('擬合範圍太窄，請拉開起點與終點。')
+      return null
+    }
     setIsFitting(true); setFitError(null)
     try {
       const initPeaks = buildFitPeakPayloads(activePeaks, fitTargetDataset)
@@ -2394,7 +2430,7 @@ export default function XPS({
         initPeaks,
         fitProfile,
         peakLabels,
-        { maxfev: 8000, nRestarts: fitNRestarts },
+        { maxfev: 8000, nRestarts: fitNRestarts, fitRange: activeFitRange },
       )
       const r2 = res.r_squared ?? 0
       const rmse = res.rmse ?? 0
@@ -2431,6 +2467,10 @@ export default function XPS({
       return
     }
     if (!fitTargetDataset) return
+    if (activeFitRange && activeFitRange[1] - activeFitRange[0] <= 0.01) {
+      setFitError('擬合範圍太窄，請拉開起點與終點。')
+      return
+    }
     setAutoConverging(true); setIsFitting(true); setFitError(null); setFitHistory([])
     let currentCandidates = peakCandidates
     let prevR2 = 0
@@ -2447,7 +2487,7 @@ export default function XPS({
           initPeaks,
           fitProfile,
           peakLabels,
-          { maxfev: 8000, nRestarts: 1 },
+          { maxfev: 8000, nRestarts: 1, fitRange: activeFitRange },
         )
         const r2 = res.r_squared ?? 0
         const rmse = res.rmse ?? 0
@@ -3112,6 +3152,61 @@ export default function XPS({
                   <CustomSelect label="峰形" value={fitProfile} onChange={setFitProfile}
                     options={[{ value: 'voigt', label: 'Voigt' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'lorentzian', label: 'Lorentzian' }]}
                   />
+                  <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <TogglePill label="限制擬合範圍" checked={fitRangeEnabled} onChange={setFitRangeEnabled} />
+                    {fitRangeEnabled && (
+                      <>
+                        <DualRangeInput
+                          label="擬合範圍"
+                          min={fitDataMin}
+                          max={fitDataMax}
+                          start={fitRangeStart ?? fitDataMin}
+                          end={fitRangeEnd ?? fitDataMax}
+                          step={0.1}
+                          disabled={!fitTargetDataset}
+                          onChange={({ start, end }) => {
+                            setFitRangeStart(start)
+                            setFitRangeEnd(end)
+                          }}
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput
+                            label="起始 BE (eV)"
+                            value={fitRangeStart ?? fitDataMin}
+                            min={fitDataMin}
+                            max={fitDataMax}
+                            onChange={v => setFitRangeStart(clamp(v, fitDataMin, fitDataMax))}
+                            step={0.1}
+                            disabled={!fitTargetDataset}
+                          />
+                          <NumInput
+                            label="結束 BE (eV)"
+                            value={fitRangeEnd ?? fitDataMax}
+                            min={fitDataMin}
+                            max={fitDataMax}
+                            onChange={v => setFitRangeEnd(clamp(v, fitDataMin, fitDataMax))}
+                            step={0.1}
+                            disabled={!fitTargetDataset}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[10px] leading-5 text-[var(--text-soft)]">
+                            只用此 BE 區間內的資料做峰擬合；峰 seed 與約束仍可照常設定。
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFitRangeStart(fitDataMin)
+                              setFitRangeEnd(fitDataMax)
+                            }}
+                            className="shrink-0 text-xs text-sky-400 hover:text-sky-300"
+                          >
+                            全範圍
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     <div className="flex items-end gap-2">
                       <div className="flex-1">
@@ -4346,6 +4441,7 @@ export default function XPS({
                           effective_n_points: effectiveNPoints,
                           peaks: peakCandidates,
                           fit_profile: fitProfile,
+                          fit_range: fitRangeEnabled && activeFitRange ? activeFitRange : null,
                           fit_result: currentFitResult ? { peaks: currentFitResult.peaks } : null,
                           vbm: vbmResult?.success ? {
                             vbm_ev: vbmResult.vbm_ev,

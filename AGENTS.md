@@ -204,3 +204,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-19：繪製圖檔 XAS/XES band gap 圖新增 XES 檔與 XAS 檔各自的 X 軸顯示範圍控制；每個檔案卡可調整顯示 X 起/迄並一鍵還原完整範圍，圖上曲線依各自範圍裁切，CSV/TXT summary 會輸出 display range。
 
 - 2026-05-19：修正繪製圖檔 XAS/XES band gap 疊圖的強度處理；已歸一化到峰值 1 的上傳資料不再被 2%/98% 百分位數重新縮放，XAS 與 XES 最終圖會保留原始 normalized peak。驗證衝突標記掃描與 git diff --check 通過；目前工具環境找不到 node/npm/pnpm/yarn，未能執行 npm run build。
+
+- 2026-05-21：XPS 峰擬合區新增「限制擬合範圍」功能；前端新增擬合範圍開關、DualRange slider、起迄 BE 數值輸入與全範圍重設，執行擬合 / 自動收斂時會傳送 fitRange 給既有 /api/xps/fit，單筆 dataset session 與處理報告 JSON 會保存範圍設定。驗證 git diff --check 通過、conflict marker 掃描無結果；目前環境找不到 npm/node/pnpm/yarn，未執行 npm run build。

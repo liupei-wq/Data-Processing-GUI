@@ -812,3 +812,13 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-19] 檢查：修正 XAS/XES band intensity normalization 後，執行衝突標記、diff whitespace 與前端建置可用性檢查。
 
 [2026-05-19] 檢查結果：XAS/XES band gap 強度修正後，衝突標記掃描無結果、git diff --check 通過；目前工具環境找不到 node/npm/pnpm/yarn，未能執行 npm run build。
+
+[2026-05-21] 檢查：使用者要求在 XPS 擬合區新增可設定擬合範圍功能；開始檢查 XPS 前端擬合 UI、API 型別與後端 /api/xps/fit 資料流。
+
+[2026-05-21] 實作：準備在 XPS 峰擬合區新增可啟用/停用的擬合範圍控制；前端會保存單筆 session 的範圍設定，並在執行擬合與自動收斂時傳送 fitRange 給既有 /api/xps/fit。
+
+[2026-05-21] 檢查：XPS 擬合範圍 UI 與 fitRange 傳遞完成後，開始執行前端建置與 git diff 檢查。
+
+[2026-05-21] 檢查：XPS 擬合範圍改動後 git diff --check 通過、conflict marker 掃描無結果；前端 build 嘗試失敗，原因是從 web/frontend 工作目錄讀取 .\\CLAUDE.md 路徑錯誤且目前 PowerShell 環境找不到 npm。
+
+[2026-05-21] 實作完成：XPS 峰擬合區新增「限制擬合範圍」功能。前端 web/frontend/src/pages/XPS.tsx 新增 fitRangeEnabled/fitRangeStart/fitRangeEnd 狀態、單筆 dataset session 保存、範圍 slider 與起迄 BE 數值輸入；執行擬合與自動收斂會將 activeFitRange 傳給既有 fitPeaks(..., { fitRange })，處理報告 JSON 也記錄 fit_range。驗證 git diff --check 通過、conflict marker 掃描無結果；目前環境找不到 npm/node/pnpm/yarn，未能執行 npm run build。
