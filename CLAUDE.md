@@ -822,3 +822,13 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-21] 檢查：XPS 擬合範圍改動後 git diff --check 通過、conflict marker 掃描無結果；前端 build 嘗試失敗，原因是從 web/frontend 工作目錄讀取 .\\CLAUDE.md 路徑錯誤且目前 PowerShell 環境找不到 npm。
 
 [2026-05-21] 實作完成：XPS 峰擬合區新增「限制擬合範圍」功能。前端 web/frontend/src/pages/XPS.tsx 新增 fitRangeEnabled/fitRangeStart/fitRangeEnd 狀態、單筆 dataset session 保存、範圍 slider 與起迄 BE 數值輸入；執行擬合與自動收斂會將 activeFitRange 傳給既有 fitPeaks(..., { fitRange })，處理報告 JSON 也記錄 fit_range。驗證 git diff --check 通過、conflict marker 掃描無結果；目前環境找不到 npm/node/pnpm/yarn，未能執行 npm run build。
+
+[2026-05-21] 檢查：使用者回報網頁未看到 XPS 擬合範圍功能，並要求同步到 Git；開始檢查本地改動、UI 位置、git 狀態與遠端同步狀態。
+
+[2026-05-21] 檢查：確認 XPS.tsx 目前 HEAD 已含擬合範圍 UI，功能位於 sidebar 第 6 步「峰擬合」內；接著 fetch origin 確認本地與遠端是否一致。
+
+[2026-05-21] 重要判斷：fetch 後確認本地 main 與 origin/main 差異為 0/0，遠端 v26.9 已包含 XPS 擬合範圍功能；使用者網頁未看到，推測功能位於第 6 步峰擬合折疊區內，因此準備調整 section hint 提高可見性並再次同步 Git。
+
+[2026-05-21] 實作：為提高 XPS 擬合範圍功能可見性，將第 6 步峰擬合 section hint 改為包含「擬合範圍」，讓折疊狀態也能看出此功能位置。
+
+[2026-05-21] 檢查：XPS 擬合範圍可見性補強後，git diff --check 通過、conflict marker 掃描無結果；目前環境仍找不到 npm/node/pnpm/yarn，未執行 npm run build。

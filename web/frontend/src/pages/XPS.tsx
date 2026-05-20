@@ -3142,7 +3142,7 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={6} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
+                <Section step={6} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="擬合範圍 / 元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
                   {overlayNonAverageMode && (
                     <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-3 text-[10px] leading-5 text-amber-300">
                       不平均疊圖模式下會同時存在多條處理後光譜，峰擬合與 RSF 需要單一輸入光譜，因此這裡先鎖定。請啟用「平均所有疊圖數據」，或切回單筆資料後再擬合。
