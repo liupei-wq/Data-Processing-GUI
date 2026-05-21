@@ -130,12 +130,21 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 
 ## 精簡動作紀錄
 
+### 2026-05-21（續）
+
+- XAS 峰擬合結果圖卡新增「放大選定範圍」按鈕：會鎖定到最後一次執行擬合時的 range snapshot，結果圖 x 軸切到選定區間、y 軸依區間內原始/總擬合/殘差/各峰自動重算；保留「顯示/隱藏擬合範圍」覆蓋層；驗證 `cd web/frontend && npm run build` 通過。
+- XAS 峰擬合結果圖卡微調：將「放大選定範圍」按鈕從左下匯出列移到結果表格上方、靠近「峰名稱」區；驗證 `cd web/frontend && npm run build` 通過。
+- XAS 左側「擬合範圍」卡片視覺強化：啟用 range mode 時整張卡改為高亮背景、亮邊框與較明顯的提示文字，不再只靠右上角小型「已啟用」標籤辨識；驗證 `cd web/frontend && npm run build` 通過。
+- SingleProcessTool 切到最低點全面重設計（branch: `feature/snap-drag-mode`）：移除舊版一次性對齊與持續綁定邏輯；改為三步驟對齊模式：①設定搜尋範圍→確定→②生成高斯曲線（以最低點為初始中心/高度，FWHM=x範圍×5%）→③圖中按住拖動微調中心（透明 overlay 攔截 mousedown/mousemove/mouseup）；snap 啟用時所有高斯模板輸入/滑桿 disabled；中心可超出搜尋範圍 ±50%；beforeTraces 最低點紅點僅在 minimum_found 階段顯示；beforeLayout 範圍標記僅在 minimum_found 階段且從 confirmedSnapRange 取值；build 驗證通過（0 TypeScript 錯誤）。
+- XAS 擬合範圍修正：將擬合預覽圖的 traces/layout 從 JSX IIFE 改為 useMemo（加入 `uirevision: 'fit-preview'`），修正拖動 DualRangeInput 時範圍框框消失的問題；sidebar 擬合範圍區塊新增手動起點/終點數值輸入欄（eV）。
+
 ### 2026-05-21
 
 - 清除：已刪除 `C:\Users\peili\.codex\archived_sessions` 內全部封存聊天，並同步清掉 `session_index.jsonl` / `history.jsonl` 對應封存 session id；未動 active sessions。
 - 整理：將舊版 `CLAUDE.md` 從大型流水帳重構為精簡版協作手冊，保留核心規則、模組現況、近期重點與短版紀錄；`AGENTS.md` 也同步改成同樣的短版摘要結構。
 - XPS：Valence Band 支援匯入已處理光譜做 VBM；新增 VBM 匯出預覽 modal、TXT 匯出、有效數據範圍步驟，以及峰擬合 Center / FWHM 固定值或範圍限制。
 - XAS：新增 `Conduction Band` 模式與 CBM 線性外推；峰擬合支援匯入已處理光譜。
+- SingleProcessTool 高斯模板改版：移除多峰支援，改為單峰架構；左側 sidebar 改為純數值輸入（中心位置/半高寬/峰高度/面積唯讀）、下載高斯曲線 CSV 按鈕、匯入插值資料 file picker；中間圖加入橫向中心 slider、橫向 FWHM slider（顯示 center±FWHM/2 邊界）、縱向高度 slider；圖上新增橘色中心/FWHM 邊界虛線、藍色高度水平線、FWHM bracket 標示；支援從外部 CSV/TXT 直接匯入插值資料（不需後端處理）；驗證 `cd web/frontend && npm run build` 通過。
 
 ### 2026-05-20
 

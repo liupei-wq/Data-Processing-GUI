@@ -165,6 +165,33 @@ function chartLayout(xLabel: string, yLabel: string): Partial<Plotly.Layout> {
   }
 }
 
+function getYRangeForWindow(
+  x: number[],
+  seriesList: Array<number[] | null | undefined>,
+  start: number,
+  end: number,
+): [number, number] | null {
+  const lo = Math.min(start, end)
+  const hi = Math.max(start, end)
+  const values: number[] = []
+
+  x.forEach((xi, index) => {
+    if (!Number.isFinite(xi) || xi < lo || xi > hi) return
+    seriesList.forEach(series => {
+      const yi = series?.[index]
+      if (typeof yi === 'number' && Number.isFinite(yi)) values.push(yi)
+    })
+  })
+
+  if (values.length === 0) return null
+  const minY = Math.min(...values)
+  const maxY = Math.max(...values)
+  const span = maxY - minY
+  const reference = Math.max(Math.abs(minY), Math.abs(maxY), 1)
+  const padding = span > 1e-9 ? span * 0.08 : reference * 0.12
+  return [minY - padding, maxY + padding]
+}
+
 function getChannelRaw(dataset: ProcessedDataset, channel: 'TEY' | 'TFY') {
   return channel === 'TEY' ? dataset.tey_raw : dataset.tfy_raw
 }
@@ -974,6 +1001,10 @@ export default function XAS({
   const [fitRangeEnabled, setFitRangeEnabled] = useState(false)
   const [fitRangeLo, setFitRangeLo] = useState<number>(0)
   const [fitRangeHi, setFitRangeHi] = useState<number>(1)
+  // Snapshot of range used when fitting was last executed (prevents result chart range drifting when user changes inputs)
+  const [fittedRangeSnapshot, setFittedRangeSnapshot] = useState<{ enabled: boolean; lo: number; hi: number } | null>(null)
+  const [showResultFitRange, setShowResultFitRange] = useState(true)
+  const [zoomResultToSelection, setZoomResultToSelection] = useState(false)
 
   // ── Conduction Band mode ──────────────────────────────────────────────────
   const [xasMode, setXasMode] = useState<'xas' | 'conduction_band'>('xas')
@@ -1288,6 +1319,7 @@ export default function XAS({
     const activePeaks = fitPeakCandidates.filter(p => p.enabled)
     if (activePeaks.length === 0) { setFitError('請先新增至少一個峰'); return null }
     setIsFitting(true); setFitError(null); setFitResult(null)
+    setFittedRangeSnapshot({ enabled: fitRangeEnabled, lo: fitRangeLo, hi: fitRangeHi })
     try {
       const { x, y } = fitEffective
       const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
@@ -1321,6 +1353,7 @@ export default function XAS({
   const handleAutoConverge = useCallback(async () => {
     if (!fitEffective) return
     setAutoConverging(true); setIsFitting(true); setFitError(null); setFitHistory([])
+    setFittedRangeSnapshot({ enabled: fitRangeEnabled, lo: fitRangeLo, hi: fitRangeHi })
     const { x, y } = fitEffective
     const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
     let currentCandidates = fitPeakCandidates
@@ -1372,7 +1405,144 @@ export default function XAS({
   const fitEnergyMin = fitEffective && fitEffective.x.length > 0 ? fitEffective.x[0] : energyMin
   const fitEnergyMax = fitEffective && fitEffective.x.length > 0 ? fitEffective.x[fitEffective.x.length - 1] : energyMax
 
+  // ── Pre-fit preview useMemos ──────────────────────────────────────────────
+  const previewTraces = useMemo((): Plotly.Data[] => {
+    if (!fitEffective) return []
+    const fEff = fitEffective
+    const enabledPeaks = fitPeakCandidates.filter(pk => pk.enabled)
+    return [
+      {
+        x: fEff.x, y: fEff.y,
+        type: 'scatter', mode: 'lines', name: '原始',
+        line: { color: '#94a3b8', width: 1.6 },
+      } as Plotly.Data,
+      ...enabledPeaks.map(pk => {
+        const sigma = pk.fwhm / (2 * Math.sqrt(2 * Math.log(2)))
+        return {
+          x: fEff.x,
+          y: fEff.x.map(xi => pk.amplitude * Math.exp(-0.5 * ((xi - pk.center) / sigma) ** 2)),
+          type: 'scatter' as const,
+          mode: 'lines' as const,
+          name: pk.label,
+          line: { width: 1.6, dash: 'dash' as const },
+          opacity: 0.8,
+          fill: 'tozeroy' as const,
+        } as Plotly.Data
+      }),
+    ]
+  }, [fitEffective, fitPeakCandidates])
+
+  const previewLayout = useMemo((): Plotly.Layout => {
+    const base = chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout
+    base.uirevision = 'fit-preview'
+    if (fitRangeEnabled) {
+      base.shapes = [{
+        type: 'rect', xref: 'x', yref: 'paper',
+        x0: fitRangeLo, x1: fitRangeHi, y0: 0, y1: 1,
+        fillcolor: 'rgba(34,211,238,0.08)',
+        line: { color: 'rgba(34,211,238,0.5)', width: 1.2, dash: 'dash' },
+      } as Plotly.Shape]
+      base.annotations = [{
+        xref: 'x', yref: 'paper',
+        x: (fitRangeLo + fitRangeHi) / 2, y: 1.0,
+        text: '擬合範圍', showarrow: false,
+        font: { size: 10, color: 'rgba(34,211,238,0.8)' },
+        yanchor: 'bottom',
+      } as Plotly.Annotations]
+    }
+    return base
+  }, [fitChannel, fitRangeEnabled, fitRangeLo, fitRangeHi])
+
   // ── CBM useMemos ──────────────────────────────────────────────────────────
+  const resultTraces = useMemo((): Plotly.Data[] => {
+    if (!fitResult || !fitEffective) return []
+    return [
+      {
+        x: fitEffective.x,
+        y: fitEffective.y,
+        type: 'scatter',
+        mode: 'lines',
+        name: '原始',
+        line: { color: '#94a3b8', width: 1.4 },
+      },
+      {
+        x: fitEffective.x,
+        y: fitResult.y_fit,
+        type: 'scatter',
+        mode: 'lines',
+        name: '總擬合',
+        line: { color: '#38bdf8', width: 2.2 },
+      },
+      {
+        x: fitEffective.x,
+        y: fitResult.residuals,
+        type: 'scatter',
+        mode: 'lines',
+        name: '殘差',
+        line: { color: '#f97316', width: 1.2, dash: 'dot' as const },
+      },
+      ...fitResult.peaks.map((pk, i) => ({
+        x: fitEffective.x,
+        y: fitResult.y_individual[i] ?? [],
+        type: 'scatter' as const,
+        mode: 'lines' as const,
+        name: pk.Peak_Name,
+        line: { width: 1.6 },
+        opacity: 0.8,
+        fill: 'tozeroy' as const,
+      })),
+    ]
+  }, [fitEffective, fitResult])
+
+  const resultLayout = useMemo((): Plotly.Layout => {
+    const base = chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout
+    const snap = fittedRangeSnapshot
+    base.uirevision = `fit-result-${zoomResultToSelection ? 'zoom' : 'full'}-${showResultFitRange ? 'range' : 'plain'}`
+
+    if (snap?.enabled && showResultFitRange) {
+      base.shapes = [{
+        type: 'rect', xref: 'x', yref: 'paper',
+        x0: snap.lo, x1: snap.hi, y0: 0, y1: 1,
+        fillcolor: 'rgba(34,211,238,0.08)',
+        line: { color: 'rgba(34,211,238,0.5)', width: 1.2, dash: 'dash' },
+      } as Plotly.Shape]
+      base.annotations = [{
+        xref: 'x', yref: 'paper',
+        x: (snap.lo + snap.hi) / 2, y: 1.0,
+        text: '擬合範圍', showarrow: false,
+        font: { size: 10, color: 'rgba(34,211,238,0.8)' },
+        yanchor: 'bottom',
+      } as Plotly.Annotations]
+    }
+
+    if (fitEffective && fitResult && snap?.enabled && zoomResultToSelection) {
+      base.xaxis = {
+        ...(base.xaxis ?? {}),
+        range: [snap.lo, snap.hi],
+        autorange: false,
+      }
+      const yRange = getYRangeForWindow(
+        fitEffective.x,
+        [fitEffective.y, fitResult.y_fit, fitResult.residuals, ...fitResult.y_individual],
+        snap.lo,
+        snap.hi,
+      )
+      if (yRange) {
+        base.yaxis = {
+          ...(base.yaxis ?? {}),
+          range: yRange,
+          autorange: false,
+        }
+      }
+    }
+
+    return base
+  }, [fitChannel, fitEffective, fitResult, fittedRangeSnapshot, showResultFitRange, zoomResultToSelection])
+
+  useEffect(() => {
+    if (!fittedRangeSnapshot?.enabled) setZoomResultToSelection(false)
+  }, [fittedRangeSnapshot])
+
   const cbmPipelineRaw = useMemo((): { x: number[]; y: number[]; name: string } | null => {
     if (!activeDataset) return null
     const y = cbmChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
@@ -2269,9 +2439,23 @@ export default function XAS({
                   />
 
                   {/* 擬合範圍 */}
-                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2.5 space-y-2">
+                  <div
+                    className={[
+                      'rounded-xl border px-3 py-2.5 space-y-2 transition-all duration-150',
+                      fitRangeEnabled
+                        ? [
+                            'border-sky-400/55',
+                            'bg-[linear-gradient(135deg,rgba(56,189,248,0.22),rgba(14,165,233,0.12))]',
+                            'shadow-[inset_0_0_0_1px_rgba(125,211,252,0.2),0_10px_24px_-18px_rgba(56,189,248,0.85)]',
+                          ].join(' ')
+                        : 'border-[var(--card-border)] bg-[var(--card-ghost)]',
+                    ].join(' ')}
+                  >
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">擬合範圍</span>
+                      <span className={[
+                        'text-[10px] uppercase tracking-[0.18em]',
+                        fitRangeEnabled ? 'text-sky-200' : 'text-[var(--text-soft)]',
+                      ].join(' ')}>擬合範圍</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -2300,18 +2484,11 @@ export default function XAS({
                         {fitRangeEnabled ? '已啟用' : '自動'}
                       </button>
                     </div>
-                    {fitRangeEnabled ? (
-                      <DualRangeInput
-                        label=""
-                        min={fitEnergyMin}
-                        max={fitEnergyMax}
-                        start={fitRangeLo}
-                        end={fitRangeHi}
-                        step={0.1}
-                        onChange={({ start, end }) => { setFitRangeLo(start); setFitRangeHi(end) }}
-                      />
-                    ) : (
+                    {!fitRangeEnabled && (
                       <p className="text-[10px] text-[var(--text-soft)]">依峰中心自動決定（中心 ± FWHM×6）</p>
+                    )}
+                    {fitRangeEnabled && (
+                      <p className="text-[10px] text-sky-100/90">可在中間預覽圖上方調整範圍</p>
                     )}
                   </div>
 
@@ -2803,25 +2980,57 @@ export default function XAS({
           />
         )}
 
-        {/* Imported spectrum preview — shows when no pipeline result but imported data loaded */}
-        {fitDataSource === 'imported' && importedFitDataset && !fitResult && (
+        {/* Pre-fit preview — shows data + seed Gaussians + range before executing fit */}
+        {hasFitTarget && !fitResult && fitEffective && (
           <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-            <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">匯入光譜預覽 — {importedFitDataset.name}</p>
-            <p className="mb-3 text-[10px] text-[var(--text-soft)]">
-              {importedFitDataset.x.length} 個數據點 · {importedFitDataset.x[0].toFixed(2)} – {importedFitDataset.x[importedFitDataset.x.length - 1].toFixed(2)} eV
-            </p>
+            <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
+              <p className="text-sm font-semibold text-[var(--text-main)]">擬合預覽 — {fitEffective.name}</p>
+              <span className="text-[10px] text-[var(--text-soft)]">
+                {fitPeakCandidates.filter(pk => pk.enabled).length > 0
+                  ? `${fitPeakCandidates.filter(pk => pk.enabled).length} 個初始峰（虛線）`
+                  : '尚未新增峰，左側新增後即時顯示'}
+              </span>
+            </div>
+            {fitRangeEnabled && (
+              <div className="mb-3 space-y-2">
+                <DualRangeInput
+                  label=""
+                  min={fitEnergyMin}
+                  max={fitEnergyMax}
+                  start={fitRangeLo}
+                  end={fitRangeHi}
+                  step={0.1}
+                  onChange={({ start, end }) => { setFitRangeLo(start); setFitRangeHi(end) }}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="space-y-0.5">
+                    <span className="text-[10px] text-[var(--text-soft)]">起點 (eV)</span>
+                    <input
+                      type="number"
+                      value={fitRangeLo}
+                      step={0.1}
+                      onChange={e => setFitRangeLo(Number(e.target.value))}
+                      className="theme-input w-full rounded-xl px-2 py-1 text-xs"
+                    />
+                  </label>
+                  <label className="space-y-0.5">
+                    <span className="text-[10px] text-[var(--text-soft)]">終點 (eV)</span>
+                    <input
+                      type="number"
+                      value={fitRangeHi}
+                      step={0.1}
+                      onChange={e => setFitRangeHi(Number(e.target.value))}
+                      className="theme-input w-full rounded-xl px-2 py-1 text-xs"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
             <Plot
-              data={[{
-                x: importedFitDataset.x,
-                y: importedFitDataset.y,
-                type: 'scatter',
-                mode: 'lines',
-                name: importedFitDataset.name,
-                line: { color: 'var(--accent-strong)', width: 2 },
-              }] as Plotly.Data[]}
-              layout={chartLayout('Energy (eV)', '強度') as Plotly.Layout}
+              data={previewTraces}
+              layout={previewLayout}
               config={withPlotFullscreen()}
-              style={{ width: '100%', height: 320 }}
+              style={{ width: '100%', height: 340 }}
             />
           </div>
         )}
@@ -3168,7 +3377,30 @@ export default function XAS({
           return (
           <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
             <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
-              <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果（{fitChannel}）</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果（{fitChannel}）</p>
+                <button
+                  type="button"
+                  onClick={() => setFitResult(null)}
+                  className="rounded-full border border-sky-500/50 px-3 py-0.5 text-xs font-medium text-sky-400 hover:bg-sky-500/10 transition-colors"
+                >
+                  重新選擇擬合區間
+                </button>
+                {fittedRangeSnapshot?.enabled && (
+                  <button
+                    type="button"
+                    onClick={() => setShowResultFitRange(v => !v)}
+                    className={[
+                      'rounded-full border px-3 py-0.5 text-xs font-medium transition-colors',
+                      showResultFitRange
+                        ? 'border-sky-500/50 text-sky-400 hover:bg-sky-500/10'
+                        : 'border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                    ].join(' ')}
+                  >
+                    {showResultFitRange ? '隱藏擬合範圍' : '顯示擬合範圍'}
+                  </button>
+                )}
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
                   {fitProfile.toUpperCase()} · {fitResult.peaks.length} 峰
@@ -3194,59 +3426,28 @@ export default function XAS({
               </div>
             </div>
             <Plot
-              data={[
-                {
-                  x: fEff.x,
-                  y: fEff.y,
-                  type: 'scatter', mode: 'lines', name: '原始',
-                  line: { color: '#94a3b8', width: 1.4 },
-                },
-                {
-                  x: fEff.x,
-                  y: fitResult.y_fit,
-                  type: 'scatter', mode: 'lines', name: '總擬合',
-                  line: { color: '#38bdf8', width: 2.2 },
-                },
-                {
-                  x: fEff.x,
-                  y: fitResult.residuals,
-                  type: 'scatter', mode: 'lines', name: '殘差',
-                  line: { color: '#f97316', width: 1.2, dash: 'dot' as const },
-                },
-                ...fitResult.peaks.map((pk, i) => ({
-                  x: fEff.x,
-                  y: fitResult.y_individual[i] ?? [],
-                  type: 'scatter' as const,
-                  mode: 'lines' as const,
-                  name: pk.Peak_Name,
-                  line: { width: 1.6 },
-                  opacity: 0.80,
-                  fill: 'tozeroy' as const,
-                })),
-              ] as Plotly.Data[]}
-              layout={(() => {
-                const base = chartLayout('Energy (eV)', `${fitChannel} 強度`) as Plotly.Layout
-                if (fitRangeEnabled) {
-                  base.shapes = [{
-                    type: 'rect', xref: 'x', yref: 'paper',
-                    x0: fitRangeLo, x1: fitRangeHi, y0: 0, y1: 1,
-                    fillcolor: 'rgba(34,211,238,0.08)',
-                    line: { color: 'rgba(34,211,238,0.5)', width: 1.2, dash: 'dash' },
-                  } as Plotly.Shape]
-                  base.annotations = [{
-                    xref: 'x', yref: 'paper',
-                    x: (fitRangeLo + fitRangeHi) / 2, y: 1.0,
-                    text: '擬合範圍', showarrow: false,
-                    font: { size: 10, color: 'rgba(34,211,238,0.8)' },
-                    yanchor: 'bottom',
-                  } as Plotly.Annotations]
-                }
-                return base
-              })()}
+              data={resultTraces}
+              layout={resultLayout}
               config={withPlotFullscreen()}
               style={{ width: '100%', height: 360 }}
             />
             {/* result table */}
+            {fittedRangeSnapshot?.enabled && (
+              <div className="mt-3 flex items-center">
+                <button
+                  type="button"
+                  onClick={() => setZoomResultToSelection(v => !v)}
+                  className={[
+                    'rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                    zoomResultToSelection
+                      ? 'border-sky-500/50 bg-sky-500/10 text-sky-300 hover:bg-sky-500/15'
+                      : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-main)] hover:border-[var(--accent-strong)] hover:bg-[var(--accent-soft)]',
+                  ].join(' ')}
+                >
+                  {zoomResultToSelection ? '恢復完整圖' : '放大選定範圍'}
+                </button>
+              </div>
+            )}
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>

@@ -4,7 +4,7 @@ import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { parseFiles, processData } from '../api/xrd'
 import FileUpload from '../components/FileUpload'
-import type { GaussianCenter, ParsedFile, ProcessParams, ProcessedDataset } from '../types/xrd'
+import type { ParsedFile, ProcessParams, ProcessedDataset } from '../types/xrd'
 import { DEFAULT_PARAMS } from '../components/ProcessingPanel'
 
 export type SingleToolKind = 'background' | 'normalize' | 'gaussian'
@@ -44,6 +44,42 @@ function findMinimumInRange(x: number[], y: number[], start: number, end: number
     if (!best || y[i] < best.y) best = { x: x[i], y: y[i], index: i }
   }
   return best
+}
+
+function extractGaussianParams(x: number[], y: number[]): { center: number; fwhm: number; height: number } {
+  const maxIdx = y.reduce((best, v, i) => v > y[best] ? i : best, 0)
+  const height = y[maxIdx]
+  const center = x[maxIdx]
+  if (height <= 0 || x.length < 3) return { center, fwhm: 1, height }
+  const halfMax = height / 2
+  let leftX = x[0]
+  for (let i = maxIdx; i >= 1; i--) {
+    if (y[i - 1] <= halfMax) {
+      const t = (halfMax - y[i]) / (y[i - 1] - y[i])
+      leftX = x[i] + t * (x[i - 1] - x[i])
+      break
+    }
+  }
+  let rightX = x[x.length - 1]
+  for (let i = maxIdx; i < x.length - 1; i++) {
+    if (y[i + 1] <= halfMax) {
+      const t = (halfMax - y[i]) / (y[i + 1] - y[i])
+      rightX = x[i] + t * (x[i + 1] - x[i])
+      break
+    }
+  }
+  return { center, fwhm: Math.max(rightX - leftX, 0.001), height }
+}
+
+function interpolateY(xNew: number[], xSrc: number[], ySrc: number[]): number[] {
+  return xNew.map(x => {
+    if (x <= xSrc[0]) return ySrc[0]
+    if (x >= xSrc[xSrc.length - 1]) return ySrc[ySrc.length - 1]
+    let lo = 0, hi = xSrc.length - 1
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (xSrc[mid] <= x) lo = mid; else hi = mid }
+    const t = (x - xSrc[lo]) / (xSrc[hi] - xSrc[lo])
+    return ySrc[lo] + t * (ySrc[hi] - ySrc[lo])
+  })
 }
 
 function downloadFile(content: string, filename: string, mimeType: string) {
@@ -104,7 +140,7 @@ function buildParams(
   gaussianFwhm: number,
   gaussianHeight: number,
   gaussianNonnegativeGuard: boolean,
-  gaussianCenters: GaussianCenter[],
+  gaussianCenter: number,
 ): ProcessParams {
   return {
     ...DEFAULT_PARAMS,
@@ -124,7 +160,7 @@ function buildParams(
     gaussian_height: gaussianHeight,
     gaussian_nonnegative_guard: tool === 'gaussian' ? gaussianNonnegativeGuard : false,
     gaussian_search_half_width: 0,  // exact center, no backend search drift
-    gaussian_centers: tool === 'gaussian' ? gaussianCenters : [],
+    gaussian_centers: tool === 'gaussian' ? [{ enabled: true, name: 'Peak 1', center: gaussianCenter }] : [],
     smooth_method: 'none',
     norm_method: tool === 'normalize' ? normalizeMethod : 'none',
     norm_x_start: tool === 'normalize' ? normStart : null,
@@ -218,7 +254,10 @@ export default function SingleProcessTool({
   const [error, setError] = useState<string | null>(null)
   const [gaussianApplyVersion, setGaussianApplyVersion] = useState(0)
   const [snapToMinimumEnabled, setSnapToMinimumEnabled] = useState(false)
-  const [persistentSnapEnabled, setPersistentSnapEnabled] = useState(false)
+  const [snapPhase, setSnapPhase] = useState<'idle' | 'minimum_found' | 'gaussian_generated'>('idle')
+  const [confirmedSnapRange, setConfirmedSnapRange] = useState<{ start: number; end: number } | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const chartContainerRef = useRef<HTMLDivElement>(null)
   const [exportPreviewKind, setExportPreviewKind] = useState<'chart1' | 'chart2' | null>(null)
 
   // ── Background state ─────────────────────────────────────────────────────────
@@ -241,16 +280,8 @@ export default function SingleProcessTool({
   const [gaussianNonnegativeGuard, setGaussianNonnegativeGuard] = useState(true)
   const [minimumRangeStart, setMinimumRangeStart] = useState(403)
   const [minimumRangeEnd, setMinimumRangeEnd] = useState(406)
-  const [gaussianCenters, setGaussianCenters] = useState<GaussianCenter[]>([
-    { enabled: true, name: 'Peak 1', center: 30 },
-  ])
-
-  // Refs for persistent-snap loop prevention (declared after Gaussian states)
-  const snapInProgressRef = useRef(false)
-  const gaussianCentersRef = useRef(gaussianCenters)
-  const gaussianFwhmRef = useRef(gaussianFwhm)
-  useEffect(() => { gaussianCentersRef.current = gaussianCenters }, [gaussianCenters])
-  useEffect(() => { gaussianFwhmRef.current = gaussianFwhm }, [gaussianFwhm])
+  const [gaussianCenter, setGaussianCenter] = useState(30)
+  const [importedGaussianCurve, setImportedGaussianCurve] = useState<{ x: number[]; y: number[]; name: string } | null>(null)
 
   // ── Reset on tool change ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -274,11 +305,19 @@ export default function SingleProcessTool({
     setGaussianNonnegativeGuard(true)
     setMinimumRangeStart(403)
     setMinimumRangeEnd(406)
-    setGaussianCenters([{ enabled: true, name: 'Peak 1', center: 30 }])
+    setGaussianCenter(30)
+    setImportedGaussianCurve(null)
     setSnapToMinimumEnabled(false)
-    setPersistentSnapEnabled(false)
+    setSnapPhase('idle')
+    setConfirmedSnapRange(null)
+    setIsDragging(false)
     setExportPreviewKind(null)
   }, [tool])
+
+  // Reset snap phase when snap mode is toggled off
+  useEffect(() => {
+    if (!snapToMinimumEnabled) { setSnapPhase('idle'); setConfirmedSnapRange(null) }
+  }, [snapToMinimumEnabled])
 
   useEffect(() => {
     if (result.length === 0) { setSelectedDatasetName(''); return }
@@ -288,57 +327,15 @@ export default function SingleProcessTool({
   const activeDataset: ProcessedDataset | null =
     result.find(d => d.name === selectedDatasetName) ?? result[0] ?? null
 
-  // Auto-detect full range when snap is enabled
-  useEffect(() => {
-    if (!snapToMinimumEnabled || !activeDataset) return
-    const xMin = Math.min(...activeDataset.x)
-    const xMax = Math.max(...activeDataset.x)
-    setMinimumRangeStart(xMin)
-    setMinimumRangeEnd(xMax)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapToMinimumEnabled]) // intentionally omit activeDataset: only auto-set on toggle-on
-
   // ── Gaussian derived state ───────────────────────────────────────────────────
 
-  // Minimum in the user-defined range on the raw data — only when snap is enabled
+  // Minimum in the confirmed search range — only when snap is enabled and range confirmed
   const anchorMinimum = useMemo(
-    () => tool === 'gaussian' && activeDataset && snapToMinimumEnabled
-      ? findMinimumInRange(activeDataset.x, activeDataset.y_raw, minimumRangeStart, minimumRangeEnd)
+    () => tool === 'gaussian' && activeDataset && snapToMinimumEnabled && confirmedSnapRange
+      ? findMinimumInRange(activeDataset.x, activeDataset.y_raw, confirmedSnapRange.start, confirmedSnapRange.end)
       : null,
-    [tool, activeDataset, minimumRangeStart, minimumRangeEnd, snapToMinimumEnabled],
+    [tool, activeDataset, snapToMinimumEnabled, confirmedSnapRange],
   )
-
-  // Persistent snap: shift all centers so weighted centroid = x_min (centers only, height unchanged)
-  const runPersistentSnap = useCallback(() => {
-    if (!persistentSnapEnabled || !anchorMinimum || snapInProgressRef.current) return
-    const sigma = gaussianFwhmRef.current / (2 * Math.sqrt(2 * Math.log(2)))
-    const centers = gaussianCentersRef.current
-    const enabled = centers.filter(c => c.enabled && Number.isFinite(c.center))
-    if (enabled.length === 0) return
-    const weights = enabled.map(c => Math.exp(-0.5 * ((anchorMinimum.x - c.center) / sigma) ** 2))
-    const totalW = weights.reduce((s, w) => s + w, 0)
-    if (totalW === 0) return
-    const x_g = enabled.reduce((s, c, i) => s + c.center * weights[i], 0) / totalW
-    const shift = anchorMinimum.x - x_g
-    if (Math.abs(shift) < 1e-9) return // already aligned, skip re-render
-    snapInProgressRef.current = true
-    setGaussianCenters(prev => prev.map(c => ({ ...c, center: c.center + shift })))
-    requestAnimationFrame(() => { snapInProgressRef.current = false })
-  }, [persistentSnapEnabled, anchorMinimum])
-
-  // Re-snap when FWHM changes (sigma changes → weighted centroid shifts for multi-peak)
-  useEffect(() => {
-    runPersistentSnap()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gaussianFwhm, persistentSnapEnabled, anchorMinimum])
-
-  // Re-snap 150ms after center is manually dragged (debounce lets slider settle before snapping back)
-  useEffect(() => {
-    if (!persistentSnapEnabled || !anchorMinimum || snapInProgressRef.current) return
-    const timer = window.setTimeout(runPersistentSnap, 150)
-    return () => window.clearTimeout(timer)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gaussianCenters]) // intentionally narrow dep: only react to external center changes
 
   // Gaussian area: height × FWHM × sqrt(π / 4ln2) ≈ height × FWHM × 1.0645
   const gaussianArea = useMemo(
@@ -346,21 +343,25 @@ export default function SingleProcessTool({
     [gaussianHeight, gaussianFwhm],
   )
 
-  // Client-side instant Gaussian model (<1ms for 1200pts)
+  // Client-side Gaussian model: use imported curve if available, otherwise compute from params
   const clientGaussianModel = useMemo((): number[] | null => {
-    if (tool !== 'gaussian' || !activeDataset || gaussianFwhm <= 0) return null
+    if (tool !== 'gaussian' || !activeDataset) return null
+    // Imported gaussian curve takes priority
+    if (importedGaussianCurve) {
+      return interpolateY(activeDataset.x, importedGaussianCurve.x, importedGaussianCurve.y)
+    }
+    if (gaussianFwhm <= 0) return null
     const sigma = gaussianFwhm / (2 * Math.sqrt(2 * Math.log(2)))
     const model = new Array(activeDataset.x.length).fill(0) as number[]
-    for (const c of gaussianCenters) {
-      if (!c.enabled || !Number.isFinite(c.center)) continue
+    if (Number.isFinite(gaussianCenter)) {
       for (let i = 0; i < activeDataset.x.length; i++) {
-        model[i] += gaussianHeight * Math.exp(-0.5 * ((activeDataset.x[i] - c.center) / sigma) ** 2)
+        model[i] = gaussianHeight * Math.exp(-0.5 * ((activeDataset.x[i] - gaussianCenter) / sigma) ** 2)
       }
     }
     return model
-  }, [tool, activeDataset, gaussianFwhm, gaussianCenters, gaussianHeight])
+  }, [tool, activeDataset, importedGaussianCurve, gaussianFwhm, gaussianCenter, gaussianHeight])
 
-  // Client-side subtraction — always instant, exact when centers are manually placed
+  // Client-side subtraction — always instant, exact when center is manually placed
   const clientAfterY = useMemo((): number[] | null => {
     if (!activeDataset || !clientGaussianModel) return null
     return activeDataset.y_raw.map((v, i) => {
@@ -403,53 +404,23 @@ export default function SingleProcessTool({
     return []
   }, [activeDataset, tool, clientAfterY])
 
-  // ── Snap-to-minimum (one-shot, Euclidean closest point) ─────────────────────
-  //
-  // Algorithm:
-  //   1. For each data point x[i], the Gaussian model has value G[i].
-  //   2. Compute 2D Euclidean distance from (x[i], G[i]) to (x_min, y_min).
-  //   3. The closest point (x_g, G[x_g]) is selected.
-  //   4. Shift all centers by (x_min − x_g) so that x_g maps to x_min.
-  //   5. Compute new height so G_new(x_min) = y_min:
-  //      H_new = y_min / Σ unit_gaussian(x_g − c_old_i)
-  //      (because after the shift, G_new at x_min = H_new × Σ exp(−0.5×((x_g−c_old_i)/σ)²))
-  const handleSnapToMinimum = useCallback(() => {
-    if (!anchorMinimum || !clientGaussianModel || !activeDataset || gaussianFwhm <= 0) return
-    const x_min = anchorMinimum.x
-    const y_min = anchorMinimum.y
+  // ── Snap-to-minimum handlers ─────────────────────────────────────────────────
 
-    // Normalize axes by data range so neither dominates
-    const xArr = activeDataset.x
-    const yArr = activeDataset.y_raw
-    const xRange = Math.max(xArr[xArr.length - 1] - xArr[0], 1e-10)
-    const yRange = Math.max(Math.max(...yArr) - Math.min(...yArr), 1e-10)
+  const handleConfirmSnapRange = useCallback(() => {
+    setConfirmedSnapRange({ start: minimumRangeStart, end: minimumRangeEnd })
+    setSnapPhase('minimum_found')
+  }, [minimumRangeStart, minimumRangeEnd])
 
-    let minDist = Infinity
-    let bestIdx = 0
-    for (let i = 0; i < xArr.length; i++) {
-      const dx = (xArr[i] - x_min) / xRange
-      const dy = ((clientGaussianModel[i] ?? 0) - y_min) / yRange
-      const dist = dx * dx + dy * dy
-      if (dist < minDist) { minDist = dist; bestIdx = i }
-    }
-
-    const x_g = xArr[bestIdx]
-    const shift = x_min - x_g
-
-    // New centers: shift all by (x_min - x_g)
-    const newCenters = gaussianCenters.map(c => ({ ...c, center: c.center + shift }))
-
-    // New height: G_new(x_min) = H_new × Σ exp(-0.5 × ((x_g - c_old) / sigma)^2) = y_min
-    const sigma = gaussianFwhm / (2 * Math.sqrt(2 * Math.log(2)))
-    const totalAtten = gaussianCenters
-      .filter(c => c.enabled && Number.isFinite(c.center))
-      .reduce((s, c) => s + Math.exp(-0.5 * ((x_g - c.center) / sigma) ** 2), 0)
-
-    const newHeight = totalAtten > 1e-9 ? Math.max(y_min / totalAtten, 0) : gaussianHeight
-
-    setGaussianCenters(newCenters)
-    setGaussianHeight(newHeight)
-  }, [anchorMinimum, clientGaussianModel, activeDataset, gaussianFwhm, gaussianCenters, gaussianHeight])
+  const handleGenerateSnapGaussian = useCallback(() => {
+    if (!anchorMinimum) return
+    setGaussianCenter(anchorMinimum.x)
+    setGaussianHeight(anchorMinimum.y)
+    const xMin = rawFiles.length > 0 ? Math.min(...rawFiles.flatMap(f => f.x)) : 0
+    const xMax = rawFiles.length > 0 ? Math.max(...rawFiles.flatMap(f => f.x)) : 180
+    setGaussianFwhm(Math.max(xMax - xMin, 1) * 0.05)
+    setImportedGaussianCurve(null)
+    setSnapPhase('gaussian_generated')
+  }, [anchorMinimum, rawFiles])
 
   // ── Backend params ───────────────────────────────────────────────────────────
   const params = buildParams(
@@ -459,7 +430,7 @@ export default function SingleProcessTool({
     gaussianFwhm,
     gaussianHeight,
     gaussianNonnegativeGuard,
-    gaussianCenters,
+    gaussianCenter,
   )
 
   // Debounced params for background/normalize auto-process
@@ -517,7 +488,7 @@ export default function SingleProcessTool({
         setNormStart(xMin)
         setNormEnd(xMax)
         setGaussianHeight(Math.max(yMax * 0.08, 0.01))
-        setGaussianCenters([{ enabled: true, name: 'Peak 1', center: (xMin + xMax) / 2 }])
+        setGaussianCenter((xMin + xMax) / 2)
         if (tool === 'gaussian') {
           setGaussianApplyVersion(v => v + 1)
         }
@@ -549,7 +520,8 @@ export default function SingleProcessTool({
     if (tool === 'gaussian' && clientGaussianModel) {
       traces.push({
         x: activeDataset.x, y: clientGaussianModel,
-        type: 'scatter', mode: 'lines', name: '高斯模型（即時）',
+        type: 'scatter', mode: 'lines',
+        name: importedGaussianCurve ? '高斯模型（匯入）' : '高斯模型（即時）',
         line: { color: '#f97316', width: 2.4, dash: 'dash' },
       })
     }
@@ -567,7 +539,7 @@ export default function SingleProcessTool({
         line: { color: '#38bdf8', width: 2.2 },
       })
     }
-    if (tool === 'gaussian' && anchorMinimum) {
+    if (tool === 'gaussian' && anchorMinimum && snapPhase === 'minimum_found') {
       traces.push({
         x: [anchorMinimum.x], y: [anchorMinimum.y],
         type: 'scatter', mode: 'markers',
@@ -576,7 +548,7 @@ export default function SingleProcessTool({
       })
     }
     return traces
-  }, [activeDataset, tool, clientGaussianModel, anchorMinimum])
+  }, [activeDataset, tool, clientGaussianModel, importedGaussianCurve, anchorMinimum])
 
   // After chart always uses client-side subtraction (instant, exact)
   const afterTraces = useMemo((): Plotly.Data[] => {
@@ -602,18 +574,33 @@ export default function SingleProcessTool({
     const base = chartLayout()
     base.dragmode = 'zoom'
     base.uirevision = `${tool}:${selectedDatasetName}:before`
-    if (tool === 'gaussian' && snapToMinimumEnabled) {
-      base.shapes = [{
+    const shapes: Plotly.Shape[] = []
+    if (tool === 'gaussian' && snapToMinimumEnabled && snapPhase === 'minimum_found' && confirmedSnapRange) {
+      shapes.push({
         type: 'rect', xref: 'x', yref: 'paper',
-        x0: Math.min(minimumRangeStart, minimumRangeEnd),
-        x1: Math.max(minimumRangeStart, minimumRangeEnd),
+        x0: Math.min(confirmedSnapRange.start, confirmedSnapRange.end),
+        x1: Math.max(confirmedSnapRange.start, confirmedSnapRange.end),
         y0: 0, y1: 1,
         fillcolor: 'rgba(251,113,133,0.08)',
         line: { color: 'rgba(251,113,133,0.32)', width: 1, dash: 'dot' },
-      }]
+      } as Plotly.Shape)
     }
+    // Only show parameter indicator lines in manual mode (no imported curve, snap not active)
+    if (tool === 'gaussian' && !importedGaussianCurve && !snapToMinimumEnabled && Number.isFinite(gaussianCenter)) {
+      // Center vertical line (solid orange)
+      shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: gaussianCenter, x1: gaussianCenter, y0: 0, y1: 1, line: { color: '#f97316', width: 1.5 } } as Plotly.Shape)
+      // FWHM left boundary (dashed orange)
+      shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: gaussianCenter - gaussianFwhm / 2, x1: gaussianCenter - gaussianFwhm / 2, y0: 0, y1: 1, line: { color: '#f97316', width: 1, dash: 'dash' } } as Plotly.Shape)
+      // FWHM right boundary (dashed orange)
+      shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: gaussianCenter + gaussianFwhm / 2, x1: gaussianCenter + gaussianFwhm / 2, y0: 0, y1: 1, line: { color: '#f97316', width: 1, dash: 'dash' } } as Plotly.Shape)
+      // Height horizontal line (dotted blue)
+      shapes.push({ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: gaussianHeight, y1: gaussianHeight, line: { color: '#38bdf8', width: 1, dash: 'dot' } } as Plotly.Shape)
+      // FWHM bracket at y = height/2 (dotted orange)
+      shapes.push({ type: 'line', xref: 'x', yref: 'y', x0: gaussianCenter - gaussianFwhm / 2, x1: gaussianCenter + gaussianFwhm / 2, y0: gaussianHeight / 2, y1: gaussianHeight / 2, line: { color: '#f97316', width: 1.5, dash: 'dot' } } as Plotly.Shape)
+    }
+    if (shapes.length > 0) base.shapes = shapes
     return base
-  }, [tool, minimumRangeStart, minimumRangeEnd, selectedDatasetName])
+  }, [tool, selectedDatasetName, gaussianCenter, gaussianFwhm, gaussianHeight, snapToMinimumEnabled, snapPhase, confirmedSnapRange, importedGaussianCurve])
 
   const afterLayout = useMemo(() => {
     const base = chartLayout()
@@ -663,6 +650,125 @@ export default function SingleProcessTool({
       downloadFile([header, ...rows].join('\n'), `${stem}_background_subtracted.csv`, 'text/csv;charset=utf-8')
     }
   }, [activeDataset, tool, clientAfterY])
+
+  const handleDownloadGaussianCsv = useCallback(() => {
+    if (!activeDataset || !clientGaussianModel) return
+    const stem = activeDataset.name.replace(/\.[^.]+$/, '')
+    const header = 'x,gaussian_model'
+    const rows = activeDataset.x.map((xv, i) =>
+      `${xv.toFixed(6)},${clientGaussianModel[i]?.toFixed(6) ?? ''}`)
+    downloadFile([header, ...rows].join('\n'), `${stem}_gaussian_curve.csv`, 'text/csv;charset=utf-8')
+  }, [activeDataset, clientGaussianModel])
+
+  const handleImportGaussianData = useCallback((files: File[]) => {
+    if (files.length === 0) return
+    const file = files[0]
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const text = e.target?.result as string
+      if (!text) return
+      const lines = text.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'))
+      const parsed: { x: number; y: number }[] = []
+      for (const line of lines) {
+        const parts = line.trim().split(/[\t,\s]+/)
+        if (parts.length >= 2) {
+          const x = parseFloat(parts[0])
+          const y = parseFloat(parts[1])
+          if (Number.isFinite(x) && Number.isFinite(y)) parsed.push({ x, y })
+        }
+      }
+      if (parsed.length < 3) { setError('匯入失敗：有效資料點不足 3 點'); return }
+      parsed.sort((a, b) => a.x - b.x)
+      const xs = parsed.map(p => p.x)
+      const ys = parsed.map(p => p.y)
+      // Extract gaussian params so sliders show accurate reference values
+      const params = extractGaussianParams(xs, ys)
+      setGaussianCenter(params.center)
+      setGaussianFwhm(params.fwhm)
+      setGaussianHeight(params.height)
+      setImportedGaussianCurve({ x: xs, y: ys, name: file.name })
+      setError(null)
+    }
+    reader.readAsText(file)
+  }, [])
+
+  // ── Drag-in-chart helpers ────────────────────────────────────────────────────
+
+  const getDataXFromClientX = useCallback((clientX: number): number | null => {
+    if (!chartContainerRef.current) return null
+    const plotDiv = chartContainerRef.current.querySelector('.js-plotly-plot') as (HTMLElement & { _fullLayout?: { xaxis?: { _offset?: number; _length?: number; range?: [number, number] } } }) | null
+    if (!plotDiv?._fullLayout?.xaxis) return null
+    const xaxis = plotDiv._fullLayout.xaxis
+    const rect = plotDiv.getBoundingClientRect()
+    const pixelInPlot = clientX - rect.left - (xaxis._offset ?? 0)
+    if (!xaxis._length) return null
+    const fraction = pixelInPlot / xaxis._length
+    const [x0, x1] = xaxis.range ?? [0, 1]
+    return x0 + fraction * (x1 - x0)
+  }, [])
+
+  const getDataYFromClientY = useCallback((clientY: number): number | null => {
+    if (!chartContainerRef.current) return null
+    const plotDiv = chartContainerRef.current.querySelector('.js-plotly-plot') as (HTMLElement & { _fullLayout?: { yaxis?: { _offset?: number; _length?: number; range?: [number, number] } } }) | null
+    if (!plotDiv?._fullLayout?.yaxis) return null
+    const yaxis = plotDiv._fullLayout.yaxis
+    const rect = plotDiv.getBoundingClientRect()
+    const pixelInPlot = clientY - rect.top - (yaxis._offset ?? 0)
+    if (!yaxis._length) return null
+    const fraction = pixelInPlot / yaxis._length
+    const [y0, y1] = yaxis.range ?? [0, 1]
+    // screen y increases downward; data y0=bottom, y1=top
+    return y1 - fraction * (y1 - y0)
+  }, [])
+
+  // Anchored snap: mouse position is treated as the Gaussian peak (center, height).
+  // sigma is back-computed so the curve always passes through the anchor minimum.
+  const applyAnchoredSnap = useCallback((mouseX: number, mouseY: number) => {
+    if (!anchorMinimum) return
+    const { x: xa, y: ya } = anchorMinimum
+    const center = mouseX
+    const height = mouseY
+    // height must be above the anchor y for a valid solution
+    if (height <= ya) return
+    const dx = Math.abs(xa - center)
+    let fwhm: number
+    if (dx < 1e-10) {
+      // mouse is at anchor x → very wide Gaussian; keep previous fwhm
+      setGaussianCenter(center)
+      setGaussianHeight(height)
+      return
+    }
+    const sigma = dx / Math.sqrt(2 * Math.log(height / ya))
+    fwhm = 2 * Math.sqrt(2 * Math.log(2)) * sigma
+    setGaussianCenter(center)
+    setGaussianHeight(height)
+    setGaussianFwhm(fwhm)
+  }, [anchorMinimum])
+
+  const handleOverlayMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+    const x = getDataXFromClientX(e.clientX)
+    const y = getDataYFromClientY(e.clientY)
+    if (x !== null && y !== null) applyAnchoredSnap(x, y)
+  }, [getDataXFromClientX, getDataYFromClientY, applyAnchoredSnap])
+
+  // Global mouse tracking for drag
+  useEffect(() => {
+    if (!isDragging) return
+    const onMove = (e: MouseEvent) => {
+      const x = getDataXFromClientX(e.clientX)
+      const y = getDataYFromClientY(e.clientY)
+      if (x !== null && y !== null) applyAnchoredSnap(x, y)
+    }
+    const onUp = () => setIsDragging(false)
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+  }, [isDragging, getDataXFromClientX, getDataYFromClientY, applyAnchoredSnap])
 
   const plotConfig = withPlotFullscreen({ scrollZoom: false, displayModeBar: true, doubleClick: 'reset+autosize' })
   const showTwoCharts = tool === 'gaussian' || tool === 'background'
@@ -813,8 +919,7 @@ export default function SingleProcessTool({
               <div className="theme-block rounded-[20px] p-4">
                 <div className="mb-1 text-sm font-semibold text-[var(--text-muted)]">高斯模板</div>
                 <div className="mb-3 text-[11px] leading-5 text-[var(--text-soft)]">
-                  三個參數：<span className="font-medium text-[var(--text-main)]">半高寬 FWHM、高度、中心位置</span>。
-                  橘色虛線即時預覽，下圖扣除結果同步更新。
+                  圖中橘線即時預覽；拉桿移至中間欄，左側僅顯示數值輸入。
                 </div>
                 <label className="mb-3 flex items-start gap-2.5 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-3 py-2.5">
                   <input type="checkbox" checked={gaussianNonnegativeGuard}
@@ -823,86 +928,77 @@ export default function SingleProcessTool({
                   />
                   <span className="text-xs leading-5 text-[var(--text-main)]">
                     避免負值保護
-                    <span className="block text-[var(--text-soft)]">後端套用時自動縮小過深的模板</span>
+                    <span className="block text-[var(--text-soft)]">扣除後自動縮小過深的模板</span>
                   </span>
                 </label>
-                <div className="space-y-4">
-                  <SliderRow label="半高寬 FWHM" value={gaussianFwhm}
-                    min={0.001} max={fwhmSliderMax} step={0.01} decimals={3}
-                    onChange={setGaussianFwhm} />
-                  <SliderRow label="峰高度" value={gaussianHeight}
-                    min={0} max={heightSliderMax} step={0.01} decimals={3}
-                    onChange={setGaussianHeight} />
-                </div>
-
-                {/* Gaussian centers — inline with FWHM & height */}
-                <div className="mt-4">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 text-sm font-semibold text-[var(--text-muted)]">
-                      中心位置
-                      {persistentSnapEnabled && (
-                        <span className="rounded-full bg-[var(--accent-strong)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--bg-canvas)]">綁定</span>
-                      )}
-                    </div>
-                    <button type="button"
-                      onClick={() => setGaussianCenters(prev => [
-                        ...prev,
-                        { enabled: true, name: `Peak ${prev.length + 1}`, center: prev[prev.length - 1]?.center ?? 30 },
-                      ])}
-                      className="theme-pill pressable rounded-xl px-3 py-1.5 text-xs font-medium text-[var(--accent)]">
-                      新增
-                    </button>
+                {/* Mode indicator when using imported curve */}
+                {importedGaussianCurve && (
+                  <div className="mb-3 flex items-center gap-2 rounded-[14px] bg-[color:color-mix(in_srgb,var(--accent-tertiary)_12%,transparent)] px-3 py-2 border border-[color:color-mix(in_srgb,var(--accent-tertiary)_30%,var(--card-border))]">
+                    <span className="text-[10px] uppercase tracking-[0.14em] text-[var(--accent-tertiary)] font-semibold">匯入模式</span>
+                    <span className="text-[10px] text-[var(--text-soft)] flex-1">數值為提取結果，調整後自動切換手動</span>
                   </div>
-                  <div className="space-y-3">
-                    {gaussianCenters.map((center, idx) => (
-                      <div key={`c-${idx}`} className={`rounded-[16px] border p-3 transition-colors ${persistentSnapEnabled ? 'border-[var(--accent-strong)] bg-[color:color-mix(in_srgb,var(--accent-strong)_8%,transparent)]' : 'border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)]'}`}>
-                        <div className="mb-2 flex items-center justify-between">
-                          <span className="text-xs font-semibold text-[var(--text-main)]">中心 {idx + 1}</span>
-                          {gaussianCenters.length > 1 && (
-                            <button type="button"
-                              onClick={() => setGaussianCenters(prev => prev.filter((_, i) => i !== idx))}
-                              className="text-xs text-[var(--accent-secondary)]">
-                              刪除
-                            </button>
-                          )}
-                        </div>
-                        <div className="space-y-2">
-                          <input type="text" value={center.name}
-                            onChange={e => setGaussianCenters(prev => prev.map((c, i) => i === idx ? { ...c, name: e.target.value } : c))}
-                            className="theme-input w-full rounded-xl px-3 py-1.5 text-xs" />
-                          <SliderRow
-                            label={persistentSnapEnabled ? 'X 位置（綁定中，自動回齊）' : 'X 位置'}
-                            value={center.center}
-                            min={gSliderXMin} max={gSliderXMax} step={0.01} decimals={2}
-                            onChange={v => setGaussianCenters(prev => prev.map((c, i) => i === idx ? { ...c, center: v } : c))}
-                          />
-                        </div>
-                      </div>
-                    ))}
+                )}
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-[var(--text-soft)]">中心位置</span>
+                    <input type="number" value={gaussianCenter} step={0.01}
+                      disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                      onChange={e => { setGaussianCenter(Number(e.target.value)); setImportedGaussianCurve(null) }}
+                      className="theme-input w-full rounded-xl px-3 py-2 text-sm disabled:opacity-40" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-[var(--text-soft)]">半高寬 FWHM</span>
+                    <input type="number" value={gaussianFwhm} min={0.001} step={0.01}
+                      disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                      onChange={e => { setGaussianFwhm(Math.max(0.001, Number(e.target.value))); setImportedGaussianCurve(null) }}
+                      className="theme-input w-full rounded-xl px-3 py-2 text-sm disabled:opacity-40" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-[var(--text-soft)]">峰高度</span>
+                    <input type="number" value={gaussianHeight} min={0} step={0.01}
+                      disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                      onChange={e => { setGaussianHeight(Math.max(0, Number(e.target.value))); setImportedGaussianCurve(null) }}
+                      className="theme-input w-full rounded-xl px-3 py-2 text-sm disabled:opacity-40" />
+                  </label>
+                  <div className="rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">高斯面積 (H × FWHM × 1.0645)</div>
+                    <div className="mt-0.5 font-mono text-sm text-[var(--accent)]">{gaussianArea.toFixed(4)}</div>
                   </div>
                 </div>
 
-                {/* Area display */}
-                <div className="mt-3 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">高斯面積 (H × FWHM × 1.0645)</div>
-                  <div className="mt-0.5 font-mono text-sm text-[var(--accent)]">{gaussianArea.toFixed(4)}</div>
-                </div>
-
-                {/* Backend apply button */}
+                {/* Download gaussian curve */}
                 <button
                   type="button"
-                  onClick={() => setGaussianApplyVersion(v => v + 1)}
-                  disabled={rawFiles.length === 0 || isLoading}
-                  className="pressable mt-3 w-full rounded-xl border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] py-2 text-xs font-medium text-[var(--text-soft)] disabled:opacity-40 hover:text-[var(--text-muted)]"
+                  onClick={handleDownloadGaussianCsv}
+                  disabled={!activeDataset || !clientGaussianModel}
+                  className="pressable mt-3 w-full rounded-xl border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] py-2 text-xs font-medium text-[var(--accent)] disabled:opacity-40 hover:opacity-80"
                 >
-                  {isLoading ? '重新載入中…' : '重新載入插值資料（換檔後用）'}
+                  ↓ 下載高斯曲線 CSV
                 </button>
+
+                {/* Import gaussian curve */}
+                <div className="mt-2">
+                  <div className="mb-1 text-xs text-[var(--text-soft)]">匯入高斯曲線資料</div>
+                  {importedGaussianCurve ? (
+                    <div className="flex items-center gap-2 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2">
+                      <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-main)]">{importedGaussianCurve.name}</span>
+                      <button type="button" onClick={() => setImportedGaussianCurve(null)}
+                        className="shrink-0 text-xs text-[var(--accent-secondary)]">移除</button>
+                    </div>
+                  ) : (
+                    <label className="pressable flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--card-border)] px-3 py-2.5 text-xs text-[var(--text-soft)] hover:text-[var(--text-muted)]">
+                      <span>+ 選擇 CSV / TXT 檔案</span>
+                      <input type="file" accept=".csv,.txt,.dat,.xy" className="hidden"
+                        onChange={e => { if (e.target.files) handleImportGaussianData(Array.from(e.target.files)); if (e.target) (e.target as HTMLInputElement).value = '' }} />
+                    </label>
+                  )}
+                </div>
               </div>
 
-              {/* Minimum range + snap */}
+              {/* Cut-point mode */}
               <div className="theme-block rounded-[20px] p-4">
                 <div className="mb-2 flex items-center justify-between">
-                  <div className="text-sm font-semibold text-[var(--text-muted)]">切到最低點</div>
+                  <div className="text-sm font-semibold text-[var(--text-muted)]">切點模式</div>
                   <label className="flex cursor-pointer items-center gap-2">
                     <span className="text-xs text-[var(--text-soft)]">{snapToMinimumEnabled ? '已啟用' : '啟用'}</span>
                     <input type="checkbox" checked={snapToMinimumEnabled}
@@ -910,69 +1006,78 @@ export default function SingleProcessTool({
                       className="h-4 w-4 rounded" style={{ accentColor: 'var(--accent-strong)' }} />
                   </label>
                 </div>
+
                 {!snapToMinimumEnabled && (
                   <div className="text-[11px] leading-5 text-[var(--text-soft)]">
-                    啟用後可設定搜尋區間，系統會找到高斯曲線與最低點<span className="font-medium text-[var(--text-main)]">歐氏距離最短</span>的點並自動對齊。
+                    啟用後設定搜尋範圍 → 確定 → 生成高斯 → 圖中拖動，高斯曲線始終通過最低點。
                   </div>
                 )}
-                {snapToMinimumEnabled && (
-                  <>
-                    <div className="mb-3 grid grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="mb-1 block text-xs text-[var(--text-soft)]">搜尋起點</span>
-                        <input type="number" value={minimumRangeStart} step={0.01}
-                          onChange={e => setMinimumRangeStart(Number(e.target.value))}
-                          className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1 block text-xs text-[var(--text-soft)]">搜尋終點</span>
-                        <input type="number" value={minimumRangeEnd} step={0.01}
-                          onChange={e => setMinimumRangeEnd(Number(e.target.value))}
-                          className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                      </label>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleSnapToMinimum}
-                      disabled={!anchorMinimum || !clientGaussianModel}
-                      className="pressable w-full rounded-xl bg-[var(--accent-strong)] py-2 text-sm font-semibold text-[var(--bg-canvas)] disabled:opacity-40"
-                    >
-                      切到最低點（一次性對齊）
-                    </button>
 
-                    {/* Persistent binding toggle */}
-                    <label className="mt-2 flex cursor-pointer items-center gap-2.5 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-3 py-2.5">
-                      <input type="checkbox" checked={persistentSnapEnabled}
-                        onChange={e => setPersistentSnapEnabled(e.target.checked)}
-                        disabled={!anchorMinimum}
-                        className="h-4 w-4 rounded" style={{ accentColor: 'var(--accent-strong)' }} />
-                      <span className="text-xs leading-5 text-[var(--text-main)]">
-                        持續綁定最低點
-                        <span className="block text-[var(--text-soft)]">
-                          {persistentSnapEnabled
-                            ? '已綁定 — 調 FWHM/高度/中心均自動回齊最低點'
-                            : '啟用後，調整任何參數都自動圍繞最低點重算'}
-                        </span>
-                      </span>
-                    </label>
-                  </>
-                )}
-
-                {/* Info cards — only when enabled */}
                 {snapToMinimumEnabled && (
-                  <div className="mt-3 space-y-2">
-                    <div className="rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2.5">
-                      <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">最低點 X / Y（原始）</div>
-                      <div className="mt-0.5 font-mono text-sm text-[var(--text-main)]">
-                        {anchorMinimum ? `${anchorMinimum.x.toFixed(4)}  /  ${anchorMinimum.y.toFixed(4)}` : '未找到'}
+                  <div className="space-y-3">
+                    {/* Step 1: set range + confirm */}
+                    <div>
+                      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-soft)]">① 設定搜尋範圍</div>
+                      <div className="mb-2 grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">起點</span>
+                          <input type="number" value={minimumRangeStart} step={0.01}
+                            onChange={e => { setMinimumRangeStart(Number(e.target.value)); setSnapPhase('idle') }}
+                            className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-[var(--text-soft)]">終點</span>
+                          <input type="number" value={minimumRangeEnd} step={0.01}
+                            onChange={e => { setMinimumRangeEnd(Number(e.target.value)); setSnapPhase('idle') }}
+                            className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                        </label>
                       </div>
+                      <button
+                        type="button"
+                        onClick={handleConfirmSnapRange}
+                        disabled={!activeDataset}
+                        className="pressable w-full rounded-xl border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] py-2 text-sm font-semibold text-[var(--text-muted)] disabled:opacity-40 hover:opacity-80"
+                      >
+                        確定
+                      </button>
                     </div>
-                    {anchorMinimum && clientAfterY && (
-                      <div className="rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2.5">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">扣除後殘值（接近 0 即目標）</div>
-                        <div className={`mt-0.5 font-mono text-sm ${(minimumResidual ?? 99) < 1 ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-main)]'}`}>
-                          {minimumResidual != null ? minimumResidual.toFixed(4) : '—'}
+
+                    {/* Step 2: minimum found info + generate gaussian */}
+                    {(snapPhase === 'minimum_found' || snapPhase === 'gaussian_generated') && anchorMinimum && (
+                      <div>
+                        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-soft)]">② 最低點</div>
+                        <div className="mb-2 rounded-[14px] border border-[color:color-mix(in_srgb,#fb7185_30%,var(--card-border))] bg-[color:color-mix(in_srgb,#fb7185_06%,transparent)] px-3 py-2">
+                          <div className="text-[10px] uppercase tracking-[0.12em] text-[#fb7185]">X / Y</div>
+                          <div className="mt-0.5 font-mono text-sm text-[var(--text-main)]">
+                            {anchorMinimum.x.toFixed(4)} / {anchorMinimum.y.toFixed(4)}
+                          </div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={handleGenerateSnapGaussian}
+                          disabled={snapPhase === 'gaussian_generated'}
+                          className="pressable w-full rounded-xl bg-[var(--accent-strong)] py-2 text-sm font-semibold text-[var(--bg-canvas)] disabled:opacity-50"
+                        >
+                          {snapPhase === 'gaussian_generated' ? '✓ 高斯已生成' : '生成高斯曲線'}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Step 3: drag fine-tune + residual */}
+                    {snapPhase === 'gaussian_generated' && (
+                      <div>
+                        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-soft)]">③ 圖中按住拖動塑形</div>
+                        <div className="mb-2 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2 text-[11px] leading-5 text-[var(--text-soft)]">
+                          按住左鍵拖動，滑鼠位置即為高斯峰頂。曲線自動維持通過最低點，可斜向/上下移動自由伸縮。
+                        </div>
+                        {clientAfterY && (
+                          <div className="rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2.5">
+                            <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">扣除後殘值（接近 0 即目標）</div>
+                            <div className={`mt-0.5 font-mono text-sm ${(minimumResidual ?? 99) < 1 ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-main)]'}`}>
+                              {minimumResidual != null ? minimumResidual.toFixed(4) : '—'}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1046,7 +1151,99 @@ export default function SingleProcessTool({
                   <span className="rounded-full bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]">更新中…</span>
                 )}
               </div>
-              {renderBeforeChart()}
+
+              {/* Gaussian: chart + right-side vertical height slider */}
+              {tool === 'gaussian' ? (
+                <>
+                  <div className="flex items-stretch gap-1">
+                    <div
+                      ref={chartContainerRef}
+                      className="relative min-w-0 flex-1"
+                      style={{ cursor: snapPhase === 'gaussian_generated' ? (isDragging ? 'grabbing' : 'ew-resize') : undefined }}
+                    >
+                      {renderBeforeChart(320)}
+                      {/* Transparent overlay for drag-to-reposition gaussian in snap mode */}
+                      {snapToMinimumEnabled && snapPhase === 'gaussian_generated' && (
+                        <div
+                          className="absolute inset-0"
+                          style={{ zIndex: 10, cursor: isDragging ? 'grabbing' : 'ew-resize' }}
+                          onMouseDown={handleOverlayMouseDown}
+                        />
+                      )}
+                    </div>
+                    {/* Vertical height slider (rotated) */}
+                    <div className="flex w-10 flex-col items-center justify-center gap-1">
+                      <span className="text-[9px] text-[var(--text-soft)]" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>高度 H</span>
+                      <input
+                        type="range"
+                        value={gaussianHeight}
+                        min={0}
+                        max={heightSliderMax}
+                        step={heightSliderMax / 500}
+                        disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                        onChange={e => { setGaussianHeight(Number(e.target.value)); setImportedGaussianCurve(null) }}
+                        style={{
+                          writingMode: 'vertical-lr',
+                          direction: 'rtl',
+                          width: '28px',
+                          height: '260px',
+                          cursor: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 'not-allowed' : 'pointer',
+                          accentColor: '#38bdf8',
+                          opacity: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined,
+                        }}
+                      />
+                      <span className="font-mono text-[9px] text-[var(--text-soft)]">{gaussianHeight.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Horizontal center slider */}
+                  <div className="mt-3 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[var(--text-soft)]">
+                        中心位置{snapToMinimumEnabled && snapPhase === 'gaussian_generated' && <span className="ml-1 text-[var(--accent-secondary)]">（按住圖中拖動）</span>}
+                      </span>
+                      <span className="font-mono text-xs text-[var(--text-main)]">{gaussianCenter.toFixed(3)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      value={gaussianCenter}
+                      min={gSliderXMin}
+                      max={gSliderXMax}
+                      step={gSliderXRange / 1000}
+                      disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                      onChange={e => { setGaussianCenter(Number(e.target.value)); setImportedGaussianCurve(null) }}
+                      className="w-full cursor-pointer"
+                      style={{ accentColor: '#f97316', opacity: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined }}
+                    />
+                  </div>
+
+                  {/* Horizontal FWHM slider */}
+                  <div className="mt-2 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[var(--text-soft)]">半高寬 FWHM</span>
+                      <span className="font-mono text-xs text-[var(--text-main)]">{gaussianFwhm.toFixed(3)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      value={gaussianFwhm}
+                      min={0.001}
+                      max={fwhmSliderMax}
+                      step={fwhmSliderMax / 500}
+                      disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                      onChange={e => { setGaussianFwhm(Number(e.target.value)); setImportedGaussianCurve(null) }}
+                      className="w-full cursor-pointer"
+                      style={{ accentColor: '#f97316', opacity: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined }}
+                    />
+                    <div className="flex justify-between text-[10px] text-[var(--text-soft)]">
+                      <span>← {(gaussianCenter - gaussianFwhm / 2).toFixed(3)}</span>
+                      <span>{(gaussianCenter + gaussianFwhm / 2).toFixed(3)} →</span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                renderBeforeChart()
+              )}
+
               {showTwoCharts && (
                 <div className="mt-2 flex">
                   <button type="button" onClick={() => setExportPreviewKind('chart1')}
