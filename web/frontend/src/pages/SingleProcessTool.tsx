@@ -154,6 +154,19 @@ function chartLayout(): Partial<Plotly.Layout> {
   }
 }
 
+function buildOriginProLayout(): Partial<Plotly.Layout> {
+  return {
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    font: { color: '#000000', family: 'Arial, sans-serif', size: 11 },
+    xaxis: { title: { text: 'X' }, showgrid: false, zeroline: false, linecolor: '#000000', linewidth: 1.5, mirror: true, ticks: 'inside', tickcolor: '#000000', color: '#000000' },
+    yaxis: { title: { text: 'Intensity' }, showgrid: false, zeroline: false, linecolor: '#000000', linewidth: 1.5, mirror: true, ticks: 'inside', tickcolor: '#000000', color: '#000000' },
+    legend: { x: 0.98, xanchor: 'right', y: 0.98, yanchor: 'top', bgcolor: 'rgba(255,255,255,0.85)', bordercolor: '#888888', borderwidth: 1, font: { color: '#000000', size: 11 } },
+    margin: { l: 70, r: 30, t: 30, b: 60 },
+    autosize: true,
+  }
+}
+
 // Slider: range commits on mouseUp/touchEnd; number input commits on blur/Enter
 function SliderRow({
   label, value, min, max, step, decimals = 3, onChange,
@@ -204,6 +217,8 @@ export default function SingleProcessTool({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [gaussianApplyVersion, setGaussianApplyVersion] = useState(0)
+  const [snapToMinimumEnabled, setSnapToMinimumEnabled] = useState(false)
+  const [exportPreviewKind, setExportPreviewKind] = useState<'chart1' | 'chart2' | null>(null)
 
   // ── Background state ─────────────────────────────────────────────────────────
   const [backgroundMethod, setBackgroundMethod] = useState<BackgroundMethod>('linear')
@@ -252,6 +267,8 @@ export default function SingleProcessTool({
     setMinimumRangeStart(403)
     setMinimumRangeEnd(406)
     setGaussianCenters([{ enabled: true, name: 'Peak 1', center: 30 }])
+    setSnapToMinimumEnabled(false)
+    setExportPreviewKind(null)
   }, [tool])
 
   useEffect(() => {
@@ -262,14 +279,24 @@ export default function SingleProcessTool({
   const activeDataset: ProcessedDataset | null =
     result.find(d => d.name === selectedDatasetName) ?? result[0] ?? null
 
+  // Auto-detect full range when snap is enabled
+  useEffect(() => {
+    if (!snapToMinimumEnabled || !activeDataset) return
+    const xMin = Math.min(...activeDataset.x)
+    const xMax = Math.max(...activeDataset.x)
+    setMinimumRangeStart(xMin)
+    setMinimumRangeEnd(xMax)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapToMinimumEnabled]) // intentionally omit activeDataset: only auto-set on toggle-on
+
   // ── Gaussian derived state ───────────────────────────────────────────────────
 
-  // Minimum in the user-defined range on the raw data
+  // Minimum in the user-defined range on the raw data — only when snap is enabled
   const anchorMinimum = useMemo(
-    () => tool === 'gaussian' && activeDataset
+    () => tool === 'gaussian' && activeDataset && snapToMinimumEnabled
       ? findMinimumInRange(activeDataset.x, activeDataset.y_raw, minimumRangeStart, minimumRangeEnd)
       : null,
-    [tool, activeDataset, minimumRangeStart, minimumRangeEnd],
+    [tool, activeDataset, minimumRangeStart, minimumRangeEnd, snapToMinimumEnabled],
   )
 
   // Gaussian area: height × FWHM × sqrt(π / 4ln2) ≈ height × FWHM × 1.0645
@@ -307,6 +334,33 @@ export default function SingleProcessTool({
     const v = clientAfterY[anchorMinimum.index]
     return v != null && Number.isFinite(v) ? v : null
   }, [anchorMinimum, clientAfterY])
+
+  // Origin Pro–style preview traces for export modal
+  const previewChart1Traces = useMemo((): Plotly.Data[] => {
+    if (!activeDataset) return []
+    const traces: Plotly.Data[] = [{
+      x: activeDataset.x, y: activeDataset.y_raw,
+      type: 'scatter', mode: 'lines', name: 'Raw',
+      line: { color: '#000000', width: 1.5 },
+    }]
+    if (tool === 'gaussian' && clientGaussianModel) {
+      traces.push({ x: activeDataset.x, y: clientGaussianModel, type: 'scatter', mode: 'lines', name: 'Gaussian model', line: { color: '#cc0000', width: 1.5, dash: 'dash' } })
+    } else if (tool === 'background' && activeDataset.y_background) {
+      traces.push({ x: activeDataset.x, y: activeDataset.y_background, type: 'scatter', mode: 'lines', name: 'Background', line: { color: '#cc0000', width: 1.5, dash: 'dash' } })
+    }
+    return traces
+  }, [activeDataset, tool, clientGaussianModel])
+
+  const previewChart2Traces = useMemo((): Plotly.Data[] => {
+    if (!activeDataset) return []
+    if (tool === 'gaussian' && clientAfterY) {
+      return [{ x: activeDataset.x, y: clientAfterY, type: 'scatter', mode: 'lines', name: 'Gaussian subtracted', line: { color: '#000000', width: 1.5 } }]
+    }
+    if (tool === 'background' && activeDataset.y_processed) {
+      return [{ x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: 'Background subtracted', line: { color: '#000000', width: 1.5 } }]
+    }
+    return []
+  }, [activeDataset, tool, clientAfterY])
 
   // ── Snap-to-minimum (one-shot, Euclidean closest point) ─────────────────────
   //
@@ -507,7 +561,7 @@ export default function SingleProcessTool({
     const base = chartLayout()
     base.dragmode = 'zoom'
     base.uirevision = `${tool}:${selectedDatasetName}:before`
-    if (tool === 'gaussian') {
+    if (tool === 'gaussian' && snapToMinimumEnabled) {
       base.shapes = [{
         type: 'rect', xref: 'x', yref: 'paper',
         x0: Math.min(minimumRangeStart, minimumRangeEnd),
@@ -536,6 +590,38 @@ export default function SingleProcessTool({
     )
     downloadFile(csv, `${activeDataset.name.replace(/\.[^.]+$/, '')}_${tool}_processed.csv`, 'text/csv;charset=utf-8')
   }, [activeDataset, tool, minimumRangeStart, minimumRangeEnd, anchorMinimum, clientGaussianModel, clientAfterY])
+
+  const handleExportChart1 = useCallback(() => {
+    if (!activeDataset) return
+    const stem = activeDataset.name.replace(/\.[^.]+$/, '')
+    if (tool === 'gaussian' && clientGaussianModel) {
+      const header = 'x,raw,gaussian_model'
+      const rows = activeDataset.x.map((xv, i) =>
+        `${xv.toFixed(6)},${activeDataset.y_raw[i]?.toFixed(6) ?? ''},${clientGaussianModel[i]?.toFixed(6) ?? ''}`)
+      downloadFile([header, ...rows].join('\n'), `${stem}_raw_gaussian_model.csv`, 'text/csv;charset=utf-8')
+    } else if (tool === 'background' && activeDataset.y_background) {
+      const header = 'x,raw,background'
+      const rows = activeDataset.x.map((xv, i) =>
+        `${xv.toFixed(6)},${activeDataset.y_raw[i]?.toFixed(6) ?? ''},${activeDataset.y_background![i]?.toFixed(6) ?? ''}`)
+      downloadFile([header, ...rows].join('\n'), `${stem}_raw_background.csv`, 'text/csv;charset=utf-8')
+    }
+  }, [activeDataset, tool, clientGaussianModel])
+
+  const handleExportChart2 = useCallback(() => {
+    if (!activeDataset) return
+    const stem = activeDataset.name.replace(/\.[^.]+$/, '')
+    if (tool === 'gaussian' && clientAfterY) {
+      const header = 'x,gaussian_subtracted'
+      const rows = activeDataset.x.map((xv, i) =>
+        `${xv.toFixed(6)},${clientAfterY[i]?.toFixed(6) ?? ''}`)
+      downloadFile([header, ...rows].join('\n'), `${stem}_gaussian_subtracted.csv`, 'text/csv;charset=utf-8')
+    } else if (tool === 'background' && activeDataset.y_processed) {
+      const header = 'x,background_subtracted'
+      const rows = activeDataset.x.map((xv, i) =>
+        `${xv.toFixed(6)},${activeDataset.y_processed[i]?.toFixed(6) ?? ''}`)
+      downloadFile([header, ...rows].join('\n'), `${stem}_background_subtracted.csv`, 'text/csv;charset=utf-8')
+    }
+  }, [activeDataset, tool, clientAfterY])
 
   const plotConfig = withPlotFullscreen({ scrollZoom: false, displayModeBar: true, doubleClick: 'reset+autosize' })
   const showTwoCharts = tool === 'gaussian' || tool === 'background'
@@ -727,52 +813,66 @@ export default function SingleProcessTool({
 
               {/* Minimum range + snap */}
               <div className="theme-block rounded-[20px] p-4">
-                <div className="mb-1 text-sm font-semibold text-[var(--text-muted)]">切到最低點</div>
-                <div className="mb-3 text-[11px] leading-5 text-[var(--text-soft)]">
-                  先設定搜尋區間，再按按鈕。系統從高斯曲線上找到與最低點<span className="font-medium text-[var(--text-main)]">歐氏距離最短</span>的點，
-                  平移整條曲線讓該點切到最低點，同時自動調整高度。
-                </div>
-                <div className="mb-3 grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">搜尋起點</span>
-                    <input type="number" value={minimumRangeStart} step={0.01}
-                      onChange={e => setMinimumRangeStart(Number(e.target.value))}
-                      className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs text-[var(--text-soft)]">搜尋終點</span>
-                    <input type="number" value={minimumRangeEnd} step={0.01}
-                      onChange={e => setMinimumRangeEnd(Number(e.target.value))}
-                      className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-semibold text-[var(--text-muted)]">切到最低點</div>
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <span className="text-xs text-[var(--text-soft)]">{snapToMinimumEnabled ? '已啟用' : '啟用'}</span>
+                    <input type="checkbox" checked={snapToMinimumEnabled}
+                      onChange={e => setSnapToMinimumEnabled(e.target.checked)}
+                      className="h-4 w-4 rounded" style={{ accentColor: 'var(--accent-strong)' }} />
                   </label>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handleSnapToMinimum}
-                  disabled={!anchorMinimum || !clientGaussianModel}
-                  className="pressable w-full rounded-xl bg-[var(--accent-strong)] py-2 text-sm font-semibold text-[var(--bg-canvas)] disabled:opacity-40"
-                >
-                  切到最低點
-                </button>
-
-                {/* Info cards */}
-                <div className="mt-3 space-y-2">
-                  <div className="rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2.5">
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">最低點 X / Y（原始）</div>
-                    <div className="mt-0.5 font-mono text-sm text-[var(--text-main)]">
-                      {anchorMinimum ? `${anchorMinimum.x.toFixed(4)}  /  ${anchorMinimum.y.toFixed(4)}` : '未找到'}
-                    </div>
+                {!snapToMinimumEnabled && (
+                  <div className="text-[11px] leading-5 text-[var(--text-soft)]">
+                    啟用後可設定搜尋區間，系統會找到高斯曲線與最低點<span className="font-medium text-[var(--text-main)]">歐氏距離最短</span>的點並自動對齊。
                   </div>
-                  {anchorMinimum && clientAfterY && (
+                )}
+                {snapToMinimumEnabled && (
+                  <>
+                    <div className="mb-3 grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="mb-1 block text-xs text-[var(--text-soft)]">搜尋起點</span>
+                        <input type="number" value={minimumRangeStart} step={0.01}
+                          onChange={e => setMinimumRangeStart(Number(e.target.value))}
+                          className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs text-[var(--text-soft)]">搜尋終點</span>
+                        <input type="number" value={minimumRangeEnd} step={0.01}
+                          onChange={e => setMinimumRangeEnd(Number(e.target.value))}
+                          className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSnapToMinimum}
+                      disabled={!anchorMinimum || !clientGaussianModel}
+                      className="pressable w-full rounded-xl bg-[var(--accent-strong)] py-2 text-sm font-semibold text-[var(--bg-canvas)] disabled:opacity-40"
+                    >
+                      切到最低點
+                    </button>
+                  </>
+                )}
+
+                {/* Info cards — only when enabled */}
+                {snapToMinimumEnabled && (
+                  <div className="mt-3 space-y-2">
                     <div className="rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2.5">
-                      <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">扣除後殘值（接近 0 即目標）</div>
-                      <div className={`mt-0.5 font-mono text-sm ${(minimumResidual ?? 99) < 1 ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-main)]'}`}>
-                        {minimumResidual != null ? minimumResidual.toFixed(4) : '—'}
+                      <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">最低點 X / Y（原始）</div>
+                      <div className="mt-0.5 font-mono text-sm text-[var(--text-main)]">
+                        {anchorMinimum ? `${anchorMinimum.x.toFixed(4)}  /  ${anchorMinimum.y.toFixed(4)}` : '未找到'}
                       </div>
                     </div>
-                  )}
-                </div>
+                    {anchorMinimum && clientAfterY && (
+                      <div className="rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2.5">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">扣除後殘值（接近 0 即目標）</div>
+                        <div className={`mt-0.5 font-mono text-sm ${(minimumResidual ?? 99) < 1 ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-main)]'}`}>
+                          {minimumResidual != null ? minimumResidual.toFixed(4) : '—'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Gaussian centers */}
@@ -838,12 +938,6 @@ export default function SingleProcessTool({
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {activeDataset && (
-                  <button type="button" onClick={handleExport}
-                    className="theme-pill pressable rounded-xl px-4 py-2 text-sm font-medium text-[var(--accent)]">
-                    匯出 CSV
-                  </button>
-                )}
                 {result.length > 1 && (
                   <select value={selectedDatasetName} onChange={e => setSelectedDatasetName(e.target.value)}
                     className="theme-input rounded-xl px-3 py-2 text-sm">
@@ -891,6 +985,14 @@ export default function SingleProcessTool({
                 )}
               </div>
               {renderBeforeChart()}
+              {showTwoCharts && (
+                <div className="mt-2 flex">
+                  <button type="button" onClick={() => setExportPreviewKind('chart1')}
+                    className="theme-pill pressable rounded-xl px-3 py-1.5 text-xs font-medium text-[var(--accent)]">
+                    ↓ 匯出此圖數據
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -908,11 +1010,60 @@ export default function SingleProcessTool({
                 </div>
               )}
               {renderAfterChart()}
+              <div className="mt-2 flex">
+                <button type="button" onClick={() => setExportPreviewKind('chart2')}
+                  className="theme-pill pressable rounded-xl px-3 py-1.5 text-xs font-medium text-[var(--accent)]">
+                  ↓ 匯出此圖數據
+                </button>
+              </div>
             </div>
           )}
 
         </div>
       </main>
+
+      {/* ════════ Export preview modal ════════ */}
+      {exportPreviewKind && activeDataset && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setExportPreviewKind(null)}>
+          <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-[24px] bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="border-b border-gray-200 px-6 py-4">
+              <div className="text-sm font-semibold text-gray-800">
+                {exportPreviewKind === 'chart1'
+                  ? (tool === 'gaussian' ? '原始訊號 + 高斯模型' : '原始訊號 + 背景基準線')
+                  : (tool === 'gaussian' ? '高斯扣除後' : '背景扣除後')}
+              </div>
+              <div className="mt-0.5 text-xs text-gray-400">{activeDataset.name} — Origin Pro 風格預覽</div>
+            </div>
+            {/* Preview chart */}
+            <div className="px-4 pt-3">
+              <Plot
+                data={exportPreviewKind === 'chart1' ? previewChart1Traces : previewChart2Traces}
+                layout={buildOriginProLayout()}
+                config={{ scrollZoom: false, displayModeBar: false }}
+                style={{ width: '100%', height: '320px' }}
+                useResizeHandler
+              />
+            </div>
+            {/* Actions */}
+            <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
+              <button type="button" onClick={() => setExportPreviewKind(null)}
+                className="rounded-xl border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                取消
+              </button>
+              <button type="button"
+                onClick={() => {
+                  if (exportPreviewKind === 'chart1') handleExportChart1()
+                  else handleExportChart2()
+                  setExportPreviewKind(null)
+                }}
+                className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                確定匯出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
