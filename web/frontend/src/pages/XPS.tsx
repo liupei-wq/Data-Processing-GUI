@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
@@ -587,6 +587,23 @@ function NumInput({ label, value, onChange, min, max, step = 1, disabled = false
   )
 }
 
+function TextInput({ label, value, onChange, placeholder, disabled = false, title, onBlur, onKeyDown }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; disabled?: boolean; title?: string
+  onBlur?: () => void; onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void
+}) {
+  return (
+    <label className="block" title={title}>
+      <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
+      <input type="text" value={value} placeholder={placeholder} disabled={disabled}
+        onChange={e => onChange(e.target.value)}
+        onBlur={onBlur}
+        onKeyDown={onKeyDown}
+        className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] placeholder:text-[var(--text-soft)] focus:outline-none disabled:opacity-40"
+      />
+    </label>
+  )
+}
+
 function CustomSelect({ label, value, onChange, options, disabled = false }: {
   label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; disabled?: boolean
 }) {
@@ -1098,6 +1115,46 @@ interface PeakCandidate extends InitPeak {
   originalAmplitude?: number
 }
 
+type PeakConstraintTarget = 'center' | 'fwhm'
+
+type ParsedPeakConstraint =
+  | { mode: 'fixed'; value: number }
+  | { mode: 'range'; min: number; max: number }
+
+function formatPeakNumber(value: number): string {
+  if (!Number.isFinite(value)) return ''
+  return Number(value.toFixed(4)).toString()
+}
+
+function formatPeakConstraint(peak: PeakCandidate, target: PeakConstraintTarget): string {
+  if (target === 'center') {
+    if (peak.lock_center) return formatPeakNumber(peak.center)
+    return `${formatPeakNumber(peak.center_min ?? peak.center)}~${formatPeakNumber(peak.center_max ?? peak.center)}`
+  }
+  if (peak.lock_fwhm) return formatPeakNumber(peak.fwhm)
+  return `${formatPeakNumber(peak.fwhm_min ?? peak.fwhm)}~${formatPeakNumber(peak.fwhm_max ?? peak.fwhm)}`
+}
+
+function parsePeakConstraint(text: string, target: PeakConstraintTarget): ParsedPeakConstraint | null {
+  const cleaned = text.trim().replace(/\s*eV\s*$/i, '')
+  if (!cleaned) return null
+  const parts = cleaned.split(/(?:~|～|至|到|\.\.|–|—|\s+-\s+)/).map(part => part.trim()).filter(Boolean)
+  const parseValue = (value: string) => Number(value.replace(/\s*eV\s*$/i, ''))
+  const minAllowed = target === 'fwhm' ? PEAK_FWHM_MIN_ABS : -Infinity
+  if (parts.length >= 2) {
+    const a = parseValue(parts[0])
+    const b = parseValue(parts[1])
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+    const lo = Math.max(Math.min(a, b), minAllowed)
+    const hi = Math.max(Math.max(a, b), minAllowed)
+    if (Math.abs(hi - lo) < 1e-9) return { mode: 'fixed', value: lo }
+    return { mode: 'range', min: lo, max: hi }
+  }
+  const value = parseValue(cleaned)
+  if (!Number.isFinite(value) || value < minAllowed) return null
+  return { mode: 'fixed', value }
+}
+
 function createPeakCandidate(
   input: {
     label: string
@@ -1174,7 +1231,7 @@ function sanitizePeakCandidate(peak: PeakCandidate, datasetMax = 1000): PeakCand
   }
 }
 
-function updatePeakCenterSeed(peak: PeakCandidate, center: number, datasetMax = 1000): PeakCandidate {
+function updatePeakCenterSeed(peak: PeakCandidate, center: number, datasetMax = 1000, options: { preserveBounds?: boolean } = {}): PeakCandidate {
   const sourceType = peak.sourceType ?? 'database'
   const theoreticalCenter = center
   const centerTolerance = sourceType === 'database'
@@ -1183,19 +1240,19 @@ function updatePeakCenterSeed(peak: PeakCandidate, center: number, datasetMax = 
   return sanitizePeakCandidate({
     ...peak,
     center,
-    theoretical_center: theoreticalCenter,
-    center_min: theoreticalCenter - centerTolerance,
-    center_max: theoreticalCenter + centerTolerance,
+    theoretical_center: options.preserveBounds ? peak.theoretical_center : theoreticalCenter,
+    center_min: options.preserveBounds ? peak.center_min : theoreticalCenter - centerTolerance,
+    center_max: options.preserveBounds ? peak.center_max : theoreticalCenter + centerTolerance,
   }, datasetMax)
 }
 
-function updatePeakFwhmSeed(peak: PeakCandidate, fwhm: number, datasetMax = 1000): PeakCandidate {
+function updatePeakFwhmSeed(peak: PeakCandidate, fwhm: number, datasetMax = 1000, options: { preserveBounds?: boolean } = {}): PeakCandidate {
   const nextFwhm = Math.max(fwhm, PEAK_FWHM_MIN_ABS)
   return sanitizePeakCandidate({
     ...peak,
     fwhm: nextFwhm,
-    fwhm_min: Math.max(PEAK_FWHM_MIN_ABS, nextFwhm * PEAK_FWHM_MIN_RATIO),
-    fwhm_max: Math.max(nextFwhm * PEAK_FWHM_MAX_MULTIPLIER, nextFwhm + 0.2),
+    fwhm_min: options.preserveBounds ? peak.fwhm_min : Math.max(PEAK_FWHM_MIN_ABS, nextFwhm * PEAK_FWHM_MIN_RATIO),
+    fwhm_max: options.preserveBounds ? peak.fwhm_max : Math.max(nextFwhm * PEAK_FWHM_MAX_MULTIPLIER, nextFwhm + 0.2),
   }, datasetMax)
 }
 
@@ -1206,6 +1263,92 @@ function updatePeakAmplitudeSeed(peak: PeakCandidate, amplitude: number, dataset
     amplitude: nextAmplitude,
     amplitude_max: Math.max(nextAmplitude * PEAK_AMPLITUDE_MAX_MULTIPLIER, datasetMax * 1.5, 1),
   }, datasetMax)
+}
+
+function applyPeakConstraintText(peak: PeakCandidate, target: PeakConstraintTarget, text: string, datasetMax = 1000): PeakCandidate {
+  const parsed = parsePeakConstraint(text, target)
+  if (!parsed) return peak
+  if (target === 'center') {
+    if (parsed.mode === 'fixed') {
+      return sanitizePeakCandidate({
+        ...peak,
+        center: parsed.value,
+        theoretical_center: parsed.value,
+        lock_center: true,
+        center_min: parsed.value,
+        center_max: parsed.value,
+      }, datasetMax)
+    }
+    const center = clamp(peak.center, parsed.min, parsed.max)
+    return sanitizePeakCandidate({
+      ...peak,
+      center,
+      theoretical_center: center,
+      lock_center: false,
+      center_min: parsed.min,
+      center_max: parsed.max,
+    }, datasetMax)
+  }
+  if (parsed.mode === 'fixed') {
+    const fwhm = Math.max(parsed.value, PEAK_FWHM_MIN_ABS)
+    return sanitizePeakCandidate({
+      ...peak,
+      fwhm,
+      lock_fwhm: true,
+      fwhm_min: fwhm,
+      fwhm_max: fwhm,
+    }, datasetMax)
+  }
+  const fwhmMin = Math.max(parsed.min, PEAK_FWHM_MIN_ABS)
+  const fwhmMax = Math.max(parsed.max, fwhmMin + 0.01)
+  return sanitizePeakCandidate({
+    ...peak,
+    fwhm: clamp(peak.fwhm, fwhmMin, fwhmMax),
+    lock_fwhm: false,
+    fwhm_min: fwhmMin,
+    fwhm_max: fwhmMax,
+  }, datasetMax)
+}
+
+function PeakConstraintInput({ label, peak, target, disabled, onApply }: {
+  label: string
+  peak: PeakCandidate
+  target: PeakConstraintTarget
+  disabled?: boolean
+  onApply: (text: string) => void
+}) {
+  const formatted = formatPeakConstraint(peak, target)
+  const [draft, setDraft] = useState(formatted)
+
+  useEffect(() => {
+    setDraft(formatted)
+  }, [formatted])
+
+  const commit = () => {
+    const parsed = parsePeakConstraint(draft, target)
+    if (!parsed) {
+      setDraft(formatted)
+      return
+    }
+    onApply(draft)
+  }
+
+  return (
+    <TextInput
+      label={label}
+      value={draft}
+      disabled={disabled}
+      placeholder={target === 'fwhm' ? '固定: 1.2 或範圍: 1~1.8' : '固定: 531.2 或範圍: 530~532'}
+      title="輸入單一數值會固定；輸入下限~上限會限制擬合範圍"
+      onChange={setDraft}
+      onBlur={commit}
+      onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur()
+        }
+      }}
+    />
+  )
 }
 
 function buildFitPeakPayloads(peaks: PeakCandidate[], dataset: ProcessedDataset): InitPeak[] {
@@ -2483,8 +2626,8 @@ export default function XPS({
         const fitted = res.peaks[activeIdx]
         if (!fitted) return pk
         let updated = pk
-        if (!pk.lock_center) updated = updatePeakCenterSeed(updated, fitted.Center_eV, scale)
-        if (!pk.lock_fwhm)   updated = updatePeakFwhmSeed(updated, fitted.FWHM_eV, scale)
+        if (!pk.lock_center) updated = updatePeakCenterSeed(updated, fitted.Center_eV, scale, { preserveBounds: true })
+        if (!pk.lock_fwhm)   updated = updatePeakFwhmSeed(updated, fitted.FWHM_eV, scale, { preserveBounds: true })
         if (!pk.lock_area)   updated = updatePeakAmplitudeSeed(updated, fitted.Height, scale)
         return updated
       }))
@@ -2532,8 +2675,8 @@ export default function XPS({
           const fitted = res.peaks[activeIdx]
           if (!fitted) return pk
           let updated = pk
-          if (!pk.lock_center) updated = updatePeakCenterSeed(updated, fitted.Center_eV, scale)
-          if (!pk.lock_fwhm)   updated = updatePeakFwhmSeed(updated, fitted.FWHM_eV, scale)
+          if (!pk.lock_center) updated = updatePeakCenterSeed(updated, fitted.Center_eV, scale, { preserveBounds: true })
+          if (!pk.lock_fwhm)   updated = updatePeakFwhmSeed(updated, fitted.FWHM_eV, scale, { preserveBounds: true })
           if (!pk.lock_area)   updated = updatePeakAmplitudeSeed(updated, fitted.Height, scale)
           return updated
         })
@@ -3395,6 +3538,22 @@ export default function XPS({
                         <NumInput label="FWHM (eV)" value={pk.fwhm} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? updatePeakFwhmSeed(p, v, fitTargetPeakScale) : p))} min={0.01} step={0.1} />
                         <NumInput label="強度" value={pk.amplitude} onChange={v => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? updatePeakAmplitudeSeed(p, v, fitTargetPeakScale) : p))} min={0} step={100} />
                       </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <PeakConstraintInput
+                          label="中心限制"
+                          peak={pk}
+                          target="center"
+                          disabled={pk.cardLocked}
+                          onApply={text => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? applyPeakConstraintText(p, 'center', text, fitTargetPeakScale) : p))}
+                        />
+                        <PeakConstraintInput
+                          label="FWHM限制"
+                          peak={pk}
+                          target="fwhm"
+                          disabled={pk.cardLocked}
+                          onApply={text => setPeakCandidates(prev => prev.map(p => p.id === pk.id ? applyPeakConstraintText(p, 'fwhm', text, fitTargetPeakScale) : p))}
+                        />
+                      </div>
                       <p className="text-[10px] leading-5 text-[var(--text-soft)]">
                         {pk.lock_center
                           ? `中心將固定在 ${pk.center.toFixed(2)} eV`
@@ -3413,7 +3572,7 @@ export default function XPS({
                   {peakCandidates.length > 0 && (
                     <>
                       <p className="text-[10px] leading-5 text-[var(--text-soft)]">
-                        鎖定只限制擬合時的自由度；你仍可先手動改 seed。若同時放開多個峰，系統會自動維持最小峰距，避免峰位互相交叉。
+                        中心限制與 FWHM限制可填單一數值固定，或填 1~1.8 這類範圍；你仍可先手動改 seed。若同時放開多個峰，系統會自動維持最小峰距，避免峰位互相交叉。
                       </p>
                       <div className="flex flex-wrap gap-2">
                         <button

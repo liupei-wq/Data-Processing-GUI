@@ -846,3 +846,17 @@ XPS binding energy 習慣高 BE 在左，因此後端峰偵測先 flip，前端�
 [2026-05-21] 同步完成：XPS 有效數據範圍第 5 步改動已提交並推送到 origin/main，提交 6702836。Core Level 流程為 7 項，VBM/能帶偏移在 Valence Band 模式下接續為第 8/9 步。
 
 [2026-05-21] 檢查：使用者要求同步到 Git；fetch origin 後確認 main 與 origin/main 差異為 0/0，最新提交為 f55aa91（Record XPS effective range sync）。準備補同步檢查紀錄並推送。
+
+[2026-05-21] 檢查：使用者要求 XPS 峰擬合的 FWHM 與 Center 限制可固定特定數值或設定範圍（例如 1~1.8）；開始檢查 XPS 前端峰候選資料結構、payload 與後端 fitting bounds。
+
+[2026-05-21] 實作：準備在 XPS PeakCandidate UI 新增 Center/FWHM 限制文字輸入；單一數值會固定該參數，形如 1~1.8 的輸入會轉成 min/max 範圍，並保留自訂 bounds 不被後續自動收斂更新覆蓋。
+
+[2026-05-21] 實作：XPS 峰卡新增 Center/FWHM 限制輸入。單一數值會設定 lock_center/lock_fwhm 並固定該值；範圍文字如 1~1.8 會設定 center_min/max 或 fwhm_min/max 並解除該參數鎖定。自動收斂與擬合回寫 seed 時會保留自訂 bounds。
+
+[2026-05-21] 檢查：XPS Center/FWHM 限制輸入改動完成後，開始執行前端 build、git diff whitespace 與 conflict marker 檢查。
+
+[2026-05-21] 檢查：前端 build 嘗試失敗，原因是目前 PowerShell 環境找不到 npm；改執行 git diff --check 與 conflict marker 掃描確認改動基本乾淨。
+
+[2026-05-21] 實作完成：XPS 峰擬合的 Center 與 FWHM 限制改為可直接填固定值或範圍。每個峰卡新增「中心限制」與「FWHM限制」文字欄位；輸入單一數值會固定該參數，輸入 `1~1.8` 這類範圍會解除該參數鎖定並送出對應 min/max bounds。自動收斂與擬合成功後回寫 seed 時會保留使用者設定的 bounds，不會把自訂範圍重設成預設容許值。驗證 `git diff --check -- web/frontend/src/pages/XPS.tsx` 通過，conflict marker 掃描無結果；目前環境找不到 npm/node，未能執行 `npm run build`。
+
+[2026-05-21] 檢查完成：XPS Center/FWHM 固定值/範圍限制改動後執行最終 git diff --check、conflict marker 掃描與工作樹確認；npm/node 仍不存在，因此未執行前端 build。

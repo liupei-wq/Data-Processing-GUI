@@ -216,3 +216,5 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - 2026-05-21：同步完成，XPS 有效數據範圍第 5 步改動已推送到 origin/main（6702836）；Core Level 流程為 7 項，VBM/能帶偏移在 Valence Band 模式下接續為第 8/9 步。
 
 - 2026-05-21：同步檢查：main 與 origin/main 差異為 0/0，最新提交為 f55aa91（Record XPS effective range sync）；補記本次同步確認紀錄。
+
+- 2026-05-21：XPS 峰擬合的 Center 與 FWHM 限制新增固定值 / 範圍輸入；每個峰卡可在「中心限制」「FWHM限制」填單一數值固定，或填 `1~1.8` 這類範圍轉成 min/max bounds。自動收斂與擬合回寫 seed 時會保留自訂 bounds。驗證 git diff --check 通過、conflict marker 掃描無結果；目前環境找不到 npm/node，未執行 npm run build。
