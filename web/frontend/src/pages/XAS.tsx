@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
+import { formatUtc8Iso } from '../utils/time'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
@@ -680,6 +681,113 @@ function parseTwoColumnText(text: string, fileName: string): { name: string; x: 
   return { name: fileName.replace(/\.[^.]+$/, ''), x: pairs.map(p => p[0]), y: pairs.map(p => p[1]) }
 }
 
+// ── CBM/VBM linear extrapolation helpers ──────────────────────────────────────
+
+interface XasLineFit {
+  slope: number
+  intercept: number
+  point_count: number
+  start_window_point_count: number
+  end_window_point_count: number
+  candidate_pair_count: number
+  anchor_start_point: { x: number; y: number }
+  anchor_end_point: { x: number; y: number }
+  start_point: { x: number; y: number }
+  end_point: { x: number; y: number }
+}
+
+function fitEdgeLine(x: number[], y: number[], start: number, end: number, mode: 'tangent' | 'baseline'): XasLineFit | null {
+  if (x.length !== y.length) return null
+  const lo = Math.min(start, end)
+  const hi = Math.max(start, end)
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 2) return null
+  const nearestPoint = (targetX: number) => {
+    let bestIndex = 0; let bestDistance = Infinity
+    for (let i = 0; i < points.length; i += 1) {
+      const d = Math.abs(points[i].x - targetX)
+      if (d < bestDistance) { bestDistance = d; bestIndex = i }
+    }
+    return { index: bestIndex, point: points[bestIndex] }
+  }
+  const anchorStart = nearestPoint(lo)
+  const anchorEnd = nearestPoint(hi)
+  const spanPoints = Math.max(Math.abs(anchorEnd.index - anchorStart.index) + 1, 5)
+  const windowPointCount = Math.max(3, Math.min(points.length, Math.round(spanPoints * 0.2)))
+  const buildWindow = (anchorIndex: number) => {
+    const startIndex = Math.max(0, Math.min(points.length - windowPointCount, anchorIndex - Math.floor(windowPointCount / 2)))
+    return points.slice(startIndex, startIndex + windowPointCount)
+  }
+  const startWindow = buildWindow(anchorStart.index)
+  const endWindow = buildWindow(anchorEnd.index)
+  let bestPair: { startPoint: { x: number; y: number }; endPoint: { x: number; y: number }; slope: number; span: number; meanY: number } | null = null
+  let candidatePairCount = 0
+  for (const startPoint of startWindow) {
+    for (const endPoint of endWindow) {
+      const dx = endPoint.x - startPoint.x
+      if (dx <= 1e-10) continue
+      const slope = (endPoint.y - startPoint.y) / dx
+      const span = Math.abs(dx)
+      const meanY = (startPoint.y + endPoint.y) / 2
+      candidatePairCount += 1
+      if (!bestPair) { bestPair = { startPoint, endPoint, slope, span, meanY }; continue }
+      if (mode === 'tangent') {
+        if (slope > bestPair.slope + 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span))
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+      } else {
+        const absSlope = Math.abs(slope); const bestAbsSlope = Math.abs(bestPair.slope)
+        if (absSlope < bestAbsSlope - 1e-10 || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && meanY < bestPair.meanY - 1e-10) || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && Math.abs(meanY - bestPair.meanY) <= 1e-10 && span > bestPair.span))
+          bestPair = { startPoint, endPoint, slope, span, meanY }
+      }
+    }
+  }
+  if (!bestPair) return null
+  const intercept = bestPair.startPoint.y - bestPair.slope * bestPair.startPoint.x
+  return {
+    slope: bestPair.slope, intercept,
+    point_count: startWindow.length + endWindow.length,
+    start_window_point_count: startWindow.length,
+    end_window_point_count: endWindow.length,
+    candidate_pair_count: candidatePairCount,
+    anchor_start_point: anchorStart.point,
+    anchor_end_point: anchorEnd.point,
+    start_point: bestPair.startPoint,
+    end_point: bestPair.endPoint,
+  }
+}
+
+function intersectEdgeLines(line1: XasLineFit | null, line2: XasLineFit | null): { x: number; y: number } | null {
+  if (!line1 || !line2) return null
+  const slopeDelta = line1.slope - line2.slope
+  if (Math.abs(slopeDelta) < 1e-10) return null
+  const x = (line2.intercept - line1.intercept) / slopeDelta
+  if (!Number.isFinite(x)) return null
+  const y = line1.slope * x + line1.intercept
+  if (!Number.isFinite(y)) return null
+  return { x, y }
+}
+
+function buildCbmStablePlotWindow(x: number[], y: number[]) {
+  const points = x
+    .map((xi, index) => ({ x: xi, y: y[index] }))
+    .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 2) return null
+  const xs = points.map(p => p.x); const ys = points.map(p => p.y)
+  const xMin = xs[0]; const xMax = xs[xs.length - 1]
+  const yMin = Math.min(...ys); const yMax = Math.max(...ys)
+  const xPad = (xMax - xMin) * 0.04; const yPad = (yMax - yMin) * 0.08
+  const lineX = [xMin - xPad, xMax + xPad]
+  return {
+    xAxisRange: [xMin - xPad, xMax + xPad] as [number, number],
+    yAxisRange: [yMin - yPad, yMax + yPad] as [number, number],
+    lineX,
+  }
+}
+
 interface XasPeakCandidate extends XasInitPeak {
   id: string
   label: string
@@ -870,6 +978,19 @@ export default function XAS({
   const [fitRangeEnabled, setFitRangeEnabled] = useState(false)
   const [fitRangeLo, setFitRangeLo] = useState<number>(0)
   const [fitRangeHi, setFitRangeHi] = useState<number>(1)
+
+  // ── Conduction Band mode ──────────────────────────────────────────────────
+  const [xasMode, setXasMode] = useState<'xas' | 'conduction_band'>('xas')
+  const [cbmChannel, setCbmChannel] = useState<'TEY' | 'TFY'>('TEY')
+  const [cbmDataSource, setCbmDataSource] = useState<'pipeline' | 'imported'>('pipeline')
+  const [importedCbmDataset, setImportedCbmDataset] = useState<{ x: number[]; y: number[]; name: string } | null>(null)
+  const [importedCbmError, setImportedCbmError] = useState<string | null>(null)
+  const [cbmEdgeLo, setCbmEdgeLo] = useState<number>(0)
+  const [cbmEdgeHi, setCbmEdgeHi] = useState<number>(0)
+  const [cbmBaselineLo, setCbmBaselineLo] = useState<number>(0)
+  const [cbmBaselineHi, setCbmBaselineHi] = useState<number>(0)
+  const [showCbmExportPreview, setShowCbmExportPreview] = useState(false)
+  const cbmRangeInitKeyRef = useRef<string | null>(null)
 
 
   const isOverlayMode = viewMode === 'overlay'
@@ -1259,6 +1380,55 @@ export default function XAS({
   const fitEnergyMin = fitEffective && fitEffective.x.length > 0 ? fitEffective.x[0] : energyMin
   const fitEnergyMax = fitEffective && fitEffective.x.length > 0 ? fitEffective.x[fitEffective.x.length - 1] : energyMax
 
+  // ── CBM useMemos ──────────────────────────────────────────────────────────
+  const cbmPipelineRaw = useMemo((): { x: number[]; y: number[]; name: string } | null => {
+    if (!activeDataset) return null
+    const y = cbmChannel === 'TEY' ? activeDataset.tey_processed : activeDataset.tfy_processed
+    if (!y || y.length === 0) return null
+    return { x: activeDataset.x, y, name: activeDataset.name ?? 'pipeline' }
+  }, [activeDataset, cbmChannel])
+
+  const effectiveCbmRaw = useMemo(
+    () => (cbmDataSource === 'imported' && importedCbmDataset) ? importedCbmDataset : cbmPipelineRaw,
+    [cbmDataSource, importedCbmDataset, cbmPipelineRaw]
+  )
+
+  const effectiveCbmDataset = useMemo((): { x: number[]; y_processed: number[]; name: string } | null => {
+    if (!effectiveCbmRaw) return null
+    const y = effectiveCbmRaw.y
+    const yMin = Math.min(...y.filter(Number.isFinite))
+    const yMax = Math.max(...y.filter(Number.isFinite))
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax === yMin) return null
+    return { x: effectiveCbmRaw.x, y_processed: y.map(v => (v - yMin) / (yMax - yMin)), name: effectiveCbmRaw.name }
+  }, [effectiveCbmRaw])
+
+  const effectiveCbmEnergyMin = useMemo(() =>
+    effectiveCbmDataset ? Math.min(...effectiveCbmDataset.x.filter(Number.isFinite)) : energyMin
+  , [effectiveCbmDataset, energyMin])
+
+  const effectiveCbmEnergyMax = useMemo(() =>
+    effectiveCbmDataset ? Math.max(...effectiveCbmDataset.x.filter(Number.isFinite)) : energyMax
+  , [effectiveCbmDataset, energyMax])
+
+  const cbmPreviewTangent = useMemo(() => {
+    if (!effectiveCbmDataset) return null
+    return fitEdgeLine(effectiveCbmDataset.x, effectiveCbmDataset.y_processed, cbmEdgeLo, cbmEdgeHi, 'tangent')
+  }, [effectiveCbmDataset, cbmEdgeLo, cbmEdgeHi])
+
+  const cbmPreviewBaselineLine = useMemo(() => {
+    if (!effectiveCbmDataset) return null
+    return fitEdgeLine(effectiveCbmDataset.x, effectiveCbmDataset.y_processed, cbmBaselineLo, cbmBaselineHi, 'baseline')
+  }, [effectiveCbmDataset, cbmBaselineLo, cbmBaselineHi])
+
+  const cbmPreviewCbm = useMemo(() =>
+    intersectEdgeLines(cbmPreviewTangent, cbmPreviewBaselineLine)
+  , [cbmPreviewTangent, cbmPreviewBaselineLine])
+
+  const cbmPlotWindow = useMemo(() => {
+    if (!effectiveCbmDataset) return null
+    return buildCbmStablePlotWindow(effectiveCbmDataset.x, effectiveCbmDataset.y_processed)
+  }, [effectiveCbmDataset])
+
   const sidebarStyle: CSSProperties = sidebarCollapsed
     ? { width: SIDEBAR_COLLAPSED_PEEK, minWidth: SIDEBAR_COLLAPSED_PEEK, overflow: 'hidden' }
     : { width: sidebarWidth, minWidth: SIDEBAR_MIN_WIDTH, maxWidth: SIDEBAR_MAX_WIDTH }
@@ -1569,6 +1739,21 @@ export default function XAS({
     viewMode,
   ])
 
+  // Auto-initialize CBM energy ranges when dataset first becomes available
+  useEffect(() => {
+    if (!effectiveCbmDataset) return
+    const key = `${effectiveCbmDataset.x[0]?.toFixed(2)}-${effectiveCbmDataset.x[effectiveCbmDataset.x.length - 1]?.toFixed(2)}`
+    if (cbmRangeInitKeyRef.current === key) return
+    cbmRangeInitKeyRef.current = key
+    const eMin = Math.min(...effectiveCbmDataset.x.filter(Number.isFinite))
+    const eMax = Math.max(...effectiveCbmDataset.x.filter(Number.isFinite))
+    const span = eMax - eMin
+    setCbmBaselineLo(parseFloat((eMin + span * 0.02).toFixed(1)))
+    setCbmBaselineHi(parseFloat((eMin + span * 0.15).toFixed(1)))
+    setCbmEdgeLo(parseFloat((eMin + span * 0.30).toFixed(1)))
+    setCbmEdgeHi(parseFloat((eMin + span * 0.50).toFixed(1)))
+  }, [effectiveCbmDataset])
+
   const renderNormalizationSidebarInputs = (channel: XasChannel) => {
     const range = getNormalizationRange(channel, energyBounds)
     const preRange = getPreEdgeRange(channel, energyBounds)
@@ -1683,7 +1868,23 @@ export default function XAS({
                 onCollapse={() => setSidebarCollapsed(true)}
               />
 
+              {/* Mode toggle */}
+              <div className="px-4 py-3">
+                <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模式</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(['xas', 'conduction_band'] as const).map(m => (
+                    <button key={m} type="button" onClick={() => setXasMode(m)}
+                      className={['rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors pressable',
+                        xasMode === m ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
+                    >
+                      {m === 'xas' ? 'XAS 分析' : 'Conduction Band'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="px-4 pt-4">
+              {xasMode === 'xas' && (<>
               {/* 1. 載入 */}
               <Section step={1} title="載入資料" hint="DAT / XMU / NOR / TXT">
                 <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor', '.xlsx', '.xls']} />
@@ -2506,6 +2707,130 @@ export default function XAS({
                   {fitError && <p className="text-[10px] text-rose-400">{fitError}</p>}
                   </>)}
               </Section>
+              </>)}
+
+              {/* ── Conduction Band mode sections ── */}
+              {xasMode === 'conduction_band' && (<>
+
+              {/* CBM Step 1: 資料來源與歸一化 */}
+              <Section step={1} title="資料來源 / 歸一化" hint="Min-Max 歸一化 → y ∈ [0, 1]">
+                {/* Data source toggle */}
+                <div className="flex overflow-hidden rounded-xl border border-[var(--card-border)]">
+                  {(['pipeline', 'imported'] as const).map((s, i) => (
+                    <button key={s} type="button" onClick={() => setCbmDataSource(s)}
+                      className={['flex-1 py-1.5 text-xs font-medium transition-colors',
+                        i === 0 ? '' : 'border-l border-[var(--card-border)]',
+                        cbmDataSource === s ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]' : 'bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}>
+                      {s === 'pipeline' ? '處理流程結果' : '匯入已處理光譜'}
+                    </button>
+                  ))}
+                </div>
+
+                {cbmDataSource === 'pipeline' && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-[var(--text-soft)]">從目前 XAS 處理流程取得數據（需先在 XAS 分析模式完成處理）。</p>
+                    <div className="flex gap-1.5">
+                      {(['TEY', 'TFY'] as const).map(ch => (
+                        <button key={ch} type="button" onClick={() => setCbmChannel(ch)}
+                          className={['flex-1 rounded-lg border px-2 py-1 text-xs font-medium transition-colors pressable',
+                            cbmChannel === ch ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}>
+                          {ch}
+                        </button>
+                      ))}
+                    </div>
+                    {!cbmPipelineRaw && (
+                      <p className="text-[10px] text-amber-400">尚無處理後光譜，請先切回 XAS 分析模式完成處理。</p>
+                    )}
+                    {cbmPipelineRaw && (
+                      <p className="text-[10px] text-[var(--text-soft)]">
+                        {cbmPipelineRaw.name} · {cbmPipelineRaw.x.length} pts · {cbmPipelineRaw.x[0]?.toFixed(1)}–{cbmPipelineRaw.x[cbmPipelineRaw.x.length - 1]?.toFixed(1)} eV
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {cbmDataSource === 'imported' && (
+                  <div className="space-y-2 text-xs">
+                    <label className="block cursor-pointer rounded-xl border-2 border-dashed border-[var(--card-border)] px-3 py-3 text-center text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)] transition-colors">
+                      <span>點擊上傳光譜 TXT / CSV</span>
+                      <input type="file" className="hidden" accept=".txt,.csv,.dat"
+                        onChange={async e => {
+                          const file = e.target.files?.[0]; if (!file) return
+                          setImportedCbmError(null)
+                          try {
+                            const text = await file.text()
+                            const parsed = parseTwoColumnText(text, file.name)
+                            if (!parsed) { setImportedCbmError('無法解析：需要至少 3 個有效數據點（兩欄數值）'); return }
+                            setImportedCbmDataset(parsed)
+                            cbmRangeInitKeyRef.current = null
+                          } catch { setImportedCbmError('讀取檔案失敗') }
+                        }}
+                      />
+                    </label>
+                    {importedCbmError && <p className="text-rose-400">{importedCbmError}</p>}
+                    {importedCbmDataset && (
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-[var(--text-main)]">{importedCbmDataset.name}</p>
+                          <p className="text-[var(--text-soft)]">{importedCbmDataset.x.length} 點 · {Math.min(...importedCbmDataset.x).toFixed(2)}–{Math.max(...importedCbmDataset.x).toFixed(2)} eV</p>
+                        </div>
+                        <button type="button" onClick={() => { setImportedCbmDataset(null); cbmRangeInitKeyRef.current = null }}
+                          className="shrink-0 rounded-lg border border-rose-500/30 px-2 py-1 text-rose-400 hover:bg-rose-500/10 text-[10px]">移除</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {effectiveCbmDataset && (
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs">
+                    <p className="font-semibold text-emerald-400">Min-Max 歸一化已套用</p>
+                    <p className="mt-0.5 text-[var(--text-soft)]">y → (y − min) / (max − min)，數值已映射至 [0, 1]</p>
+                  </div>
+                )}
+              </Section>
+
+              {/* CBM Step 2: CBM 線性外推 */}
+              <Section step={2} title="CBM 線性外推" hint="切線 × 基準線交點 → CBM" defaultOpen={true}>
+                {!effectiveCbmDataset ? (
+                  <p className="text-xs text-[var(--text-soft)]">請先在步驟 1 設定資料來源。</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="切線起 (eV)" value={cbmEdgeLo} onChange={setCbmEdgeLo} step={0.1} />
+                      <NumInput label="切線終 (eV)" value={cbmEdgeHi} onChange={setCbmEdgeHi} step={0.1} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="基準起 (eV)" value={cbmBaselineLo} onChange={setCbmBaselineLo} step={0.1} />
+                      <NumInput label="基準終 (eV)" value={cbmBaselineHi} onChange={setCbmBaselineHi} step={0.1} />
+                    </div>
+                    {cbmPreviewCbm !== null && (
+                      <p className="text-xs text-[var(--text-soft)]">
+                        預覽 CBM ≈ <span className="font-semibold text-emerald-400">{cbmPreviewCbm.x.toFixed(3)} eV</span>
+                      </p>
+                    )}
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {[
+                        { label: '切線擬合', tone: '#f97316', slopeLabel: '最大正斜率', line: cbmPreviewTangent },
+                        { label: '基準線擬合', tone: '#a855f7', slopeLabel: '最平斜率', line: cbmPreviewBaselineLine },
+                      ].map(item => (
+                        <div key={item.label} className="rounded-xl border border-[var(--card-border)] bg-black/10 p-3 text-[11px]">
+                          <p className="font-semibold" style={{ color: item.tone }}>{item.label}</p>
+                          {item.line ? (
+                            <div className="mt-1 space-y-1 text-[var(--text-soft)]">
+                              <p>{item.slopeLabel}：{item.line.slope.toFixed(5)}</p>
+                              <p>實際選點：({item.line.start_point.x.toFixed(3)}, {item.line.start_point.y.toFixed(3)}) → ({item.line.end_point.x.toFixed(3)}, {item.line.end_point.y.toFixed(3)})</p>
+                              <p>搜尋窗：{item.line.start_window_point_count} / {item.line.end_window_point_count} 點</p>
+                            </div>
+                          ) : (
+                            <p className="mt-1 text-[var(--text-soft)]">區間內有效點數不足</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </Section>
+              </>)}
 
               </div>
             </div>
@@ -3085,6 +3410,126 @@ export default function XAS({
           )
         })()}
 
+        {/* ── Conduction Band main content ── */}
+        {xasMode === 'conduction_band' && (
+          <div className="space-y-4">
+            <ModuleTopBar
+              title="Conduction Band 分析"
+              subtitle="XAS CBM 線性外推"
+              description="將 XAS 光譜做 Min-Max 歸一化後，以切線與基準線交點決定 CBM 能量。"
+              chips={[
+                { label: `資料來源：${cbmDataSource === 'imported' ? '匯入光譜' : `${cbmChannel} 處理流程`}` },
+                { label: effectiveCbmDataset ? `${effectiveCbmDataset.x.length} pts` : '未載入' },
+              ]}
+            />
+
+            {!effectiveCbmDataset && (
+              <EmptyWorkspaceState
+                module="xas"
+                title="請先設定 CBM 資料來源"
+                description="在左側步驟 1 選擇「處理流程結果」或「匯入已處理光譜」，完成後這裡會顯示歸一化光譜與 CBM 外推圖。"
+                formats={[]}
+              />
+            )}
+
+            {effectiveCbmDataset && (() => {
+              const { x, y_processed } = effectiveCbmDataset
+              const tangent = cbmPreviewTangent
+              const baseline = cbmPreviewBaselineLine
+              const cbm = cbmPreviewCbm
+              const lineXArr = cbmPlotWindow?.lineX ?? [effectiveCbmEnergyMin, effectiveCbmEnergyMax]
+              return (
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <p className="mb-1 text-sm font-semibold text-[var(--text-main)]">CBM 線性外推圖</p>
+                  <p className="mb-3 text-xs text-[var(--text-soft)]">空心 marker 是輸入 x 值對應的光譜點，實心 marker 是在附近 20% 搜尋窗實際選到的點。</p>
+                  <Plot
+                    data={[
+                      { x, y: y_processed, type: 'scatter', mode: 'lines', name: '歸一化光譜', line: { color: '#38bdf8', width: 1.8 } },
+                      ...(tangent ? [
+                        { x: [tangent.anchor_start_point.x], y: [tangent.anchor_start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線輸入起點', marker: { color: '#f97316', size: 11, symbol: 'circle-open' as const, line: { color: '#f97316', width: 2 } } },
+                        { x: [tangent.anchor_end_point.x], y: [tangent.anchor_end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線輸入終點', marker: { color: '#fb923c', size: 11, symbol: 'circle-open' as const, line: { color: '#fb923c', width: 2 } } },
+                        { x: [tangent.start_point.x], y: [tangent.start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線實際起點', marker: { color: '#f97316', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
+                        { x: [tangent.end_point.x], y: [tangent.end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '切線實際終點', marker: { color: '#fb923c', size: 9, symbol: 'circle' as const, line: { color: '#fff7ed', width: 1.5 } } },
+                        { x: lineXArr, y: lineXArr.map(xi => tangent.slope * xi + tangent.intercept), type: 'scatter' as const, mode: 'lines' as const, name: '切線 (外推)', line: { color: '#f97316', width: 2, dash: 'dash' as const } },
+                      ] : []),
+                      ...(baseline ? [
+                        { x: [baseline.anchor_start_point.x], y: [baseline.anchor_start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準輸入起點', marker: { color: '#a855f7', size: 11, symbol: 'square-open' as const, line: { color: '#a855f7', width: 2 } } },
+                        { x: [baseline.anchor_end_point.x], y: [baseline.anchor_end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準輸入終點', marker: { color: '#c084fc', size: 11, symbol: 'square-open' as const, line: { color: '#c084fc', width: 2 } } },
+                        { x: [baseline.start_point.x], y: [baseline.start_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準實際起點', marker: { color: '#a855f7', size: 9, symbol: 'square' as const, line: { color: '#f5f3ff', width: 1.5 } } },
+                        { x: [baseline.end_point.x], y: [baseline.end_point.y], type: 'scatter' as const, mode: 'markers' as const, name: '基準實際終點', marker: { color: '#c084fc', size: 9, symbol: 'square' as const, line: { color: '#f5f3ff', width: 1.5 } } },
+                        { x: lineXArr, y: lineXArr.map(xi => baseline.slope * xi + baseline.intercept), type: 'scatter' as const, mode: 'lines' as const, name: '基準線', line: { color: '#a855f7', width: 1.8, dash: 'dot' as const } },
+                      ] : []),
+                      ...(cbm !== null ? [
+                        { x: [cbm.x], y: [cbm.y], type: 'scatter' as const, mode: 'markers' as const, name: `CBM ≈ ${cbm.x.toFixed(3)} eV`, marker: { color: '#22c55e', size: 11, symbol: 'diamond' as const } },
+                      ] : []),
+                    ] as Plotly.Data[]}
+                    layout={(() => {
+                      const base = chartLayout('Energy (eV)', '強度 (歸一化)') as Plotly.Layout
+                      return {
+                        ...base,
+                        margin: { l: 60, r: 20, t: 20, b: 50 },
+                        ...(cbmPlotWindow ? {
+                          xaxis: { ...(base.xaxis ?? {}), autorange: false, range: cbmPlotWindow.xAxisRange },
+                          yaxis: { ...(base.yaxis ?? {}), autorange: false, range: cbmPlotWindow.yAxisRange },
+                        } : {}),
+                        shapes: [
+                          ...buildRegionShapes(Math.min(cbmEdgeLo, cbmEdgeHi), Math.max(cbmEdgeLo, cbmEdgeHi), '#f97316'),
+                          ...buildRegionShapes(Math.min(cbmBaselineLo, cbmBaselineHi), Math.max(cbmBaselineLo, cbmBaselineHi), '#a855f7'),
+                        ] as unknown as Plotly.Shape[],
+                        annotations: [
+                          ...buildRegionAnnotations(Math.min(cbmEdgeLo, cbmEdgeHi), Math.max(cbmEdgeLo, cbmEdgeHi), '切線區間', '#f97316'),
+                          ...buildRegionAnnotations(Math.min(cbmBaselineLo, cbmBaselineHi), Math.max(cbmBaselineLo, cbmBaselineHi), '基準線區間', '#a855f7'),
+                          ...(cbm !== null ? [{
+                            x: cbm.x, y: cbm.y,
+                            text: `CBM ≈ ${cbm.x.toFixed(3)} eV`,
+                            showarrow: true, arrowhead: 2, ax: 50, ay: -35,
+                            font: { color: '#22c55e', size: 11 }, arrowcolor: '#22c55e',
+                          }] : []),
+                        ],
+                      }
+                    })()}
+                    config={withPlotFullscreen()}
+                    style={{ width: '100%', height: 360 }}
+                  />
+                  {/* Range control sliders */}
+                  <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
+                      <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">切線區間</p>
+                      <DualRangeInput
+                        label="" min={effectiveCbmEnergyMin} max={effectiveCbmEnergyMax}
+                        start={cbmEdgeLo} end={cbmEdgeHi}
+                        onChange={({ start, end }) => { setCbmEdgeLo(start); setCbmEdgeHi(end) }}
+                      />
+                    </div>
+                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
+                      <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">基準線區間</p>
+                      <DualRangeInput
+                        label="" min={effectiveCbmEnergyMin} max={effectiveCbmEnergyMax}
+                        start={cbmBaselineLo} end={cbmBaselineHi}
+                        onChange={({ start, end }) => { setCbmBaselineLo(start); setCbmBaselineHi(end) }}
+                      />
+                    </div>
+                  </div>
+                  {/* Export bar */}
+                  {cbmPreviewTangent && cbmPreviewBaselineLine && (
+                    <div className="mt-3 flex items-center justify-between rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-2.5">
+                      <div className="text-xs text-[var(--text-soft)]">
+                        {cbm !== null
+                          ? <span>預覽 CBM = <span className="font-semibold text-emerald-400">{cbm.x.toFixed(3)} eV</span></span>
+                          : '切線與基準線已就緒'}
+                      </div>
+                      <button type="button" onClick={() => setShowCbmExportPreview(true)}
+                        className="rounded-full border border-[var(--accent-secondary)] px-4 py-1.5 text-[12px] font-semibold text-[var(--accent-secondary)] transition-colors hover:bg-[var(--accent-soft)] pressable">
+                        ↓ 匯出 TXT（Origin Pro）
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
         </div>
       </main>
 
@@ -3248,6 +3693,155 @@ export default function XAS({
                     </button>
                   )}
                 </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── CBM Export Preview Modal ── */}
+      {showCbmExportPreview && effectiveCbmDataset && cbmPreviewTangent && cbmPreviewBaselineLine && (() => {
+        const { x, y_processed } = effectiveCbmDataset
+        const tangent = cbmPreviewTangent
+        const baseline = cbmPreviewBaselineLine
+        const cbm = cbmPreviewCbm
+        const sm = 0.4
+        const tangentLineLo = Math.min(cbmEdgeLo, cbm !== null ? cbm.x : cbmEdgeLo) - sm
+        const tangentLineHi = Math.max(cbmEdgeHi, cbm !== null ? cbm.x : cbmEdgeHi) + sm
+        const baselineLineLo = Math.min(cbmBaselineLo, cbm !== null ? cbm.x : cbmBaselineLo) - sm
+        const baselineLineHi = Math.max(cbmBaselineHi, cbm !== null ? cbm.x : cbmBaselineHi) + sm
+        const cbmSampleName = cbmDataSource === 'imported' && importedCbmDataset
+          ? importedCbmDataset.name
+          : (effectiveCbmDataset.name ?? 'spectrum')
+        const buildCbmExportContent = () => {
+          const headerLines = [
+            `# XAS Conduction Band - CBM Linear Extrapolation`,
+            `# Exported: ${formatUtc8Iso()}`,
+            `# Sample: ${cbmSampleName}`,
+            `# Data source: ${cbmDataSource === 'imported' ? 'imported spectrum' : `pipeline ${cbmChannel}`}`,
+            `# Normalization: Min-Max (y = (y - min) / (max - min))`,
+            `# Tangent region: ${cbmEdgeLo.toFixed(3)} - ${cbmEdgeHi.toFixed(3)} eV`,
+            `# Baseline region: ${cbmBaselineLo.toFixed(3)} - ${cbmBaselineHi.toFixed(3)} eV`,
+            `# Tangent slope: ${tangent.slope.toFixed(6)},  intercept: ${tangent.intercept.toFixed(4)}`,
+            `# Baseline slope: ${baseline.slope.toFixed(6)},  intercept: ${baseline.intercept.toFixed(4)}`,
+            `# Preview CBM: ${cbm !== null ? `${cbm.x.toFixed(4)} eV` : 'N/A'}`,
+            `# Tangent_Line: [${tangentLineLo.toFixed(3)}, ${tangentLineHi.toFixed(3)}] eV only; Baseline: [${baselineLineLo.toFixed(3)}, ${baselineLineHi.toFixed(3)}] eV only; NaN outside`,
+            `#`,
+            `Energy_eV\tSpectrum_normalized\tTangent_Line\tBaseline`,
+          ]
+          const dataRows = x.map((xi, i) => {
+            const yi = y_processed[i]
+            const tY = (xi >= tangentLineLo && xi <= tangentLineHi) ? (tangent.slope * xi + tangent.intercept).toFixed(6) : 'NaN'
+            const bY = (xi >= baselineLineLo && xi <= baselineLineHi) ? (baseline.slope * xi + baseline.intercept).toFixed(6) : 'NaN'
+            return `${xi.toFixed(4)}\t${yi.toFixed(6)}\t${tY}\t${bY}`
+          })
+          const cbmRows = cbm !== null ? [
+            `# CBM intersection point:`,
+            `${cbm.x.toFixed(4)}\tNaN\t${(tangent.slope * cbm.x + tangent.intercept).toFixed(6)}\t${(baseline.slope * cbm.x + baseline.intercept).toFixed(6)}`,
+          ] : []
+          return [...headerLines, ...dataRows, ...cbmRows].join('\n')
+        }
+        const previewText = (() => {
+          const allLines = buildCbmExportContent().split('\n')
+          const firstDataIdx = allLines.findIndex(l => !l.startsWith('#'))
+          const headerPart = allLines.slice(0, firstDataIdx + 1)
+          const dataPart = allLines.slice(firstDataIdx + 1, firstDataIdx + 6)
+          const suffix = x.length > 5 ? [`… (共 ${x.length} 行數據)`] : []
+          return [...headerPart, ...dataPart, ...suffix].join('\n')
+        })()
+        const mkLineX = (lo: number, hi: number, n = 60) =>
+          Array.from({ length: n }, (_, i) => lo + (hi - lo) * i / (n - 1))
+        const tangentChartX = mkLineX(tangentLineLo, tangentLineHi)
+        const baselineChartX = mkLineX(baselineLineLo, baselineLineHi)
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6 backdrop-blur-[3px]"
+            onClick={() => setShowCbmExportPreview(false)}>
+            <div className="glass-panel flex max-h-[min(92vh,calc(100vh-3rem))] w-full max-w-2xl flex-col overflow-hidden rounded-[30px]"
+              onClick={e => e.stopPropagation()}>
+              <div className="flex shrink-0 items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
+                <div>
+                  <p className="text-base font-semibold text-[var(--text-main)]">匯出預覽 — CBM 外推光譜</p>
+                  <p className="mt-0.5 text-xs text-[var(--text-soft)]">確認後將下載 tab-separated TXT（Origin Pro 格式）</p>
+                </div>
+                <button type="button" onClick={() => setShowCbmExportPreview(false)}
+                  className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable">
+                  取消
+                </button>
+              </div>
+              <div className="flex-1 space-y-4 overflow-y-auto p-5">
+                {/* Origin Pro-style chart */}
+                <Plot
+                  data={[
+                    { x, y: y_processed, type: 'scatter', mode: 'lines', name: 'Spectrum', line: { color: '#222222', width: 1.5 } },
+                    { x: tangentChartX, y: tangentChartX.map(xi => tangent.slope * xi + tangent.intercept), type: 'scatter' as const, mode: 'lines' as const, name: 'Tangent_Line', line: { color: '#e53e3e', width: 1.8 } },
+                    { x: baselineChartX, y: baselineChartX.map(xi => baseline.slope * xi + baseline.intercept), type: 'scatter' as const, mode: 'lines' as const, name: 'Baseline', line: { color: '#2b6cb0', width: 1.8 } },
+                    ...(cbm !== null ? [{ x: [cbm.x], y: [cbm.y], type: 'scatter' as const, mode: 'markers' as const, name: `CBM = ${cbm.x.toFixed(3)} eV`, marker: { color: '#22863a', size: 10, symbol: 'diamond' as const } }] : []),
+                  ] as Plotly.Data[]}
+                  layout={{
+                    paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+                    font: { color: '#111111', family: 'Arial, sans-serif', size: 12 },
+                    margin: { l: 65, r: 20, t: 20, b: 55 },
+                    xaxis: {
+                      title: { text: 'Energy_eV', font: { color: '#111111', size: 13 } },
+                      showgrid: true, gridcolor: '#e0e0e0', gridwidth: 1,
+                      linecolor: '#111111', linewidth: 1.5, mirror: true,
+                      tickcolor: '#111111', ticks: 'outside', showline: true,
+                    },
+                    yaxis: {
+                      title: { text: 'Spectrum_normalized', font: { color: '#111111', size: 13 } },
+                      showgrid: true, gridcolor: '#e0e0e0', gridwidth: 1,
+                      linecolor: '#111111', linewidth: 1.5, mirror: true,
+                      tickcolor: '#111111', ticks: 'outside', showline: true,
+                    },
+                    showlegend: true,
+                    legend: {
+                      bgcolor: 'rgba(255,255,255,0.9)', bordercolor: '#aaaaaa', borderwidth: 1,
+                      font: { color: '#111111', size: 11 }, x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
+                    },
+                  } as Plotly.Layout}
+                  config={{ displayModeBar: false }}
+                  style={{ width: '100%', height: 280 }}
+                />
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <p className="font-semibold text-[var(--text-main)]">切線參數</p>
+                    <p className="text-[var(--text-soft)]">區間：{cbmEdgeLo.toFixed(3)} – {cbmEdgeHi.toFixed(3)} eV</p>
+                    <p className="text-[var(--text-soft)]">斜率：{tangent.slope.toFixed(5)}</p>
+                    <p className="text-[var(--text-soft)]">截距：{tangent.intercept.toFixed(4)}</p>
+                    <p className="text-[var(--text-soft)] text-[10px]">TXT 輸出範圍：{tangentLineLo.toFixed(2)} – {tangentLineHi.toFixed(2)} eV</p>
+                  </div>
+                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <p className="font-semibold text-[var(--text-main)]">基準線參數</p>
+                    <p className="text-[var(--text-soft)]">區間：{cbmBaselineLo.toFixed(3)} – {cbmBaselineHi.toFixed(3)} eV</p>
+                    <p className="text-[var(--text-soft)]">斜率：{baseline.slope.toFixed(5)}</p>
+                    <p className="text-[var(--text-soft)]">截距：{baseline.intercept.toFixed(4)}</p>
+                    <p className="text-[var(--text-soft)] text-[10px]">TXT 輸出範圍：{baselineLineLo.toFixed(2)} – {baselineLineHi.toFixed(2)} eV</p>
+                  </div>
+                </div>
+                {cbm !== null && (
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+                    <p className="text-sm font-semibold text-emerald-400">預覽 CBM = {cbm.x.toFixed(4)} eV</p>
+                  </div>
+                )}
+                <div>
+                  <p className="mb-1.5 text-xs font-semibold text-[var(--text-main)]">檔案預覽</p>
+                  <pre className="overflow-x-auto rounded-xl bg-[var(--card-ghost)] p-3 text-[10.5px] leading-5 text-[var(--text-soft)]">{previewText}</pre>
+                </div>
+              </div>
+              <div className="flex shrink-0 justify-end gap-3 border-t border-[var(--card-divider)] px-5 py-4">
+                <button type="button" onClick={() => setShowCbmExportPreview(false)}
+                  className="rounded-full border border-[var(--card-border)] px-4 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable">
+                  取消
+                </button>
+                <button type="button" onClick={() => {
+                  const content = buildCbmExportContent()
+                  const safeName = cbmSampleName.replace(/[^a-zA-Z0-9_\-.]/g, '_').replace(/_+/g, '_').slice(0, 40)
+                  downloadFile(content, `xas_cbm_${safeName}.txt`, 'text/plain')
+                  setShowCbmExportPreview(false)
+                }}
+                  className="rounded-full bg-[var(--accent-strong)] px-5 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 pressable">
+                  確定匯出
+                </button>
               </div>
             </div>
           </div>

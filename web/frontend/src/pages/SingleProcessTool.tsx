@@ -61,15 +61,20 @@ function buildSingleToolCsv(
   rangeStart: number,
   rangeEnd: number,
   minimum: RangeMinimum | null,
+  gaussianModelOverride?: number[] | null,
+  gaussianSubtractedOverride?: number[] | null,
 ): string {
   const header = ['x', 'raw', 'background', 'gaussian_model', 'gaussian_subtracted', 'processed']
+  const gaussianModel = gaussianModelOverride ?? dataset.y_gaussian_model
+  const gaussianSubtracted = gaussianSubtractedOverride ?? dataset.y_gaussian_subtracted
+  const processedCol = gaussianSubtractedOverride ? gaussianSubtracted : dataset.y_processed
   const rows = dataset.x.map((xv, i) => [
     xv.toFixed(6),
     dataset.y_raw[i]?.toFixed(6) ?? '',
     dataset.y_background?.[i]?.toFixed(6) ?? '',
-    dataset.y_gaussian_model?.[i]?.toFixed(6) ?? '',
-    dataset.y_gaussian_subtracted?.[i]?.toFixed(6) ?? '',
-    dataset.y_processed[i]?.toFixed(6) ?? '',
+    gaussianModel?.[i]?.toFixed(6) ?? '',
+    gaussianSubtracted?.[i]?.toFixed(6) ?? '',
+    processedCol?.[i]?.toFixed(6) ?? '',
   ])
   const summary = minimum
     ? ['', '', '', '', '', '', '', `minimum_range_${rangeStart.toFixed(3)}_${rangeEnd.toFixed(3)}`, minimum.x.toFixed(6), minimum.y.toFixed(6)]
@@ -290,8 +295,11 @@ export default function SingleProcessTool({
   // Client-side subtraction — always instant, exact when centers are manually placed
   const clientAfterY = useMemo((): number[] | null => {
     if (!activeDataset || !clientGaussianModel) return null
-    return activeDataset.y_raw.map((v, i) => Math.max(0, v - (clientGaussianModel[i] ?? 0)))
-  }, [activeDataset, clientGaussianModel])
+    return activeDataset.y_raw.map((v, i) => {
+      const sub = v - (clientGaussianModel[i] ?? 0)
+      return gaussianNonnegativeGuard ? Math.max(0, sub) : sub
+    })
+  }, [activeDataset, clientGaussianModel, gaussianNonnegativeGuard])
 
   // Residual at the minimum (from client-side after)
   const minimumResidual = useMemo(() => {
@@ -521,9 +529,13 @@ export default function SingleProcessTool({
 
   const handleExport = useCallback(() => {
     if (!activeDataset) return
-    const csv = buildSingleToolCsv(activeDataset, minimumRangeStart, minimumRangeEnd, anchorMinimum)
+    const csv = buildSingleToolCsv(
+      activeDataset, minimumRangeStart, minimumRangeEnd, anchorMinimum,
+      tool === 'gaussian' ? clientGaussianModel : null,
+      tool === 'gaussian' ? clientAfterY : null,
+    )
     downloadFile(csv, `${activeDataset.name.replace(/\.[^.]+$/, '')}_${tool}_processed.csv`, 'text/csv;charset=utf-8')
-  }, [activeDataset, tool, minimumRangeStart, minimumRangeEnd, anchorMinimum])
+  }, [activeDataset, tool, minimumRangeStart, minimumRangeEnd, anchorMinimum, clientGaussianModel, clientAfterY])
 
   const plotConfig = withPlotFullscreen({ scrollZoom: false, displayModeBar: true, doubleClick: 'reset+autosize' })
   const showTwoCharts = tool === 'gaussian' || tool === 'background'

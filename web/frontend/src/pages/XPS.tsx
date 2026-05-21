@@ -1704,6 +1704,7 @@ export default function XPS({
   const [vbmDataSource, setVbmDataSource] = useState<'pipeline' | 'imported'>('pipeline')
   const [importedVbmDataset, setImportedVbmDataset] = useState<{ x: number[]; y: number[]; name: string } | null>(null)
   const [importedVbmError, setImportedVbmError] = useState<string | null>(null)
+  const [showVbmExportPreview, setShowVbmExportPreview] = useState(false)
 
   // Band Offset
   const [bandOffsetMethod, setBandOffsetMethod] = useState<'vbm_diff' | 'kraut'>('vbm_diff')
@@ -4527,6 +4528,22 @@ export default function XPS({
                     },
                   )}
                 </div>
+                {vbmPreviewTangent && vbmPreviewBaselineLine && (
+                  <div className="mt-3 flex items-center justify-between rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-2.5">
+                    <div className="text-xs text-[var(--text-soft)]">
+                      {vbmPreviewVbm !== null
+                        ? <span>預覽 VBM = <span className={vbmPreviewVbm.x < 0 ? 'font-semibold text-amber-400' : 'font-semibold text-emerald-400'}>{vbmPreviewVbm.x.toFixed(3)} eV</span></span>
+                        : '切線與基準線已就緒'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowVbmExportPreview(true)}
+                      className="rounded-full border border-[var(--accent-secondary)] px-4 py-1.5 text-[12px] font-semibold text-[var(--accent-secondary)] transition-colors hover:bg-[var(--accent-soft)] pressable"
+                    >
+                      ↓ 匯出 TXT（Origin Pro）
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -4736,24 +4753,8 @@ export default function XPS({
                       ) : (
                         <p className="text-xs leading-5 text-[var(--text-soft)]">完成峰擬合後才有結果可下載。</p>
                       )}
-                      {vbmResult?.success && (
-                        <ExportBtnSecondary label="VBM 結果 TXT" onClick={() => {
-                          const lines = [
-                            `VBM = ${vbmResult.vbm_ev?.toFixed(4) ?? 'N/A'} eV`,
-                            `Tangent slope = ${vbmResult.slope.toFixed(6)}`,
-                            `Baseline slope = ${vbmResult.baseline_slope.toFixed(6)}`,
-                            `Baseline mean intensity = ${vbmResult.baseline_level?.toFixed(4) ?? 'N/A'}`,
-                            `Edge region: ${vbmEdgeLo} – ${vbmEdgeHi} eV`,
-                            `Baseline region: ${vbmBaselineLo} – ${vbmBaselineHi} eV`,
-                            `Tangent anchor points: ${vbmResult.edge_line ? `${vbmResult.edge_line.anchor_start_point.x.toFixed(4)}, ${vbmResult.edge_line.anchor_start_point.y.toFixed(4)} -> ${vbmResult.edge_line.anchor_end_point.x.toFixed(4)}, ${vbmResult.edge_line.anchor_end_point.y.toFixed(4)}` : 'N/A'}`,
-                            `Tangent start point: ${vbmResult.edge_line ? `${vbmResult.edge_line.start_point.x.toFixed(4)}, ${vbmResult.edge_line.start_point.y.toFixed(4)}` : 'N/A'}`,
-                            `Tangent end point: ${vbmResult.edge_line ? `${vbmResult.edge_line.end_point.x.toFixed(4)}, ${vbmResult.edge_line.end_point.y.toFixed(4)}` : 'N/A'}`,
-                            `Baseline anchor points: ${vbmResult.baseline_line ? `${vbmResult.baseline_line.anchor_start_point.x.toFixed(4)}, ${vbmResult.baseline_line.anchor_start_point.y.toFixed(4)} -> ${vbmResult.baseline_line.anchor_end_point.x.toFixed(4)}, ${vbmResult.baseline_line.anchor_end_point.y.toFixed(4)}` : 'N/A'}`,
-                            `Baseline start point: ${vbmResult.baseline_line ? `${vbmResult.baseline_line.start_point.x.toFixed(4)}, ${vbmResult.baseline_line.start_point.y.toFixed(4)}` : 'N/A'}`,
-                            `Baseline end point: ${vbmResult.baseline_line ? `${vbmResult.baseline_line.end_point.x.toFixed(4)}, ${vbmResult.baseline_line.end_point.y.toFixed(4)}` : 'N/A'}`,
-                          ]
-                          downloadFile(lines.join('\n'), 'xps_vbm.txt', 'text/plain')
-                        }} />
+                      {(effectiveVbmDataset && vbmPreviewTangent && vbmPreviewBaselineLine) && (
+                        <ExportBtnSecondary label="VBM 外推光譜 TXT（Origin Pro）" onClick={() => setShowVbmExportPreview(true)} />
                       )}
                     </div>
                   </div>
@@ -4918,6 +4919,170 @@ export default function XPS({
           </div>
         </div>
       )}
+
+      {showVbmExportPreview && effectiveVbmDataset && vbmPreviewTangent && vbmPreviewBaselineLine && (() => {
+        const { x, y_processed } = effectiveVbmDataset
+        const tangent = vbmPreviewTangent
+        const baseline = vbmPreviewBaselineLine
+        const vbm = vbmPreviewVbm
+        const sm = 0.4
+        // Tangent line: covers tangent region + extends to VBM (short)
+        const tangentLineLo = Math.min(vbmEdgeLo, vbm !== null ? vbm.x : vbmEdgeLo) - sm
+        const tangentLineHi = Math.max(vbmEdgeHi, vbm !== null ? vbm.x : vbmEdgeHi) + sm
+        // Baseline: covers baseline region + extends to VBM
+        const baselineLineLo = Math.min(vbmBaselineLo, vbm !== null ? vbm.x : vbmBaselineLo) - sm
+        const baselineLineHi = Math.max(vbmBaselineHi, vbm !== null ? vbm.x : vbmBaselineHi) + sm
+        const vbmSampleName = vbmDataSource === 'imported' && importedVbmDataset
+          ? importedVbmDataset.name
+          : (activeFile?.name ?? currentReportFileName ?? 'spectrum')
+        const buildVbmExportContent = () => {
+          const headerLines = [
+            `# XPS Valence Band - VBM Linear Extrapolation`,
+            `# Exported: ${formatUtc8Iso()}`,
+            `# Sample: ${vbmSampleName}`,
+            `# Tangent region: ${vbmEdgeLo.toFixed(3)} - ${vbmEdgeHi.toFixed(3)} eV`,
+            `# Baseline region: ${vbmBaselineLo.toFixed(3)} - ${vbmBaselineHi.toFixed(3)} eV`,
+            `# Tangent slope: ${tangent.slope.toFixed(6)},  intercept: ${tangent.intercept.toFixed(4)}`,
+            `# Baseline slope: ${baseline.slope.toFixed(6)},  intercept: ${baseline.intercept.toFixed(4)}`,
+            `# Preview VBM: ${vbm !== null ? `${vbm.x.toFixed(4)} eV` : 'N/A'}`,
+            ...(vbmResult?.success ? [`# Backend confirmed VBM: ${vbmResult.vbm_ev?.toFixed(4) ?? 'N/A'} eV`] : []),
+            `# Tangent_Line: [${tangentLineLo.toFixed(3)}, ${tangentLineHi.toFixed(3)}] eV only; Baseline: [${baselineLineLo.toFixed(3)}, ${baselineLineHi.toFixed(3)}] eV only; NaN outside`,
+            `#`,
+            `Binding_Energy_eV\tSpectrum\tTangent_Line\tBaseline`,
+          ]
+          const dataRows = x.map((xi, i) => {
+            const yi = y_processed[i]
+            const tY = (xi >= tangentLineLo && xi <= tangentLineHi) ? (tangent.slope * xi + tangent.intercept).toFixed(6) : 'NaN'
+            const bY = (xi >= baselineLineLo && xi <= baselineLineHi) ? (baseline.slope * xi + baseline.intercept).toFixed(6) : 'NaN'
+            return `${xi.toFixed(4)}\t${yi.toFixed(6)}\t${tY}\t${bY}`
+          })
+          const vbmRows = vbm !== null ? [
+            `# VBM intersection point:`,
+            `${vbm.x.toFixed(4)}\tNaN\t${(tangent.slope * vbm.x + tangent.intercept).toFixed(6)}\t${(baseline.slope * vbm.x + baseline.intercept).toFixed(6)}`,
+          ] : []
+          return [...headerLines, ...dataRows, ...vbmRows].join('\n')
+        }
+        const previewText = (() => {
+          const allLines = buildVbmExportContent().split('\n')
+          const firstDataIdx = allLines.findIndex(l => !l.startsWith('#'))
+          const headerPart = allLines.slice(0, firstDataIdx + 1)
+          const dataPart = allLines.slice(firstDataIdx + 1, firstDataIdx + 6)
+          const suffix = x.length > 5 ? [`… (共 ${x.length} 行數據)`] : []
+          return [...headerPart, ...dataPart, ...suffix].join('\n')
+        })()
+        // Build short line arrays for chart (matching what will be exported)
+        const mkLineX = (lo: number, hi: number, n = 60) =>
+          Array.from({ length: n }, (_, i) => lo + (hi - lo) * i / (n - 1))
+        const tangentChartX = mkLineX(tangentLineLo, tangentLineHi)
+        const baselineChartX = mkLineX(baselineLineLo, baselineLineHi)
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6 backdrop-blur-[3px]"
+            onClick={() => setShowVbmExportPreview(false)}
+          >
+            <div
+              className="glass-panel flex max-h-[min(92vh,calc(100vh-3rem))] w-full max-w-2xl flex-col overflow-hidden rounded-[30px]"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex shrink-0 items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
+                <div>
+                  <p className="text-base font-semibold text-[var(--text-main)]">匯出預覽 — VBM 外推光譜</p>
+                  <p className="mt-0.5 text-xs text-[var(--text-soft)]">確認後將下載 tab-separated TXT（Origin Pro 格式）</p>
+                </div>
+                <button type="button" onClick={() => setShowVbmExportPreview(false)}
+                  className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable">
+                  取消
+                </button>
+              </div>
+              <div className="flex-1 space-y-4 overflow-y-auto p-5">
+                {/* Origin Pro-style preview chart */}
+                <Plot
+                  data={[
+                    { x, y: y_processed, type: 'scatter', mode: 'lines', name: 'Spectrum', line: { color: '#222222', width: 1.5 } },
+                    { x: tangentChartX, y: tangentChartX.map(xi => tangent.slope * xi + tangent.intercept), type: 'scatter' as const, mode: 'lines' as const, name: 'Tangent_Line', line: { color: '#e53e3e', width: 1.8 } },
+                    { x: baselineChartX, y: baselineChartX.map(xi => baseline.slope * xi + baseline.intercept), type: 'scatter' as const, mode: 'lines' as const, name: 'Baseline', line: { color: '#2b6cb0', width: 1.8 } },
+                    ...(vbm !== null ? [{ x: [vbm.x], y: [vbm.y], type: 'scatter' as const, mode: 'markers' as const, name: `VBM = ${vbm.x.toFixed(3)} eV`, marker: { color: '#22863a', size: 10, symbol: 'diamond' as const } }] : []),
+                  ] as Plotly.Data[]}
+                  layout={{
+                    paper_bgcolor: '#ffffff',
+                    plot_bgcolor: '#ffffff',
+                    font: { color: '#111111', family: 'Arial, sans-serif', size: 12 },
+                    margin: { l: 65, r: 20, t: 20, b: 55 },
+                    xaxis: {
+                      title: { text: 'Binding_Energy_eV', font: { color: '#111111', size: 13 } },
+                      autorange: 'reversed' as const,
+                      showgrid: true, gridcolor: '#e0e0e0', gridwidth: 1,
+                      linecolor: '#111111', linewidth: 1.5, mirror: true,
+                      tickcolor: '#111111', ticks: 'outside',
+                      showline: true,
+                    },
+                    yaxis: {
+                      title: { text: 'Spectrum', font: { color: '#111111', size: 13 } },
+                      showgrid: true, gridcolor: '#e0e0e0', gridwidth: 1,
+                      linecolor: '#111111', linewidth: 1.5, mirror: true,
+                      tickcolor: '#111111', ticks: 'outside',
+                      showline: true,
+                    },
+                    showlegend: true,
+                    legend: {
+                      bgcolor: 'rgba(255,255,255,0.9)',
+                      bordercolor: '#aaaaaa',
+                      borderwidth: 1,
+                      font: { color: '#111111', size: 11 },
+                      x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
+                    },
+                  } as Plotly.Layout}
+                  config={{ displayModeBar: false }}
+                  style={{ width: '100%', height: 280 }}
+                />
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <p className="font-semibold text-[var(--text-main)]">切線參數</p>
+                    <p className="text-[var(--text-soft)]">區間：{vbmEdgeLo.toFixed(3)} – {vbmEdgeHi.toFixed(3)} eV</p>
+                    <p className="text-[var(--text-soft)]">斜率：{tangent.slope.toFixed(5)}</p>
+                    <p className="text-[var(--text-soft)]">截距：{tangent.intercept.toFixed(4)}</p>
+                    <p className="text-[var(--text-soft)] text-[10px]">TXT 輸出範圍：{tangentLineLo.toFixed(2)} – {tangentLineHi.toFixed(2)} eV</p>
+                  </div>
+                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <p className="font-semibold text-[var(--text-main)]">基準線參數</p>
+                    <p className="text-[var(--text-soft)]">區間：{vbmBaselineLo.toFixed(3)} – {vbmBaselineHi.toFixed(3)} eV</p>
+                    <p className="text-[var(--text-soft)]">斜率：{baseline.slope.toFixed(5)}</p>
+                    <p className="text-[var(--text-soft)]">截距：{baseline.intercept.toFixed(4)}</p>
+                    <p className="text-[var(--text-soft)] text-[10px]">TXT 輸出範圍：{baselineLineLo.toFixed(2)} – {baselineLineHi.toFixed(2)} eV</p>
+                  </div>
+                </div>
+                {vbm !== null && (
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+                    <p className="text-sm font-semibold text-emerald-400">預覽 VBM = {vbm.x.toFixed(4)} eV</p>
+                    {vbmResult?.success && (
+                      <p className="mt-0.5 text-xs text-[var(--text-soft)]">後端確認：{vbmResult.vbm_ev?.toFixed(4)} eV</p>
+                    )}
+                  </div>
+                )}
+                <div>
+                  <p className="mb-1.5 text-xs font-semibold text-[var(--text-main)]">檔案預覽</p>
+                  <pre className="overflow-x-auto rounded-xl bg-[var(--card-ghost)] p-3 text-[10.5px] leading-5 text-[var(--text-soft)]">{previewText}</pre>
+                </div>
+              </div>
+              <div className="flex shrink-0 justify-end gap-3 border-t border-[var(--card-divider)] px-5 py-4">
+                <button type="button" onClick={() => setShowVbmExportPreview(false)}
+                  className="rounded-full border border-[var(--card-border)] px-4 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable">
+                  取消
+                </button>
+                <button type="button" onClick={() => {
+                  const content = buildVbmExportContent()
+                  const safeName = vbmSampleName.replace(/[^a-zA-Z0-9_\-.]/g, '_').replace(/_+/g, '_').slice(0, 40)
+                  downloadFile(content, `xps_vbm_${safeName}.txt`, 'text/plain')
+                  setShowVbmExportPreview(false)
+                }}
+                  className="rounded-full bg-[var(--accent-strong)] px-5 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 pressable">
+                  確定匯出
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {periodicTableOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 px-4 py-6 backdrop-blur-[2px]">
