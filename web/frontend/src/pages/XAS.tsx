@@ -9,7 +9,6 @@ import type { PlotPopupRequest, PlotPopupUpdate } from '../hooks/usePlotPopups'
 import { downloadFitReport, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
 import type {
   DatasetInput,
-  GaussPeak,
   ParsedXasFile,
   ProcessParams,
   ProcessResult,
@@ -174,9 +173,6 @@ function getChannelProcessed(dataset: ProcessedDataset, channel: 'TEY' | 'TFY') 
   return channel === 'TEY' ? dataset.tey_processed : dataset.tfy_processed
 }
 
-function getChannelAfterGaussian(dataset: ProcessedDataset, channel: 'TEY' | 'TFY') {
-  return channel === 'TEY' ? dataset.tey_after_gauss : dataset.tfy_after_gauss
-}
 
 function buildTraces(dataset: ProcessedDataset, channel: 'TEY' | 'TFY', showRaw: boolean, showWhiteLineMarkers: boolean, yOverride?: number[]): Plotly.Data[] {
   const raw = getChannelRaw(dataset, channel)
@@ -379,13 +375,13 @@ function buildOverlayBackgroundComparisonTraces(
   const traces: Plotly.Data[] = []
   backgroundDatasets.forEach((afterDs, i) => {
     const beforeDs = preprocessByName.get(afterDs.name) ?? fallbackPreprocess
-    const beforeY = getChannelAfterGaussian(afterDs, channel) ?? (beforeDs ? getChannelProcessed(beforeDs, channel) : null)
+    const beforeY = beforeDs ? getChannelProcessed(beforeDs, channel) : null
     const afterY = getChannelProcessed(afterDs, channel)
     const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length]
     const shortName = afterDs.name.replace(/\.[^.]+$/, '').slice(-24)
     if (beforeY && beforeY.length > 0) {
       traces.push({
-        x: getChannelAfterGaussian(afterDs, channel) ? afterDs.x : (beforeDs?.x ?? afterDs.x),
+        x: beforeDs?.x ?? afterDs.x,
         y: beforeY,
         type: 'scatter',
         mode: 'lines',
@@ -1121,11 +1117,7 @@ export default function XAS({
         white_line_end: null,
       }
       const hasPreprocessingStage = params.interpolate || params.average || params.energy_shift !== 0
-      const hasGaussianStage = effectiveParams.gauss_enabled && effectiveParams.gauss_peaks.length > 0
-      const needsPreNormalizationRequest = effectiveParams.norm_method !== 'none' && (
-        hasGaussianStage ||
-        !hasPreprocessingStage
-      )
+      const needsPreNormalizationRequest = effectiveParams.norm_method !== 'none' && !hasPreprocessingStage
 
       const finalRequest = processData(datasets, effectiveParams, controller.signal)
       const preprocessRequest = hasPreprocessingStage
@@ -2159,92 +2151,8 @@ export default function XAS({
                 )}
               </Section>
 
-              {/* 6. 高斯模板扣除 */}
-              <Section step={6} title="高斯模板扣除" hint="扣除已知雜散峰" defaultOpen={false}>
-                <TogglePill label="啟用高斯模板扣除" checked={params.gauss_enabled} onChange={set('gauss_enabled')} />
-                {params.gauss_enabled && (
-                  <>
-                    <SelectInput
-                      label="套用通道"
-                      value={params.gauss_channel}
-                      onChange={v => set('gauss_channel')(v as ProcessParams['gauss_channel'])}
-                      options={[
-                        { value: 'both', label: 'TEY + TFY' },
-                        { value: 'TEY', label: '僅 TEY' },
-                        { value: 'TFY', label: '僅 TFY' },
-                      ]}
-                    />
-                    <NumInput
-                      label="中心搜尋範圍 (±eV)"
-                      value={params.gauss_search}
-                      onChange={set('gauss_search')}
-                      min={0} max={10} step={0.1}
-                    />
-                    <div className="space-y-2">
-                      <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">模板列表</p>
-                      {params.gauss_peaks.map((gp, i) => (
-                        <div key={i} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-[var(--text-soft)]">模板 {i + 1}</span>
-                            <button
-                              type="button"
-                              onClick={() => setParams(p => ({ ...p, gauss_peaks: p.gauss_peaks.filter((_, j) => j !== i) }))}
-                              className="text-[10px] text-rose-400 hover:text-rose-300"
-                            >
-                              移除
-                            </button>
-                          </div>
-                          <div className="grid grid-cols-3 gap-1">
-                            <NumInput
-                              label="中心(eV)"
-                              value={gp.center}
-                              onChange={v => setParams(p => {
-                                const peaks = [...p.gauss_peaks]
-                                peaks[i] = { ...peaks[i], center: v }
-                                return { ...p, gauss_peaks: peaks }
-                              })}
-                              step={0.1}
-                            />
-                            <NumInput
-                              label="FWHM(eV)"
-                              value={gp.fwhm}
-                              onChange={v => setParams(p => {
-                                const peaks = [...p.gauss_peaks]
-                                peaks[i] = { ...peaks[i], fwhm: v }
-                                return { ...p, gauss_peaks: peaks }
-                              })}
-                              min={0.01} step={0.1}
-                            />
-                            <NumInput
-                              label="振幅"
-                              value={gp.amplitude}
-                              onChange={v => setParams(p => {
-                                const peaks = [...p.gauss_peaks]
-                                peaks[i] = { ...peaks[i], amplitude: v }
-                                return { ...p, gauss_peaks: peaks }
-                              })}
-                              step={0.01}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => setParams(p => ({
-                          ...p,
-                          gauss_peaks: [...p.gauss_peaks, { center: (energyMin + energyMax) / 2, fwhm: 1.0, amplitude: 0.1 } as GaussPeak],
-                        }))}
-                        className="w-full rounded-lg border border-dashed border-[var(--accent-soft)] py-1.5 text-[10px] text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] transition-colors"
-                      >
-                        + 新增模板
-                      </button>
-                    </div>
-                  </>
-                )}
-              </Section>
-
-              {/* 7. White Line */}
-              <Section step={7} title="White Line 搜尋" hint="自動找最高點能量" defaultOpen={false}>
+              {/* 5. White Line */}
+              <Section step={5} title="White Line 搜尋" hint="自動找最高點能量" defaultOpen={false}>
                 <TogglePill label="啟用 White Line 搜尋" checked={whiteLineEnabled} onChange={setWhiteLineEnabled} />
                 {whiteLineEnabled && (
                   <>
@@ -2267,9 +2175,9 @@ export default function XAS({
                 )}
               </Section>
 
-              {/* 8. 峰擬合 */}
+              {/* 6. 峰擬合 */}
               <Section
-                step={8}
+                step={6}
                 title="峰擬合"
                 hint="Voigt / Gaussian / Lorentzian"
                 defaultOpen={false}
@@ -2890,7 +2798,7 @@ export default function XAS({
           <EmptyWorkspaceState
             module="xas"
             title={moduleContent.uploadTitle}
-            description="左側已提供內插、多檔平均、背景扣除、歸一化、White Line 搜尋、高斯模板扣除與峰擬合。上傳之後會在這裡顯示 XAS / XANES 圖譜與分析結果。"
+            description="左側已提供內插、多檔平均、背景扣除、歸一化、White Line 搜尋與峰擬合。上傳之後會在這裡顯示 XAS / XANES 圖譜與分析結果。"
             formats={['.DAT', '.XMU', '.NOR', '.TXT', '.CSV']}
           />
         )}
@@ -3083,6 +2991,26 @@ export default function XAS({
                     <p className="text-[10px] text-[var(--text-soft)]">左軸：原始光譜 + Pre-edge 線性擬合（橘）；右軸：扣除後光譜 + Post-edge 多項式（綠）</p>
                   )}
                   {renderNormalizationChartControls('TEY')}
+                  {!showBgFit && (
+                    <button type="button"
+                      onClick={() => {
+                        const label = (normView === 'flattened' && params.norm_method === 'athena_norm') ? 'TEY_flattened' : 'TEY_normalized'
+                        if (isOverlayMode) {
+                          const headers = ['energy_eV', ...overlayDatasets.map(d => d.name.replace(/\.[^.]+$/, ''))]
+                          const rows = (overlayDatasets[0]?.x ?? []).map((xv, i) => [xv, ...overlayDatasets.map(d => getChannelFinal(d, 'TEY')[i] ?? null)])
+                          downloadFile(toCsv(headers, rows), `xas_${label}_overlay.csv`, 'text/csv')
+                        } else if (activeDataset) {
+                          const y = getChannelFinal(activeDataset, 'TEY')
+                          const headers = ['energy_eV', label]
+                          const rows = activeDataset.x.map((xv, i) => [xv, y[i] ?? null])
+                          downloadFile(toCsv(headers, rows), `${activeDataset.name.replace(/\.[^.]+$/, '')}_${label}.csv`, 'text/csv')
+                        }
+                      }}
+                      className="theme-pill pressable w-full rounded-xl px-3 py-1.5 text-xs font-medium text-[var(--accent)]"
+                    >
+                      ↓ 匯出 TEY 歸一化數據
+                    </button>
+                  )}
                 </div>
               )
 
@@ -3104,6 +3032,26 @@ export default function XAS({
                     <p className="text-[10px] text-[var(--text-soft)]">左軸：原始光譜 + Pre-edge 線性擬合（橘）；右軸：扣除後光譜 + Post-edge 多項式（綠）</p>
                   )}
                   {renderNormalizationChartControls('TFY')}
+                  {!showBgFit && (
+                    <button type="button"
+                      onClick={() => {
+                        const label = (normView === 'flattened' && params.norm_method === 'athena_norm') ? 'TFY_flattened' : 'TFY_normalized'
+                        if (isOverlayMode) {
+                          const headers = ['energy_eV', ...overlayDatasets.map(d => d.name.replace(/\.[^.]+$/, ''))]
+                          const rows = (overlayDatasets[0]?.x ?? []).map((xv, i) => [xv, ...overlayDatasets.map(d => getChannelFinal(d, 'TFY')[i] ?? null)])
+                          downloadFile(toCsv(headers, rows), `xas_${label}_overlay.csv`, 'text/csv')
+                        } else if (activeDataset) {
+                          const y = getChannelFinal(activeDataset, 'TFY')
+                          const headers = ['energy_eV', label]
+                          const rows = activeDataset.x.map((xv, i) => [xv, y[i] ?? null])
+                          downloadFile(toCsv(headers, rows), `${activeDataset.name.replace(/\.[^.]+$/, '')}_${label}.csv`, 'text/csv')
+                        }
+                      }}
+                      className="theme-pill pressable w-full rounded-xl px-3 py-1.5 text-xs font-medium text-[var(--accent)]"
+                    >
+                      ↓ 匯出 TFY 歸一化數據
+                    </button>
+                  )}
                 </div>
               )
 
@@ -3134,43 +3082,6 @@ export default function XAS({
 
             {/* Single-mode only sections */}
             {activeDataset && (<>
-            {/* Gaussian subtraction comparison chart (only when enabled and has data) */}
-            {params.gauss_enabled && (activeDataset.tey_gaussian != null || activeDataset.tfy_gaussian != null) && (
-            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
-              <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">高斯模板扣除對比</p>
-              {activeDataset.tey_gaussian != null && (
-                <>
-                  <p className="mb-1 text-xs text-[var(--text-soft)]">TEY</p>
-                  <Plot
-                    data={[
-                      { x: activeDataset.x, y: activeDataset.tey_raw, type: 'scatter', mode: 'lines', name: '原始 TEY', line: { color: '#94a3b8', width: 1.4 } },
-                      { x: activeDataset.x, y: activeDataset.tey_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
-                      { x: activeDataset.x, y: activeDataset.tey_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TEY', line: { color: '#38bdf8', width: 2 } },
-                    ] as Plotly.Data[]}
-                    layout={chartLayout('Energy (eV)', 'TEY Intensity') as Plotly.Layout}
-                    config={withPlotFullscreen()}
-                    style={{ width: '100%', height: 300 }}
-                  />
-                </>
-              )}
-              {activeDataset.tfy_gaussian != null && (
-                <>
-                  <p className="mb-1 mt-3 text-xs text-[var(--text-soft)]">TFY</p>
-                  <Plot
-                    data={[
-                      { x: activeDataset.x, y: activeDataset.tfy_raw, type: 'scatter', mode: 'lines', name: '原始 TFY', line: { color: '#94a3b8', width: 1.4 } },
-                      { x: activeDataset.x, y: activeDataset.tfy_gaussian, type: 'scatter', mode: 'lines', name: '高斯模板', line: { color: '#f97316', width: 1.8, dash: 'dash' } },
-                      { x: activeDataset.x, y: activeDataset.tfy_after_gauss, type: 'scatter', mode: 'lines', name: '扣除後 TFY', line: { color: '#a78bfa', width: 2 } },
-                    ] as Plotly.Data[]}
-                    layout={chartLayout('Energy (eV)', 'TFY Intensity') as Plotly.Layout}
-                    config={withPlotFullscreen()}
-                    style={{ width: '100%', height: 300 }}
-                  />
-                </>
-              )}
-            </div>
-            )}
-
             {/* edge step table */}
             {activeDataset.edge_step_tey != null && (
               <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">

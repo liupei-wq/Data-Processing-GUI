@@ -218,6 +218,7 @@ export default function SingleProcessTool({
   const [error, setError] = useState<string | null>(null)
   const [gaussianApplyVersion, setGaussianApplyVersion] = useState(0)
   const [snapToMinimumEnabled, setSnapToMinimumEnabled] = useState(false)
+  const [persistentSnapEnabled, setPersistentSnapEnabled] = useState(false)
   const [exportPreviewKind, setExportPreviewKind] = useState<'chart1' | 'chart2' | null>(null)
 
   // ── Background state ─────────────────────────────────────────────────────────
@@ -244,6 +245,13 @@ export default function SingleProcessTool({
     { enabled: true, name: 'Peak 1', center: 30 },
   ])
 
+  // Refs for persistent-snap loop prevention (declared after Gaussian states)
+  const snapInProgressRef = useRef(false)
+  const gaussianCentersRef = useRef(gaussianCenters)
+  const gaussianFwhmRef = useRef(gaussianFwhm)
+  useEffect(() => { gaussianCentersRef.current = gaussianCenters }, [gaussianCenters])
+  useEffect(() => { gaussianFwhmRef.current = gaussianFwhm }, [gaussianFwhm])
+
   // ── Reset on tool change ─────────────────────────────────────────────────────
   useEffect(() => {
     setRawFiles([])
@@ -268,6 +276,7 @@ export default function SingleProcessTool({
     setMinimumRangeEnd(406)
     setGaussianCenters([{ enabled: true, name: 'Peak 1', center: 30 }])
     setSnapToMinimumEnabled(false)
+    setPersistentSnapEnabled(false)
     setExportPreviewKind(null)
   }, [tool])
 
@@ -298,6 +307,38 @@ export default function SingleProcessTool({
       : null,
     [tool, activeDataset, minimumRangeStart, minimumRangeEnd, snapToMinimumEnabled],
   )
+
+  // Persistent snap: shift all centers so weighted centroid = x_min (centers only, height unchanged)
+  const runPersistentSnap = useCallback(() => {
+    if (!persistentSnapEnabled || !anchorMinimum || snapInProgressRef.current) return
+    const sigma = gaussianFwhmRef.current / (2 * Math.sqrt(2 * Math.log(2)))
+    const centers = gaussianCentersRef.current
+    const enabled = centers.filter(c => c.enabled && Number.isFinite(c.center))
+    if (enabled.length === 0) return
+    const weights = enabled.map(c => Math.exp(-0.5 * ((anchorMinimum.x - c.center) / sigma) ** 2))
+    const totalW = weights.reduce((s, w) => s + w, 0)
+    if (totalW === 0) return
+    const x_g = enabled.reduce((s, c, i) => s + c.center * weights[i], 0) / totalW
+    const shift = anchorMinimum.x - x_g
+    if (Math.abs(shift) < 1e-9) return // already aligned, skip re-render
+    snapInProgressRef.current = true
+    setGaussianCenters(prev => prev.map(c => ({ ...c, center: c.center + shift })))
+    requestAnimationFrame(() => { snapInProgressRef.current = false })
+  }, [persistentSnapEnabled, anchorMinimum])
+
+  // Re-snap when FWHM changes (sigma changes → weighted centroid shifts for multi-peak)
+  useEffect(() => {
+    runPersistentSnap()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gaussianFwhm, persistentSnapEnabled, anchorMinimum])
+
+  // Re-snap 150ms after center is manually dragged (debounce lets slider settle before snapping back)
+  useEffect(() => {
+    if (!persistentSnapEnabled || !anchorMinimum || snapInProgressRef.current) return
+    const timer = window.setTimeout(runPersistentSnap, 150)
+    return () => window.clearTimeout(timer)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gaussianCenters]) // intentionally narrow dep: only react to external center changes
 
   // Gaussian area: height × FWHM × sqrt(π / 4ln2) ≈ height × FWHM × 1.0645
   const gaussianArea = useMemo(
@@ -794,6 +835,53 @@ export default function SingleProcessTool({
                     onChange={setGaussianHeight} />
                 </div>
 
+                {/* Gaussian centers — inline with FWHM & height */}
+                <div className="mt-4">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-sm font-semibold text-[var(--text-muted)]">
+                      中心位置
+                      {persistentSnapEnabled && (
+                        <span className="rounded-full bg-[var(--accent-strong)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--bg-canvas)]">綁定</span>
+                      )}
+                    </div>
+                    <button type="button"
+                      onClick={() => setGaussianCenters(prev => [
+                        ...prev,
+                        { enabled: true, name: `Peak ${prev.length + 1}`, center: prev[prev.length - 1]?.center ?? 30 },
+                      ])}
+                      className="theme-pill pressable rounded-xl px-3 py-1.5 text-xs font-medium text-[var(--accent)]">
+                      新增
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {gaussianCenters.map((center, idx) => (
+                      <div key={`c-${idx}`} className={`rounded-[16px] border p-3 transition-colors ${persistentSnapEnabled ? 'border-[var(--accent-strong)] bg-[color:color-mix(in_srgb,var(--accent-strong)_8%,transparent)]' : 'border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)]'}`}>
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-xs font-semibold text-[var(--text-main)]">中心 {idx + 1}</span>
+                          {gaussianCenters.length > 1 && (
+                            <button type="button"
+                              onClick={() => setGaussianCenters(prev => prev.filter((_, i) => i !== idx))}
+                              className="text-xs text-[var(--accent-secondary)]">
+                              刪除
+                            </button>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <input type="text" value={center.name}
+                            onChange={e => setGaussianCenters(prev => prev.map((c, i) => i === idx ? { ...c, name: e.target.value } : c))}
+                            className="theme-input w-full rounded-xl px-3 py-1.5 text-xs" />
+                          <SliderRow
+                            label={persistentSnapEnabled ? 'X 位置（綁定中，自動回齊）' : 'X 位置'}
+                            value={center.center}
+                            min={gSliderXMin} max={gSliderXMax} step={0.01} decimals={2}
+                            onChange={v => setGaussianCenters(prev => prev.map((c, i) => i === idx ? { ...c, center: v } : c))}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 {/* Area display */}
                 <div className="mt-3 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2">
                   <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--text-soft)]">高斯面積 (H × FWHM × 1.0645)</div>
@@ -849,8 +937,24 @@ export default function SingleProcessTool({
                       disabled={!anchorMinimum || !clientGaussianModel}
                       className="pressable w-full rounded-xl bg-[var(--accent-strong)] py-2 text-sm font-semibold text-[var(--bg-canvas)] disabled:opacity-40"
                     >
-                      切到最低點
+                      切到最低點（一次性對齊）
                     </button>
+
+                    {/* Persistent binding toggle */}
+                    <label className="mt-2 flex cursor-pointer items-center gap-2.5 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-3 py-2.5">
+                      <input type="checkbox" checked={persistentSnapEnabled}
+                        onChange={e => setPersistentSnapEnabled(e.target.checked)}
+                        disabled={!anchorMinimum}
+                        className="h-4 w-4 rounded" style={{ accentColor: 'var(--accent-strong)' }} />
+                      <span className="text-xs leading-5 text-[var(--text-main)]">
+                        持續綁定最低點
+                        <span className="block text-[var(--text-soft)]">
+                          {persistentSnapEnabled
+                            ? '已綁定 — 調 FWHM/高度/中心均自動回齊最低點'
+                            : '啟用後，調整任何參數都自動圍繞最低點重算'}
+                        </span>
+                      </span>
+                    </label>
                   </>
                 )}
 
@@ -873,48 +977,6 @@ export default function SingleProcessTool({
                     )}
                   </div>
                 )}
-              </div>
-
-              {/* Gaussian centers */}
-              <div className="theme-block rounded-[20px] p-4">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <div className="text-sm font-semibold text-[var(--text-muted)]">中心位置</div>
-                  <button type="button"
-                    onClick={() => setGaussianCenters(prev => [
-                      ...prev,
-                      { enabled: true, name: `Peak ${prev.length + 1}`, center: prev[prev.length - 1]?.center ?? 30 },
-                    ])}
-                    className="theme-pill pressable rounded-xl px-3 py-1.5 text-xs font-medium text-[var(--accent)]">
-                    新增
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  {gaussianCenters.map((center, idx) => (
-                    <div key={`c-${idx}`} className="rounded-[16px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-3">
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="text-xs font-semibold text-[var(--text-main)]">中心 {idx + 1}</span>
-                        {gaussianCenters.length > 1 && (
-                          <button type="button"
-                            onClick={() => setGaussianCenters(prev => prev.filter((_, i) => i !== idx))}
-                            className="text-xs text-[var(--accent-secondary)]">
-                            刪除
-                          </button>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <input type="text" value={center.name}
-                          onChange={e => setGaussianCenters(prev => prev.map((c, i) => i === idx ? { ...c, name: e.target.value } : c))}
-                          className="theme-input w-full rounded-xl px-3 py-1.5 text-xs" />
-                        <SliderRow
-                          label="X 位置"
-                          value={center.center}
-                          min={gSliderXMin} max={gSliderXMax} step={0.01} decimals={2}
-                          onChange={v => setGaussianCenters(prev => prev.map((c, i) => i === idx ? { ...c, center: v } : c))}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
 
             </div>
