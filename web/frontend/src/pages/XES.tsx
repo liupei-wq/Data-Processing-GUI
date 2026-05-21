@@ -5,7 +5,7 @@ import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
-import { parseFiles, processData, detectPeaks, listReferences, getReferencePeaks } from '../api/xes'
+import { parseFiles, processData } from '../api/xes'
 import type {
   BandAlignParams,
   BandAlignResult,
@@ -61,10 +61,7 @@ const DEFAULT_BAND: BandAlignParams = {
 
 const BG_SUBTRACTION_HELP: Record<string, string> = {
   none: '不做背景扣除，直接保留處理前的訊號。',
-  bg1: '只用上傳的 BG1 當背景，適合前背景最接近樣品條件時。',
-  bg2: '只用上傳的 BG2 當背景，適合後背景比較穩定時。',
-  average: '把 BG1 與 BG2 平均後再扣除，適合前後背景都可信時。',
-  interpolated: '依每筆樣品的量測序號與總量測次數，在 BG1 與 BG2 之間分點插值扣背。',
+  bg1: '扣除匯入的背景檔案。',
 }
 
 function parseNumericTable(text: string): number[][] {
@@ -188,15 +185,21 @@ function downloadFile(name: string, content: string, mime = 'text/csv') {
 }
 
 // ── SidebarCard ───────────────────────────────────────────────────────────────
-function SidebarCard({ step, title, hint, children, defaultOpen = true }: {
+function SidebarCard({ step, title, hint, children, defaultOpen = true, onOpen }: {
   step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
+  onOpen?: () => void
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const handleToggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && onOpen) onOpen()
+  }
   return (
     <div className="analysis-section-card mb-3 overflow-hidden rounded-[22px] p-0">
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={handleToggle}
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
       >
         <div className="flex min-w-0 items-center gap-3">
@@ -217,13 +220,13 @@ function SidebarCard({ step, title, hint, children, defaultOpen = true }: {
 
 // ── label / input helpers ──────────────────────────────────────────────────────
 function Label({ children }: { children: React.ReactNode }) {
-  return <div className="mb-1 text-xs font-medium text-[var(--text-soft)]">{children}</div>
+  return <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{children}</span>
 }
 function Input({ ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`w-full rounded-lg border border-[var(--card-border)] bg-[var(--input-bg)] px-3 py-1.5 text-sm text-[var(--text-main)] outline-none focus:border-[var(--accent-strong)] ${props.className ?? ''}`}
+      className={`w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none disabled:opacity-40 ${props.className ?? ''}`}
     />
   )
 }
@@ -231,10 +234,80 @@ function Select({ ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
       {...props}
-      className={`w-full rounded-lg border border-[var(--card-border)] bg-[var(--input-bg)] px-3 py-1.5 text-sm text-[var(--text-main)] outline-none focus:border-[var(--accent-strong)] ${props.className ?? ''}`}
-    />
+      className={`w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none disabled:opacity-40 ${props.className ?? ''}`}
+    >
+      {props.children}
+    </select>
   )
 }
+
+function TogglePill({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={[
+        'flex w-full items-center justify-between gap-3 rounded-[14px] px-4 py-2.5 text-sm font-medium transition-all duration-150',
+        checked
+          ? [
+              'bg-[color:color-mix(in_srgb,var(--accent-secondary)_18%,transparent)]',
+              'text-[var(--accent-secondary)]',
+              '[box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent),0_2px_12px_-2px_color-mix(in_srgb,var(--accent-secondary)_30%,transparent)]',
+            ].join(' ')
+          : [
+              'bg-[color:color-mix(in_srgb,var(--card-bg)_70%,transparent)]',
+              'text-[var(--text-soft)]',
+              '[box-shadow:inset_0_0_0_1px_var(--card-border)]',
+              'hover:text-[var(--text-main)] hover:[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--accent-secondary)_40%,var(--card-border))]',
+            ].join(' '),
+      ].join(' ')}
+    >
+      <span>{label}</span>
+      <span
+        className={[
+          'h-3.5 w-3.5 shrink-0 rounded-full transition-all duration-150',
+          checked
+            ? 'bg-[var(--accent-secondary)] [box-shadow:0_0_8px_color-mix(in_srgb,var(--accent-secondary)_75%,transparent)]'
+            : 'border border-[var(--card-border)]',
+        ].join(' ')}
+      />
+    </button>
+  )
+}
+
+function TextInput({ label, value, onChange, placeholder, disabled = false }: {
+  label: string; value: string; onChange: (v: string) => void
+  placeholder?: string; disabled?: boolean
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
+      <input
+        type="text" value={value} placeholder={placeholder} disabled={disabled}
+        onChange={e => onChange(e.target.value)}
+        className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none disabled:opacity-40"
+      />
+    </label>
+  )
+}
+
+function NumInput({ label, value, onChange, min, max, step = 1, disabled = false, placeholder }: {
+  label: string; value: number | null; onChange: (v: number | null) => void
+  min?: number; max?: number; step?: number; disabled?: boolean; placeholder?: string
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
+      <input
+        type="number" value={value ?? ''} min={min} max={max} step={step} disabled={disabled}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none disabled:opacity-40"
+      />
+    </label>
+  )
+}
+
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function XES({
@@ -295,13 +368,6 @@ export default function XES({
   const [processing, setProcessing] = useState(false)
   const [processError, setProcessError] = useState<string | null>(null)
 
-  const [peakParams, setPeakParams] = useState({ enabled: false, prominence: 0.05, minDistance: 1.0, maxPeaks: 20 })
-  const [detectedPeaks, setDetectedPeaks] = useState<DetectedPeak[]>([])
-
-  const [availableMaterials, setAvailableMaterials] = useState<string[]>([])
-  const [selectedMaterials, setSelectedMaterials] = useState<string[]>([])
-  const [refPeaks, setRefPeaks] = useState<ReferencePeak[]>([])
-
   const [bandParams, setBandParams] = useState<BandAlignParams>(DEFAULT_BAND)
 
   const [sampleFiles, setSampleFiles] = useState<File[]>([])
@@ -313,16 +379,6 @@ export default function XES({
   const [calibrationFile, setCalibrationFile] = useState<File | null>(null)
   const [calibrationSummary, setCalibrationSummary] = useState<CalibrationSummary | null>(null)
   const [calibrationError, setCalibrationError] = useState<string | null>(null)
-
-  // load references on mount
-  useEffect(() => {
-    listReferences().then(setAvailableMaterials).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    if (selectedMaterials.length === 0) { setRefPeaks([]); return }
-    getReferencePeaks(selectedMaterials).then(setRefPeaks).catch(() => {})
-  }, [selectedMaterials])
 
   const handleUpload = async (files: File[]) => {
     setSampleFiles(files)
@@ -358,29 +414,18 @@ export default function XES({
   const handleParse = useCallback(async () => {
     if (sampleFiles.length === 0) return
     try {
-      const res = await parseFiles(sampleFiles, bg1File, bg2File)
+      const res = await parseFiles(sampleFiles, bg1File, null)
       setSamples(res.samples)
       setBg1(res.bg1)
-      setBg2(res.bg2)
+      setBg2(null)
       setParseErrors(res.errors)
-      setSampleOrders(prev => {
-        const next: Record<string, number> = {}
-        res.samples.forEach((s, idx) => {
-          next[s.name] = prev[s.name] ?? idx + 2
-        })
-        return next
-      })
-      setParams(prev => ({
-        ...prev,
-        total_measurements: prev.total_measurements ?? res.samples.length + 2,
-      }))
+      setSampleOrders({})
       setProcessed([])
       setAverage(null)
-      setDetectedPeaks([])
     } catch (e) {
       setParseErrors([(e as Error).message])
     }
-  }, [sampleFiles, bg1File, bg2File])
+  }, [sampleFiles, bg1File])
 
   const handleProcess = useCallback(async () => {
     if (samples.length === 0) return
@@ -391,30 +436,18 @@ export default function XES({
         name: s.name,
         x: s.x,
         y: s.y,
-        measurement_order: sampleOrders[s.name] ?? null,
+        measurement_order: null,
       }))
       const bg1Input = bg1 ? { name: bg1.name, x: bg1.x, y: bg1.y } : null
-      const bg2Input = bg2 ? { name: bg2.name, x: bg2.x, y: bg2.y } : null
-      const res = await processData(dsInputs, bg1Input, bg2Input, params)
+      const res = await processData(dsInputs, bg1Input, null, params)
       setProcessed(res.datasets)
       setAverage(res.average)
-      setDetectedPeaks([])
     } catch (e) {
       setProcessError((e as Error).message)
     } finally {
       setProcessing(false)
     }
-  }, [samples, bg1, bg2, params, sampleOrders])
-
-  const handleDetectPeaks = useCallback(async () => {
-    const target = average ?? processed[0]
-    if (!target) return
-    const xArr = params.axis_calibration !== 'none' && target.x_ev ? target.x_ev : target.x_pixel
-    try {
-      const peaks = await detectPeaks(xArr, target.y_processed, peakParams.prominence, peakParams.minDistance, peakParams.maxPeaks)
-      setDetectedPeaks(peaks)
-    } catch (e) { /* ignore */ }
-  }, [processed, average, params.axis_calibration, peakParams])
+  }, [samples, bg1, params])
 
   const p = (k: keyof ProcessParams, v: unknown) => setParams(prev => ({ ...prev, [k]: v }))
   const bp = (k: keyof BandAlignParams, v: unknown) => setBandParams(prev => ({ ...prev, [k]: v }))
@@ -491,29 +524,8 @@ export default function XES({
         }] : []),
         ...(bg1 && params.bg_method !== 'none' ? [{
           x: getReferenceX(bg1), y: bg1.y,
-          type: 'scatter' as const, mode: 'lines' as const, name: 'BG1',
+          type: 'scatter' as const, mode: 'lines' as const, name: '背景',
           line: { color: '#19D3F3', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
-        }] : []),
-        ...(bg2 && params.bg_method !== 'none' ? [{
-          x: getReferenceX(bg2), y: bg2.y,
-          type: 'scatter' as const, mode: 'lines' as const, name: 'BG2',
-          line: { color: '#FFA15A', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
-        }] : []),
-        ...refPeaks.map(rp => ({
-          x: [rp.energy_eV, rp.energy_eV],
-          y: [0, 1],
-          type: 'scatter' as const, mode: 'lines' as const,
-          name: `${rp.material} ${rp.label}`,
-          line: { color: '#a78bfa', width: 1, dash: 'dot' as const },
-          yaxis: 'y' as const,
-          showlegend: false,
-          hovertemplate: `${rp.material}: ${rp.label}<br>${rp.energy_eV} eV<extra></extra>`,
-        })),
-        ...(detectedPeaks.length > 0 ? [{
-          x: detectedPeaks.map(pk => pk.x),
-          y: detectedPeaks.map(pk => pk.intensity),
-          type: 'scatter' as const, mode: 'markers' as const, name: '偵測峰',
-          marker: { color: '#f59e0b', size: 9, symbol: 'triangle-down' },
         }] : []),
       ]}
       layout={{
@@ -521,7 +533,6 @@ export default function XES({
         height,
         yaxis: {
           ...(chartLayout('', '').yaxis),
-          ...(refPeaks.length > 0 ? {} : {}),
         },
       }}
       config={withPlotFullscreen()}
@@ -545,7 +556,7 @@ export default function XES({
         style={{ width: sidebarCollapsed ? SIDEBAR_COLLAPSED_PEEK : sidebarWidth }}
       >
         {!sidebarCollapsed && (
-          <div className="module-sidebar__content flex flex-1 flex-col overflow-y-auto">
+          <div className="module-sidebar__content min-h-0 flex flex-1 flex-col overflow-y-auto">
             <StickySidebarHeader
               activeModule="xes"
               subtitle="Material Intelligence Engine"
@@ -556,13 +567,11 @@ export default function XES({
             {/* steps */}
             <div className="flex-1 px-4 py-4">
               {/* Step 1 */}
-              <SidebarCard step={1} title="載入資料">
+              <SidebarCard step={1} title="載入資料" hint="載入光譜、背景與能量校正檔">
                 <Label>Sample 光譜（可多選）</Label>
                 <FileUpload onFiles={handleUpload} moduleLabel="XES" />
-                <Label>BG1（樣品前背景，可選）</Label>
-                <FileUpload onFiles={handleBg1Upload} moduleLabel="BG1" />
-                <Label>BG2（樣品後背景，可選）</Label>
-                <FileUpload onFiles={handleBg2Upload} moduleLabel="BG2" />
+                <Label>背景檔案（可選）</Label>
+                <FileUpload onFiles={handleBg1Upload} moduleLabel="背景" />
                 <Label>XES 能量校正檔 (.dat / .txt / .csv)</Label>
                 <FileUpload onFiles={handleCalibrationUpload} moduleLabel="XES 能量校正" accept={['.dat', '.txt', '.csv']} />
                 {calibrationFile && (
@@ -583,7 +592,7 @@ export default function XES({
                   type="button"
                   onClick={handleParse}
                   disabled={sampleFiles.length === 0}
-                  className="pressable mt-3 w-full rounded-xl bg-[var(--accent-strong)] py-2 text-sm font-semibold text-[var(--bg-canvas)] disabled:opacity-40"
+                  className="w-full rounded-lg text-white font-bold bg-[var(--accent-strong)] hover:opacity-90 disabled:opacity-50 transition-opacity py-2 text-sm mt-3"
                 >
                   解析檔案
                 </button>
@@ -593,135 +602,21 @@ export default function XES({
               </SidebarCard>
 
               {/* Step 2 */}
-              <SidebarCard step={2} title="內插 / 多檔平均" defaultOpen={false}>
-                <label className="flex items-center gap-2 text-sm text-[var(--text-main)]">
-                  <input type="checkbox" checked={params.interpolate} onChange={e => p('interpolate', e.target.checked)} />
-                  內插至均勻網格
-                </label>
+              <SidebarCard step={2} title="內插 / 多檔平均" hint="均勻網格內插與資料集平均" defaultOpen={false}>
+                <TogglePill label="內插至均勻網格" checked={params.interpolate} onChange={v => p('interpolate', v)} />
                 {params.interpolate && (
                   <div className="mt-2">
-                    <Label>點數</Label>
-                    <Input type="number" value={params.n_points} min={100} max={5000} step={100}
-                      onChange={e => p('n_points', Number(e.target.value))} />
+                    <NumInput label="點數" value={params.n_points} min={100} max={5000} step={100}
+                      onChange={v => p('n_points', v)} />
                   </div>
                 )}
-                <label className="mt-2 flex items-center gap-2 text-sm text-[var(--text-main)]">
-                  <input type="checkbox" checked={params.average} onChange={e => p('average', e.target.checked)} />
-                  多檔平均
-                </label>
-              </SidebarCard>
-
-              {/* Step 3 */}
-              <SidebarCard step={3} title="BG1/BG2 背景扣除" defaultOpen={false}>
-                <Label>扣除方式</Label>
-                <Select value={params.bg_method} onChange={e => p('bg_method', e.target.value)}>
-                  <option value="none">不扣除</option>
-                  <option value="bg1">只用 BG1</option>
-                  <option value="bg2">只用 BG2</option>
-                  <option value="average">BG1+BG2 平均</option>
-                  <option value="interpolated">分點插值（依上傳順序）</option>
-                </Select>
-                <div className="mt-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
-                  {BG_SUBTRACTION_HELP[params.bg_method]}
+                <div className="mt-2">
+                  <TogglePill label="多檔平均" checked={params.average} onChange={v => p('average', v)} />
                 </div>
-                {params.bg_method === 'interpolated' && (
-                  <div className="mt-3 space-y-3">
-                    <div>
-                      <Label>量測數據總數（含 BG1 / BG2）</Label>
-                      <Input
-                        type="number"
-                        min={2}
-                        step={1}
-                        value={params.total_measurements ?? samples.length + 2}
-                        onChange={e => p('total_measurements', e.target.value === '' ? null : Number(e.target.value))}
-                      />
-                    </div>
-                    {samples.length > 0 && (
-                      <div className="space-y-2">
-                        {samples.map((s, idx) => {
-                          const order = sampleOrders[s.name] ?? idx + 2
-                          const weights = estimateBgWeights(order, params.total_measurements ?? samples.length + 2)
-                          return (
-                            <div key={s.name} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
-                              <div className="mb-1 truncate text-xs font-medium text-[var(--text-main)]">{s.name}</div>
-                              <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-                                <div>
-                                  <Label>上傳檔案量測序號</Label>
-                                  <Input
-                                    type="number"
-                                    min={1}
-                                    step={1}
-                                    value={order}
-                                    onChange={e => setSampleOrders(prev => ({ ...prev, [s.name]: Number(e.target.value) }))}
-                                  />
-                                </div>
-                                {weights && (
-                                  <div className="pb-1 text-right font-mono text-[11px] text-[var(--accent)]">
-                                    {(weights.bg1 * 100).toFixed(1)}% BG1<br />
-                                    {(weights.bg2 * 100).toFixed(1)}% BG2
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
               </SidebarCard>
 
-              {/* Step 4 */}
-              <SidebarCard step={4} title="平滑" defaultOpen={false}>
-                <Label>平滑方式</Label>
-                <Select value={params.smooth_method} onChange={e => p('smooth_method', e.target.value as ProcessParams['smooth_method'])}>
-                  <option value="none">不平滑</option>
-                  <option value="moving_average">移動平均</option>
-                  <option value="savitzky_golay">Savitzky-Golay</option>
-                </Select>
-                {params.smooth_method !== 'none' && (
-                  <div className="mt-2 space-y-2">
-                    <Label>視窗點數</Label>
-                    <Input type="number" value={params.smooth_window} min={3} max={101} step={2}
-                      onChange={e => p('smooth_window', Number(e.target.value))} />
-                    {params.smooth_method === 'savitzky_golay' && (
-                      <>
-                        <Label>多項式階次</Label>
-                        <Input type="number" value={params.smooth_poly} min={1} max={9} step={1}
-                          onChange={e => p('smooth_poly', Number(e.target.value))} />
-                      </>
-                    )}
-                  </div>
-                )}
-              </SidebarCard>
-
-              {/* Step 5 */}
-              <SidebarCard step={5} title="歸一化" defaultOpen={false}>
-                <Select value={params.norm_method} onChange={e => p('norm_method', e.target.value as ProcessParams['norm_method'])}>
-                  <option value="none">不歸一化</option>
-                  <option value="min_max">Min-Max</option>
-                  <option value="max">最大值 = 1</option>
-                  <option value="area">面積 = 1</option>
-                  <option value="reference_region">參考區間</option>
-                </Select>
-                {params.norm_method === 'reference_region' && (
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <div>
-                      <Label>X 起始</Label>
-                      <Input type="number" step="any" value={params.norm_x_start ?? ''} placeholder="auto"
-                        onChange={e => p('norm_x_start', e.target.value === '' ? null : Number(e.target.value))} />
-                    </div>
-                    <div>
-                      <Label>X 結束</Label>
-                      <Input type="number" step="any" value={params.norm_x_end ?? ''} placeholder="auto"
-                        onChange={e => p('norm_x_end', e.target.value === '' ? null : Number(e.target.value))} />
-                    </div>
-                  </div>
-                )}
-              </SidebarCard>
-
-              {/* Step 6 — I0 正規化 */}
-              <SidebarCard step={6} title="I0 正規化（每筆除以監視訊號）" defaultOpen={false}>
+              {/* Step 3 — I0 正規化 */}
+              <SidebarCard step={3} title="I0 正規化（每筆除以監視訊號）" hint="每筆強度除以監視訊號" defaultOpen={false}>
                 <div className="text-xs leading-5 text-[var(--text-soft)]">
                   每行輸入：<code className="rounded px-1 py-0.5 bg-[var(--card-ghost)]">檔名,I0數值</code>，I0 值須為正數。
                   套用後各曲線原始強度會先除以對應 I0，再進行背景扣除與歸一化。
@@ -731,12 +626,12 @@ export default function XES({
                   placeholder={'sample1.txt,12345\nsample2.txt,13456'}
                   value={i0CsvText}
                   onChange={e => setI0CsvText(e.target.value)}
-                  className="mt-2 w-full rounded-lg border border-[var(--card-border)] bg-[var(--input-bg)] px-3 py-2 font-mono text-xs text-[var(--text-main)] outline-none focus:border-[var(--accent-strong)]"
+                  className="mt-2 w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-3 py-2 font-mono text-xs text-[var(--input-text)] focus:outline-none disabled:opacity-40"
                 />
                 <button
                   type="button"
                   onClick={() => applyI0Csv(i0CsvText)}
-                  className="pressable mt-1 w-full rounded-xl bg-[var(--accent-strong)] py-1.5 text-xs font-semibold text-[var(--bg-canvas)]"
+                  className="w-full rounded-lg text-white font-bold bg-[var(--accent-strong)] hover:opacity-90 transition-opacity py-1.5 text-xs mt-1"
                 >
                   套用 I0 值
                 </button>
@@ -754,7 +649,7 @@ export default function XES({
                     <button
                       type="button"
                       onClick={() => { setI0CsvText(''); setParams(prev => ({ ...prev, i0_values: {} })); setI0ParseError(null) }}
-                      className="pressable mt-1 w-full rounded-xl border border-[var(--card-border)] py-1 text-xs text-[var(--text-soft)] hover:text-[var(--accent-secondary)]"
+                      className="w-full rounded-lg border border-[var(--card-border)] hover:border-[var(--accent-secondary)] py-1.5 text-xs text-[var(--text-soft)] hover:text-[var(--accent-secondary)] transition-all mt-1"
                     >
                       清除 I0 設定
                     </button>
@@ -762,8 +657,8 @@ export default function XES({
                 )}
               </SidebarCard>
 
-              {/* Step 7 */}
-              <SidebarCard step={7} title="X 軸校正（pixel → eV）" defaultOpen={false}>
+              {/* Step 4 — X 軸校正 */}
+              <SidebarCard step={4} title="X 軸校正（pixel → eV）" hint="能量校正：pixel 轉 eV" defaultOpen={false}>
                 <Label>校正狀態</Label>
                 <Select
                   value={params.axis_calibration === 'table' ? 'table' : 'none'}
@@ -808,80 +703,60 @@ export default function XES({
                 )}
               </SidebarCard>
 
-              {/* Step 8 */}
-              <SidebarCard step={8} title="參考峰" defaultOpen={false}>
-                <Label>選擇材料</Label>
-                <div className="space-y-1">
-                  {availableMaterials.map(m => (
-                    <label key={m} className="flex items-center gap-2 text-sm text-[var(--text-main)]">
-                      <input
-                        type="checkbox"
-                        checked={selectedMaterials.includes(m)}
-                        onChange={e => setSelectedMaterials(prev =>
-                          e.target.checked ? [...prev, m] : prev.filter(x => x !== m)
-                        )}
-                      />
-                      {m}
-                    </label>
-                  ))}
+              {/* Step 5 — 背景扣除 */}
+              <SidebarCard step={5} title="背景扣除" hint="扣除對應背景檔案" defaultOpen={false}>
+                <Label>扣除方式</Label>
+                <Select value={params.bg_method} onChange={e => p('bg_method', e.target.value)}>
+                  <option value="none">不扣除</option>
+                  <option value="bg1">扣除背景檔案</option>
+                </Select>
+                <div className="mt-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs leading-6 text-[var(--text-soft)]">
+                  {BG_SUBTRACTION_HELP[params.bg_method]}
                 </div>
               </SidebarCard>
 
-              {/* Step 9 */}
-              <SidebarCard step={9} title="峰值偵測" defaultOpen={false}>
-                <label className="flex items-center gap-2 text-sm text-[var(--text-main)]">
-                  <input type="checkbox" checked={peakParams.enabled}
-                    onChange={e => setPeakParams(p => ({ ...p, enabled: e.target.checked }))} />
-                  啟用峰值偵測
-                </label>
-                {peakParams.enabled && (
-                  <div className="mt-2 space-y-2">
-                    <Label>Prominence（相對最大值）</Label>
-                    <Input type="number" step={0.01} min={0.01} max={1} value={peakParams.prominence}
-                      onChange={e => setPeakParams(p => ({ ...p, prominence: Number(e.target.value) }))} />
-                    <Label>最小峰距（X 單位）</Label>
-                    <Input type="number" step={0.1} min={0.1} value={peakParams.minDistance}
-                      onChange={e => setPeakParams(p => ({ ...p, minDistance: Number(e.target.value) }))} />
-                    <Label>最多峰數</Label>
-                    <Input type="number" step={1} min={1} max={50} value={peakParams.maxPeaks}
-                      onChange={e => setPeakParams(p => ({ ...p, maxPeaks: Number(e.target.value) }))} />
-                    <button
-                      type="button"
-                      onClick={handleDetectPeaks}
-                      disabled={!hasProcessed}
-                      className="pressable w-full rounded-xl border border-[var(--accent-strong)] py-1.5 text-sm font-semibold text-[var(--accent-strong)] disabled:opacity-40"
-                    >
-                      偵測峰值
-                    </button>
+              {/* Step 6 — 歸一化 */}
+              <SidebarCard step={6} title="歸一化" hint="歸一化數據範圍" defaultOpen={false}>
+                <Label>歸一化方式</Label>
+                <Select value={params.norm_method} onChange={e => p('norm_method', e.target.value as ProcessParams['norm_method'])}>
+                  <option value="none">不歸一化</option>
+                  <option value="min_max">Min-Max</option>
+                  <option value="max">最大值 = 1</option>
+                  <option value="area">面積 = 1</option>
+                  <option value="reference_region">參考區間</option>
+                </Select>
+                {params.norm_method === 'reference_region' && (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <NumInput label="X 起始" value={params.norm_x_start} placeholder="auto"
+                      onChange={v => p('norm_x_start', v)} />
+                    <NumInput label="X 結束" value={params.norm_x_end} placeholder="auto"
+                      onChange={v => p('norm_x_end', v)} />
                   </div>
                 )}
               </SidebarCard>
 
-              {/* Step 9 */}
-              <SidebarCard step={9} title="能帶對齊（XES/XAS）" defaultOpen={false}>
-                <label className="flex items-center gap-2 text-sm text-[var(--text-main)]">
-                  <input type="checkbox" checked={bandParams.enabled} onChange={e => bp('enabled', e.target.checked)} />
-                  啟用能帶對齊計算
-                </label>
+              {/* Step 7 — 能帶對齊 */}
+              <SidebarCard step={7} title="能帶對齊（XES/XAS）" hint="計算異質結價帶/導帶偏置" defaultOpen={false}>
+                <TogglePill label="啟用能帶對齊計算" checked={bandParams.enabled} onChange={v => bp('enabled', v)} />
                 {bandParams.enabled && (
                   <div className="mt-2 space-y-2 text-sm">
                     <div className="grid grid-cols-2 gap-2">
-                      <div><Label>材料 A</Label><Input value={bandParams.mat_a} onChange={e => bp('mat_a', e.target.value)} /></div>
-                      <div><Label>材料 B</Label><Input value={bandParams.mat_b} onChange={e => bp('mat_b', e.target.value)} /></div>
+                      <TextInput label="材料 A" value={bandParams.mat_a} onChange={v => bp('mat_a', v)} />
+                      <TextInput label="材料 B" value={bandParams.mat_b} onChange={v => bp('mat_b', v)} />
                     </div>
                     <p className="text-xs font-semibold text-[var(--text-soft)]">材料 A</p>
                     <div className="grid grid-cols-2 gap-2">
-                      <div><Label>VBM (eV)</Label><Input type="number" step="any" value={bandParams.vbm_a} onChange={e => bp('vbm_a', Number(e.target.value))} /></div>
-                      <div><Label>CBM (eV)</Label><Input type="number" step="any" value={bandParams.cbm_a} onChange={e => bp('cbm_a', Number(e.target.value))} /></div>
-                      <div><Label>σ(VBM)</Label><Input type="number" step="any" min={0} value={bandParams.sigma_vbm_a} onChange={e => bp('sigma_vbm_a', Number(e.target.value))} /></div>
-                      <div><Label>σ(CBM)</Label><Input type="number" step="any" min={0} value={bandParams.sigma_cbm_a} onChange={e => bp('sigma_cbm_a', Number(e.target.value))} /></div>
+                      <NumInput label="VBM (eV)" step={0.01} value={bandParams.vbm_a} onChange={v => bp('vbm_a', v ?? 0)} />
+                      <NumInput label="CBM (eV)" step={0.01} value={bandParams.cbm_a} onChange={v => bp('cbm_a', v ?? 0)} />
+                      <NumInput label="σ(VBM)" min={0} step={0.01} value={bandParams.sigma_vbm_a} onChange={v => bp('sigma_vbm_a', v ?? 0)} />
+                      <NumInput label="σ(CBM)" min={0} step={0.01} value={bandParams.sigma_cbm_a} onChange={v => bp('sigma_cbm_a', v ?? 0)} />
                     </div>
                     <p className="text-xs font-semibold text-[var(--text-soft)]">材料 B</p>
                     <div className="grid grid-cols-2 gap-2">
-                      <div><Label>VBM (eV)</Label><Input type="number" step="any" value={bandParams.vbm_b} onChange={e => bp('vbm_b', Number(e.target.value))} /></div>
-                      <div><Label>CBM (eV)</Label><Input type="number" step="any" value={bandParams.cbm_b} onChange={e => bp('cbm_b', Number(e.target.value))} /></div>
-                      <div><Label>σ(VBM)</Label><Input type="number" step="any" min={0} value={bandParams.sigma_vbm_b} onChange={e => bp('sigma_vbm_b', Number(e.target.value))} /></div>
-                      <div><Label>σ(CBM)</Label><Input type="number" step="any" min={0} value={bandParams.sigma_cbm_b} onChange={e => bp('sigma_cbm_b', Number(e.target.value))} /></div>
+                      <NumInput label="VBM (eV)" step={0.01} value={bandParams.vbm_b} onChange={v => bp('vbm_b', v ?? 0)} />
+                      <NumInput label="CBM (eV)" step={0.01} value={bandParams.cbm_b} onChange={v => bp('cbm_b', v ?? 0)} />
+                      <NumInput label="σ(VBM)" min={0} step={0.01} value={bandParams.sigma_vbm_b} onChange={v => bp('sigma_vbm_b', v ?? 0)} />
+                      <NumInput label="σ(CBM)" min={0} step={0.01} value={bandParams.sigma_cbm_b} onChange={v => bp('sigma_cbm_b', v ?? 0)} />
                     </div>
                   </div>
                 )}
@@ -892,7 +767,7 @@ export default function XES({
                 type="button"
                 onClick={handleProcess}
                 disabled={!hasSamples || processing}
-                className="pressable mb-4 w-full rounded-xl bg-[var(--accent-strong)] py-2.5 text-sm font-bold text-[var(--bg-canvas)] disabled:opacity-40"
+                className="w-full rounded-lg text-white font-bold bg-[var(--accent-strong)] hover:opacity-90 disabled:opacity-50 transition-opacity py-2.5 text-sm"
               >
                 {processing ? '處理中…' : '執行處理'}
               </button>
@@ -923,7 +798,7 @@ export default function XES({
       </div>
 
       {/* main content */}
-      <div className="flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+      <div className="min-h-0 flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
           <ModuleTopBar
             title={moduleContent.title}
@@ -932,7 +807,6 @@ export default function XES({
             chips={[
               { label: `資料量 ${samples.length}` },
               { label: `平均 ${params.average ? '開啟' : '關閉'}` },
-              { label: `參考峰 ${refPeaks.length}` },
             ]}
           />
 
@@ -940,18 +814,16 @@ export default function XES({
             items={[
               { label: '資料集', value: samples.length > 0 ? `${samples.length} 個` : '未載入' },
               { label: '平均模式', value: params.average ? '開啟' : '關閉' },
-              { label: '參考峰', value: `${refPeaks.length}` },
             ]}
           />
 
           {/* status pills */}
           {hasSamples && (
-            <div className="mb-5 flex flex-wrap gap-2">
+            <div className="mb-4 flex flex-wrap gap-2">
               <span className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">
                 {samples.length} 個 sample
               </span>
-              {bg1 && <span className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">BG1: {bg1.name}</span>}
-              {bg2 && <span className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">BG2: {bg2.name}</span>}
+              {bg1 && <span className="rounded-full border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-1 text-xs text-[var(--text-soft)]">背景: {bg1.name}</span>}
               {hasProcessed && <span className="rounded-full border border-green-500/40 bg-green-500/10 px-3 py-1 text-xs text-green-400">已處理</span>}
               {energyCalibrated ? (
                 <span className="rounded-full border border-green-500/40 bg-green-500/10 px-3 py-1 text-xs text-green-400">Energy calibrated</span>
@@ -983,7 +855,7 @@ export default function XES({
           ) : (
             <>
               {/* Main spectra chart */}
-              <div className="analysis-section-card mb-5 p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <div className="mb-2 flex justify-end">
                   {onOpenPlotPopup && (
                     <button type="button" className="chart-popup-button" onClick={openMainSpectraPopup}>
@@ -1012,38 +884,14 @@ export default function XES({
                     // BG reference overlays
                     ...(bg1 && params.bg_method !== 'none' ? [{
                       x: getReferenceX(bg1), y: bg1.y,
-                      type: 'scatter' as const, mode: 'lines' as const, name: 'BG1',
+                      type: 'scatter' as const, mode: 'lines' as const, name: '背景',
                       line: { color: '#19D3F3', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
-                    }] : []),
-                    ...(bg2 && params.bg_method !== 'none' ? [{
-                      x: getReferenceX(bg2), y: bg2.y,
-                      type: 'scatter' as const, mode: 'lines' as const, name: 'BG2',
-                      line: { color: '#FFA15A', width: 1.2, dash: 'dash' as const }, opacity: 0.6,
-                    }] : []),
-                    // reference peak markers
-                    ...refPeaks.map(rp => ({
-                      x: [rp.energy_eV, rp.energy_eV],
-                      y: [0, 1],
-                      type: 'scatter' as const, mode: 'lines' as const,
-                      name: `${rp.material} ${rp.label}`,
-                      line: { color: '#a78bfa', width: 1, dash: 'dot' as const },
-                      yaxis: 'y' as const,
-                      showlegend: false,
-                      hovertemplate: `${rp.material}: ${rp.label}<br>${rp.energy_eV} eV<extra></extra>`,
-                    })),
-                    // detected peaks
-                    ...(detectedPeaks.length > 0 ? [{
-                      x: detectedPeaks.map(pk => pk.x),
-                      y: detectedPeaks.map(pk => pk.intensity),
-                      type: 'scatter' as const, mode: 'markers' as const, name: '偵測峰',
-                      marker: { color: '#f59e0b', size: 9, symbol: 'triangle-down' },
                     }] : []),
                   ]}
                   layout={{
                     ...chartLayout('處理後光譜', xLabel),
                     yaxis: {
                       ...(chartLayout('', '').yaxis),
-                      ...(refPeaks.length > 0 ? {} : {}),
                     },
                   }}
                   config={withPlotFullscreen()}
@@ -1053,7 +901,7 @@ export default function XES({
 
               {/* BG subtraction comparison chart */}
               {params.bg_method !== 'none' && (
-                <div className="analysis-section-card mb-5 p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <Plot
                     data={processed.flatMap((ds, i) => [
                       {
@@ -1066,89 +914,29 @@ export default function XES({
                       ...(ds.y_bg ? [{
                         x: getX(ds), y: ds.y_bg,
                         type: 'scatter' as const, mode: 'lines' as const,
-                        name: `${ds.name} (BG)`,
+                        name: `${ds.name} (背景)`,
                         line: { color: COLORS[i % COLORS.length], width: 1, dash: 'dash' as const },
                         opacity: 0.5,
                       }] : []),
                       {
                         x: getX(ds), y: ds.y_corrected,
                         type: 'scatter' as const, mode: 'lines' as const,
-                        name: `${ds.name} (扣 BG 後)`,
+                        name: `${ds.name} (扣背景後)`,
                         line: { color: COLORS[i % COLORS.length], width: 1.8 },
                       },
                     ])}
-                    layout={chartLayout('BG1/BG2 扣除比較', xLabel)}
+                    layout={chartLayout('背景扣除比較', xLabel)}
                     config={withPlotFullscreen()}
                     style={{ width: '100%' }}
                   />
                 </div>
               )}
 
-              {/* Detected peaks table */}
-              {detectedPeaks.length > 0 && (
-                <div className="analysis-section-card mb-5 p-4">
-                  <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">偵測峰</h2>
-                  <div className="analysis-table-wrap">
-                    <table className="analysis-data-table min-w-full text-left text-xs">
-                      <thead>
-                        <tr className="border-b border-[var(--card-border)] text-[var(--text-soft)]">
-                          <th className="py-2 pr-4 text-left">#</th>
-                          <th className="py-2 pr-4 text-left">{xLabel}</th>
-                          <th className="py-2 pr-4 text-left">強度</th>
-                          <th className="py-2 pr-4 text-left">相對強度 (%)</th>
-                          <th className="py-2 text-left">FWHM</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detectedPeaks.map((pk, i) => (
-                          <tr key={i} className="border-b border-[var(--card-border)]/50">
-                            <td className="py-1.5 pr-4">{i + 1}</td>
-                            <td className="py-1.5 pr-4">{pk.x.toFixed(3)}</td>
-                            <td className="py-1.5 pr-4">{pk.intensity.toFixed(2)}</td>
-                            <td className="py-1.5 pr-4">{pk.rel_intensity.toFixed(1)}</td>
-                            <td className="py-1.5">{pk.fwhm != null ? pk.fwhm.toFixed(3) : '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
 
-              {/* Reference peaks table */}
-              {refPeaks.length > 0 && (
-                <div className="analysis-section-card mb-5 p-4">
-                  <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">參考峰</h2>
-                  <div className="analysis-table-wrap">
-                    <table className="analysis-data-table min-w-full text-left text-xs">
-                      <thead>
-                        <tr className="border-b border-[var(--card-border)] text-[var(--text-soft)]">
-                          <th className="py-2 pr-4 text-left">材料</th>
-                          <th className="py-2 pr-4 text-left">標籤</th>
-                          <th className="py-2 pr-4 text-left">Energy (eV)</th>
-                          <th className="py-2 pr-4 text-left">容差 (eV)</th>
-                          <th className="py-2 text-left">相對強度</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {refPeaks.map((rp, i) => (
-                          <tr key={i} className="border-b border-[var(--card-border)]/50">
-                            <td className="py-1.5 pr-4 font-medium text-[var(--text-main)]">{rp.material}</td>
-                            <td className="py-1.5 pr-4">{rp.label}</td>
-                            <td className="py-1.5 pr-4">{rp.energy_eV.toFixed(1)}</td>
-                            <td className="py-1.5 pr-4">±{rp.tolerance_eV}</td>
-                            <td className="py-1.5">{rp.relative_intensity}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
 
               {/* Band alignment result */}
               {bandParams.enabled && bandResult && (
-                <div className="analysis-section-card mb-5 p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">能帶對齊結果</h2>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {[
@@ -1197,7 +985,7 @@ export default function XES({
               )}
 
               {/* Export */}
-              <div className="analysis-section-card mb-8 p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</h2>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -1253,24 +1041,7 @@ export default function XES({
                   >
                     全部資料集 CSV
                   </button>
-                  {detectedPeaks.length > 0 && (
-                    <button
-                      type="button"
-                      className="pressable rounded-xl border border-[var(--card-border)] bg-[var(--panel-bg)] px-4 py-2 text-xs font-medium text-[var(--text-main)] hover:border-[var(--accent-strong)]"
-                      onClick={() => {
-                        const rows = detectedPeaks.map((pk, i) => ({
-                          Peak: i + 1,
-                          [xLabel]: pk.x,
-                          Intensity: pk.intensity,
-                          'Rel_Intensity_%': pk.rel_intensity,
-                          FWHM: pk.fwhm ?? '',
-                        }))
-                        downloadFile('xes_peaks.csv', toCsv(rows))
-                      }}
-                    >
-                      峰值表 CSV
-                    </button>
-                  )}
+
                   {bandParams.enabled && bandResult && (
                     <button
                       type="button"

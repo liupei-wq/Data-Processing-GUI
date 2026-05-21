@@ -2916,6 +2916,17 @@ export default function XPS({
     ? { width: SIDEBAR_COLLAPSED_PEEK, minWidth: SIDEBAR_COLLAPSED_PEEK, overflow: 'hidden' }
     : { width: sidebarWidth, minWidth: SIDEBAR_MIN_WIDTH, maxWidth: SIDEBAR_MAX_WIDTH }
 
+  const overlayHasPreprocess = overlayState.params.interpolate || overlayState.params.average || Math.abs(overlayState.params.energy_shift) > 1e-8
+  const overlayAnyStageEnabled = overlayHasPreprocess || overlayState.params.bg_enabled || overlayState.params.valid_range_enabled || hasNormalizationStage
+
+  const showRawSpectrumCard = processingViewMode === 'single'
+    ? !hasPreprocessStage
+    : !overlayHasPreprocess
+
+  const showFinalSpectrumCard = processingViewMode === 'single'
+    ? (hasPreprocessStage || hasBackgroundStage || hasValidRangeStage || hasNormalizationStage)
+    : overlayAnyStageEnabled
+
   return (
     <div className={`flex h-screen flex-row overflow-hidden${sidebarResizing ? ' select-none' : ''}`}>
       {/* ── sidebar ── */}
@@ -3876,7 +3887,7 @@ export default function XPS({
       </aside>
 
       {/* ── main content ── */}
-      <main className="flex flex-1 flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
         <ModuleTopBar
           title={moduleContent.title}
           subtitle={moduleContent.subtitle}
@@ -3919,7 +3930,7 @@ export default function XPS({
 
         {(rawFiles.length > 0 || (vbmDataSource === 'imported' && !!importedVbmDataset)) && (
           <>
-            {rawChartTraces.length > 0 && (
+            {rawChartTraces.length > 0 && showRawSpectrumCard && (
               <div className="analysis-section-card mb-4 p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">原始光譜</p>
                 {rawChartSourceFiles.length > 0 && (
@@ -4154,40 +4165,6 @@ export default function XPS({
               </div>
             )}
 
-            {/* ── overlay: final ── */}
-            {overlayFinalDatasets.length >= overlayMinCount && (
-              <div className="analysis-section-card mb-4 p-4">
-                <ChartToolbar
-                  title="多筆疊圖比較：最終結果"
-                  colorValue={chartLineColors.overlay}
-                  onColorChange={value => {
-                    setChartLineColors(current => ({ ...current, overlay: value }))
-                    applyOverlayPalette(value)
-                  }}
-                />
-                <div className="mb-3">
-                  <SeriesColorControls
-                    items={overlaySeriesItems}
-                    colorKeys={overlaySeriesColorKeys}
-                    onColorChange={handleSeriesColorChange}
-                  />
-                </div>
-                <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {overlayState.params.average ? '多檔平均光譜目前最新的處理結果。' : '各筆資料目前最新的處理結果疊圖。'}
-                </p>
-                <Plot
-                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayFinalDatasets, getDatasetColorKey) as Plotly.Data[], overlayHidden)}
-                  layout={chartLayout() as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 340 }}
-                  onLegendClick={makeLegendClick(setOverlayHidden) as never}
-                  onLegendDoubleClick={() => false}
-                />
-                <div className="mt-3 flex justify-start">
-                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayFinalDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_final.csv', 'text/csv')} />
-                </div>
-              </div>
-            )}
 
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
               <div className="analysis-section-card mb-4 p-4">
@@ -4334,7 +4311,7 @@ export default function XPS({
               </div>
             )}
 
-            {currentDisplayDataset && (processingViewMode === 'single' ? result : fitTargetDataset) && (
+            {currentDisplayDataset && (processingViewMode === 'single' ? result : fitTargetDataset) && showFinalSpectrumCard && (
               <div className="analysis-section-card mb-4 p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div>

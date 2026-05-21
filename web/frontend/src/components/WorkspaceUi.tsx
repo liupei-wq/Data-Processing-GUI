@@ -830,3 +830,79 @@ export function StickySidebarHeader({
     </div>
   )
 }
+
+// ── Shared Helper UI Components for Modules (Design System) ──────────────────
+
+type ToggleRowProps = {
+  checked: boolean
+  onChange: (v: boolean) => void
+  label: string
+  hint?: string
+}
+
+export function ToggleRow({ checked, onChange, label, hint }: ToggleRowProps) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-1.5">
+      <div className="flex flex-col min-w-0 flex-1">
+        <span className="text-sm font-semibold text-[var(--text-main)] truncate">{label}</span>
+        {hint && <span className="text-xs text-[var(--text-soft)] leading-normal mt-0.5">{hint}</span>}
+      </div>
+      <label className="relative inline-flex cursor-pointer items-center shrink-0">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={e => onChange(e.target.checked)}
+          className="peer sr-only"
+        />
+        <div className="peer h-5 w-9 rounded-full bg-[var(--card-border)] after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-[var(--accent-strong)] peer-checked:after:translate-x-[16px]" />
+      </label>
+    </div>
+  )
+}
+
+export function SmallLabel({ children }: { children: React.ReactNode }) {
+  return <p className="mb-1 text-xs font-semibold text-[var(--text-soft)]">{children}</p>
+}
+
+type NumberFieldProps = {
+  value: number
+  step?: number
+  min?: number
+  max?: number
+  disabled?: boolean
+  onChange: (v: number) => void
+}
+
+export function NumberField({ value, step = 1, min, max, disabled, onChange }: NumberFieldProps) {
+  return (
+    <input
+      type="number"
+      value={value ?? ''}
+      step={step}
+      min={min}
+      max={max}
+      disabled={disabled}
+      onChange={e => onChange(Number(e.target.value))}
+      className="theme-input w-full rounded-xl px-3 py-2 text-sm disabled:opacity-50"
+    />
+  )
+}
+
+type TextFieldProps = {
+  value: string
+  disabled?: boolean
+  onChange: (v: string) => void
+}
+
+export function TextField({ value, disabled, onChange }: TextFieldProps) {
+  return (
+    <input
+      type="text"
+      value={value ?? ''}
+      disabled={disabled}
+      onChange={e => onChange(e.target.value)}
+      className="theme-input w-full rounded-xl px-3 py-2 text-sm disabled:opacity-50"
+    />
+  )
+}
+

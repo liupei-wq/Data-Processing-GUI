@@ -805,7 +805,7 @@ export default function SingleProcessTool({
     <div className="flex h-screen overflow-hidden bg-[var(--bg-canvas)] text-[var(--text-main)]">
 
       {/* ════════════════════════════ LEFT SIDEBAR ════════════════════════════ */}
-      <aside className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-r border-[var(--card-border)] bg-[var(--panel-bg)]">
+      <aside className="min-h-0 flex w-[300px] shrink-0 flex-col overflow-y-auto border-r border-[var(--card-border)] bg-[var(--panel-bg)]">
 
         {/* Sticky title */}
         <div className="sticky top-0 z-10 border-b border-[var(--card-border)] bg-[var(--panel-bg)] px-5 py-4">
@@ -1090,7 +1090,7 @@ export default function SingleProcessTool({
       </aside>
 
       {/* ════════════════════════════ RIGHT MAIN ════════════════════════════ */}
-      <main className="flex flex-1 flex-col overflow-y-auto p-4 sm:p-5">
+      <main className="min-h-0 flex flex-1 flex-col overflow-y-auto p-4 sm:p-5">
         <div className="space-y-4">
 
           {/* Status bar */}

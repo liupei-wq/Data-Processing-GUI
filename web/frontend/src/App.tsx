@@ -149,6 +149,32 @@ export default function App() {
   const workspaceLauncherRef = useRef<HTMLDivElement | null>(null)
   const workspaceLauncherCloseTimerRef = useRef<number | null>(null)
 
+  const themeLauncherRef = useRef<HTMLDivElement | null>(null)
+  const [showThemePanel, setShowThemePanel] = useState(false)
+  const themeCloseTimerRef = useRef<number | null>(null)
+
+  const handleThemeMouseEnter = () => {
+    if (themeCloseTimerRef.current != null) {
+      window.clearTimeout(themeCloseTimerRef.current)
+      themeCloseTimerRef.current = null
+    }
+    setShowThemePanel(true)
+  }
+
+  const handleThemeMouseLeave = () => {
+    if (themeCloseTimerRef.current != null) {
+      window.clearTimeout(themeCloseTimerRef.current)
+    }
+    themeCloseTimerRef.current = window.setTimeout(() => {
+      setShowThemePanel(false)
+    }, 180)
+  }
+
+  const handleThemeGearClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setShowThemePanel(prev => !prev)
+  }
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('nigiro-theme', theme)
@@ -169,6 +195,9 @@ export default function App() {
       if (workspaceLauncherCloseTimerRef.current != null) {
         window.clearTimeout(workspaceLauncherCloseTimerRef.current)
       }
+      if (themeCloseTimerRef.current != null) {
+        window.clearTimeout(themeCloseTimerRef.current)
+      }
     }
   }, [])
 
@@ -177,6 +206,9 @@ export default function App() {
       if (!workspaceLauncherRef.current?.contains(event.target as Node)) {
         setWorkspaceLauncherOpen(false)
         setWorkspaceLauncherPreview(false)
+      }
+      if (!themeLauncherRef.current?.contains(event.target as Node)) {
+        setShowThemePanel(false)
       }
     }
 
@@ -265,17 +297,26 @@ export default function App() {
     : (ANALYSIS_MODULES.find(item => `workflow-${item.id}` === workspace)?.label ?? '分析模組')
 
   const themeLauncher = (
-    <div className="theme-launcher">
+    <div
+      ref={themeLauncherRef}
+      className={`theme-launcher ${showThemePanel ? 'theme-launcher--open' : ''}`}
+      onMouseEnter={handleThemeMouseEnter}
+      onMouseLeave={handleThemeMouseLeave}
+    >
       <button
         type="button"
         className="theme-launcher__gear pressable"
         aria-label="打開主題設定"
-        aria-expanded="false"
+        aria-expanded={showThemePanel ? "true" : "false"}
+        onClick={handleThemeGearClick}
       >
         <span className="theme-launcher__gear-icon" aria-hidden="true" />
       </button>
 
-      <div className="theme-dock theme-launcher__panel" aria-hidden="true">
+      <div
+        className={`theme-dock theme-launcher__panel ${showThemePanel ? 'theme-launcher__panel--open' : ''}`}
+        aria-hidden={showThemePanel ? "false" : "true"}
+      >
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--text-soft)]">

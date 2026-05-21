@@ -2022,7 +2022,7 @@ export default function XAS({
           </button>
         ) : (
           <>
-            <div className="flex-1 overflow-y-auto">
+            <div className="min-h-0 flex-1 overflow-y-auto">
               <StickySidebarHeader
                 activeModule="xas"
                 subtitle="Material Intelligence Engine"
@@ -2932,7 +2932,7 @@ export default function XAS({
       </aside>
 
       {/* ── main content ── */}
-      <main className="flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
+      <main className="min-h-0 flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
         <ModuleTopBar
           title={moduleContent.title}
@@ -3701,7 +3701,7 @@ export default function XAS({
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 space-y-5">
                 {/* preview table */}
                 <div>
                   <p className="text-xs uppercase tracking-[0.14em] text-[var(--text-soft)] mb-2">資料預覽（前 5 行）</p>
@@ -3880,7 +3880,7 @@ export default function XAS({
                   取消
                 </button>
               </div>
-              <div className="flex-1 space-y-4 overflow-y-auto p-5">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
                 {/* Origin Pro-style chart */}
                 <Plot
                   data={[

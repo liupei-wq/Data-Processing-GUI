@@ -179,6 +179,9 @@ interface Props {
   onScherrerParamsChange: (p: ScherrerParams) => void
   onExportWeakPeakSeries?: () => void
   canExportWeakPeak?: boolean
+  refPeaksEnabled?: boolean
+  onRefPeaksEnabledChange?: (v: boolean) => void
+  onOpenCompoundModal?: () => void
 }
 
 export default function ProcessingPanel({
@@ -207,6 +210,9 @@ export default function ProcessingPanel({
   onScherrerParamsChange,
   onExportWeakPeakSeries,
   canExportWeakPeak = false,
+  refPeaksEnabled = false,
+  onRefPeaksEnabledChange,
+  onOpenCompoundModal,
 }: Props) {
   const set = <K extends keyof ProcessParams>(key: K, value: ProcessParams[K]) =>
     onChange({ ...params, [key]: value })
@@ -523,52 +529,42 @@ export default function ProcessingPanel({
           <p>依照強度門檻與容差顯示可比對的參考峰，方便快速做相辨識。</p>
         </div>
       }>
-        <NumberInput
-          label="最小參考相對強度 (%)"
-          value={refMatchParams.min_rel_intensity}
-          min={1}
-          max={100}
-          step={1}
-          onChange={value => setRefMatch('min_rel_intensity', value)}
+        <TogglePill
+          checked={refPeaksEnabled}
+          onChange={onRefPeaksEnabledChange || (() => {})}
+          label="啟用參考峰比對"
         />
-        <NumberInput
-          label="匹配容差（degree）"
-          value={refMatchParams.tolerance_deg}
-          min={0.01}
-          max={2}
-          step={0.01}
-          onChange={value => setRefMatch('tolerance_deg', value)}
-        />
-        <Checkbox
-          checked={refMatchParams.only_show_matched}
-          onChange={value => setRefMatch('only_show_matched', value)}
-          label="比對表只顯示匹配項"
-        />
-        {refMaterials.length === 0 ? (
-          <div className="text-sm text-slate-500">載入中…</div>
-        ) : (
-          <div className="theme-block-soft max-h-48 space-y-1 overflow-y-auto rounded-xl p-2">
-            {refMaterials.map(material => (
-              <label key={material} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-sm text-[var(--text-main)] transition-colors hover:bg-[var(--card-ghost)]">
-                <input
-                  type="checkbox"
-                  checked={selectedRefs.includes(material)}
-                  onChange={() => toggleRef(material)}
-                  className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-strong)]"
-                />
-                <span className="leading-5">{material}</span>
-              </label>
-            ))}
+        {refPeaksEnabled && (
+          <div className="mt-3 space-y-3">
+            <button
+              type="button"
+              onClick={onOpenCompoundModal}
+              className="w-full flex items-center justify-center gap-2 rounded-xl border border-[var(--accent-strong)] bg-[var(--accent-strong)]/10 text-[var(--accent-strong)] px-4 py-2.5 text-sm font-semibold hover:bg-[var(--accent-strong)] hover:text-white transition-all transform hover:-translate-y-0.5 active:translate-y-0 duration-200"
+            >
+              🔬 選擇化合物與晶面
+            </button>
+            <NumberInput
+              label="最小參考相對強度 (%)"
+              value={refMatchParams.min_rel_intensity}
+              min={1}
+              max={100}
+              step={1}
+              onChange={value => setRefMatch('min_rel_intensity', value)}
+            />
+            <NumberInput
+              label="匹配容差（degree）"
+              value={refMatchParams.tolerance_deg}
+              min={0.01}
+              max={2}
+              step={0.01}
+              onChange={value => setRefMatch('tolerance_deg', value)}
+            />
+            <Checkbox
+              checked={refMatchParams.only_show_matched}
+              onChange={value => setRefMatch('only_show_matched', value)}
+              label="比對表只顯示匹配項"
+            />
           </div>
-        )}
-        {selectedRefs.length > 0 && (
-          <button
-            type="button"
-            onClick={() => onSelectedRefsChange([])}
-            className="text-xs text-[var(--accent-secondary)] transition-colors hover:opacity-80"
-          >
-            清除全部
-          </button>
         )}
       </Section>
 

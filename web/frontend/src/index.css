@@ -954,7 +954,7 @@
       0 18px 34px rgba(0, 0, 0, 0.16),
       inset 0 1px 0 rgba(255, 255, 255, 0.04);
     backdrop-filter: blur(16px);
-    overflow: hidden;
+    overflow: clip;
   }
 
   .analysis-section-card::before,
@@ -980,7 +980,7 @@
       0 14px 26px rgba(0, 0, 0, 0.14),
       inset 0 1px 0 rgba(255, 255, 255, 0.04);
     backdrop-filter: blur(14px);
-    overflow: hidden;
+    overflow: clip;
   }
 
   .analysis-subcard {
@@ -993,7 +993,7 @@
       0 10px 22px rgba(0, 0, 0, 0.1),
       inset 0 1px 0 rgba(255, 255, 255, 0.03);
     backdrop-filter: blur(12px);
-    overflow: hidden;
+    overflow: clip;
   }
 
   .analysis-table-wrap {
@@ -1440,12 +1440,15 @@
   .theme-launcher__panel::before {
     content: '';
     position: absolute;
-    left: 0;
-    right: 0;
-    bottom: -0.65rem;
-    height: 0.8rem;
+    left: -20px;
+    right: -20px;
+    bottom: -1.2rem;
+    height: 1.6rem;
   }
 
+  .theme-launcher--open .theme-launcher__panel,
+  .theme-launcher__panel--open,
+  .theme-launcher:hover .theme-launcher__panel,
   .theme-launcher__gear:hover + .theme-launcher__panel,
   .theme-launcher__gear:focus-visible + .theme-launcher__panel,
   .theme-launcher__panel:hover,
@@ -1455,6 +1458,8 @@
     pointer-events: auto;
   }
 
+  .theme-launcher--open .theme-launcher__gear,
+  .theme-launcher:hover .theme-launcher__gear,
   .theme-launcher__gear:hover,
   .theme-launcher__gear:focus-visible,
   .theme-launcher__gear:hover + .theme-launcher__panel,
@@ -1467,6 +1472,8 @@
       inset 0 0 22px color-mix(in srgb, var(--accent-strong) 14%, transparent);
   }
 
+  .theme-launcher--open .theme-launcher__gear-icon,
+  .theme-launcher:hover .theme-launcher__gear-icon,
   .theme-launcher__gear:hover .theme-launcher__gear-icon,
   .theme-launcher__gear:focus-visible .theme-launcher__gear-icon {
     transform: rotate(70deg);
