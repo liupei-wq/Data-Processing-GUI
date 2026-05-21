@@ -2970,15 +2970,15 @@ export default function Raman({
 
             <div className="px-4 py-3">
               <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                <div className="analysis-metric-card px-3 py-2.5">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
                   <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{rawFiles.length}</p>
                 </div>
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                <div className="analysis-metric-card px-3 py-2.5">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考</p>
                   <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{selectedRefs.length}</p>
                 </div>
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                <div className="analysis-metric-card px-3 py-2.5">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">峰數</p>
                   <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{detectedPeaks.length}</p>
                 </div>
@@ -2999,7 +2999,7 @@ export default function Raman({
                   {rawFiles.map(file => (
                     <div
                       key={file.name}
-                      className="theme-block-soft flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
+                      className="analysis-subcard flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
                     >
                       <span className="text-[var(--accent-tertiary)]">✓</span>
                       <span className="truncate">{file.name}</span>
@@ -3811,7 +3811,7 @@ export default function Raman({
               />
 
               {rawChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始 Raman</p>
                   {rawChartSourceFiles.length > 0 && (
                     <div className="mb-3 flex flex-wrap gap-2">
@@ -3864,7 +3864,7 @@ export default function Raman({
               )}
 
               {isOverlayView && overlayChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="2. 多筆疊圖處理"
                     colorValue={chartLineColors.overlay}
@@ -3960,7 +3960,7 @@ export default function Raman({
               )}
 
               {!isOverlayView && !hasBackgroundStage && !hasNormalizationStage && preprocessChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="2. 前處理後"
                     colorValue={chartLineColors.preprocess}
@@ -3991,7 +3991,7 @@ export default function Raman({
               )}
 
               {!isOverlayView && backgroundChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="3. 背景扣除"
                     colorValue={chartLineColors.background}
@@ -4022,7 +4022,7 @@ export default function Raman({
               )}
 
               {!isOverlayView && hasSiSubtractionStage && siChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="4. Si 基板校正扣除診斷"
                     colorValue={chartLineColors.si}
@@ -4042,19 +4042,19 @@ export default function Raman({
                   </DeferredRender>
                   {activeSiDataset?.si_subtraction_diagnostics && (
                     <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                      <div className="analysis-subcard rounded-xl px-3 py-2">
                         <div className="text-[var(--text-soft)]">scale a</div>
                         <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.scale_factor_a == null ? '-' : activeSiDataset.si_subtraction_diagnostics.scale_factor_a.toFixed(4)}</div>
                       </div>
-                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                      <div className="analysis-subcard rounded-xl px-3 py-2">
                         <div className="text-[var(--text-soft)]">dx cm⁻¹</div>
                         <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.shift_dx_cm == null ? '-' : activeSiDataset.si_subtraction_diagnostics.shift_dx_cm.toFixed(4)}</div>
                       </div>
-                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                      <div className="analysis-subcard rounded-xl px-3 py-2">
                         <div className="text-[var(--text-soft)]">RMSE near Si</div>
                         <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.rmse_near_si == null ? '-' : activeSiDataset.si_subtraction_diagnostics.rmse_near_si.toExponential(3)}</div>
                       </div>
-                      <div className="theme-block-soft rounded-xl px-3 py-2">
+                      <div className="analysis-subcard rounded-xl px-3 py-2">
                         <div className="text-[var(--text-soft)]">Warning</div>
                         <div className="font-semibold text-[var(--text-main)]">{activeSiDataset.si_subtraction_diagnostics.warning || '-'}</div>
                       </div>
@@ -4082,7 +4082,7 @@ export default function Raman({
               )}
 
               {!isOverlayView && hasSiSubtractionStage && siCorrectedOverlayTraces.length > 1 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="5. Si 扣除後 Raman 疊圖"
                     colorValue={chartLineColors.si}
@@ -4130,7 +4130,7 @@ export default function Raman({
               )}
 
               {!isOverlayView && hasNormalizationStage && normalizationChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title={hasSiSubtractionStage ? '6. 歸一化' : '4. 歸一化'}
                     colorValue={chartLineColors.normalization}
@@ -4191,7 +4191,7 @@ export default function Raman({
               )}
 
               {!isOverlayView && finalChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="最終處理光譜"
                     colorValue={chartLineColors.final}
@@ -4218,7 +4218,7 @@ export default function Raman({
                 </div>
               )}
 
-              <div className="mt-5 theme-block rounded-[20px] p-0">
+              <div className="analysis-section-card mt-5 p-0">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                   <div>
                     <div className="text-sm font-semibold text-[var(--text-muted)]">峰位表</div>
@@ -4231,7 +4231,7 @@ export default function Raman({
                 </div>
                 {fitCandidates.length > 0 ? (
                   <div className="overflow-hidden">
-                    <table className="min-w-0 w-full table-fixed border-collapse text-left text-xs sm:text-sm">
+                    <table className="analysis-data-table min-w-0 w-full table-fixed text-left text-xs sm:text-sm">
                       <colgroup>
                         <col style={{ width: '4%' }} />
                         <col style={{ width: '4%' }} />
@@ -4342,11 +4342,11 @@ export default function Raman({
               </div>
 
               <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-                <div className="theme-block rounded-[28px] p-4">
+                <div className="analysis-section-card p-4">
                   <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">偵測到的峰</div>
                   {peakParams.enabled && detectedPeaks.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
+                    <div className="analysis-table-wrap">
+                      <table className="analysis-data-table min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
                             <th className="px-3 py-3 font-medium">位置 cm⁻¹</th>
@@ -4370,11 +4370,11 @@ export default function Raman({
                   )}
                 </div>
 
-                <div className="theme-block rounded-[28px] p-4">
+                <div className="analysis-section-card p-4">
                   <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">參考峰清單</div>
                   {refPeaks.length > 0 ? (
-                    <div className="max-h-[26rem] overflow-auto">
-                      <table className="min-w-full text-left text-sm">
+                    <div className="analysis-table-wrap max-h-[26rem] overflow-auto">
+                      <table className="analysis-data-table min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
                             <th className="px-3 py-3 font-medium">材料</th>
@@ -4399,7 +4399,7 @@ export default function Raman({
                 </div>
               </div>
 
-              <div className="mt-5 theme-block rounded-[28px] p-4 sm:p-5">
+              <div className="analysis-section-card mt-5 p-4 sm:p-5">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-[var(--text-muted)]">峰擬合結果</div>
@@ -4441,7 +4441,7 @@ export default function Raman({
                 {fitResult?.success && activeFitDataset ? (
                   <>
                     {fitResult.message && (
-                      <div className="mb-3 rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-3 text-sm text-[var(--text-main)]">
+                      <div className="analysis-subcard mb-3 px-4 py-3 text-sm text-[var(--text-main)]">
                         {fitResult.message}
                       </div>
                     )}
@@ -4470,7 +4470,7 @@ export default function Raman({
                         全螢幕檢視
                       </button>
                     </div>
-                    <div className="theme-block-soft rounded-[24px] p-3 sm:p-4">
+                    <div className="analysis-subcard p-3 sm:p-4">
                       <DeferredRender minHeight={520}>
                         <Plot
                           data={fitFigure?.data ?? []}
@@ -4494,19 +4494,19 @@ export default function Raman({
 
                     {fitResult.calibration && (
                       <div className="mt-4 grid gap-4 xl:grid-cols-4">
-                        <div className="theme-block-soft rounded-[22px] p-4">
+                        <div className="analysis-subcard p-4">
                           <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">校正方法</div>
                           <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fitResult.calibration.method || 'none'}</div>
                         </div>
-                        <div className="theme-block-soft rounded-[22px] p-4">
+                        <div className="analysis-subcard p-4">
                           <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Offset</div>
                           <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fmtFixed(fitResult.calibration.offset_cm, 3)} cm⁻¹</div>
                         </div>
-                        <div className="theme-block-soft rounded-[22px] p-4">
+                        <div className="analysis-subcard p-4">
                           <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Si 校正前</div>
                           <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fitResult.calibration.si_peak_before_cm == null ? '—' : `${fitResult.calibration.si_peak_before_cm.toFixed(3)} cm⁻¹`}</div>
                         </div>
-                        <div className="theme-block-soft rounded-[22px] p-4">
+                        <div className="analysis-subcard p-4">
                           <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Si 校正後</div>
                           <div className="mt-2 text-sm font-semibold text-[var(--text-main)]">{fitResult.calibration.si_peak_after_cm == null ? '—' : `${fitResult.calibration.si_peak_after_cm.toFixed(3)} cm⁻¹`}</div>
                         </div>
@@ -4594,7 +4594,7 @@ export default function Raman({
                     </div>
 
                     <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                      <div className="theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard p-4">
                         <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">Final Fit Overview</div>
                         <div className="grid grid-cols-2 gap-2 text-sm text-[var(--text-main)]">
                           <div>全域 RMSE</div>
@@ -4629,7 +4629,7 @@ export default function Raman({
                               />
                             </DeferredRender>
                             <div className="mt-3 max-h-72 overflow-auto">
-                              <table className="min-w-full text-left text-xs">
+                              <table className="analysis-data-table min-w-full text-left text-xs">
                                 <thead>
                                   <tr className="border-b border-white/10 uppercase tracking-[0.18em] text-slate-500">
                                     <th className="px-3 py-3 font-medium">material</th>
@@ -4667,7 +4667,7 @@ export default function Raman({
                       <div className="mt-5 space-y-4">
                         <div className="text-sm font-semibold text-[var(--text-muted)]">Sequential Group Fitting</div>
                         {(fitResult.group_fit_stages ?? []).map(stage => (
-                          <div key={stage.group_name} className="theme-block-soft rounded-[22px] p-4">
+                          <div key={stage.group_name} className="analysis-subcard p-4">
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                               <div>
                                 <div className="text-sm font-semibold text-[var(--text-main)]">{stage.group_name}</div>
@@ -4699,7 +4699,7 @@ export default function Raman({
                     )}
 
                     {(fitResult.group_probe_rows ?? []).length > 0 && (
-                      <div className="mt-5 theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard mt-5 p-4">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div className="text-sm font-semibold text-[var(--text-muted)]">Material Group Diagnostics</div>
                           <div className="flex flex-wrap gap-2">
@@ -4779,7 +4779,7 @@ export default function Raman({
                     )}
 
                     <div className="mt-5 grid gap-4 xl:grid-cols-2">
-                      <div className="theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard p-4">
                         <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Peak Alignment Map</div>
                         {(fitResult.alignment_rows ?? []).length > 0 ? (
                           <DeferredRender minHeight={320}>
@@ -4795,7 +4795,7 @@ export default function Raman({
                           <div className="text-sm text-[var(--text-soft)]">目前沒有可輸出的 peak alignment 資料。</div>
                         )}
                       </div>
-                      <div className="theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard p-4">
                         <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Peak Delta Plot</div>
                         {(fitResult.peaks ?? []).length > 0 ? (
                           <DeferredRender minHeight={320}>
@@ -4814,7 +4814,7 @@ export default function Raman({
                     </div>
 
                     {fitResult.report && (
-                      <div className="mt-5 theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard mt-5 p-4">
                         <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Report Summary</div>
                         <div className="grid gap-2 text-sm text-[var(--text-main)] sm:grid-cols-2 xl:grid-cols-4">
                           <div>樣品 ID：{fitResult.report.sample_id}</div>
@@ -4892,7 +4892,7 @@ export default function Raman({
                     )}
 
                     <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                      <div className="theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard p-4">
                         <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">非可疑峰名稱</div>
                         {cleanFitPeaks.length > 0 ? (
                           <div className="flex flex-wrap gap-2">
@@ -4907,7 +4907,7 @@ export default function Raman({
                         )}
                       </div>
 
-                      <div className="theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard p-4">
                         <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">可疑峰清單</div>
                         {suspiciousFitPeaks.length > 0 ? (
                           <div className="space-y-2">
@@ -4925,7 +4925,7 @@ export default function Raman({
                     </div>
 
                     {autoRefitSummary && (
-                      <div className="mt-4 theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard mt-4 p-4">
                         <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">自動二次擬合摘要</div>
                         <div className="text-sm text-[var(--text-main)]">
                           停止原因：{autoRefitSummary.stopReason}
@@ -4946,7 +4946,7 @@ export default function Raman({
                     )}
 
                     {autoDebugSummary && (
-                      <div className="mt-4 theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard mt-4 p-4">
                         <div className="mb-2 text-sm font-semibold text-[var(--text-muted)]">自動偵錯修改摘要</div>
                         <div className="grid gap-2 text-sm text-[var(--text-main)] sm:grid-cols-3">
                           <div>停止原因：{autoDebugSummary.stopReason}</div>
@@ -4969,7 +4969,7 @@ export default function Raman({
                     )}
 
                     {batchResults.length > 0 && (
-                      <div className="mt-4 theme-block-soft rounded-[22px] p-4">
+                      <div className="analysis-subcard mt-4 p-4">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <div className="text-sm font-semibold text-[var(--text-muted)]">Cross-sample Comparison</div>
@@ -5088,7 +5088,7 @@ export default function Raman({
       </main>
       {editingCandidate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm">
-          <div className="theme-block max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-5 shadow-2xl">
+          <div className="analysis-section-card max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-5 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <div className="text-lg font-semibold text-[var(--text-muted)]">{editingCandidate.display_name || editingCandidate.label}</div>
@@ -5278,7 +5278,7 @@ export default function Raman({
       />
       {fitFullscreenOpen && fitFigure && (
         <div className="fixed inset-0 z-[1000] flex flex-col bg-[color:color-mix(in_srgb,var(--bg-canvas)_96%,black)] p-3 sm:p-5" role="dialog" aria-modal="true">
-          <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow)]">
+          <div className="analysis-section-card mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3 px-4 py-3">
             <div>
               <div className="text-sm font-semibold text-[var(--text-main)]">Raman 擬合結果圖</div>
               <div className="mt-1 text-xs text-[var(--text-soft)]">{activeFitDataset?.name ?? fitTargetName}</div>
@@ -5291,7 +5291,7 @@ export default function Raman({
               關閉
             </button>
           </div>
-          <div className="min-h-0 flex-1 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-2 shadow-[var(--card-shadow)]">
+          <div className="analysis-section-card min-h-0 flex-1 p-2">
             <Plot
               data={fitFigure.data}
               layout={fitFigure.layout as Plotly.Layout}

@@ -817,14 +817,14 @@ export default function SingleProcessTool({
         <div className="flex-1 space-y-3 p-4">
 
           {/* Upload */}
-          <div className="theme-block overflow-hidden rounded-[20px]">
+          <div className="analysis-section-card overflow-hidden rounded-[20px] p-0">
             <div className="border-b border-[var(--card-divider)] px-4 py-3 text-sm font-semibold text-[var(--text-muted)]">上傳檔案</div>
             <div className="p-4">
               <FileUpload onFiles={handleFiles} isLoading={isLoading} />
               {rawFiles.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {rawFiles.map(f => (
-                    <div key={f.name} className="theme-block-soft rounded-[12px] px-3 py-1.5 text-xs text-[var(--text-main)]">{f.name}</div>
+                    <div key={f.name} className="analysis-subcard rounded-[12px] px-3 py-1.5 text-xs text-[var(--text-main)]">{f.name}</div>
                   ))}
                 </div>
               )}
@@ -833,7 +833,7 @@ export default function SingleProcessTool({
 
           {/* ── Background settings ── */}
           {tool === 'background' && (
-            <div className="theme-block rounded-[20px] p-4">
+            <div className="analysis-section-card rounded-[20px] p-4">
               <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">背景扣除設定</div>
               <div className="space-y-3">
                 <label className="block">
@@ -886,7 +886,7 @@ export default function SingleProcessTool({
 
           {/* ── Normalize settings ── */}
           {tool === 'normalize' && (
-            <div className="theme-block rounded-[20px] p-4">
+            <div className="analysis-section-card rounded-[20px] p-4">
               <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">歸一化設定</div>
               <div className="space-y-3">
                 <label className="block">
@@ -916,7 +916,7 @@ export default function SingleProcessTool({
             <div className="space-y-3">
 
               {/* Template params */}
-              <div className="theme-block rounded-[20px] p-4">
+              <div className="analysis-section-card rounded-[20px] p-4">
                 <div className="mb-1 text-sm font-semibold text-[var(--text-muted)]">高斯模板</div>
                 <div className="mb-3 text-[11px] leading-5 text-[var(--text-soft)]">
                   圖中橘線即時預覽；拉桿移至中間欄，左側僅顯示數值輸入。
@@ -996,7 +996,7 @@ export default function SingleProcessTool({
               </div>
 
               {/* Cut-point mode */}
-              <div className="theme-block rounded-[20px] p-4">
+              <div className="analysis-section-card rounded-[20px] p-4">
                 <div className="mb-2 flex items-center justify-between">
                   <div className="text-sm font-semibold text-[var(--text-muted)]">切點模式</div>
                   <label className="flex cursor-pointer items-center gap-2">
@@ -1126,7 +1126,7 @@ export default function SingleProcessTool({
           {/* Empty state */}
           {!activeDataset && !isLoading && (
             <div className="glass-panel rounded-[24px] p-4">
-              <div className="theme-block-soft flex min-h-[22rem] flex-col items-center justify-center rounded-[20px] px-6 text-center">
+              <div className="analysis-subcard flex min-h-[22rem] flex-col items-center justify-center rounded-[20px] px-6 text-center">
                 <div className="mb-4 text-5xl" style={{ color: meta.accent }}>◌</div>
                 <div className="text-xl font-semibold text-[var(--text-muted)]">先上傳檔案</div>
                 <div className="mt-3 max-w-xl text-sm leading-6 text-[var(--text-soft)]">{meta.description}</div>
@@ -1284,30 +1284,32 @@ export default function SingleProcessTool({
       {/* ════════ Export preview modal ════════ */}
       {exportPreviewKind && activeDataset && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setExportPreviewKind(null)}>
-          <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-[24px] bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="analysis-section-card flex w-full max-w-2xl flex-col overflow-hidden rounded-[24px] p-0 shadow-2xl" onClick={e => e.stopPropagation()}>
             {/* Header */}
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="text-sm font-semibold text-gray-800">
+            <div className="border-b border-[var(--card-divider)] px-6 py-4">
+              <div className="text-sm font-semibold text-[var(--text-main)]">
                 {exportPreviewKind === 'chart1'
                   ? (tool === 'gaussian' ? '原始訊號 + 高斯模型' : '原始訊號 + 背景基準線')
                   : (tool === 'gaussian' ? '高斯扣除後' : '背景扣除後')}
               </div>
-              <div className="mt-0.5 text-xs text-gray-400">{activeDataset.name} — Origin Pro 風格預覽</div>
+              <div className="mt-0.5 text-xs text-[var(--text-soft)]">{activeDataset.name} — Origin Pro 風格預覽</div>
             </div>
             {/* Preview chart */}
             <div className="px-4 pt-3">
-              <Plot
-                data={exportPreviewKind === 'chart1' ? previewChart1Traces : previewChart2Traces}
-                layout={buildOriginProLayout()}
-                config={{ scrollZoom: false, displayModeBar: false }}
-                style={{ width: '100%', height: '320px' }}
-                useResizeHandler
-              />
+              <div className="analysis-subcard overflow-hidden p-2">
+                <Plot
+                  data={exportPreviewKind === 'chart1' ? previewChart1Traces : previewChart2Traces}
+                  layout={buildOriginProLayout()}
+                  config={{ scrollZoom: false, displayModeBar: false }}
+                  style={{ width: '100%', height: '320px' }}
+                  useResizeHandler
+                />
+              </div>
             </div>
             {/* Actions */}
-            <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
+            <div className="flex justify-end gap-3 border-t border-[var(--card-divider)] px-6 py-4">
               <button type="button" onClick={() => setExportPreviewKind(null)}
-                className="rounded-xl border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                className="pressable rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-2 text-sm text-[var(--text-main)] hover:border-[var(--accent-strong)]">
                 取消
               </button>
               <button type="button"
@@ -1316,7 +1318,7 @@ export default function SingleProcessTool({
                   else handleExportChart2()
                   setExportPreviewKind(null)
                 }}
-                className="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                className="pressable rounded-xl border border-[color:color-mix(in_srgb,var(--accent)_46%,transparent)] bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent)_92%,transparent),color-mix(in_srgb,var(--accent-strong)_78%,transparent))] px-5 py-2 text-sm font-semibold text-[var(--bg-canvas)] shadow-[0_16px_32px_-24px_color-mix(in_srgb,var(--accent)_78%,transparent)] hover:brightness-110">
                 確定匯出
               </button>
             </div>

@@ -1344,15 +1344,15 @@ export default function XRD({
 
             <div className="px-4 py-3">
               <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                <div className="analysis-metric-card px-3 py-2.5">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">檔案</p>
                   <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{rawFiles.length}</p>
                 </div>
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                <div className="analysis-metric-card px-3 py-2.5">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">X 軸</p>
                   <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{xMode === 'twotheta' ? '2θ' : 'd'}</p>
                 </div>
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2.5">
+                <div className="analysis-metric-card px-3 py-2.5">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考相</p>
                   <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{selectedRefs.length}</p>
                 </div>
@@ -1360,7 +1360,7 @@ export default function XRD({
             </div>
 
             <div className="sidebar-scroll px-4 py-5">
-              <div className="theme-block mb-3 overflow-hidden rounded-[24px]">
+              <div className="analysis-section-card mb-3 overflow-hidden rounded-[24px] p-0">
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="flex items-center gap-3">
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
@@ -1381,7 +1381,7 @@ export default function XRD({
                       {rawFiles.map(file => (
                         <div
                           key={file.name}
-                          className="theme-block-soft flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
+                          className="analysis-subcard flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
                         >
                           <span className="text-[var(--accent-tertiary)]">✓</span>
                           <span className="truncate">{file.name}</span>
@@ -1499,7 +1499,7 @@ export default function XRD({
           {result && (
             <>
               {rawChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">1. 原始 XRD</p>
                   {rawChartSourceFiles.length > 0 && (
                     <div className="mb-3 flex flex-wrap gap-2">
@@ -1508,7 +1508,7 @@ export default function XRD({
                         const colorKey = rawFileColors[globalIndex >= 0 ? globalIndex : index] ?? DEFAULT_SERIES_PALETTE_KEYS[index % DEFAULT_SERIES_PALETTE_KEYS.length]
                         const palette = LINE_COLOR_PALETTES[colorKey] ?? LINE_COLOR_PALETTES.blue
                         return (
-                          <div key={`${file.name}-${index}`} className="flex items-center gap-1.5 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1">
+                          <div key={`${file.name}-${index}`} className="analysis-subcard flex items-center gap-1.5 px-2 py-1">
                             <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: palette.primary }} />
                             <span className="max-w-[108px] truncate text-[10px] text-[var(--text-main)]">{file.name}</span>
                             <select
@@ -1554,7 +1554,7 @@ export default function XRD({
               )}
 
               {isOverlayView && overlayChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="2. 多筆疊圖處理"
                     colorValue={chartLineColors.overlay}
@@ -1585,7 +1585,7 @@ export default function XRD({
               )}
 
               {!isOverlayView && preprocessChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="2. 前處理後"
                     colorValue={chartLineColors.preprocess}
@@ -1616,7 +1616,7 @@ export default function XRD({
               )}
 
               {!isOverlayView && logChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="3. 對數弱峰檢視"
                     colorValue={chartLineColors.log}
@@ -1627,7 +1627,7 @@ export default function XRD({
                       </button>
                     ) : undefined}
                   />
-                  <div className="mb-3 grid gap-3 rounded-2xl border border-white/10 bg-slate-950/20 p-3 md:grid-cols-[220px_1fr_auto] md:items-end">
+                  <div className="analysis-subcard mb-3 grid gap-3 p-3 md:grid-cols-[220px_1fr_auto] md:items-end">
                     <div>
                       <label className="mb-1 block text-xs font-medium text-[var(--text-main)]">強度轉換方式</label>
                       <select
@@ -1670,7 +1670,7 @@ export default function XRD({
               )}
 
               {!isOverlayView && finalChartTraces.length > 0 && (
-                <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card mb-4 p-4">
                   <ChartToolbar
                     title="4. 最終處理光譜"
                     colorValue={chartLineColors.final}
@@ -1686,7 +1686,7 @@ export default function XRD({
                     {renderFinalChart(380)}
                   </DeferredRender>
                   {selectedRefPeak && (
-                    <div className="mt-3 rounded-2xl border border-cyan-300/20 bg-slate-950/35 px-4 py-3 text-sm text-slate-200">
+                    <div className="analysis-subcard mt-3 px-4 py-3 text-sm text-slate-200">
                       <div className="mb-2 flex items-center justify-between gap-3">
                         <p className="font-semibold text-white">參考峰資訊</p>
                         <button
@@ -1722,7 +1722,7 @@ export default function XRD({
               )}
 
               {peakParams.enabled && (
-                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                <div className="analysis-section-card mt-4 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                       <p className="text-sm font-semibold text-white">自動偵測峰位</p>
@@ -1751,13 +1751,13 @@ export default function XRD({
                   </div>
 
                   {detectedPeaks.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                    <div className="analysis-subcard rounded-2xl border-dashed px-4 py-6 text-sm text-slate-400">
                       目前條件下沒有找到可用峰位。可以提高偵測靈敏度、放寬排除區間，或重新調整峰寬範圍後再試一次。
                     </div>
                   ) : (
                     <DeferredRender minHeight={320}>
-                      <div className="mb-4 overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
+                      <div className="analysis-table-wrap mb-4">
+                      <table className="analysis-data-table min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
                             <th className="px-3 py-3 font-medium">2θ（degree）</th>
@@ -1813,7 +1813,7 @@ export default function XRD({
               )}
 
               {scherrerParams.enabled && peakParams.enabled && (
-                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                <div className="analysis-section-card mt-4 px-4 py-4">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                       <p className="text-sm font-semibold text-white">Scherrer 晶粒尺寸</p>
@@ -1827,7 +1827,7 @@ export default function XRD({
                   </div>
 
                   {scherrerRows.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                    <div className="analysis-subcard rounded-2xl border-dashed px-4 py-6 text-sm text-slate-400">
                       先啟用自動尋峰並確認有峰位結果，Scherrer 才能計算。
                     </div>
                   ) : (
@@ -1880,11 +1880,11 @@ export default function XRD({
                   </div>
 
                   {!peakParams.enabled ? (
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                    <div className="analysis-subcard rounded-2xl border-dashed px-4 py-6 text-sm text-slate-400">
                       參考峰匹配需要先啟用自動尋峰，因為目前網站版會直接使用尋峰結果來做最近峰比對。
                     </div>
                   ) : filteredRefPeaks.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-4 py-6 text-sm text-slate-400">
+                    <div className="analysis-subcard rounded-2xl border-dashed px-4 py-6 text-sm text-slate-400">
                       目前條件下沒有符合最小相對強度門檻的參考峰。可以降低強度門檻或改選其他參考相位。
                     </div>
                   ) : visibleReferenceMatches.length === 0 ? (
@@ -1893,8 +1893,8 @@ export default function XRD({
                     </div>
                   ) : (
                     <DeferredRender minHeight={320}>
-                      <div className="overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
+                      <div className="analysis-table-wrap">
+                      <table className="analysis-data-table min-w-full text-left text-sm">
                         <thead>
                           <tr className="border-b border-white/10 text-xs uppercase tracking-[0.18em] text-slate-500">
                             <th className="px-3 py-3 font-medium">相位</th>
@@ -1957,7 +1957,7 @@ export default function XRD({
               )}
 
               <DeferredRender minHeight={260}>
-                <div className="mt-4 rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
+                <div className="analysis-section-card mt-4 px-4 py-4">
                 <div className="mb-4">
                   <p className="text-sm font-semibold text-white">匯出</p>
                   <p className="mt-1 text-xs leading-5 text-slate-400">
@@ -1966,7 +1966,7 @@ export default function XRD({
                 </div>
 
                 <div className="grid gap-4 xl:grid-cols-3">
-                  <div className="rounded-[22px] border border-white/10 bg-slate-950/25 p-4">
+                  <div className="analysis-subcard p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">研究常用</p>
                     <div className="mt-3 flex flex-col gap-2">
                       <button
@@ -2019,7 +2019,7 @@ export default function XRD({
                     </div>
                   </div>
 
-                  <div className="rounded-[22px] border border-white/10 bg-slate-950/25 p-4">
+                  <div className="analysis-subcard p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">分析表格</p>
                     <div className="mt-3 flex flex-col gap-2">
                       {peakParams.enabled && detectedPeaks.length > 0 && (
@@ -2146,7 +2146,7 @@ export default function XRD({
                     </div>
                   </div>
 
-                  <div className="rounded-[22px] border border-white/10 bg-slate-950/25 p-4">
+                  <div className="analysis-subcard p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">追溯 / 設定</p>
                     <div className="mt-3 flex flex-col gap-2">
                       <button

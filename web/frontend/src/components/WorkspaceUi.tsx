@@ -448,17 +448,25 @@ export function ModuleTopBar({
   description: string
   chips?: ModuleChipItem[]
 }) {
+  const primaryChip = chips[0] ?? null
+  const extraChips = primaryChip ? chips.slice(1) : chips
+
   return (
     <div className="topbar-panel">
       <div className="topbar-eyebrow">Analysis Module</div>
       <div className="module-title-row">
         <h1 className="module-title">{title}</h1>
         <span className="module-subtitle">{subtitle}</span>
+        {primaryChip && (
+          <span className="status-chip">
+            {primaryChip.label}
+          </span>
+        )}
       </div>
       <p className="module-description">{description}</p>
-      {chips.length > 0 && (
+      {extraChips.length > 0 && (
         <div className="mt-4 flex flex-wrap gap-2">
-          {chips.map(chip => (
+          {extraChips.map(chip => (
             <span key={chip.label} className="status-chip">
               {chip.label}
             </span>
@@ -552,15 +560,17 @@ export function EmptyWorkspaceState({
   return (
     <div className="workspace-surface">
       <div className="empty-state">
-        <ModuleGlyph module={module} />
-        <div className="empty-title">{title}</div>
-        <div className="empty-description">{description}</div>
-        <div className="format-chips">
-          {formats.map(format => (
-            <span key={format} className="format-chip">
-              {format}
-            </span>
-          ))}
+        <div className="empty-state__panel">
+          <ModuleGlyph module={module} />
+          <div className="empty-title">{title}</div>
+          <div className="empty-description">{description}</div>
+          <div className="format-chips">
+            {formats.map(format => (
+              <span key={format} className="format-chip">
+                {format}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -764,7 +774,7 @@ export function GlassSection({
 function ModuleTabs({ activeModule, onSelect }: { activeModule: AnalysisModuleId; onSelect?: (m: AnalysisModuleId) => void }) {
   return (
     <div className="module-tabs" role="tablist" aria-label="分析模組切換">
-      {ANALYSIS_MODULES.map(module => {
+      {ANALYSIS_MODULES.filter(module => module.id !== 'athena').map(module => {
         const isActive = module.id === activeModule
         return (
           <button

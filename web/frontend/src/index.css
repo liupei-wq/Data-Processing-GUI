@@ -838,7 +838,7 @@
   }
 
   .topbar-panel {
-    padding: 0 0 16px;
+    padding: 0 0 14px;
   }
 
   .topbar-eyebrow {
@@ -854,7 +854,7 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: 12px;
-    margin-top: 10px;
+    margin-top: 12px;
   }
 
   .module-title {
@@ -871,7 +871,7 @@
   }
 
   .module-description {
-    margin-top: 10px;
+    margin-top: 12px;
     max-width: 920px;
     font-size: 14px;
     line-height: 1.7;
@@ -904,6 +904,30 @@
     padding: 12px 14px;
     background: var(--analysis-panel-bg);
     border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow-soft);
+    backdrop-filter: blur(14px);
+    position: relative;
+    overflow: hidden;
+    transition:
+      transform 160ms ease,
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .info-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+    opacity: 0.7;
+  }
+
+  .info-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent-strong) 30%, var(--card-border));
+    box-shadow: var(--card-shadow);
   }
 
   .info-card-label {
@@ -916,16 +940,117 @@
     font-size: 15px;
     font-weight: 700;
     color: var(--accent-secondary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+  }
+
+  .analysis-section-card {
+    position: relative;
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card-bg) 98%, transparent), color-mix(in srgb, var(--card-bg-strong) 88%, transparent));
+    box-shadow:
+      0 18px 34px rgba(0, 0, 0, 0.16),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(16px);
+    overflow: hidden;
+  }
+
+  .analysis-section-card::before,
+  .analysis-metric-card::before,
+  .analysis-subcard::before,
+  .analysis-table-wrap::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 50%, transparent), transparent);
+    opacity: 0.84;
+  }
+
+  .analysis-metric-card {
+    position: relative;
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card-bg) 96%, transparent), color-mix(in srgb, var(--analysis-panel-bg) 84%, transparent));
+    box-shadow:
+      0 14px 26px rgba(0, 0, 0, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+  }
+
+  .analysis-subcard {
+    position: relative;
+    border-radius: 0.9rem;
+    border: 1px solid var(--card-border);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card-ghost) 92%, transparent), color-mix(in srgb, var(--analysis-panel-bg) 76%, transparent));
+    box-shadow:
+      0 10px 22px rgba(0, 0, 0, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(12px);
+    overflow: hidden;
+  }
+
+  .analysis-table-wrap {
+    position: relative;
+    overflow-x: auto;
+    border-radius: 0.95rem;
+    border: 1px solid var(--card-border);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card-ghost) 78%, transparent), color-mix(in srgb, var(--analysis-panel-bg) 74%, transparent));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.03),
+      0 10px 22px rgba(0, 0, 0, 0.08);
+  }
+
+  .analysis-data-table {
+    width: 100%;
+    font-size: 12px;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .analysis-data-table thead tr {
+    background: color-mix(in srgb, var(--accent-soft) 34%, transparent);
+  }
+
+  .analysis-data-table tbody tr {
+    transition: background-color 140ms ease;
+  }
+
+  .analysis-data-table tbody tr:hover {
+    background: color-mix(in srgb, var(--accent-soft) 34%, transparent);
   }
 
   .module-tabs {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 4px;
-    padding: 4px;
-    border-radius: 14px;
-    background: var(--analysis-tab-bg);
-    border: 1px solid var(--card-border);
+    position: relative;
+    gap: 5px;
+    padding: 5px;
+    border-radius: 16px;
+    border: 1px solid color-mix(in srgb, var(--card-border) 86%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--analysis-tab-bg) 92%, transparent), color-mix(in srgb, var(--card-ghost) 80%, transparent)),
+      var(--analysis-tab-bg);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+  }
+
+  .module-tabs::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 55%, transparent), transparent);
+    opacity: 0.78;
   }
 
   .module-tab {
@@ -936,31 +1061,92 @@
     color: var(--text-soft);
     font-size: 12px;
     font-weight: 600;
+    position: relative;
+    z-index: 1;
+    transition:
+      background 160ms ease,
+      color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .module-tab:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--analysis-tab-active-bg) 45%, transparent);
+    color: var(--text-main);
   }
 
   .module-tab--active {
     color: var(--text-main);
     background: var(--analysis-tab-active-bg);
-    box-shadow: inset 0 0 0 1px var(--analysis-chip-border);
+    box-shadow:
+      inset 0 0 0 1px var(--analysis-chip-border),
+      0 10px 18px rgba(0, 0, 0, 0.14);
   }
 
   .workspace-surface {
     min-height: calc(100vh - 260px);
+    position: relative;
     border-radius: 22px;
     border: 1px solid var(--analysis-workspace-border);
     background:
+      radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--accent-strong) 14%, transparent), transparent 18rem),
+      radial-gradient(circle at 88% 4%, color-mix(in srgb, var(--accent-secondary) 12%, transparent), transparent 15rem),
       linear-gradient(var(--analysis-workspace-grid) 1px, transparent 1px),
       linear-gradient(90deg, var(--analysis-workspace-grid) 1px, transparent 1px),
       var(--analysis-workspace-bg);
     background-size: 28px 28px;
+    box-shadow:
+      0 18px 42px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(18px);
     overflow: hidden;
+    isolation: isolate;
+  }
+
+  .workspace-surface::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 18%),
+      radial-gradient(circle at 78% 0%, color-mix(in srgb, var(--accent-strong) 16%, transparent), transparent 22%);
+    opacity: 0.9;
+  }
+
+  .workspace-surface::after {
+    content: '';
+    position: absolute;
+    inset: auto 1.1rem 1rem auto;
+    width: 7.5rem;
+    height: 7.5rem;
+    pointer-events: none;
+    border-radius: 999px;
+    background: radial-gradient(circle, color-mix(in srgb, var(--accent-secondary) 12%, transparent), transparent 72%);
+    filter: blur(10px);
+    opacity: 0.8;
   }
 
   .workspace-stage-card {
+    position: relative;
     border-radius: 18px;
     border: 1px solid var(--card-border);
-    background: var(--analysis-panel-bg);
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--analysis-panel-bg) 96%, transparent), color-mix(in srgb, var(--card-bg) 92%, transparent));
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.16),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+  }
+
+  .workspace-stage-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 48%, transparent), transparent);
+    opacity: 0.82;
   }
 
   .empty-state {
@@ -969,10 +1155,25 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 14px;
-    padding: 48px 24px;
+    padding: 40px 24px;
     text-align: center;
     color: var(--text-main);
+  }
+
+  .empty-state__panel {
+    max-width: 720px;
+    margin: 0 auto;
+    border-radius: 28px;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    backdrop-filter: blur(16px);
+    box-shadow: var(--card-shadow);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 40px 24px;
   }
 
   .empty-icon {
@@ -1013,19 +1214,42 @@
 
   .upload-zone {
     min-height: 180px;
+    position: relative;
     border-radius: 16px;
     border: 1px dashed var(--analysis-upload-border);
-    background: var(--analysis-upload-bg);
+    background:
+      radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent-secondary) 10%, transparent), transparent 12rem),
+      var(--analysis-upload-bg);
+    box-shadow: var(--card-shadow-soft);
+    backdrop-filter: blur(14px);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 12px;
+    transition:
+      transform 160ms ease,
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .upload-zone::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 52%, transparent), transparent);
+    opacity: 0.84;
   }
 
   .upload-zone:hover {
     border-color: color-mix(in srgb, var(--accent-strong) 42%, var(--analysis-upload-border));
-    box-shadow: var(--glow-soft);
+    box-shadow:
+      0 16px 28px rgba(0, 0, 0, 0.16),
+      0 0 24px color-mix(in srgb, var(--accent-strong) 10%, transparent);
+    transform: translateY(-2px);
   }
 
   .upload-icon {
@@ -1033,11 +1257,40 @@
     height: 48px;
     color: var(--accent);
     opacity: 0.92;
+    filter: drop-shadow(0 10px 16px color-mix(in srgb, var(--accent-strong) 12%, transparent));
+  }
+
+  .upload-zone__cta {
+    box-shadow:
+      0 12px 22px rgba(0, 0, 0, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
   }
 
   .upload-help {
     font-size: 12px;
     color: var(--text-soft);
+  }
+
+  .upload-format-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 2px;
+  }
+
+  .upload-format-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--analysis-chip-border);
+    background: color-mix(in srgb, var(--analysis-chip-bg) 92%, transparent);
+    color: var(--accent);
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
 
   .module-sidebar {
@@ -1062,12 +1315,24 @@
 
   .theme-dock {
     width: min(21.5rem, calc(100vw - 1.5rem));
+    position: relative;
     border-radius: 18px;
     border: 1px solid var(--panel-border);
     background: color-mix(in srgb, var(--panel-bg) 88%, transparent);
     box-shadow: var(--panel-shadow);
     backdrop-filter: blur(16px);
     padding: 1rem;
+    overflow: hidden;
+  }
+
+  .theme-dock::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 48%, transparent), transparent);
+    opacity: 0.88;
   }
 
   .theme-launcher {
@@ -1234,7 +1499,7 @@
     position: absolute;
     right: calc(100% + 0.45rem);
     top: 50%;
-    width: min(17rem, calc(100vw - 4rem));
+    width: min(17.5rem, calc(100vw - 4rem));
     max-height: calc(100vh - 2rem);
     overflow-y: auto;
     transform: translate(1rem, -50%) scale(0.98);
@@ -1243,13 +1508,29 @@
     pointer-events: none;
     border-radius: 18px;
     border: 1px solid var(--panel-border);
-    background: color-mix(in srgb, var(--panel-bg) 88%, transparent);
-    box-shadow: var(--panel-shadow);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 96%, rgba(255, 255, 255, 0.04)), color-mix(in srgb, var(--panel-bg) 90%, transparent)),
+      color-mix(in srgb, var(--panel-bg) 88%, transparent);
+    box-shadow:
+      0 24px 48px rgba(0, 0, 0, 0.32),
+      0 0 0 1px color-mix(in srgb, var(--accent-strong) 10%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
     backdrop-filter: blur(18px);
     padding: 1rem;
     transition:
       opacity 180ms ease,
       transform 180ms ease;
+    overflow: hidden auto;
+  }
+
+  .workspace-launcher__panel::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 54%, transparent), transparent);
+    opacity: 0.9;
   }
 
   .workspace-launcher--docked .workspace-launcher__panel {
@@ -1285,12 +1566,36 @@
   .workspace-launcher__item {
     display: block;
     width: 100%;
+    position: relative;
     border-radius: 12px;
     border: 1px solid var(--card-border);
-    background: var(--card-bg);
-    padding: 0.8rem 0.85rem;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--card-bg) 92%, transparent), color-mix(in srgb, var(--card-bg-strong) 84%, transparent));
+    padding: 0.85rem 0.95rem 0.85rem 1rem;
     text-align: left;
     box-shadow: var(--card-shadow-soft);
+    overflow: hidden;
+    transition:
+      transform 160ms ease,
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      background 160ms ease;
+  }
+
+  .workspace-launcher__item::before {
+    content: '';
+    position: absolute;
+    left: 0.4rem;
+    top: 0.55rem;
+    bottom: 0.55rem;
+    width: 2px;
+    border-radius: 999px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-secondary) 86%, transparent), color-mix(in srgb, var(--accent-strong) 76%, transparent));
+    opacity: 0;
+    transform: scaleY(0.45);
+    transform-origin: center;
+    transition:
+      opacity 160ms ease,
+      transform 160ms ease;
   }
 
   .workspace-launcher__item + .workspace-launcher__item {
@@ -1299,13 +1604,25 @@
 
   .workspace-launcher__item:hover {
     border-color: color-mix(in srgb, var(--accent-strong) 32%, var(--card-border));
+    box-shadow:
+      0 14px 24px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
     transform: translateY(-1px);
   }
 
   .workspace-launcher__item--active {
     border-color: color-mix(in srgb, var(--accent-strong) 48%, var(--card-border));
-    background: color-mix(in srgb, var(--pill-bg) 76%, var(--card-bg));
-    box-shadow: var(--card-shadow);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--pill-bg) 82%, var(--card-bg)), color-mix(in srgb, var(--accent-soft) 46%, var(--card-bg-strong)));
+    box-shadow:
+      0 16px 28px rgba(0, 0, 0, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    transform: translateX(-1px);
+  }
+
+  .workspace-launcher__item:hover::before,
+  .workspace-launcher__item--active::before {
+    opacity: 1;
+    transform: scaleY(1);
   }
 
   .workspace-launcher__item-label {
@@ -1327,20 +1644,27 @@
     align-items: center;
     justify-content: flex-start;
     gap: 0.7rem;
+    position: relative;
     width: 3.3rem;
     min-height: 3.3rem;
     padding: 0.65rem 0.85rem 0.65rem 0.75rem;
     border-radius: 999px 0 0 999px;
     border: 1px solid color-mix(in srgb, var(--accent-strong) 42%, var(--pill-border));
     border-right: 0;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-strong) 72%, var(--panel-bg)), color-mix(in srgb, var(--accent) 34%, var(--panel-bg)));
-    box-shadow: var(--card-shadow);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--accent-strong) 74%, var(--panel-bg)), color-mix(in srgb, var(--accent) 34%, var(--panel-bg)));
+    box-shadow:
+      0 16px 30px rgba(0, 0, 0, 0.24),
+      0 0 0 1px color-mix(in srgb, var(--accent-strong) 14%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      inset 0 -10px 16px color-mix(in srgb, var(--accent-strong) 12%, transparent);
     color: white;
     font-size: 0.9rem;
     font-weight: 700;
     letter-spacing: 0.06em;
     user-select: none;
     overflow: hidden;
+    isolation: isolate;
     transition:
       width 220ms ease,
       padding 220ms ease,
@@ -1348,6 +1672,17 @@
       box-shadow 180ms ease,
       filter 180ms ease,
       border-radius 220ms ease;
+  }
+
+  .workspace-launcher__tab::before {
+    content: '';
+    position: absolute;
+    inset: 1px 0 auto 0;
+    height: 45%;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent);
+    opacity: 0.72;
+    z-index: 0;
   }
 
   .workspace-launcher__tab-icon {
@@ -1359,8 +1694,12 @@
     height: 1.45rem;
     border-radius: 999px;
     background: color-mix(in srgb, rgba(255, 255, 255, 0.18) 72%, transparent);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
     font-size: 0.9rem;
     line-height: 1;
+    position: relative;
+    z-index: 1;
   }
 
   .workspace-launcher__tab-copy {
@@ -1374,6 +1713,8 @@
     max-width: 0;
     overflow: hidden;
     white-space: nowrap;
+    position: relative;
+    z-index: 1;
     transition:
       opacity 180ms ease,
       max-width 220ms ease;
@@ -1519,17 +1860,27 @@
   }
 
   .theme-block {
-    background: var(--card-bg);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card-bg) 98%, transparent), color-mix(in srgb, var(--card-bg-strong) 90%, transparent));
     border: 1px solid var(--card-border);
-    box-shadow: var(--card-shadow);
+    box-shadow:
+      0 16px 36px rgba(0, 0, 0, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(16px);
     position: relative;
+    overflow: hidden;
   }
 
   .theme-block-soft {
-    background: var(--card-ghost);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card-ghost) 96%, transparent), color-mix(in srgb, var(--analysis-panel-bg) 72%, transparent));
     border: 1px solid var(--card-border);
-    box-shadow: var(--card-shadow-soft);
+    box-shadow:
+      0 12px 24px rgba(0, 0, 0, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(14px);
     position: relative;
+    overflow: hidden;
   }
 
   .theme-block > *,
@@ -1545,7 +1896,11 @@
     color: var(--input-text);
     border-radius: 12px;
     min-height: 40px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    box-shadow:
+      0 8px 18px rgba(0, 0, 0, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      inset 0 -10px 18px color-mix(in srgb, var(--accent-strong) 3%, transparent);
+    backdrop-filter: blur(14px);
     accent-color: var(--accent-strong);
     transition:
       border-color 160ms ease,
@@ -1923,8 +2278,23 @@ summary:active,
 .sidebar-stage-card {
   background: var(--analysis-panel-bg-strong);
   border: 1px solid var(--card-border);
-  box-shadow: 0 12px 24px -22px rgba(15, 23, 42, 0.48);
+  box-shadow:
+    0 14px 28px -22px rgba(15, 23, 42, 0.52),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(14px);
   contain: layout paint;
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-stage-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 46%, transparent), transparent);
+  opacity: 0.82;
 }
 
 .step-card:hover {
@@ -1964,13 +2334,31 @@ summary:active,
 
 .sidebar-sticky-shell {
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 98%, transparent), color-mix(in srgb, var(--panel-bg) 86%, transparent) 76%, transparent);
+  backdrop-filter: blur(6px);
 }
 
 .sidebar-header-card {
-  background: var(--analysis-brand-bg);
+  position: relative;
+  background:
+    radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--accent-secondary) 13%, transparent), transparent 10rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--analysis-brand-bg) 100%, transparent), color-mix(in srgb, var(--analysis-panel-bg) 84%, transparent));
   border: 1px solid var(--analysis-chip-border);
-  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow:
+    0 18px 34px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
   contain: layout paint;
+  overflow: hidden;
+}
+
+.sidebar-header-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 52%, transparent), transparent);
+  opacity: 0.9;
 }
 
 .xps-range-track {
@@ -2101,9 +2489,25 @@ summary:active,
   pointer-events: auto;
   border: 1px solid var(--card-border);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--card-bg-strong) 94%, transparent);
-  box-shadow: var(--panel-shadow);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--card-bg-strong) 96%, transparent), color-mix(in srgb, var(--panel-bg) 92%, transparent));
+  box-shadow:
+    0 26px 52px rgba(0, 0, 0, 0.34),
+    0 0 0 1px color-mix(in srgb, var(--accent-strong) 10%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(18px);
+  position: fixed;
+  isolation: isolate;
+}
+
+.plot-popup::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-secondary) 48%, transparent), transparent);
+  opacity: 0.88;
 }
 
 .plot-popup__header {
@@ -2114,7 +2518,8 @@ summary:active,
   min-height: 2.75rem;
   padding: 0.65rem 0.85rem 0.65rem 1rem;
   border-bottom: 1px solid var(--card-divider);
-  background: color-mix(in srgb, var(--accent-soft) 42%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 56%, transparent), color-mix(in srgb, var(--card-ghost) 46%, transparent));
   user-select: none;
 }
 
@@ -2162,6 +2567,9 @@ summary:active,
 .chart-popup-button:hover {
   border-color: var(--accent-strong);
   background: var(--accent-soft);
+  box-shadow:
+    0 12px 22px rgba(0, 0, 0, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .plot-popup__body {

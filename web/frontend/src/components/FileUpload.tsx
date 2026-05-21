@@ -56,11 +56,18 @@ export default function FileUpload({ onFiles, isLoading = false, moduleLabel = '
         <p className="text-sm font-medium text-[var(--accent)]">放開以載入檔案</p>
       ) : (
         <>
-          <div className="btn btn-primary inline-flex">選擇檔案</div>
+          <div className="btn btn-primary upload-zone__cta inline-flex">選擇檔案</div>
           <p className="mt-1 text-sm font-medium text-[var(--text-main)]">拖曳或上傳 {moduleLabel} 檔案</p>
           <p className="upload-help">
             支援 {formatList.map(ext => ext.toUpperCase()).join(' / ')}
           </p>
+          <div className="upload-format-row">
+            {formatList.slice(0, 6).map(ext => (
+              <span key={ext} className="upload-format-chip">
+                {ext.toUpperCase()}
+              </span>
+            ))}
+          </div>
         </>
       )}
     </div>

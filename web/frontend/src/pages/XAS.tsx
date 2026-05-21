@@ -536,7 +536,7 @@ function Section({ step, title, hint, children, defaultOpen = true, onOpen }: {
     if (next && onOpen) onOpen()
   }
   return (
-    <div className="theme-block mb-3 overflow-hidden rounded-[22px]">
+    <div className="analysis-section-card mb-3 overflow-hidden rounded-[22px] p-0">
       <button type="button" onClick={handleToggle}
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]">
         <div className="flex min-w-0 items-center gap-3">
@@ -3039,7 +3039,7 @@ export default function XAS({
           <>
             {/* summary cards */}
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow-soft)]">
+              <div className="analysis-metric-card px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">資料集</p>
                 <p className="mt-1 text-lg font-semibold text-[var(--text-main)]">{result.datasets.length} 個</p>
                 {isOverlayMode
@@ -3049,7 +3049,7 @@ export default function XAS({
                     : null
                 }
               </div>
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow-soft)]">
+              <div className="analysis-metric-card px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">能量範圍</p>
                 <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
                   {activeDataset
@@ -3060,7 +3060,7 @@ export default function XAS({
                   }
                 </p>
               </div>
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3 shadow-[var(--card-shadow-soft)]">
+              <div className="analysis-metric-card px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">White Line</p>
                 {activeDataset ? (
                   <>
@@ -3081,7 +3081,7 @@ export default function XAS({
               </div>
             </div>
 
-            <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-4 shadow-[var(--card-shadow-soft)]">
+            <div className="analysis-section-card mb-4 px-4 py-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">White Line 結果</p>
@@ -3102,7 +3102,7 @@ export default function XAS({
                 </label>
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+                <div className="analysis-subcard px-3 py-3">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">TEY</p>
                   <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
                     {!whiteLineEnabled
@@ -3114,7 +3114,7 @@ export default function XAS({
                         : '尚未找到'}
                   </p>
                 </div>
-                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-3">
+                <div className="analysis-subcard px-3 py-3">
                   <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">TFY</p>
                   <p className="mt-1 text-base font-semibold text-[var(--text-main)]">
                     {!whiteLineEnabled
@@ -3293,9 +3293,9 @@ export default function XAS({
             {activeDataset && (<>
             {/* edge step table */}
             {activeDataset.edge_step_tey != null && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+              <div className="analysis-section-card mb-4 p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">Post-edge 歸一化摘要</p>
-                <table className="w-full text-xs">
+                <table className="analysis-data-table">
                   <thead>
                     <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
                       <th className="pb-2 text-left font-medium">通道</th>
@@ -3320,7 +3320,7 @@ export default function XAS({
             )}
 
             {/* export */}
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+            <div className="analysis-section-card p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</p>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -3341,7 +3341,7 @@ export default function XAS({
 
             {/* Overlay mode export */}
             {isOverlayMode && overlayDatasets.length > 0 && (
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+              <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">疊圖匯出</p>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -3375,7 +3375,7 @@ export default function XAS({
           const rmse = fitResult.rmse ?? 0
           const chiRed = fitResult.chi_red ?? null
           return (
-          <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+          <div className="analysis-section-card mb-4 p-4">
             <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2 flex-wrap">
                 <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果（{fitChannel}）</p>
@@ -3449,7 +3449,7 @@ export default function XAS({
               </div>
             )}
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full text-xs">
+              <table className="analysis-data-table">
                 <thead>
                   <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
                     <th className="pb-2 text-left font-medium">峰名稱</th>
@@ -3705,8 +3705,8 @@ export default function XAS({
                 {/* preview table */}
                 <div>
                   <p className="text-xs uppercase tracking-[0.14em] text-[var(--text-soft)] mb-2">資料預覽（前 5 行）</p>
-                  <div className="overflow-x-auto rounded border border-[var(--card-border)]">
-                    <table className="w-full text-xs">
+                  <div className="analysis-table-wrap">
+                    <table className="analysis-data-table">
                       <thead>
                         <tr className="bg-[var(--accent-soft)]">
                           <th className="px-2 py-1.5 text-left text-[var(--text-soft)] font-medium">#</th>
@@ -3753,7 +3753,7 @@ export default function XAS({
                       { key: 'tey' as const, label: 'TEY 訊號', icon: 'T', color: 'text-sky-400', nullable: false },
                       { key: 'tfy' as const, label: 'TFY 訊號', icon: 'F', color: 'text-violet-400', nullable: false },
                     ]).map(({ key, label, icon, color, nullable }) => (
-                      <div key={key} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+                      <div key={key} className="analysis-subcard px-4 py-3">
                         <p className={`text-xs font-semibold mb-2 ${color}`}>{icon} {label}</p>
                         <select
                           value={(draft[key] as number | null) ?? -1}
@@ -3915,14 +3915,14 @@ export default function XAS({
                   style={{ width: '100%', height: 280 }}
                 />
                 <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <div className="analysis-subcard space-y-1.5 p-3">
                     <p className="font-semibold text-[var(--text-main)]">切線參數</p>
                     <p className="text-[var(--text-soft)]">區間：{cbmEdgeLo.toFixed(3)} – {cbmEdgeHi.toFixed(3)} eV</p>
                     <p className="text-[var(--text-soft)]">斜率：{tangent.slope.toFixed(5)}</p>
                     <p className="text-[var(--text-soft)]">截距：{tangent.intercept.toFixed(4)}</p>
                     <p className="text-[var(--text-soft)] text-[10px]">TXT 輸出範圍：{tangentLineLo.toFixed(2)} – {tangentLineHi.toFixed(2)} eV</p>
                   </div>
-                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <div className="analysis-subcard space-y-1.5 p-3">
                     <p className="font-semibold text-[var(--text-main)]">基準線參數</p>
                     <p className="text-[var(--text-soft)]">區間：{cbmBaselineLo.toFixed(3)} – {cbmBaselineHi.toFixed(3)} eV</p>
                     <p className="text-[var(--text-soft)]">斜率：{baseline.slope.toFixed(5)}</p>

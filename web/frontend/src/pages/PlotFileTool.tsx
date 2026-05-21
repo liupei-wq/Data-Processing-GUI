@@ -3659,7 +3659,7 @@ export default function PlotFileTool({
       {activeModule === 'raman' ? (
         <div className="mb-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
           <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <p className="text-sm font-semibold text-[var(--text-main)]">Raman 圖譜檔</p>
               <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">可匯入 Raman 分析頁 JSON 報告，也可直接匯入兩欄式 TXT / CSV / DAT 做多樣品參考峰疊圖。</p>
               <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
@@ -3705,7 +3705,7 @@ export default function PlotFileTool({
           </aside>
 
           <section className="space-y-4">
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <div className="mb-3 flex flex-wrap gap-2 rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
                 {[
                   { id: 'single' as const, label: '單一擬合圖', detail: 'component deconvolution' },
@@ -3748,7 +3748,7 @@ export default function PlotFileTool({
 
           <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
             {activeRamanFile && ramanPlotMode === 'single' && (
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-[var(--text-main)]">Raman 峰顯示</p>
                   <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
@@ -3804,7 +3804,7 @@ export default function PlotFileTool({
               </div>
             )}
             {ramanPlotMode === 'overlay' && (
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-[var(--text-main)]">Raman 參考峰資料庫</p>
                   <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">
@@ -3914,7 +3914,7 @@ export default function PlotFileTool({
                 <p className="mt-3 text-[10px] leading-4 text-[var(--text-soft)]">參考峰標籤只顯示材料、共振態與波數；文字顏色跟材料線色一致。</p>
               </div>
             )}
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">Raman 圖面設定</p>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                 <label className="block">
@@ -4052,7 +4052,7 @@ export default function PlotFileTool({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出尺寸</p>
               <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
                 <NumInput label="圖寬(px)" value={ramanStyle.exportWidth} onChange={value => setRamanStyle(prev => ({ ...prev, exportWidth: Math.max(600, value) }))} min={600} max={4000} step={20} />
@@ -4066,7 +4066,7 @@ export default function PlotFileTool({
       ) : activeModule === 'xas' ? (
         <div className="mb-4 grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
           <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <p className="text-sm font-semibold text-[var(--text-main)]">XES / XAS 光譜檔</p>
               <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">支援兩欄式 TXT / CSV / DAT / TSV；XES 用下降邊外推 VBM，XAS 用上升邊外推 CBM。</p>
               <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
@@ -4090,7 +4090,7 @@ export default function PlotFileTool({
             {(['xes', 'xas'] as XasBandFileKind[]).map(kind => {
               const list = kind === 'xes' ? xesBandFiles : xasAbsorptionBandFiles
               return (
-                <div key={kind} className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div key={kind} className="analysis-section-card p-4">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-[var(--text-main)]">{kind.toUpperCase()} 檔案</p>
                     <span className="rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[10px] text-[var(--text-soft)]">{list.length}</span>
@@ -4136,7 +4136,7 @@ export default function PlotFileTool({
           </aside>
 
           <section className="space-y-4">
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-[var(--text-main)]">XES / XAS band gap 疊圖</p>
@@ -4157,7 +4157,7 @@ export default function PlotFileTool({
             </div>
 
             {xasBandResults.results.length > 0 && (
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">Band gap 結果</p>
                 <div className="grid gap-3 md:grid-cols-3">
                   {xasBandResults.results.map(result => (
@@ -4173,7 +4173,7 @@ export default function PlotFileTool({
           </section>
 
           <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <p className="text-sm font-semibold text-[var(--text-main)]">樣品配對</p>
                 <button type="button" onClick={() => setXasBandPairs(autoBuildXasBandPairs(xasBandFiles))} className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">自動配對</button>
@@ -4225,7 +4225,7 @@ export default function PlotFileTool({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">XAS 圖面設定</p>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                 <label className="block">
@@ -4324,7 +4324,7 @@ export default function PlotFileTool({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+            <div className="analysis-section-card p-4">
               <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出尺寸</p>
               <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
                 <NumInput label="圖寬(px)" value={xasBandStyle.exportWidth} onChange={value => setXasBandStyle(prev => ({ ...prev, exportWidth: Math.max(700, value) }))} min={700} max={4000} step={20} />
@@ -4371,7 +4371,7 @@ export default function PlotFileTool({
           {xpsPlotMode === 'fit' ? (
           <div className="mb-4 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)_380px]">
             <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <p className="text-sm font-semibold text-[var(--text-main)]">XPS 擬合結果檔</p>
                 <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">支援欄位：Binding_Energy_eV、Observed、Total_Fit，以及任意多個 component 欄位。</p>
                 <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
@@ -4402,7 +4402,7 @@ export default function PlotFileTool({
             </aside>
 
             <section className="space-y-4">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-[var(--text-main)]">XPS component panels</p>
@@ -4421,7 +4421,7 @@ export default function PlotFileTool({
               </div>
 
               {files.length > 0 && (
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card p-4">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-[var(--text-main)]">Area ratio / component ratio</p>
                     <div className="flex gap-2">
@@ -4435,7 +4435,7 @@ export default function PlotFileTool({
             </section>
 
             <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">圖面設定</p>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <label className="block">
@@ -4493,7 +4493,7 @@ export default function PlotFileTool({
               </div>
 
               {keys.length > 0 && (
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card p-4">
                   <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">比例圖設定</p>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                     <label className="block">
@@ -4513,7 +4513,7 @@ export default function PlotFileTool({
               )}
 
               {keys.length > 0 && (
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card p-4">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-[var(--text-main)]">Component 樣式</p>
                     <button type="button" onClick={applyRomanPreset} className="rounded-full border border-[var(--accent-secondary)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-secondary)]">
@@ -4561,7 +4561,7 @@ export default function PlotFileTool({
                 </div>
               )}
 
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出尺寸</p>
                 <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
                   <NumInput label="Panel 寬(px)" value={style.exportWidth} onChange={value => setStyle(prev => ({ ...prev, exportWidth: Math.max(420, value) }))} min={420} max={3000} step={20} />
@@ -4574,7 +4574,7 @@ export default function PlotFileTool({
           ) : (
           <div className="mb-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
             <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <p className="text-sm font-semibold text-[var(--text-main)]">XPS VBM 數據檔</p>
                 <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">支援 CSV/TXT/TSV；至少兩欄數值。會自動尋找 Binding Energy 與 intensity 欄位，只做最大值歸一化，不做背景扣除。</p>
                 <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
@@ -4621,7 +4621,7 @@ export default function PlotFileTool({
             </aside>
 
             <section className="space-y-4">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-[var(--text-main)]">VBM stacked 線性外推圖</p>
@@ -4642,7 +4642,7 @@ export default function PlotFileTool({
               {vbmResults.results.map(result => {
                 const singleFigure = buildVbmSingleFigure(result, vbmStyle)
                 return (
-                  <div key={result.file.id} className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <div key={result.file.id} className="analysis-section-card p-4">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                       <p className="text-sm font-semibold text-[var(--text-main)]">{result.file.sampleLabel} 單張 VBM 圖</p>
                       <div className="flex gap-2">
@@ -4656,7 +4656,7 @@ export default function PlotFileTool({
               })}
 
               {vbmSummaryFigure && (
-                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <div className="analysis-section-card p-4">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-[var(--text-main)]">VBM summary</p>
                     <div className="flex flex-wrap gap-2">
@@ -4672,7 +4672,7 @@ export default function PlotFileTool({
             </section>
 
             <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">VBM 圖面設定</p>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <label className="block">
@@ -4732,7 +4732,7 @@ export default function PlotFileTool({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出尺寸</p>
                 <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
                   <NumInput label="圖寬(px)" value={vbmStyle.exportWidth} onChange={value => setVbmStyle(prev => ({ ...prev, exportWidth: Math.max(420, value) }))} min={420} max={3000} step={20} />

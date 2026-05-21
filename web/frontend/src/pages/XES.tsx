@@ -193,7 +193,7 @@ function SidebarCard({ step, title, hint, children, defaultOpen = true }: {
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="theme-block mb-3 overflow-hidden rounded-[22px]">
+    <div className="analysis-section-card mb-3 overflow-hidden rounded-[22px] p-0">
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
@@ -975,7 +975,7 @@ export default function XES({
               formats={moduleContent.formats}
             />
           ) : !hasProcessed ? (
-            <div className="flex min-h-[32vh] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-bg)]">
+            <div className="analysis-subcard flex min-h-[32vh] items-center justify-center rounded-2xl border-dashed">
               <div className="text-center text-[var(--text-soft)]">
                 <p className="text-sm">已載入 {samples.length} 個 sample，調整左側參數後點擊「執行處理」。</p>
               </div>
@@ -983,7 +983,7 @@ export default function XES({
           ) : (
             <>
               {/* Main spectra chart */}
-              <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
+              <div className="analysis-section-card mb-5 p-4">
                 <div className="mb-2 flex justify-end">
                   {onOpenPlotPopup && (
                     <button type="button" className="chart-popup-button" onClick={openMainSpectraPopup}>
@@ -1053,7 +1053,7 @@ export default function XES({
 
               {/* BG subtraction comparison chart */}
               {params.bg_method !== 'none' && (
-                <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
+                <div className="analysis-section-card mb-5 p-4">
                   <Plot
                     data={processed.flatMap((ds, i) => [
                       {
@@ -1086,10 +1086,10 @@ export default function XES({
 
               {/* Detected peaks table */}
               {detectedPeaks.length > 0 && (
-                <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
+                <div className="analysis-section-card mb-5 p-4">
                   <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">偵測峰</h2>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
+                  <div className="analysis-table-wrap">
+                    <table className="analysis-data-table min-w-full text-left text-xs">
                       <thead>
                         <tr className="border-b border-[var(--card-border)] text-[var(--text-soft)]">
                           <th className="py-2 pr-4 text-left">#</th>
@@ -1117,10 +1117,10 @@ export default function XES({
 
               {/* Reference peaks table */}
               {refPeaks.length > 0 && (
-                <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
+                <div className="analysis-section-card mb-5 p-4">
                   <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">參考峰</h2>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
+                  <div className="analysis-table-wrap">
+                    <table className="analysis-data-table min-w-full text-left text-xs">
                       <thead>
                         <tr className="border-b border-[var(--card-border)] text-[var(--text-soft)]">
                           <th className="py-2 pr-4 text-left">材料</th>
@@ -1148,7 +1148,7 @@ export default function XES({
 
               {/* Band alignment result */}
               {bandParams.enabled && bandResult && (
-                <div className="mb-5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
+                <div className="analysis-section-card mb-5 p-4">
                   <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">能帶對齊結果</h2>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {[
@@ -1157,14 +1157,15 @@ export default function XES({
                       { label: 'ΔEV', val: bandResult.delta_ev, sig: bandResult.sigma_delta_ev },
                       { label: 'ΔEC', val: bandResult.delta_ec, sig: bandResult.sigma_delta_ec },
                     ].map(item => (
-                      <div key={item.label} className="rounded-xl border border-[var(--card-border)] bg-[var(--panel-bg)] px-4 py-3">
+                      <div key={item.label} className="analysis-subcard px-4 py-3">
                         <div className="text-xs text-[var(--text-soft)]">{item.label}</div>
                         <div className="mt-1 text-lg font-bold text-[var(--text-main)]">{item.val.toFixed(3)} eV</div>
                         <div className="text-[10px] text-[var(--text-soft)]">±{item.sig.toFixed(3)} eV</div>
                       </div>
                     ))}
                   </div>
-                  <table className="mt-4 w-full text-xs">
+                  <div className="analysis-table-wrap mt-4">
+                    <table className="analysis-data-table min-w-full text-left text-xs">
                     <thead>
                       <tr className="border-b border-[var(--card-border)] text-[var(--text-soft)]">
                         <th className="py-2 pr-4 text-left">量</th>
@@ -1190,12 +1191,13 @@ export default function XES({
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                    </table>
+                  </div>
                 </div>
               )}
 
               {/* Export */}
-              <div className="mb-8 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow)]">
+              <div className="analysis-section-card mb-8 p-4">
                 <h2 className="mb-3 text-sm font-semibold text-[var(--text-main)]">匯出</h2>
                 <div className="flex flex-wrap gap-2">
                   <button

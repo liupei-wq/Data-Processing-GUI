@@ -130,8 +130,20 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 
 ## 精簡動作紀錄
 
+### 2026-05-22
+
+- Athena 入口位置修正：右側 workspace launcher 的分析模組區恢復 `XAS Athena 處理` 快捷鍵；首頁左上品牌卡片下方的 `ModuleTabs` 改為隱藏 `Athena`，保留 `Raman / XRD / XPS / XAS / XES`；驗證 `cd web/frontend && npm run build` 通過。
+- 合併 `Nigiro Pro Design System` 主介面樣式：不新增獨立展示頁，直接把 design system 的殼層語言套回現有前端；`ModuleTopBar` 改為首顆 chip 內嵌標題列、空狀態改為玻璃內卡、`info-card / module-tab / upload-zone` 補上更明顯的玻璃卡片感與 hover；驗證 `cd web/frontend && npm run build` 通過。
+- 持續合併 `Nigiro Pro Design System` 主介面樣式：進一步強化 `workspace surface / workspace launcher / sidebar header / module tabs / workspace stage card / theme dock` 的玻璃殼層與高光表現，加入更明顯的網格場域、頂部高光、active 導引條與 launcher tab 光澤；驗證 `cd web/frontend && npm run build` 通過，`git diff --check` 只有既有 LF/CRLF 警告。
+- 持續合併 `Nigiro Pro Design System` 主介面樣式：把共用 `theme-block / theme-block-soft / theme-input / sidebar-stage-card / plot-popup / FileUpload` 再往同一套視覺統一，補上卡面高光、輸入框景深、upload format chips 與彈出圖表玻璃層次；驗證 `cd web/frontend && npm run build` 通過，`git diff --check` 只有既有 LF/CRLF 警告。
+- 持續合併 `Nigiro Pro Design System` 主介面樣式：新增共用 `analysis-section-card / analysis-metric-card / analysis-subcard / analysis-table-wrap / analysis-data-table`，並套用到 `XAS / XPS` 內容層的大卡片、結果表、匯出區與 VBM/CBM 預覽資訊卡，讓分析結果區也跟外層 shell 使用同一套玻璃卡與表格語言；驗證 `cd web/frontend && npm run build` 通過，`git diff --check` 只有既有 LF/CRLF 警告。
+- 持續合併 `Nigiro Pro Design System` 主介面樣式：將 `XRD` 的流程結果卡、弱峰分析、參考峰比對、匯出區，以及 `Raman` 的峰候選表、峰擬合結果區、校正摘要、group diagnostics 與編輯 modal 一起切換到共用 `analysis-*` 卡片/表格語言，讓主要分析頁內容層視覺一致；驗證 `cd web/frontend && npm run build` 通過，`git diff --check` 只有既有 LF/CRLF 警告。
+
+- 持續合併 `Nigiro Pro Design System` 主介面樣式：將 `XES` 的主圖、BG 比較圖、偵測峰表、參考峰表、band alignment 結果與匯出區切換到共用 `analysis-*` 卡片/表格語言，並同步把 `SingleProcessTool` 的側欄控制卡、空狀態與匯出預覽 modal 改成相同的玻璃卡層次；驗證 `cd web/frontend && npm run build` 成功，`git diff --check` 仍只有既有 LF/CRLF 警告。
+- 持續合併 `Nigiro Pro Design System` 主介面樣式：補收尾 `PlotFileTool`、`XPS` overlay/periodic modal、`Raman` 圖表結果卡、`XRD` / `Raman` 頁首統計卡，以及 `XAS` / `XES` 側欄折疊卡的共用玻璃卡語言，將一批重複的舊 `rounded-2xl + card-bg` 卡片改為 `analysis-section-card / analysis-metric-card / analysis-subcard`；驗證 `cd web/frontend && npm run build` 成功，`git diff --check` 仍只有既有 LF/CRLF 警告。
 ### 2026-05-21（續）
 
+- 左上 workspace launcher 微調：移除分析模組區裡額外插在 XAS 後面的 `XAS Athena 處理` 快捷鍵；保留 `Raman / XRD / XPS / XAS / XES` 與 Athena 頁面本體；驗證 `cd web/frontend && npm run build` 通過。
 - XAS 峰擬合結果圖卡新增「放大選定範圍」按鈕：會鎖定到最後一次執行擬合時的 range snapshot，結果圖 x 軸切到選定區間、y 軸依區間內原始/總擬合/殘差/各峰自動重算；保留「顯示/隱藏擬合範圍」覆蓋層；驗證 `cd web/frontend && npm run build` 通過。
 - XAS 峰擬合結果圖卡微調：將「放大選定範圍」按鈕從左下匯出列移到結果表格上方、靠近「峰名稱」區；驗證 `cd web/frontend && npm run build` 通過。
 - XAS 左側「擬合範圍」卡片視覺強化：啟用 range mode 時整張卡改為高亮背景、亮邊框與較明顯的提示文字，不再只靠右上角小型「已啟用」標籤辨識；驗證 `cd web/frontend && npm run build` 通過。

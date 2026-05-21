@@ -3920,7 +3920,7 @@ export default function XPS({
         {(rawFiles.length > 0 || (vbmDataSource === 'imported' && !!importedVbmDataset)) && (
           <>
             {rawChartTraces.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">原始光譜</p>
                 {rawChartSourceFiles.length > 0 && (
                   <div className="mb-3">
@@ -3951,7 +3951,7 @@ export default function XPS({
 
             {/* ── overlay: preprocess stage ── */}
             {overlayPreprocessDatasets.length >= overlayMinCount && (overlayState.params.interpolate || overlayState.params.average || Math.abs(overlayState.params.energy_shift) > 1e-8) && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title={overlayState.params.average ? '多筆疊圖：內插 / 平均 / 校正後' : '多筆疊圖：內插 / 校正後'}
                   colorValue={chartLineColors.overlay}
@@ -3986,7 +3986,7 @@ export default function XPS({
 
             {/* ── overlay: background stage ── */}
             {overlayPreprocessDatasets.length >= overlayMinCount && overlayState.params.bg_enabled && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title={overlayState.params.bg_enabled ? '多筆疊圖：背景扣除後' : '多筆疊圖：背景扣除（未啟用）'}
                   colorValue={chartLineColors.overlayBg}
@@ -4050,7 +4050,7 @@ export default function XPS({
 
             {/* ── overlay: effective range stage ── */}
             {overlayFinalDatasets.length >= overlayMinCount && overlayValidRangeDatasets.length >= overlayMinCount && overlayState.params.valid_range_enabled && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title="多筆疊圖：有效數據範圍後"
                   colorValue={chartLineColors.overlayNorm}
@@ -4103,7 +4103,7 @@ export default function XPS({
 
             {/* ── overlay: normalization stage ── */}
             {overlayFinalDatasets.length >= overlayMinCount && overlayNormalizationDatasets.length >= overlayMinCount && hasNormalizationStage && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title="多筆疊圖：歸一化後"
                   colorValue={chartLineColors.overlayNorm}
@@ -4156,7 +4156,7 @@ export default function XPS({
 
             {/* ── overlay: final ── */}
             {overlayFinalDatasets.length >= overlayMinCount && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title="多筆疊圖比較：最終結果"
                   colorValue={chartLineColors.overlay}
@@ -4190,7 +4190,7 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title={stageDisplayLabel ? `${stageDisplayLabel}後` : '前處理後'}
                   colorValue={chartLineColors.preprocess}
@@ -4214,7 +4214,7 @@ export default function XPS({
               </div>
             )}
             {processingViewMode === 'single' && backgroundChartTraces.length > 0 && hasBackgroundStage && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <ChartToolbar
@@ -4261,7 +4261,7 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && validRangeChartTraces.length > 0 && hasValidRangeStage && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title="有效數據範圍"
                   colorValue={chartLineColors.normalization}
@@ -4298,7 +4298,7 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && normalizationChartTraces.length > 0 && hasNormalizationStage && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <ChartToolbar
                   title="歸一化"
                   colorValue={chartLineColors.normalization}
@@ -4335,7 +4335,7 @@ export default function XPS({
             )}
 
             {currentDisplayDataset && (processingViewMode === 'single' ? result : fitTargetDataset) && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <ChartToolbar
@@ -4366,7 +4366,7 @@ export default function XPS({
             )}
 
             {fitTargetDataset && currentFitResult && currentFitResult.peaks.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">峰擬合光譜</p>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
                   {processingViewMode === 'overlay'
@@ -4389,7 +4389,7 @@ export default function XPS({
               const rmse = currentFitResult.rmse ?? 0
               const chiRed = currentFitResult.chi_red ?? null
               return (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合結果</p>
                   <span className={[
@@ -4410,7 +4410,7 @@ export default function XPS({
                     </span>
                   )}
                 </div>
-                <table className="w-full text-xs">
+                <table className="analysis-data-table">
                   <thead>
                     <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
                       <th className="pb-2 text-left font-medium">峰</th>
@@ -4437,7 +4437,7 @@ export default function XPS({
             })()}
 
             {xpsMode === 'valence_band' && effectiveVbmDataset && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <p className="mb-1 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推圖</p>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">空心 marker 是你輸入 x 值對應到的光譜點，實心 marker 是在附近 20% 搜尋窗中實際被拿來畫線的點。</p>
                 <Plot
@@ -4529,7 +4529,7 @@ export default function XPS({
                   )}
                 </div>
                 {vbmPreviewTangent && vbmPreviewBaselineLine && (
-                  <div className="mt-3 flex items-center justify-between rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-2.5">
+                  <div className="analysis-subcard mt-3 flex items-center justify-between px-4 py-2.5">
                     <div className="text-xs text-[var(--text-soft)]">
                       {vbmPreviewVbm !== null
                         ? <span>預覽 VBM = <span className={vbmPreviewVbm.x < 0 ? 'font-semibold text-amber-400' : 'font-semibold text-emerald-400'}>{vbmPreviewVbm.x.toFixed(3)} eV</span></span>
@@ -4548,15 +4548,15 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && xpsMode === 'valence_band' && bandOffsetResult && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">能帶偏移結果</p>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--accent-soft)_50%,var(--card-bg))] px-4 py-3">
+                  <div className="analysis-subcard px-4 py-3">
                     <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">ΔEV</p>
                     <p className="mt-1 text-xl font-semibold text-[var(--text-main)]">{bandOffsetResult.deltaEv.toFixed(3)} eV</p>
                     {bandOffsetResult.sigmaEv > 0 && <p className="text-[11px] text-[var(--text-soft)]">± {bandOffsetResult.sigmaEv.toFixed(3)} eV</p>}
                   </div>
-                  <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] px-4 py-3">
+                  <div className="analysis-subcard px-4 py-3">
                     <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">方法</p>
                     <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">
                       {bandOffsetMethod === 'vbm_diff' ? 'VBM 差值法' : 'Kraut Method'}
@@ -4567,7 +4567,7 @@ export default function XPS({
             )}
 
             {currentFitResult && currentFitResult.peaks.length > 0 && currentRsfRows.length > 0 && (
-              <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card mb-4 p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <p className="text-sm font-semibold text-[var(--text-main)]">RSF 定量分析</p>
                   <button type="button" onClick={lookupRsfFn} disabled={rsfLoading}
@@ -4577,7 +4577,7 @@ export default function XPS({
                   </button>
                 </div>
                 {rsfError && <p className="mb-2 text-xs text-rose-400">{rsfError}</p>}
-                <table className="w-full text-xs">
+                <table className="analysis-data-table">
                   <thead>
                     <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
                       <th className="pb-2 text-left font-medium">峰</th>
@@ -4637,7 +4637,7 @@ export default function XPS({
             )}
 
             {currentDisplayDataset && (
-              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+              <div className="analysis-section-card p-4">
                 <div className="mb-4">
                   <p className="text-sm font-semibold text-[var(--text-main)]">匯出</p>
                   <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">
@@ -4647,7 +4647,7 @@ export default function XPS({
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3">
                   {/* 研究常用 */}
-                  <div className="rounded-[22px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
+                  <div className="analysis-subcard p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">研究常用</p>
                     <div className="mt-3 flex flex-col gap-2">
                       <ExportBtnPrimary label="最終處理光譜 CSV" onClick={() => {
@@ -4671,7 +4671,7 @@ export default function XPS({
                     </div>
                   </div>
                   {/* 分析表格 */}
-                  <div className="rounded-[22px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
+                  <div className="analysis-subcard p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">分析表格</p>
                     <div className="mt-3 flex flex-col gap-2">
                       {currentFitResult && currentFitResult.peaks.length > 0 ? (
@@ -4759,7 +4759,7 @@ export default function XPS({
                     </div>
                   </div>
                   {/* 追溯/設定 */}
-                  <div className="rounded-[22px] border border-[var(--card-border)] bg-[var(--card-ghost)] p-4">
+                  <div className="analysis-subcard p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">追溯 / 設定</p>
                     <div className="mt-3 flex flex-col gap-2">
                       <ExportBtnSecondary label="處理報告 JSON" onClick={() => {
@@ -4805,7 +4805,7 @@ export default function XPS({
 
       {overlaySelectorOpen && (
         <div className="absolute inset-0 z-40 flex items-start justify-center bg-black/35 px-4 py-8 backdrop-blur-[2px]">
-          <div className="theme-block max-h-[calc(100vh-4rem)] w-full max-w-4xl overflow-hidden rounded-[28px]">
+          <div className="analysis-section-card max-h-[calc(100vh-4rem)] w-full max-w-4xl overflow-hidden rounded-[28px] p-0">
             <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
               <div>
                 <p className="text-sm font-semibold text-[var(--text-main)]">多筆數據疊圖處理</p>
@@ -5036,14 +5036,14 @@ export default function XPS({
                   style={{ width: '100%', height: 280 }}
                 />
                 <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <div className="analysis-subcard space-y-1.5 p-3">
                     <p className="font-semibold text-[var(--text-main)]">切線參數</p>
                     <p className="text-[var(--text-soft)]">區間：{vbmEdgeLo.toFixed(3)} – {vbmEdgeHi.toFixed(3)} eV</p>
                     <p className="text-[var(--text-soft)]">斜率：{tangent.slope.toFixed(5)}</p>
                     <p className="text-[var(--text-soft)]">截距：{tangent.intercept.toFixed(4)}</p>
                     <p className="text-[var(--text-soft)] text-[10px]">TXT 輸出範圍：{tangentLineLo.toFixed(2)} – {tangentLineHi.toFixed(2)} eV</p>
                   </div>
-                  <div className="space-y-1.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                  <div className="analysis-subcard space-y-1.5 p-3">
                     <p className="font-semibold text-[var(--text-main)]">基準線參數</p>
                     <p className="text-[var(--text-soft)]">區間：{vbmBaselineLo.toFixed(3)} – {vbmBaselineHi.toFixed(3)} eV</p>
                     <p className="text-[var(--text-soft)]">斜率：{baseline.slope.toFixed(5)}</p>
@@ -5086,7 +5086,7 @@ export default function XPS({
 
       {periodicTableOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 px-4 py-6 backdrop-blur-[2px]">
-          <div className="theme-block max-h-[calc(100vh-4rem)] w-full max-w-6xl overflow-hidden rounded-[28px]">
+          <div className="analysis-section-card max-h-[calc(100vh-4rem)] w-full max-w-6xl overflow-hidden rounded-[28px] p-0">
             <div className="flex items-center justify-between border-b border-[var(--card-divider)] px-5 py-4">
               <div>
                 <p className="text-sm font-semibold text-[var(--text-main)]">元素週期表</p>
