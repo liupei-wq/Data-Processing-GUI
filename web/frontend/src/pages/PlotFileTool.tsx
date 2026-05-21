@@ -1855,92 +1855,6 @@ function calculateVbm(file: VbmSpectrumFile): VbmFitResult {
   }
 }
 
-function fitXasBandPlotLine(x: number[], y: number[], start: number, end: number, mode: 'baseline' | 'rising' | 'falling'): VbmLineFit | null {
-  if (x.length !== y.length) return null
-  const lo = Math.min(start, end)
-  const hi = Math.max(start, end)
-  const points = x
-    .map((xi, index) => ({ x: xi, y: y[index] }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
-    .sort((a, b) => a.x - b.x)
-  if (points.length < 2) return null
-
-  const nearestPoint = (targetX: number) => {
-    let bestIndex = 0
-    let bestDistance = Infinity
-    for (let i = 0; i < points.length; i += 1) {
-      const distance = Math.abs(points[i].x - targetX)
-      if (distance < bestDistance) {
-        bestDistance = distance
-        bestIndex = i
-      }
-    }
-    return { index: bestIndex, point: points[bestIndex] }
-  }
-
-  const anchorStart = nearestPoint(lo)
-  const anchorEnd = nearestPoint(hi)
-  const spanPoints = Math.max(Math.abs(anchorEnd.index - anchorStart.index) + 1, 5)
-  const windowPointCount = Math.max(3, Math.min(points.length, Math.round(spanPoints * 0.2)))
-  const buildWindow = (anchorIndex: number) => {
-    const startIndex = Math.max(0, Math.min(points.length - windowPointCount, anchorIndex - Math.floor(windowPointCount / 2)))
-    return points.slice(startIndex, startIndex + windowPointCount)
-  }
-
-  const startWindow = buildWindow(anchorStart.index)
-  const endWindow = buildWindow(anchorEnd.index)
-  let bestPair: { startPoint: VbmLinePoint; endPoint: VbmLinePoint; slope: number; span: number; meanY: number } | null = null
-  let candidatePairCount = 0
-  for (const startPoint of startWindow) {
-    for (const endPoint of endWindow) {
-      const dx = endPoint.x - startPoint.x
-      if (Math.abs(dx) <= 1e-10) continue
-      const slope = (endPoint.y - startPoint.y) / dx
-      const span = Math.abs(dx)
-      const meanY = (startPoint.y + endPoint.y) / 2
-      candidatePairCount += 1
-      if (!bestPair) {
-        bestPair = { startPoint, endPoint, slope, span, meanY }
-        continue
-      }
-      if (mode === 'rising') {
-        if (slope > bestPair.slope + 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span)) {
-          bestPair = { startPoint, endPoint, slope, span, meanY }
-        }
-      } else if (mode === 'falling') {
-        if (slope < bestPair.slope - 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span)) {
-          bestPair = { startPoint, endPoint, slope, span, meanY }
-        }
-      } else {
-        const absSlope = Math.abs(slope)
-        const bestAbsSlope = Math.abs(bestPair.slope)
-        if (
-          absSlope < bestAbsSlope - 1e-10
-          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && meanY < bestPair.meanY - 1e-10)
-          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && Math.abs(meanY - bestPair.meanY) <= 1e-10 && span > bestPair.span)
-        ) {
-          bestPair = { startPoint, endPoint, slope, span, meanY }
-        }
-      }
-    }
-  }
-
-  if (!bestPair) return null
-  const intercept = bestPair.startPoint.y - bestPair.slope * bestPair.startPoint.x
-  return {
-    slope: bestPair.slope,
-    intercept,
-    pointCount: startWindow.length + endWindow.length,
-    startWindowPointCount: startWindow.length,
-    endWindowPointCount: endWindow.length,
-    candidatePairCount,
-    anchorStartPoint: anchorStart.point,
-    anchorEndPoint: anchorEnd.point,
-    startPoint: bestPair.startPoint,
-    endPoint: bestPair.endPoint,
-  }
-}
-
 function normalizeBandIntensity(y: number[]) {
   const finite = y.filter(Number.isFinite)
   if (finite.length === 0) return y.map(() => 0)
@@ -1960,8 +1874,8 @@ function calculateXasBandEdge(file: XasBandEdgeFile): XasBandEdgeResult {
   if (validPoints.length < 3) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: 有效資料點不足`)
   const x = validPoints.map(point => point.x)
   const yNorm = normalizeBandIntensity(validPoints.map(point => point.y))
-  const tangentLine = fitXasBandPlotLine(x, yNorm, file.tangentStart, file.tangentEnd, file.kind === 'xes' ? 'falling' : 'rising')
-  const baselineLine = fitXasBandPlotLine(x, yNorm, file.baselineStart, file.baselineEnd, 'baseline')
+  const tangentLine = fitVbmPlotLine(x, yNorm, file.tangentStart, file.tangentEnd, 'tangent')
+  const baselineLine = fitVbmPlotLine(x, yNorm, file.baselineStart, file.baselineEnd, 'baseline')
   if (!tangentLine) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: tangent 區間內資料點不足`)
   if (!baselineLine) throw new Error(`${file.sampleLabel} ${file.kind.toUpperCase()}: baseline 區間內資料點不足`)
   const slopeDelta = tangentLine.slope - baselineLine.slope
@@ -3611,8 +3525,7 @@ export default function PlotFileTool({
   const exportXasBandSummaryTxt = () => {
     const lines = [
       'XAS/XES band gap linear extrapolation results',
-      'XES VBM: baseline intersection with the steepest falling tangent.',
-      'XAS CBM: baseline intersection with the steepest rising tangent.',
+      'Algorithm: same as XPS VBM preview; tangent uses max positive slope candidate pair, baseline uses flattest candidate pair.',
       '',
       ...xasBandResults.results.map(result => `${result.pair.sampleLabel}: VBM=${result.xes.edge.toFixed(3)} eV, CBM=${result.xas.edge.toFixed(3)} eV, Eg=${result.bandGap.toFixed(3)} eV, XES display=${result.xes.file.displayStart}-${result.xes.file.displayEnd} eV, XAS display=${result.xas.file.displayStart}-${result.xas.file.displayEnd} eV`),
     ]

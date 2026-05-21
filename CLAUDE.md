@@ -132,6 +132,7 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 
 ### 2026-05-22
 
+- PlotFileTool XAS/XES band gap 線性外推邏輯對齊 XPS VBM：移除 Band Gap 自有 rising/falling 選線分支，改共用 VBM 的「tangent 最大正斜率候選點對、baseline 最平斜率候選點對」計算；同步更新 TXT 匯出說明；驗證 `git diff --check` 通過，前端 build 因此環境找不到 `npm` / `node` 未能執行。
 - Athena 入口位置修正：右側 workspace launcher 的分析模組區恢復 `XAS Athena 處理` 快捷鍵；首頁左上品牌卡片下方的 `ModuleTabs` 改為隱藏 `Athena`，保留 `Raman / XRD / XPS / XAS / XES`；驗證 `cd web/frontend && npm run build` 通過。
 - 合併 `Nigiro Pro Design System` 主介面樣式：不新增獨立展示頁，直接把 design system 的殼層語言套回現有前端；`ModuleTopBar` 改為首顆 chip 內嵌標題列、空狀態改為玻璃內卡、`info-card / module-tab / upload-zone` 補上更明顯的玻璃卡片感與 hover；驗證 `cd web/frontend && npm run build` 通過。
 - 持續合併 `Nigiro Pro Design System` 主介面樣式：進一步強化 `workspace surface / workspace launcher / sidebar header / module tabs / workspace stage card / theme dock` 的玻璃殼層與高光表現，加入更明顯的網格場域、頂部高光、active 導引條與 launcher tab 光澤；驗證 `cd web/frontend && npm run build` 通過，`git diff --check` 只有既有 LF/CRLF 警告。
