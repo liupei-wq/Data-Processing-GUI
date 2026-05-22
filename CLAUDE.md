@@ -227,3 +227,9 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 [2026-05-23] 檢查：git diff --check 通過；僅顯示 CLAUDE.md 與 PlotFileTool.tsx 之 LF/CRLF 提示，未發現 whitespace error。
 
 [2026-05-23] 檢查：git status --short 顯示本次相關變更為 CLAUDE.md 與 web/frontend/src/pages/PlotFileTool.tsx。
+
+[2026-05-23] 重要判斷：使用者澄清需求是逐筆調整數據本身的 X 軸；將 X offset 控制集中到 XPS offset 專區，避免被誤解為只調圖表範圍。
+
+[2026-05-23] 實作：將 PlotFileTool XPS 每筆資料的 X 軸位移控制移入 offset 專區；上傳清單保留樣品標籤，offset 專區逐筆列出 sample/file 與 X 軸位移(eV)。
+
+[2026-05-23] 檢查：調整 XPS offset 專區後再次執行 git diff --check 通過；僅有 LF/CRLF 提示。

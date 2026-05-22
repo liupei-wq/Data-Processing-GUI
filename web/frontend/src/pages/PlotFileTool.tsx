@@ -4404,9 +4404,6 @@ export default function PlotFileTool({
                           onChange={event => updateXpsFitFile(file.id, { sampleLabel: event.target.value })}
                           className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs font-semibold text-[var(--input-text)] focus:outline-none"
                         />
-                        <div className="mt-2">
-                          <NumInput label="X offset (eV)" value={file.xOffsetEv} onChange={value => updateXpsFitFile(file.id, { xOffsetEv: value })} step={0.01} />
-                        </div>
                         <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--text-soft)]">
                           <span className="truncate">{file.name}</span>
                           <button type="button" onClick={() => setFiles(current => current.filter(item => item.id !== file.id))} className="text-rose-400">移除</button>
@@ -4421,6 +4418,21 @@ export default function PlotFileTool({
               <div className="analysis-section-card p-4">
                 <p className="text-sm font-semibold text-[var(--text-main)]">XPS offset / 內插</p>
                 <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">調整各筆已擬合資料的 Binding Energy X 軸，並可內插到共同重疊區間。</p>
+                {files.length > 0 ? (
+                  <div className="mt-3 space-y-2">
+                    {files.map(file => (
+                      <div key={file.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                        <div className="mb-2 min-w-0">
+                          <p className="truncate text-xs font-semibold text-[var(--text-main)]">{file.sampleLabel}</p>
+                          <p className="truncate text-[10px] text-[var(--text-soft)]">{file.name}</p>
+                        </div>
+                        <NumInput label="X 軸位移(eV)" value={file.xOffsetEv} onChange={value => updateXpsFitFile(file.id, { xOffsetEv: value })} step={0.01} />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-soft)]">尚未載入 XPS fit spectra。</p>
+                )}
                 <label className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
                   <span>套用共同 grid 內插</span>
                   <input
