@@ -3978,7 +3978,7 @@ export default function PlotFileTool({
         </div>
       ) : activeModule === 'xas' ? (
         <div className="mb-4 grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-          <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+          <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:self-start xl:overflow-y-auto xl:pr-1">
             <div className="analysis-section-card p-4">
               <p className="text-sm font-semibold text-[var(--text-main)]">XES / XAS 光譜檔</p>
               <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">支援兩欄式 TXT / CSV / DAT / TSV；XES 用下降邊外推 VBM，XAS 用上升邊外推 CBM。</p>

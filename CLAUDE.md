@@ -197,3 +197,21 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 - XPS / XAS：峰擬合加入自動收斂、重設峰、收斂歷史與更穩定的 seed 回寫流程。
 - XES：完成能量校正、分點扣背權重、process 500 補強與歸一化修正。
 - PlotFileTool：完成 Raman 參考峰疊圖增強與 XAS/XES band gap 圖功能。
+
+[2026-05-22] 檢查：開始定位繪製圖檔 XAS 區與左側調整區實作，目標是新增滑桿避免調整數值時中央圖表位移。
+
+[2026-05-22] 重要判斷：PlotFileTool 的 XAS band gap 版面中，右側設定欄已有獨立捲動，但左側 XES/XAS 檔案與範圍調整欄缺少 max-height 與 overflow-y-auto；為避免左欄高度推動頁面造成中央圖表位移，改為左欄也使用獨立捲動。
+
+[2026-05-22] 實作：準備修改 PlotFileTool XAS 左側調整欄，新增獨立垂直捲動以固定中央圖表位置。
+
+[2026-05-22] 檢查：檢視 PlotFileTool XAS 左側調整欄捲動修改的 git diff，確認未修改其他非目標 UI。
+
+[2026-05-22] 實作：還原誤改的 Raman 左欄 class，並將獨立捲動 class 正確套用到 PlotFileTool XAS 左側調整欄。
+
+[2026-05-22] 檢查：重新檢視 PlotFileTool diff，確認 Raman 誤改已還原且 XAS 左側調整欄已加上獨立捲動。
+
+[2026-05-22] 檢查：前端 build 嘗試失敗；從 web/frontend 寫入 CLAUDE.md 被拒絕且目前環境找不到 npm，改回專案根目錄補記錄並檢查 Node/npm 路徑。
+
+[2026-05-22] 檢查：因目前 PATH 找不到 node/npm，改執行 git diff --check 驗證 XAS 左欄捲動修改的 patch 格式。
+
+[2026-05-22] 檢查：收尾確認 git status 與 PlotFileTool XAS 左側捲動 class 位置。
