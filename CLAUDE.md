@@ -215,3 +215,15 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 [2026-05-22] æª¢æŸ¥ï¼šå› ç›®å‰ PATH æ‰¾ä¸åˆ° node/npmï¼Œæ”¹åŸ·è¡Œ git diff --check é©—è­‰ XAS å·¦æ¬„æ²å‹•ä¿®æ”¹çš„ patch æ ¼å¼ã€‚
 
 [2026-05-22] æª¢æŸ¥ï¼šæ”¶å°¾ç¢ºèª git status èˆ‡ PlotFileTool XAS å·¦å´æ²å‹• class ä½ç½®ã€‚
+
+[2026-05-23] ¹ê§@¡G¶}©l¦b PlotFileTool ªº XPS ®pÀÀ¦X¹Ï¥[¤J offset ±M°Ï¡A³W¹º¹ï¨Cµ§ fit spectra ®M¥Î X ¶b¦ì²¾¨Ã¥i¤º´¡¨ì¦@¦P Binding Energy grid¡C
+
+[2026-05-23] ¹ê§@¡G§¹¦¨ PlotFileTool XPS ®pÀÀ¦X¹Ï offset ±M°Ï¡F¨Cµ§ fit spectra ¥i³]©w X offset¡A¹Ïªí/¼Ğ½u/½d³ò¨Ï¥Î¦ì²¾«á¸ê®Æ¡A¨Ã¥i¤º´¡¨ì¦@¦P­«Å| Binding Energy grid »P¶×¥X CSV¡C
+
+[2026-05-23] ÀË¬d¡Gweb/frontend npm run build ¥¼§¹¦¨¡F±q frontend ¥Ø¿ı¼g¤J CLAUDE.md ³Q©Úµ´¡A¥B¥Ø«e shell §ä¤£¨ì npm «ü¥O¡A§ï¦^±M®×®Ú¥Ø¿ı°O¿ı¨ÃÀË¬d Node/npm ¸ô®|¡C
+
+[2026-05-23] ÀË¬d¡G½T»{¥Ø«e shell µL node/npm/pnpm/yarn ¥i¥Î¡A§ï°õ¦æ git diff --check ÀË¬d patch ªÅ¥Õ®æ¦¡¡C
+
+[2026-05-23] ÀË¬d¡Ggit diff --check ³q¹L¡F¶ÈÅã¥Ü CLAUDE.md »P PlotFileTool.tsx ¤§ LF/CRLF ´£¥Ü¡A¥¼µo²{ whitespace error¡C
+
+[2026-05-23] ÀË¬d¡Ggit status --short Åã¥Ü¥»¦¸¬ÛÃöÅÜ§ó¬° CLAUDE.md »P web/frontend/src/pages/PlotFileTool.tsx¡C

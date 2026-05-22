@@ -15,10 +15,16 @@ interface FitSpectrumFile {
   id: string
   name: string
   sampleLabel: string
+  xOffsetEv: number
   x: number[]
   observed: number[]
   totalFit: number[]
   components: Record<string, number[]>
+}
+
+interface XpsOffsetSettings {
+  interpolate: boolean
+  nPoints: number
 }
 
 interface VbmSpectrumFile {
@@ -445,6 +451,14 @@ const DEFAULT_STYLE: PlotFigureStyle = {
   ratioDenominator: '',
 }
 
+const XPS_OFFSET_POINTS_MIN = 50
+const XPS_OFFSET_POINTS_MAX = 5000
+
+const DEFAULT_XPS_OFFSET_SETTINGS: XpsOffsetSettings = {
+  interpolate: false,
+  nPoints: 1200,
+}
+
 const DEFAULT_VBM_STYLE: VbmFigureStyle = {
   titleLabel: 'VB',
   fontFamily: 'Times New Roman, Times, serif',
@@ -662,6 +676,12 @@ function interpolateY(x: number[], y: number[], targetX: number) {
     }
   }
   return points[points.length - 1].y
+}
+
+function buildLinearGrid(start: number, end: number, count: number) {
+  const pointCount = Math.max(1, Math.round(count))
+  if (pointCount === 1) return [start]
+  return Array.from({ length: pointCount }, (_, index) => start + ((end - start) * index) / (pointCount - 1))
 }
 
 function splitDelimitedLine(line: string, delimiter: string) {
@@ -1018,6 +1038,7 @@ function parseFitSpectrumText(text: string, fileName: string): FitSpectrumFile {
     id: `${fileName}-${Math.random().toString(36).slice(2, 8)}`,
     name: fileName,
     sampleLabel: safeFileStem(fileName),
+    xOffsetEv: 0,
     x,
     observed,
     totalFit,
@@ -1219,6 +1240,81 @@ function componentAreas(file: FitSpectrumFile, keys: string[]) {
   const areas = Object.fromEntries(keys.map(key => [key, positiveTrapzArea(file.x, file.components[key] ?? [])]))
   const total = Object.values(areas).reduce((sum, value) => sum + value, 0)
   return Object.fromEntries(keys.map(key => [key, total > 0 ? areas[key] / total * 100 : 0]))
+}
+
+function shiftedXpsFile(file: FitSpectrumFile): FitSpectrumFile {
+  const offset = Number.isFinite(file.xOffsetEv) ? file.xOffsetEv : 0
+  if (Math.abs(offset) < 1e-12) return file
+  return {
+    ...file,
+    x: file.x.map(value => value + offset),
+  }
+}
+
+function xpsOffsetGridInfo(files: FitSpectrumFile[], nPoints: number) {
+  if (files.length === 0) return null
+  const shifted = files.map(shiftedXpsFile)
+  const ranges = shifted
+    .map(file => {
+      const finite = file.x.filter(Number.isFinite)
+      if (finite.length < 2) return null
+      return { min: Math.min(...finite), max: Math.max(...finite) }
+    })
+    .filter((range): range is { min: number; max: number } => range !== null)
+  if (ranges.length !== shifted.length) return null
+  const overlapMin = Math.max(...ranges.map(range => range.min))
+  const overlapMax = Math.min(...ranges.map(range => range.max))
+  if (!Number.isFinite(overlapMin) || !Number.isFinite(overlapMax) || overlapMax <= overlapMin) return null
+  const first = shifted[0]
+  const descending = (first.x[0] ?? 0) > (first.x[first.x.length - 1] ?? 0)
+  const pointCount = Math.round(clamp(nPoints, XPS_OFFSET_POINTS_MIN, XPS_OFFSET_POINTS_MAX))
+  return {
+    start: descending ? overlapMax : overlapMin,
+    end: descending ? overlapMin : overlapMax,
+    min: overlapMin,
+    max: overlapMax,
+    pointCount,
+  }
+}
+
+function buildXpsOffsetFiles(files: FitSpectrumFile[], settings: XpsOffsetSettings): FitSpectrumFile[] {
+  const shifted = files.map(shiftedXpsFile)
+  if (!settings.interpolate || shifted.length === 0) return shifted
+  const gridInfo = xpsOffsetGridInfo(files, settings.nPoints)
+  if (!gridInfo) return shifted
+  const targetX = buildLinearGrid(gridInfo.start, gridInfo.end, gridInfo.pointCount)
+  return shifted.map(file => {
+    const components = Object.fromEntries(Object.entries(file.components).map(([key, values]) => [
+      key,
+      targetX.map(xValue => interpolateY(file.x, values, xValue)),
+    ]))
+    return {
+      ...file,
+      x: targetX,
+      observed: targetX.map(xValue => interpolateY(file.x, file.observed, xValue)),
+      totalFit: targetX.map(xValue => interpolateY(file.x, file.totalFit, xValue)),
+      components,
+    }
+  })
+}
+
+function buildXpsOffsetCsv(files: FitSpectrumFile[], keys: string[]) {
+  const headers = ['sample', 'source_file', 'x_offset_ev', 'binding_energy_ev', 'observed', 'total_fit', ...keys]
+  const rows = files.flatMap(file => file.x.map((xValue, index) => {
+    const row: Record<string, unknown> = {
+      sample: file.sampleLabel,
+      source_file: file.name,
+      x_offset_ev: file.xOffsetEv,
+      binding_energy_ev: xValue,
+      observed: file.observed[index] ?? '',
+      total_fit: file.totalFit[index] ?? '',
+    }
+    keys.forEach(key => {
+      row[key] = file.components[key]?.[index] ?? ''
+    })
+    return row
+  }))
+  return rowsToCsv(headers, rows)
 }
 
 function scaledSeries(values: number[], factor: number) {
@@ -3059,6 +3155,7 @@ export default function PlotFileTool({
   const [activeModule, setActiveModule] = useState<PlotModule>('xps')
   const [xpsPlotMode, setXpsPlotMode] = useState<'fit' | 'vbm'>('fit')
   const [files, setFiles] = useState<FitSpectrumFile[]>([])
+  const [xpsOffsetSettings, setXpsOffsetSettings] = useState<XpsOffsetSettings>(DEFAULT_XPS_OFFSET_SETTINGS)
   const [style, setStyle] = useState<PlotFigureStyle>(DEFAULT_STYLE)
   const [componentStyles, setComponentStyles] = useState<Record<string, ComponentStyle>>({})
   const [vbmFiles, setVbmFiles] = useState<VbmSpectrumFile[]>([])
@@ -3110,9 +3207,11 @@ export default function PlotFileTool({
     }
   }, [])
 
-  const keys = useMemo(() => componentKeys(files), [files])
-  const panelFigure = useMemo(() => files.length > 0 ? buildXpsPanelFigure(files, style, componentStyles) : null, [files, style, componentStyles])
-  const summaryFigure = useMemo(() => files.length > 0 ? buildXpsSummaryFigure(files, style, componentStyles) : null, [files, style, componentStyles])
+  const xpsFigureFiles = useMemo(() => buildXpsOffsetFiles(files, xpsOffsetSettings), [files, xpsOffsetSettings])
+  const xpsOffsetGrid = useMemo(() => xpsOffsetGridInfo(files, xpsOffsetSettings.nPoints), [files, xpsOffsetSettings.nPoints])
+  const keys = useMemo(() => componentKeys(xpsFigureFiles), [xpsFigureFiles])
+  const panelFigure = useMemo(() => xpsFigureFiles.length > 0 ? buildXpsPanelFigure(xpsFigureFiles, style, componentStyles) : null, [xpsFigureFiles, style, componentStyles])
+  const summaryFigure = useMemo(() => xpsFigureFiles.length > 0 ? buildXpsSummaryFigure(xpsFigureFiles, style, componentStyles) : null, [xpsFigureFiles, style, componentStyles])
   const vbmResults = useMemo(() => {
     const results: VbmFitResult[] = []
     const errors: string[] = []
@@ -3204,6 +3303,10 @@ export default function PlotFileTool({
       return next
     })
     if (errors.length > 0) setError(errors.join('; '))
+  }
+
+  const updateXpsFitFile = (fileId: string, patch: Partial<Pick<FitSpectrumFile, 'sampleLabel' | 'xOffsetEv'>>) => {
+    setFiles(current => current.map(file => file.id === fileId ? { ...file, ...patch } : file))
   }
 
   const importVbmFiles = async (fileList: FileList | null) => {
@@ -4298,9 +4401,12 @@ export default function PlotFileTool({
                       <div key={file.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
                         <input
                           value={file.sampleLabel}
-                          onChange={event => setFiles(current => current.map(item => item.id === file.id ? { ...item, sampleLabel: event.target.value } : item))}
+                          onChange={event => updateXpsFitFile(file.id, { sampleLabel: event.target.value })}
                           className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs font-semibold text-[var(--input-text)] focus:outline-none"
                         />
+                        <div className="mt-2">
+                          <NumInput label="X offset (eV)" value={file.xOffsetEv} onChange={value => updateXpsFitFile(file.id, { xOffsetEv: value })} step={0.01} />
+                        </div>
                         <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--text-soft)]">
                           <span className="truncate">{file.name}</span>
                           <button type="button" onClick={() => setFiles(current => current.filter(item => item.id !== file.id))} className="text-rose-400">移除</button>
@@ -4310,6 +4416,41 @@ export default function PlotFileTool({
                     <button type="button" onClick={() => setFiles([])} className="text-xs text-rose-400">清除全部</button>
                   </div>
                 )}
+              </div>
+
+              <div className="analysis-section-card p-4">
+                <p className="text-sm font-semibold text-[var(--text-main)]">XPS offset / 內插</p>
+                <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">調整各筆已擬合資料的 Binding Energy X 軸，並可內插到共同重疊區間。</p>
+                <label className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                  <span>套用共同 grid 內插</span>
+                  <input
+                    type="checkbox"
+                    checked={xpsOffsetSettings.interpolate}
+                    onChange={event => setXpsOffsetSettings(prev => ({ ...prev, interpolate: event.target.checked }))}
+                    className="accent-[var(--accent-secondary)]"
+                  />
+                </label>
+                <div className="mt-3">
+                  <NumInput
+                    label="內插點數"
+                    value={xpsOffsetSettings.nPoints}
+                    onChange={value => setXpsOffsetSettings(prev => ({ ...prev, nPoints: Math.round(clamp(value, XPS_OFFSET_POINTS_MIN, XPS_OFFSET_POINTS_MAX)) }))}
+                    min={XPS_OFFSET_POINTS_MIN}
+                    max={XPS_OFFSET_POINTS_MAX}
+                    step={50}
+                  />
+                </div>
+                <p className={`mt-2 text-[10px] leading-4 ${xpsOffsetSettings.interpolate && !xpsOffsetGrid ? 'text-amber-400' : 'text-[var(--text-soft)]'}`}>
+                  {xpsOffsetSettings.interpolate
+                    ? xpsOffsetGrid
+                      ? `共同 grid: ${xpsOffsetGrid.pointCount} 點 / ${xpsOffsetGrid.min.toFixed(3)} - ${xpsOffsetGrid.max.toFixed(3)} eV`
+                      : '目前 offset 後沒有共同重疊區間，會只套用位移、不內插。'
+                    : '目前只套用各筆 X offset，不改變原本取樣點。'}
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button type="button" disabled={files.length === 0} onClick={() => setFiles(current => current.map(file => ({ ...file, xOffsetEv: 0 })))} className="rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">重設 offset</button>
+                  <button type="button" disabled={xpsFigureFiles.length === 0} onClick={() => downloadTextFile(buildXpsOffsetCsv(xpsFigureFiles, keys), 'xps_fit_offset_interpolated.csv', 'text/csv;charset=utf-8')} className="rounded-lg bg-[var(--accent-secondary)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">下載 CSV</button>
+                </div>
               </div>
 
             </aside>
@@ -4327,7 +4468,7 @@ export default function PlotFileTool({
                   </div>
                 </div>
                 {panelFigure ? (
-                  <Plot data={panelFigure.data} layout={panelFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: Math.max(420, 320 * files.length) }} />
+                  <Plot data={panelFigure.data} layout={panelFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: Math.max(420, 320 * xpsFigureFiles.length) }} />
                 ) : (
                   <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">上傳 XPS fit spectra 後預覽圖會顯示在這裡。</div>
                 )}
@@ -4364,8 +4505,8 @@ export default function PlotFileTool({
                     </select>
                   </label>
                   <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="X 左端(eV)" value={style.xLeft ?? (files.length ? Math.max(...files.flatMap(file => file.x)) : 536)} onChange={value => setStyle(prev => ({ ...prev, xLeft: value }))} step={0.1} />
-                    <NumInput label="X 右端(eV)" value={style.xRight ?? (files.length ? Math.min(...files.flatMap(file => file.x)) : 526)} onChange={value => setStyle(prev => ({ ...prev, xRight: value }))} step={0.1} />
+                    <NumInput label="X 左端(eV)" value={style.xLeft ?? (xpsFigureFiles.length ? Math.max(...xpsFigureFiles.flatMap(file => file.x)) : 536)} onChange={value => setStyle(prev => ({ ...prev, xLeft: value }))} step={0.1} />
+                    <NumInput label="X 右端(eV)" value={style.xRight ?? (xpsFigureFiles.length ? Math.min(...xpsFigureFiles.flatMap(file => file.x)) : 526)} onChange={value => setStyle(prev => ({ ...prev, xRight: value }))} step={0.1} />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <NumInput label="X 軸字體" value={style.xAxisFontSize} onChange={value => setStyle(prev => ({ ...prev, xAxisFontSize: value }))} min={8} max={42} step={1} />
@@ -4460,7 +4601,7 @@ export default function PlotFileTool({
                             </label>
                             <div className="grid grid-cols-2 gap-2">
                               <ColorInput label="顏色" value={current.color} onChange={value => update({ color: value })} />
-                              <NumInput label="標線(eV)" value={current.markerCenter ?? (files[0]?.x[Math.floor((files[0]?.x.length ?? 1) / 2)] ?? 0)} onChange={value => update({ markerCenter: value })} step={0.01} />
+                              <NumInput label="標線(eV)" value={current.markerCenter ?? (xpsFigureFiles[0]?.x[Math.floor((xpsFigureFiles[0]?.x.length ?? 1) / 2)] ?? 0)} onChange={value => update({ markerCenter: value })} step={0.01} />
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                               <NumInput label="標籤 X" value={current.labelX} onChange={value => update({ labelX: clamp(value, 0, 1) })} min={0} max={1} step={0.01} />
