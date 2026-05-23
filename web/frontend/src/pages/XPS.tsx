@@ -48,6 +48,7 @@ const XPS_MODE_LABELS: Record<XpsMode, string> = {
   dft: 'DFT',
 }
 const XPS_DFT_PASSWORD = '931130'
+const DFT_STREAMLIT_URL = import.meta.env.VITE_DFT_STREAMLIT_URL ?? 'http://127.0.0.1:8505/?embed=true'
 
 const LINE_COLOR_OPTIONS = [
   { value: 'blue', label: 'Blue' },
@@ -2948,12 +2949,6 @@ export default function XPS({
     setDftPasswordError('密碼錯誤，請重新輸入。')
   }
 
-  const dftRunCommands = [
-    'cd Ga2O3_VB_Analyzer',
-    'pip install -r requirements.txt',
-    'streamlit run app.py',
-  ]
-
   return (
     <div className={`flex h-screen flex-row overflow-hidden${sidebarResizing ? ' select-none' : ''}`}>
       {/* ── sidebar ── */}
@@ -3023,9 +3018,7 @@ export default function XPS({
                     ) : (
                       <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3 text-xs text-[var(--text-soft)]">
                         <p className="font-semibold text-[var(--text-main)]">已解鎖</p>
-                        {dftRunCommands.map(command => (
-                          <code key={command} className="block rounded-md bg-black/20 px-2 py-1 text-[11px] text-[var(--text-main)]">{command}</code>
-                        ))}
+                        <p>DFT 工具會在中央工作區直接載入。</p>
                       </div>
                     )}
                   </Section>
@@ -4029,20 +4022,19 @@ export default function XPS({
                 </button>
               </div>
             ) : (
-              <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">Run Streamlit</p>
-                  <div className="space-y-2">
-                    {dftRunCommands.map(command => (
-                      <code key={command} className="block rounded-md bg-black/20 px-3 py-2 text-xs text-[var(--text-main)]">{command}</code>
-                    ))}
-                  </div>
+              <div className="space-y-3">
+                <div className="overflow-hidden rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)]">
+                  <iframe
+                    title="Valence Band DFT-informed Analyzer"
+                    src={DFT_STREAMLIT_URL}
+                    className="h-[72vh] min-h-[620px] w-full bg-white"
+                    loading="lazy"
+                  />
                 </div>
                 <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 text-xs leading-5 text-[var(--text-soft)]">
                   <p className="mb-2 font-semibold text-[var(--text-main)]">DFT-informed，不是 DFT 計算</p>
                   <p>
-                    若有 DFT pDOS reference CSV，可進行 pDOS-based fitting；若沒有，則使用 experimental VB region analysis 與 area ratio analysis。
-                    擬合得到的 tetrahedral / octahedral contribution 僅代表 relative spectral weight，不等於真實原子比例。
+                    內嵌視窗預設連線至 {DFT_STREAMLIT_URL}。若視窗未載入，請確認 Streamlit 服務已啟動；所有圖表與光譜資料匯出皆以 X 軸大值在左、小值在右為準。
                   </p>
                 </div>
               </div>

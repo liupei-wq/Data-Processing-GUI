@@ -46,12 +46,24 @@ def coerce_xy(df: pd.DataFrame, x_col: str, y_col: str) -> pd.DataFrame:
     return out.dropna().sort_values("Binding_Energy").reset_index(drop=True)
 
 
+def sort_x_descending(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    sort_cols = [col for col in ["Sample", "Binding_Energy", "E_rel", "Energy_rel"] if col in out.columns]
+    if "Sample" in sort_cols:
+        numeric_cols = [col for col in sort_cols if col != "Sample"]
+        if numeric_cols:
+            return out.sort_values(["Sample", *numeric_cols], ascending=[True, *([False] * len(numeric_cols))]).reset_index(drop=True)
+    for col in ["Binding_Energy", "E_rel", "Energy_rel"]:
+        if col in out.columns:
+            return out.sort_values(col, ascending=False).reset_index(drop=True)
+    return out
+
+
 def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
+    return sort_x_descending(df).to_csv(index=False).encode("utf-8-sig")
 
 
 def bytes_download(data: str | bytes) -> bytes:
     if isinstance(data, bytes):
         return data
     return data.encode("utf-8-sig")
-

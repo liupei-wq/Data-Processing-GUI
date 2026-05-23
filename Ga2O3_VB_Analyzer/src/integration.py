@@ -5,10 +5,10 @@ import pandas as pd
 from scipy.integrate import trapezoid
 
 DEFAULT_REGIONS = [
-    {"key": "A", "name": "VBM leading edge / O 2p onset", "start": 0.0, "end": 2.0},
-    {"key": "B", "name": "O 2p-dominated upper valence band", "start": 2.0, "end": 7.0},
-    {"key": "C", "name": "mid-valence / Ga-O hybridization-sensitive region", "start": 7.0, "end": 11.5},
-    {"key": "D", "name": "Ga 3d-derived / deep valence onset", "start": 11.5, "end": 12.5},
+    {"key": "A", "name": "VBM 前緣 / O 2p 起始區", "start": 0.0, "end": 2.0},
+    {"key": "B", "name": "O 2p 主導上價帶", "start": 2.0, "end": 7.0},
+    {"key": "C", "name": "中價帶 / Ga-O hybridization 敏感區", "start": 7.0, "end": 11.5},
+    {"key": "D", "name": "Ga 3d 衍生 / 深價帶起始區", "start": 11.5, "end": 12.5},
 ]
 
 
@@ -26,7 +26,7 @@ def integrate_regions(df: pd.DataFrame, regions: list[dict] | None = None) -> tu
         mask = (x >= lo) & (x <= hi)
         if mask.sum() < 2:
             row[f"Area_{key}"] = 0.0
-            warnings.append(f"{row['Sample']}: Region {key} has fewer than 2 points.")
+            warnings.append(f"{row['Sample']}：區域 {key} 少於 2 個資料點。")
         else:
             area = float(trapezoid(np.clip(y[mask], 0, None), x[mask]))
             row[f"Area_{key}"] = max(area, 0.0)
@@ -40,4 +40,3 @@ def integrate_regions(df: pd.DataFrame, regions: list[dict] | None = None) -> tu
     row["Hybrid_upper_ratio"] = float(row.get("Area_C", 0.0)) / upper if upper > 0 else 0.0
     row["Deep_upper_ratio"] = float(row.get("Area_D", 0.0)) / upper if upper > 0 else 0.0
     return row, warnings
-

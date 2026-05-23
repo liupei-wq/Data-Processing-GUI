@@ -33,7 +33,7 @@ def uploaded_reference(file: Any, source: str) -> PdosReference:
     notes = []
     if source == "digitized":
         notes.append(
-            "This digitized pDOS is used only as qualitative reference and should not be interpreted quantitatively."
+            "文獻圖數位化 pDOS 僅作定性參考，不應做定量解讀。"
         )
     return PdosReference(data=df, source=source, notes=notes)
 
@@ -49,7 +49,7 @@ def _mpr_class():
 
             return MPRester
         except Exception as exc:
-            raise ImportError("Install mp-api and pymatgen to use Materials Project import.") from exc
+            raise ImportError("請安裝 mp-api 與 pymatgen 以使用 Materials Project 匯入。") from exc
 
 
 def _spin_sum(densities: Any) -> np.ndarray:
@@ -79,7 +79,7 @@ def _coordination_numbers(structure: Any) -> tuple[dict[int, float], list[str]]:
         cnn = CrystalNN()
         return {i: float(cnn.get_cn(structure, i, use_weights=False)) for i in range(len(structure))}, notes
     except Exception as exc:
-        notes.append(f"CrystalNN coordination failed; using O-neighbor cutoff fallback. Detail: {exc}")
+        notes.append(f"CrystalNN 配位判斷失敗，改用 O 鄰近原子 cutoff 備援。細節：{exc}")
 
     cn_by_index: dict[int, float] = {}
     for i, site in enumerate(structure):
@@ -95,9 +95,9 @@ def _coordination_numbers(structure: Any) -> tuple[dict[int, float], list[str]]:
 
 def _coordination_group(cn: float) -> tuple[str, str | None]:
     if abs(cn - 4) <= abs(cn - 6):
-        note = None if abs(cn - 4) <= 1.0 else f"Ga site CN={cn:.1f} assigned to Ga_tet by nearest coordination."
+        note = None if abs(cn - 4) <= 1.0 else f"Ga site CN={cn:.1f} 依最接近配位指定為 Ga_tet。"
         return "Ga_tet", note
-    note = None if abs(cn - 6) <= 1.0 else f"Ga site CN={cn:.1f} assigned to Ga_oct by nearest coordination."
+    note = None if abs(cn - 6) <= 1.0 else f"Ga site CN={cn:.1f} 依最接近配位指定為 Ga_oct。"
     return "Ga_oct", note
 
 
@@ -112,12 +112,12 @@ def _get_structure_and_dos(api_key: str, material_id: str) -> tuple[Any, Any]:
 def materials_project_reference(api_key: str, material_id: str) -> PdosReference:
     structure, dos = _get_structure_and_dos(api_key, material_id)
     notes = [
-        f"Materials Project reference imported for {material_id}. Energies are aligned as E_rel = -(E - Efermi); verify VBM alignment before quantitative comparison."
+        f"已匯入 Materials Project 參考資料 {material_id}。能量已對齊為 E_rel = -(E - Efermi)；定量比較前請確認 VBM 對齊。"
     ]
 
     pdos = getattr(dos, "pdos", None)
     if not pdos:
-        raise ValueError("DOS does not include site/orbital projected information. Please upload a pDOS CSV instead.")
+        raise ValueError("DOS 不包含 site/orbital projected 資訊。請改以上傳 pDOS CSV。")
 
     energies = np.asarray(getattr(dos, "energies"), dtype=float)
     efermi = float(getattr(dos, "efermi", 0.0))
@@ -160,7 +160,7 @@ def materials_project_reference(api_key: str, material_id: str) -> PdosReference
                 out[f"{ga_group}_{family}"] += contribution
 
     if matched_sites == 0:
-        raise ValueError("No Ga/O site-projected DOS could be parsed. Please upload a pDOS CSV instead.")
+        raise ValueError("無法解析 Ga/O site-projected DOS。請改以上傳 pDOS CSV。")
 
     out = out.sort_values("Energy_rel").reset_index(drop=True)
     return PdosReference(data=out, source="materials_project", notes=notes)

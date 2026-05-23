@@ -207,3 +207,20 @@ streamlit run app.py --server.port 8505
 - XPS / XAS：峰擬合加入自動收斂、重設峰、收斂歷史與更穩定的 seed 回寫流程。
 - XES：完成能量校正、分點扣背權重、process 500 補強與歸一化修正。
 - PlotFileTool：完成 Raman 參考峰疊圖增強與 XAS/XES band gap 圖功能。
+
+- 重要判斷：回覆使用者 DFT 後續操作時，確認目前模組為 Ga2O3_VB_Analyzer 的 DFT-informed Streamlit 流程；已上傳實驗 VB 檔後，先做 VBM 對齊與區域積分，若有 pDOS reference 才進行 pDOS-based fitting。
+
+- 重要判斷：使用者要求 DFT Streamlit 工具內嵌於目前 XPS/DFT 介面、操作選項中文化，且所有輸出數據/圖的 X 軸需由大到小；開始檢查前端入口與 DFT Streamlit 子專案。
+
+- 實作：XPS DFT 工作區改為內嵌 Streamlit iframe，來源使用 VITE_DFT_STREAMLIT_URL 或預設 http://127.0.0.1:8505/?embed=true；側欄不再只顯示啟動指令。
+
+- 實作：DFT Streamlit 的光譜圖、VBM 對齊圖、導數圖與 fitting 圖強制 X 軸反向顯示；CSV 匯出依 Binding_Energy / E_rel / Energy_rel 降冪排序，確保 X 軸數值大在左、小在右。
+
+- 實作：DFT Streamlit UI 中文化，涵蓋頁面標題、側欄、檔案匯入、前處理、積分區域、pDOS 來源、截面校正、展寬/fitting、分頁、匯出按鈕、報告與 Materials Project 提示。
+
+- 實作：移除 DFT Streamlit 未使用的舊版英文 pDOS panel，並中文化前處理警告、圖表標籤與預設積分區域名稱。
+
+- 檢查：DFT Streamlit 相關 Python 檔以 uv run python -m py_compile 驗證通過；一般沙盒內 uv cache 權限失敗，已改用非沙盒執行。
+- 檢查：前端 build 因環境找不到 npm/node 未能執行；已確認 web/frontend 具備 vite/client 型別設定，並以 git diff --check 檢查 patch，僅出現既有 LF/CRLF 提醒。
+
+- 檢查：確認 DFT Streamlit 服務 http://127.0.0.1:8505/_stcore/health 回傳 200 ok，可供 XPS/DFT iframe 內嵌載入。
