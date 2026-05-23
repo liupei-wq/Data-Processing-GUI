@@ -233,3 +233,53 @@ python3 -m py_compile web/backend/main.py web/backend/routers/*.py web/backend/c
 [2026-05-23] ��@�G�N PlotFileTool XPS �C����ƪ� X �b�첾����J offset �M�ϡF�W�ǲM��O�d�˫~���ҡAoffset �M�ϳv���C�X sample/file �P X �b�첾(eV)�C
 
 [2026-05-23] �ˬd�G�վ� XPS offset �M�ϫ�A������ git diff --check �q�L�F�Ȧ� LF/CRLF ���ܡC
+
+[2026-05-24] 重要判斷：開始新增 XPS DFT 模組；採用獨立 Streamlit 專案 Ga2O3_VB_Analyzer 承載完整 Python 分析流程，並評估在既有 XPS 前端加入加密入口。
+
+[2026-05-24] 實作：建立 Ga2O3_VB_Analyzer 專案目錄與 src/example_data 子目錄，準備拆分 Streamlit DFT-informed VB 分析功能。
+
+[2026-05-24] 實作：寫入 Ga2O3_VB_Analyzer 的 Streamlit app、分析模組、README、requirements 與範例格式文件。
+
+[2026-05-24] 檢查：對 Ga2O3_VB_Analyzer 執行 Python py_compile，確認 Streamlit app 與各分析模組語法。
+
+[2026-05-24] 檢查：系統 python.exe 因 logon session 錯誤無法執行，改檢查 py launcher 與專案 .venv Python 是否可用。
+
+[2026-05-24] 檢查：嘗試使用 py launcher 取得 Python 版本並重跑 py_compile。
+
+[2026-05-24] 檢查：Python/py launcher 在沙盒內因 logon session 錯誤無法啟動，改請求非沙盒執行 py_compile。
+
+[2026-05-24] 實作：在 XPS 前端頁面加入 DFT 模式、密碼解鎖狀態與 Ga2O3_VB_Analyzer Streamlit 入口。
+
+[2026-05-24] 檢查：開始檢視 DFT Streamlit 專案與 XPS 前端入口變更，確認語法與可用檢查工具。
+
+[2026-05-24] 檢查：git diff --check 僅顯示 LF/CRLF 提醒；PATH 無 node/npm，準備改以 uv 嘗試 Python 語法檢查。
+
+[2026-05-24] 檢查：uv run python -m py_compile 已成功通過 Ga2O3_VB_Analyzer/app.py 與 src modules；第一次沙盒執行因 uv cache 權限失敗，改用核准非沙盒執行。
+
+[2026-05-24] 檢查：清理 py_compile 產生的 Ga2O3_VB_Analyzer __pycache__ 快取目錄。
+
+[2026-05-24] 檢查：最終 git diff --check 僅顯示 LF/CRLF 提醒；node/npm 不在 PATH，未執行前端 build。
+
+[2026-05-24] 重啟：嘗試以 uv 啟動 Ga2O3_VB_Analyzer Streamlit app 於 127.0.0.1:8505 並做健康檢查。
+
+[2026-05-24] 重啟：Ga2O3_VB_Analyzer Streamlit app 已於 http://127.0.0.1:8505 通過 _stcore/health 檢查。
+
+[2026-05-24] 實作：為 Ga2O3_VB_Analyzer 補上 .gitignore，排除 Streamlit log、__pycache__ 與本機虛擬環境。
+
+[2026-05-24] 重要判斷：準備新增 DFT pDOS reference acquisition 模組，整合 user CSV、Materials Project/pymatgen 與 digitized literature pDOS 三種來源。
+
+[2026-05-24] 實作：新增 src/pdos_acquisition.py，封裝 user CSV、Materials Project/pymatgen 與 digitized literature pDOS 取得流程。
+
+[2026-05-24] 實作：更新 Streamlit pDOS fitting UI，加入三種 pDOS 來源選擇、Materials Project 匯入與 digitized literature 警語。
+
+[2026-05-24] 實作：更新 README 與 example_data 說明，補充 DFT pDOS reference acquisition 三種來源與重要警語。
+
+[2026-05-24] 檢查：針對新增 pDOS acquisition 模組與更新後 app.py 執行 py_compile。
+
+[2026-05-24] 檢查：py_compile 通過 app.py、src/pdos_acquisition.py、src/pdos_model.py。
+
+[2026-05-24] 檢查：uv run --with-requirements requirements.txt 成功載入 mp_api 與 pymatgen，Materials Project 匯入依賴可用。
+
+[2026-05-24] 重啟：為套用 mp-api/pymatgen 新依賴，準備重啟 Ga2O3_VB_Analyzer Streamlit 8505 服務。
+
+[2026-05-24] 重啟：Ga2O3_VB_Analyzer Streamlit 8505 已用更新後 requirements 重新啟動並通過 health check。
