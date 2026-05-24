@@ -1,4 +1,4 @@
-﻿# Nigiro Pro 協作手冊（精簡版）
+# Nigiro Pro 協作手冊（精簡版）
 
 最後整理：2026-05-24
 
@@ -163,6 +163,8 @@ streamlit run app.py --server.port 8505
 ## 精簡動作紀錄
 
 ### 2026-05-24
+
+- 解決 Git 合併衝突並完成 Merge：順利處理 `CLAUDE.md` 的三路合併衝突。在確認內容完整且無衝突標記後，將其加入暫存並執行 `git commit`，成功提交了 "Merge branch 'main' of https://github.com/liupei-wq/Data-Processing-GUI" 合併 commit，使當前工作區狀態完全恢復乾淨。
 
 - XRD 匯出流程統一預覽 + 美化卡資料源選擇 + 參考峰標籤可調字體：四件事一起做。① **匯出統一預覽**：新增 `exportPreview` state（kind: 'png' | 'text'）與 `previewPng / previewText / confirmExportDownload` helpers；舊 `showExportPreview` 整段 Origin Pro 風格 modal 移除，改為 generic ExportPreviewModal（PNG 顯示 dataURL 圖；CSV/TXT 顯示前 18 行 + 總行數）。主圖卡與美化卡所有匯出按鈕（PNG / CSV / TXT）一律走預覽，使用者按「⬇ 確定下載」才真正下載。② **主圖卡新增 PNG/TXT**：原本只有 CSV（走舊預覽），現在 offset/overlay 模式下加入 `📷 匯出 PNG`、`📥 CSV`、`📄 TXT (Tab)` 三顆 + 既有的 `📋 峰位偏移報告 (TXT)`；單筆模式因每張卡獨立、PNG 暫不提供（請用美化卡），CSV/TXT 仍可用。主圖 `Plot` 新增 `onInitialized/onUpdate` 將 graphDiv 存入 `mainGraphDivRef`。③ **美化卡資料源**：新增 `beautifySourceMode` state 與資料源 dropdown（「跟隨主圖」或直接挑某個 rawFile 單筆呈現），覆寫 `beautifyEffective` 解析、`beautifyTraces` 與 `beautifyLayout` 使用此選擇。④ **參考峰 (hkl) 字體可調**：新增 `refMarkerLabelSize` state（預設 11pt，原寫死 9pt），Step 6 開啟「顯示參考峰」後出現一個 7~24 pt 的 slider；同步加入 `buildChartTraces` useCallback deps。前端 `npm run build` 通過 0 錯誤。
 
