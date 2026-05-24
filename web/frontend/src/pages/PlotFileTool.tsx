@@ -5,6 +5,7 @@ import { ModuleTopBar } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 
 type PlotModule = 'xps' | 'raman' | 'xrd' | 'xas' | 'xes'
+type XpsPlotMode = 'fit' | 'vbm' | 'vb-dos'
 type RamanPlotMode = 'single' | 'overlay'
 type RamanConfidenceFilter = 'all' | 'high' | 'medium-up' | 'low-only'
 type RamanReferenceLabelMode = 'full' | 'material-shift' | 'shift' | 'index'
@@ -65,6 +66,31 @@ interface XasBandPair {
   xesFileId: string
   xasFileId: string
   color: string
+}
+
+interface VbDosPeakAnnotation {
+  id: string
+  be: number
+  relEnergy: number
+  intensity: number
+  assignment: string
+  label: string
+  visible: boolean
+  labelXShift: number
+  labelYShift: number
+}
+
+interface VbDosSpectrumFile {
+  id: string
+  name: string
+  sampleLabel: string
+  color: string
+  xColumn: string
+  yColumn: string
+  x: number[]
+  y: number[]
+  vbm: number
+  peaks: VbDosPeakAnnotation[]
 }
 
 interface RamanComponentCurve {
@@ -363,6 +389,42 @@ interface XasBandFigureStyle {
   exportScale: number
 }
 
+interface VbDosAssignmentRegion {
+  id: string
+  start: number
+  end: number
+  label: string
+  shortLabel: string
+  color: string
+}
+
+interface VbDosFigureStyle {
+  titleLabel: string
+  fontFamily: string
+  fontSize: number
+  axisTitleFontSize: number
+  annotationFontSize: number
+  regionFontSize: number
+  sampleFontSize: number
+  xAxisTitleStandoff: number
+  yAxisTitleStandoff: number
+  axisLineWidth: number
+  xLeft: number
+  xRight: number
+  yMaxPadding: number
+  verticalOffset: number
+  lineWidth: number
+  markerSize: number
+  regionOpacity: number
+  showRegionLabels: boolean
+  showPeakMarkers: boolean
+  showLegend: boolean
+  exportWidth: number
+  exportHeight: number
+  exportScale: number
+  exportDpi: number
+}
+
 type PlotlyExportApi = {
   newPlot: (root: HTMLDivElement, data: Plotly.Data[], layout: Partial<Plotly.Layout>, config?: Partial<Plotly.Config>) => Promise<unknown>
   toImage: (root: HTMLDivElement, opts: { format: string; width: number; height: number; scale?: number }) => Promise<string>
@@ -370,7 +432,7 @@ type PlotlyExportApi = {
 }
 
 const MODULES: { id: PlotModule; label: string; detail: string; enabled: boolean }[] = [
-  { id: 'xps', label: 'XPS', detail: 'fit spectra / VBM', enabled: true },
+  { id: 'xps', label: 'XPS', detail: 'fit spectra / VBM / VB-DOS', enabled: true },
   { id: 'raman', label: 'Raman', detail: 'fit deconvolution', enabled: true },
   { id: 'xrd', label: 'XRD', detail: '預留：繞射峰與 stacked patterns', enabled: false },
   { id: 'xas', label: 'XAS', detail: 'XES/XAS overlay + band gap', enabled: true },
@@ -378,6 +440,11 @@ const MODULES: { id: PlotModule; label: string; detail: string; enabled: boolean
 ]
 
 const DEFAULT_COMPONENT_COLORS = ['#9b59b6', '#18a81f', '#1f78b4', '#f97316', '#a855f7', '#14b8a6', '#e11d48', '#64748b']
+const XPS_SAMPLE_COLORS: Record<string, string> = {
+  '50-0': '#136DE4',
+  '45-5': '#E42213',
+  '40-10': '#252526',
+}
 const ROMAN_COMPONENT_LABELS = ['O<sub>Ⅰ</sub>', 'O<sub>Ⅱ</sub>', 'O<sub>Ⅲ</sub>', 'O<sub>Ⅳ</sub>', 'O<sub>Ⅴ</sub>']
 const ROMAN_COMPONENT_COLORS = ['#9b59b6', '#18a81f', '#1f78b4', '#f97316', '#a855f7']
 const ROMAN_COMPONENT_POSITIONS = [
@@ -594,6 +661,78 @@ const DEFAULT_XAS_BAND_STYLE: XasBandFigureStyle = {
   exportScale: 3,
 }
 
+const VB_DOS_ASSIGNMENT_NOTE = 'The assignments are qualitative and based on reported Ga2O3 pDOS/DFT references. The VB spectra should not be fitted as independent chemical-state peaks.'
+
+const VB_DOS_ASSIGNMENT_REGIONS: VbDosAssignmentRegion[] = [
+  {
+    id: 'vbm-edge',
+    start: 0.0,
+    end: 0.6,
+    label: 'VBM onset / O 2p-derived valence band edge / possible defect tail',
+    shortLabel: 'VBM onset / O 2p edge',
+    color: '#8dd3c7',
+  },
+  {
+    id: 'upper-o2p',
+    start: 1.4,
+    end: 2.3,
+    label: 'upper O 2p valence band',
+    shortLabel: 'upper O 2p',
+    color: '#80b1d3',
+  },
+  {
+    id: 'hybridized',
+    start: 3.0,
+    end: 4.6,
+    label: 'O 2p – Ga 4p / O 2s hybridized states',
+    shortLabel: 'O 2p – Ga 4p / O 2s',
+    color: '#fdb462',
+  },
+  {
+    id: 'bonding',
+    start: 6.0,
+    end: 7.5,
+    label: 'lower O 2p / Ga–O bonding states',
+    shortLabel: 'lower O 2p / Ga–O',
+    color: '#b3de69',
+  },
+  {
+    id: 'ga3d',
+    start: 10.0,
+    end: 11.5,
+    label: 'possible Ga 3d-derived semi-core contribution',
+    shortLabel: 'possible Ga 3d semi-core',
+    color: '#fccde5',
+  },
+]
+
+const DEFAULT_VB_DOS_STYLE: VbDosFigureStyle = {
+  titleLabel: 'XPS VB / Ga2O3 pDOS-DFT assignment',
+  fontFamily: 'Times New Roman, Times, serif',
+  fontSize: 16,
+  axisTitleFontSize: 22,
+  annotationFontSize: 13,
+  regionFontSize: 12,
+  sampleFontSize: 16,
+  xAxisTitleStandoff: 18,
+  yAxisTitleStandoff: 18,
+  axisLineWidth: 1.4,
+  xLeft: 12,
+  xRight: 0,
+  yMaxPadding: 0.55,
+  verticalOffset: 1.12,
+  lineWidth: 1.45,
+  markerSize: 6,
+  regionOpacity: 0.24,
+  showRegionLabels: true,
+  showPeakMarkers: true,
+  showLegend: false,
+  exportWidth: 4200,
+  exportHeight: 3000,
+  exportScale: 1,
+  exportDpi: 600,
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
@@ -611,12 +750,74 @@ function downloadDataUrl(dataUrl: string, name: string) {
 
 function downloadTextFile(text: string, name: string, mime = 'text/plain;charset=utf-8') {
   const blob = new Blob([text], { type: mime })
+  downloadBlob(blob, name)
+}
+
+function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
   anchor.download = name
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+function asciiBytes(value: string) {
+  return new TextEncoder().encode(value)
+}
+
+function concatBytes(parts: Uint8Array[]) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0)
+  const out = new Uint8Array(total)
+  let offset = 0
+  parts.forEach(part => {
+    out.set(part, offset)
+    offset += part.length
+  })
+  return out
+}
+
+function dataUrlToBytes(dataUrl: string) {
+  const base64 = dataUrl.split(',')[1] ?? ''
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+function buildSingleImagePdf(imageDataUrl: string, widthPx: number, heightPx: number, dpi: number) {
+  const imageBytes = dataUrlToBytes(imageDataUrl)
+  const pageWidth = Math.max(1, (widthPx / Math.max(dpi, 1)) * 72)
+  const pageHeight = Math.max(1, (heightPx / Math.max(dpi, 1)) * 72)
+  const content = `q\n${pageWidth.toFixed(3)} 0 0 ${pageHeight.toFixed(3)} 0 0 cm\n/Im0 Do\nQ\n`
+  const objects: Uint8Array[] = [
+    asciiBytes('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'),
+    asciiBytes('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'),
+    asciiBytes(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth.toFixed(3)} ${pageHeight.toFixed(3)}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`),
+    concatBytes([
+      asciiBytes(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${Math.round(widthPx)} /Height ${Math.round(heightPx)} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes.length} >>\nstream\n`),
+      imageBytes,
+      asciiBytes('\nendstream\nendobj\n'),
+    ]),
+    asciiBytes(`5 0 obj\n<< /Length ${content.length} >>\nstream\n${content}endstream\nendobj\n`),
+  ]
+  const chunks: Uint8Array[] = [asciiBytes('%PDF-1.4\n')]
+  const offsets = [0]
+  objects.forEach(object => {
+    offsets.push(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
+    chunks.push(object)
+  })
+  const xrefOffset = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  const xref = [
+    `xref\n0 ${objects.length + 1}`,
+    '0000000000 65535 f ',
+    ...offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n `),
+    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>`,
+    `startxref\n${xrefOffset}`,
+    '%%EOF',
+  ].join('\n')
+  chunks.push(asciiBytes(xref))
+  return new Blob([concatBytes(chunks)], { type: 'application/pdf' })
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -731,6 +932,20 @@ function displayRamanMaterial(material: string) {
   const key = ramanMaterialKey(material)
   if (key === 'ga2o3' || key === 'ga₂o₃') return 'Ga₂O₃'
   return material || 'Other'
+}
+
+function inferXpsSampleLabel(fileName: string) {
+  const stem = safeFileStem(fileName)
+  const lower = stem.toLowerCase()
+  if (lower.includes('50-0') || lower.includes('50_0')) return '50-0'
+  if (lower.includes('45-5') || lower.includes('45_5')) return '45-5'
+  if (lower.includes('40-10') || lower.includes('40_10')) return '40-10'
+  return stem
+}
+
+function xpsSampleColor(sampleLabel: string, index: number) {
+  const normalized = sampleLabel.trim().replace(/_/g, '-')
+  return XPS_SAMPLE_COLORS[normalized] ?? DEFAULT_COMPONENT_COLORS[index % DEFAULT_COMPONENT_COLORS.length] ?? '#111827'
 }
 
 function inferRamanSampleLabel(fileName: string) {
@@ -877,6 +1092,19 @@ function chooseVbmColumns(headers: string[], rows: string[][], fileName: string)
   return { xIndex, yIndex }
 }
 
+function chooseFirstTwoNumericColumns(headers: string[], rows: string[][], fileName: string) {
+  const numericIndexes = headers
+    .map((_, columnIndex) => ({
+      index: columnIndex,
+      count: rows.map(row => Number(row[columnIndex])).filter(Number.isFinite).length,
+    }))
+    .filter(item => item.count >= 2)
+    .sort((a, b) => a.index - b.index)
+    .map(item => item.index)
+  if (numericIndexes.length < 2) throw new Error(`${fileName}: 資料檔內至少需要兩欄數值資料`)
+  return { xIndex: numericIndexes[0], yIndex: numericIndexes[1] }
+}
+
 function parseVbmSpectrumText(text: string, fileName: string): VbmSpectrumFile {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
   if (lines.length < 3) throw new Error(`${fileName}: 資料列不足`)
@@ -911,6 +1139,133 @@ function parseVbmSpectrumText(text: string, fileName: string): VbmSpectrumFile {
     baselineEnd: 1.6,
     tangentStart: 4.2,
     tangentEnd: 5.2,
+  }
+}
+
+function vbDosAssignmentForEnergy(relEnergy: number) {
+  const region = VB_DOS_ASSIGNMENT_REGIONS.find(item => relEnergy >= item.start && relEnergy <= item.end)
+  return region?.label ?? 'outside predefined Ga2O3 pDOS/DFT assignment windows'
+}
+
+function smoothArray(values: number[], windowSize: number) {
+  const half = Math.floor(windowSize / 2)
+  return values.map((_, index) => {
+    let sum = 0
+    let count = 0
+    for (let offset = -half; offset <= half; offset += 1) {
+      const value = values[index + offset]
+      if (!Number.isFinite(value)) continue
+      sum += value
+      count += 1
+    }
+    return count > 0 ? sum / count : 0
+  })
+}
+
+function normalizeVbDosIntensity(y: number[]) {
+  const finite = y.filter(Number.isFinite)
+  if (finite.length === 0) return y.map(() => 0)
+  const minValue = Math.min(...finite)
+  const shifted = y.map(value => Number.isFinite(value) ? value - minValue : 0)
+  const maxValue = Math.max(...shifted.filter(Number.isFinite), 0)
+  if (!Number.isFinite(maxValue) || maxValue <= 1e-15) return shifted.map(() => 0)
+  return shifted.map(value => value / maxValue)
+}
+
+function detectVbDosPeaks(xRel: number[], yNorm: number[], beValues: number[]) {
+  const n = Math.min(xRel.length, yNorm.length, beValues.length)
+  if (n < 3) return []
+  const windowSize = Math.max(3, Math.min(11, Math.floor(n / 70) * 2 + 3))
+  const smooth = smoothArray(yNorm.slice(0, n), windowSize % 2 === 0 ? windowSize + 1 : windowSize)
+  const xRange = Math.max(...xRel.slice(0, n)) - Math.min(...xRel.slice(0, n))
+  const prominenceWindow = Math.max(4, Math.floor(n / 22))
+  const minDistance = Math.max(0.28, xRange / 22)
+  const candidates: Array<{ index: number; prominence: number; intensity: number }> = []
+  for (let i = 1; i < n - 1; i += 1) {
+    if (smooth[i] < smooth[i - 1] || smooth[i] < smooth[i + 1]) continue
+    if (smooth[i] < 0.08) continue
+    const leftStart = Math.max(0, i - prominenceWindow)
+    const rightEnd = Math.min(n, i + prominenceWindow + 1)
+    const leftMin = Math.min(...smooth.slice(leftStart, i + 1))
+    const rightMin = Math.min(...smooth.slice(i, rightEnd))
+    const prominence = smooth[i] - Math.max(leftMin, rightMin)
+    if (prominence < 0.015 && smooth[i] < 0.18) continue
+    candidates.push({ index: i, prominence, intensity: smooth[i] })
+  }
+  if (candidates.length === 0) {
+    const maxIndex = yNorm.indexOf(Math.max(...yNorm.slice(0, n)))
+    if (maxIndex >= 0) candidates.push({ index: maxIndex, prominence: yNorm[maxIndex], intensity: yNorm[maxIndex] })
+  }
+  const selected: typeof candidates = []
+  candidates
+    .sort((a, b) => (b.prominence + b.intensity * 0.15) - (a.prominence + a.intensity * 0.15))
+    .forEach(candidate => {
+      const tooClose = selected.some(item => Math.abs(xRel[item.index] - xRel[candidate.index]) < minDistance)
+      if (!tooClose && selected.length < 6) selected.push(candidate)
+    })
+  return selected
+    .sort((a, b) => xRel[a.index] - xRel[b.index])
+    .map((candidate, peakIndex): VbDosPeakAnnotation => {
+      const relEnergy = xRel[candidate.index]
+      const assignment = vbDosAssignmentForEnergy(relEnergy)
+      const shortRegion = VB_DOS_ASSIGNMENT_REGIONS.find(region => relEnergy >= region.start && relEnergy <= region.end)?.shortLabel ?? 'unassigned'
+      return {
+        id: `peak-${peakIndex}-${relEnergy.toFixed(4)}`,
+        be: beValues[candidate.index],
+        relEnergy,
+        intensity: yNorm[candidate.index],
+        assignment,
+        label: `${relEnergy.toFixed(2)} eV<br>${shortRegion}`,
+        visible: peakIndex < 3,
+        labelXShift: [-42, 34, -28, 42, -34, 26][peakIndex % 6],
+        labelYShift: [-46, -54, -38, -62, -44, -52][peakIndex % 6],
+      }
+    })
+}
+
+function parseVbDosSpectrumText(text: string, fileName: string, index: number): VbDosSpectrumFile {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !/^(#|%|!|\/\/)/.test(line))
+  if (lines.length < 3) throw new Error(`${fileName}: 資料列不足`)
+  const headerLine = lines[0].replace(/^\uFEFF/, '')
+  const delimiter = headerLine.includes('\t') ? '\t' : (headerLine.includes(',') ? ',' : 'whitespace')
+  const firstCells = splitDelimitedLine(headerLine, delimiter)
+  const firstRowIsNumeric = firstCells.length >= 2 && firstCells.filter(cell => Number.isFinite(Number(cell))).length >= 2
+  const headers = firstRowIsNumeric ? firstCells.map((_, columnIndex) => `Column ${columnIndex + 1}`) : firstCells
+  const dataLines = firstRowIsNumeric ? lines : lines.slice(1)
+  const rows = dataLines.map(line => splitDelimitedLine(line, delimiter))
+  const { xIndex, yIndex } = chooseFirstTwoNumericColumns(headers, rows, fileName)
+  const points = rows
+    .map(row => ({ x: Number(row[xIndex]), y: Number(row[yIndex]) }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  const cleanX: number[] = []
+  const cleanY: number[] = []
+  const seen = new Set<number>()
+  points.forEach(point => {
+    if (seen.has(point.x)) return
+    seen.add(point.x)
+    cleanX.push(point.x)
+    cleanY.push(point.y)
+  })
+  if (cleanX.length < 3) throw new Error(`${fileName}: 有效資料點不足`)
+  const sampleLabel = inferXpsSampleLabel(fileName)
+  const vbm = 0
+  const yNorm = normalizeVbDosIntensity(cleanY)
+  const xRel = cleanX.map(value => value - vbm)
+  return {
+    id: `vb-dos-${fileName}-${Math.random().toString(36).slice(2, 8)}`,
+    name: fileName,
+    sampleLabel,
+    color: xpsSampleColor(sampleLabel, index),
+    xColumn: headers[xIndex] ?? `Column ${xIndex + 1}`,
+    yColumn: headers[yIndex] ?? `Column ${yIndex + 1}`,
+    x: cleanX,
+    y: cleanY,
+    vbm,
+    peaks: detectVbDosPeaks(xRel, yNorm, cleanX),
   }
 }
 
@@ -2497,6 +2852,186 @@ function buildVbmSummaryFigure(results: VbmFitResult[], style: VbmFigureStyle) {
   return { data, layout }
 }
 
+function vbDosDisplayPoints(file: VbDosSpectrumFile) {
+  const yNorm = normalizeVbDosIntensity(file.y)
+  return file.x
+    .map((be, index) => ({ be, x: be - file.vbm, y: yNorm[index] }))
+    .filter(point => Number.isFinite(point.be) && Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+}
+
+function recalcVbDosPeaks(file: VbDosSpectrumFile, vbm = file.vbm) {
+  const yNorm = normalizeVbDosIntensity(file.y)
+  const xRel = file.x.map(value => value - vbm)
+  return detectVbDosPeaks(xRel, yNorm, file.x)
+}
+
+function buildVbDosFigure(files: VbDosSpectrumFile[], style: VbDosFigureStyle) {
+  const data: Plotly.Data[] = []
+  const annotations: Partial<Plotly.Annotations>[] = []
+  const shapes: Partial<Plotly.Shape>[] = []
+  const maxOffset = Math.max(0, (files.length - 1) * style.verticalOffset)
+  const yMax = maxOffset + 1 + Math.max(0.18, style.yMaxPadding)
+
+  VB_DOS_ASSIGNMENT_REGIONS.forEach((region, index) => {
+    shapes.push({
+      type: 'rect',
+      xref: 'x',
+      yref: 'paper',
+      x0: region.start,
+      x1: region.end,
+      y0: 0,
+      y1: 1,
+      fillcolor: hexToRgba(region.color, style.regionOpacity),
+      line: { width: 0 },
+      layer: 'below',
+    })
+    if (style.showRegionLabels) {
+      annotations.push({
+        x: (region.start + region.end) / 2,
+        y: 1.08 - (index % 2) * 0.075,
+        xref: 'x',
+        yref: 'paper',
+        text: region.shortLabel,
+        showarrow: false,
+        align: 'center',
+        font: { family: style.fontFamily, size: style.regionFontSize, color: '#334155' },
+      })
+    }
+  })
+
+  files.forEach((file, fileIndex) => {
+    const points = vbDosDisplayPoints(file)
+    const offset = fileIndex * style.verticalOffset
+    const x = points.map(point => point.x)
+    const y = points.map(point => point.y + offset)
+    data.push({
+      x,
+      y,
+      type: 'scatter',
+      mode: 'lines',
+      name: file.sampleLabel,
+      showlegend: style.showLegend,
+      line: { color: file.color, width: style.lineWidth },
+      hovertemplate: `${file.sampleLabel}<br>ΔE %{x:.3f} eV<br>%{y:.4f}<extra></extra>`,
+    })
+
+    annotations.push({
+      x: style.xLeft - 0.12,
+      y: offset + 0.82,
+      xref: 'x',
+      yref: 'y',
+      text: `<b>${file.sampleLabel}</b>`,
+      showarrow: false,
+      xanchor: 'right',
+      font: { family: style.fontFamily, size: style.sampleFontSize, color: file.color },
+    })
+
+    if (style.showPeakMarkers) {
+      const visiblePeaks = file.peaks.filter(peak => peak.visible)
+      data.push({
+        x: visiblePeaks.map(peak => peak.relEnergy),
+        y: visiblePeaks.map(peak => peak.intensity + offset),
+        type: 'scatter',
+        mode: 'markers',
+        name: `${file.sampleLabel} peak / shoulder`,
+        showlegend: false,
+        marker: { color: '#ffffff', size: style.markerSize, line: { color: file.color, width: 1.2 } },
+        hovertemplate: `${file.sampleLabel}<br>BE %{customdata:.3f} eV<br>ΔE %{x:.3f} eV<extra></extra>`,
+        customdata: visiblePeaks.map(peak => peak.be),
+      })
+      visiblePeaks.forEach(peak => {
+        annotations.push({
+          x: peak.relEnergy,
+          y: peak.intensity + offset,
+          xref: 'x',
+          yref: 'y',
+          text: formatPlotLabel(peak.label),
+          showarrow: true,
+          ax: peak.labelXShift,
+          ay: peak.labelYShift,
+          arrowcolor: file.color,
+          arrowwidth: 0.9,
+          align: 'center',
+          font: { family: style.fontFamily, size: style.annotationFontSize, color: file.color },
+          bgcolor: 'rgba(255,255,255,0.72)',
+          bordercolor: 'rgba(255,255,255,0)',
+        })
+      })
+    }
+  })
+
+  annotations.push(
+    {
+      x: 0.02,
+      y: 1.16,
+      xref: 'paper',
+      yref: 'paper',
+      text: `<b>${style.titleLabel}</b>`,
+      showarrow: false,
+      xanchor: 'left',
+      font: { family: style.fontFamily, size: style.axisTitleFontSize, color: '#111827' },
+    },
+    {
+      x: 0,
+      y: -0.28,
+      xref: 'paper',
+      yref: 'paper',
+      text: VB_DOS_ASSIGNMENT_NOTE,
+      showarrow: false,
+      xanchor: 'left',
+      align: 'left',
+      font: { family: 'DejaVu Sans, Arial, sans-serif', size: Math.max(10, style.annotationFontSize - 1), color: '#4b5563' },
+    },
+  )
+
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    showlegend: style.showLegend,
+    hovermode: 'closest',
+    margin: { l: 92, r: 34, t: 118, b: 150 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    shapes: shapes as Plotly.Shape[],
+    annotations: annotations as unknown as Plotly.Layout['annotations'],
+    legend: {
+      x: 0.02,
+      y: 0.98,
+      xanchor: 'left',
+      yanchor: 'top',
+      bgcolor: 'rgba(255,255,255,0)',
+      font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    },
+    xaxis: {
+      range: [style.xLeft, style.xRight],
+      title: { text: 'ΔE = Binding Energy - VBM (eV)', font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff },
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      minor: { ticks: 'inside' },
+    },
+    yaxis: {
+      range: [-0.08, yMax],
+      title: { text: 'Normalized intensity + offset (a.u.)', font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff },
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      showticklabels: false,
+    },
+  }
+  return { data, layout }
+}
+
 function buildXpsPanelFigure(files: FitSpectrumFile[], style: PlotFigureStyle, styles: Record<string, ComponentStyle>) {
   const keys = componentKeys(files).filter(key => styles[key]?.show ?? true)
   const xAll = files.flatMap(file => file.x)
@@ -3153,13 +3688,15 @@ export default function PlotFileTool({
   onModuleSelect?: (module: AnalysisModuleId) => void
 }) {
   const [activeModule, setActiveModule] = useState<PlotModule>('xps')
-  const [xpsPlotMode, setXpsPlotMode] = useState<'fit' | 'vbm'>('fit')
+  const [xpsPlotMode, setXpsPlotMode] = useState<XpsPlotMode>('fit')
   const [files, setFiles] = useState<FitSpectrumFile[]>([])
   const [xpsOffsetSettings, setXpsOffsetSettings] = useState<XpsOffsetSettings>(DEFAULT_XPS_OFFSET_SETTINGS)
   const [style, setStyle] = useState<PlotFigureStyle>(DEFAULT_STYLE)
   const [componentStyles, setComponentStyles] = useState<Record<string, ComponentStyle>>({})
   const [vbmFiles, setVbmFiles] = useState<VbmSpectrumFile[]>([])
   const [vbmStyle, setVbmStyle] = useState<VbmFigureStyle>(DEFAULT_VBM_STYLE)
+  const [vbDosFiles, setVbDosFiles] = useState<VbDosSpectrumFile[]>([])
+  const [vbDosStyle, setVbDosStyle] = useState<VbDosFigureStyle>(DEFAULT_VB_DOS_STYLE)
   const [xasBandFiles, setXasBandFiles] = useState<XasBandEdgeFile[]>([])
   const [xasBandPairs, setXasBandPairs] = useState<XasBandPair[]>([])
   const [xasBandStyle, setXasBandStyle] = useState<XasBandFigureStyle>(DEFAULT_XAS_BAND_STYLE)
@@ -3226,6 +3763,7 @@ export default function PlotFileTool({
   }, [vbmFiles])
   const vbmStackedFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmStackedFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
   const vbmSummaryFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmSummaryFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
+  const vbDosFigure = useMemo(() => vbDosFiles.length > 0 ? buildVbDosFigure(vbDosFiles, vbDosStyle) : null, [vbDosFiles, vbDosStyle])
   const xasBandResults = useMemo(() => calculateXasBandPairs(xasBandFiles, xasBandPairs), [xasBandFiles, xasBandPairs])
   const xasBandFigure = useMemo(() => xasBandResults.results.length > 0 ? buildXasBandOverlayFigure(xasBandResults.results, xasBandStyle) : null, [xasBandResults.results, xasBandStyle])
   const activeRamanFile = useMemo(
@@ -3324,6 +3862,39 @@ export default function PlotFileTool({
     }
     setVbmFiles(current => [...current, ...imported])
     if (errors.length > 0) setError(errors.join('; '))
+  }
+
+  const importVbDosFiles = async (fileList: FileList | null) => {
+    if (!fileList) return
+    setError(null)
+    const imported: VbDosSpectrumFile[] = []
+    const errors: string[] = []
+    for (const [index, file] of Array.from(fileList).entries()) {
+      try {
+        const text = await file.text()
+        imported.push(parseVbDosSpectrumText(text, file.name, vbDosFiles.length + index))
+      } catch (importError: unknown) {
+        errors.push(String((importError as Error).message ?? importError))
+      }
+    }
+    setVbDosFiles(current => [...current, ...imported])
+    if (errors.length > 0) setError(errors.join('; '))
+  }
+
+  const updateVbDosFile = (fileId: string, patch: Partial<Pick<VbDosSpectrumFile, 'sampleLabel' | 'color' | 'vbm'>>) => {
+    setVbDosFiles(current => current.map(file => {
+      if (file.id !== fileId) return file
+      const next = { ...file, ...patch }
+      if (patch.vbm !== undefined) next.peaks = recalcVbDosPeaks(file, patch.vbm)
+      if (patch.sampleLabel !== undefined && patch.color === undefined) next.color = xpsSampleColor(patch.sampleLabel, current.findIndex(item => item.id === fileId))
+      return next
+    }))
+  }
+
+  const updateVbDosPeak = (fileId: string, peakId: string, patch: Partial<Pick<VbDosPeakAnnotation, 'label' | 'visible' | 'labelXShift' | 'labelYShift'>>) => {
+    setVbDosFiles(current => current.map(file => file.id === fileId
+      ? { ...file, peaks: file.peaks.map(peak => peak.id === peakId ? { ...peak, ...patch } : peak) }
+      : file))
   }
 
   const importXasBandFiles = async (fileList: FileList | null, kind: XasBandFileKind) => {
@@ -3563,6 +4134,51 @@ export default function PlotFileTool({
     }
   }
 
+  const exportVbDosPlot = async (format: 'png' | 'svg' | 'pdf') => {
+    if (!vbDosFigure) return
+    setExporting(true)
+    setError(null)
+    const container = document.createElement('div')
+    const width = vbDosStyle.exportWidth
+    const height = vbDosStyle.exportHeight
+    const scale = Math.max(1, vbDosStyle.exportScale)
+    container.style.position = 'fixed'
+    container.style.left = '-10000px'
+    container.style.top = '0'
+    container.style.width = `${width}px`
+    container.style.height = `${height}px`
+    document.body.appendChild(container)
+    try {
+      const plotly = PlotlyApi as unknown as PlotlyExportApi
+      await plotly.newPlot(container, vbDosFigure.data, { ...vbDosFigure.layout, autosize: false, width, height }, { staticPlot: true, displayModeBar: false, responsive: false })
+      if (format === 'pdf') {
+        const dataUrl = await plotly.toImage(container, { format: 'jpeg', width, height, scale })
+        const pdf = buildSingleImagePdf(dataUrl, width * scale, height * scale, vbDosStyle.exportDpi)
+        downloadBlob(pdf, 'xps_vb_dos_assignment.pdf')
+      } else {
+        const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? scale : 1 })
+        downloadDataUrl(dataUrl, `xps_vb_dos_assignment.${format}`)
+      }
+      plotly.purge(container)
+    } catch (exportError: unknown) {
+      setError(String((exportError as Error).message ?? exportError))
+    } finally {
+      container.remove()
+      setExporting(false)
+    }
+  }
+
+  const exportVbDosPeaksCsv = () => {
+    const rows = vbDosFiles.flatMap(file => file.peaks.map(peak => ({
+      Sample: file.sampleLabel,
+      Peak_position_BE_eV: peak.be.toFixed(6),
+      Peak_position_relative_to_VBM_eV: peak.relEnergy.toFixed(6),
+      Preliminary_assignment: peak.assignment,
+    })))
+    const headers = ['Sample', 'Peak_position_BE_eV', 'Peak_position_relative_to_VBM_eV', 'Preliminary_assignment']
+    downloadTextFile(rowsToCsv(headers, rows), 'xps_vb_dos_detected_peaks.csv', 'text/csv;charset=utf-8')
+  }
+
   const exportVbmSummaryCsv = () => {
     const rows = vbmResults.results.map(result => ({
       Sample: result.file.sampleLabel,
@@ -3646,9 +4262,9 @@ export default function PlotFileTool({
         description="集中管理 Raman、XRD、XPS、XAS、XES 的投稿圖輸出；Raman 圖檔輸出已集中到此工作區。"
         chips={[
           { label: `目前 ${activeModule.toUpperCase()}` },
-          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : activeModule === 'xas' ? 'XES/XAS band gap' : (xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
-          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : activeModule === 'xas' ? xasBandFiles.length : (xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
-          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : activeModule === 'xas' ? `Eg ${xasBandResults.results.length}` : (xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : activeModule === 'xas' ? 'XES/XAS band gap' : (xpsPlotMode === 'vb-dos' ? 'VB-DOS 初步指認' : xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
+          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : activeModule === 'xas' ? xasBandFiles.length : (xpsPlotMode === 'vb-dos' ? vbDosFiles.length : xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : activeModule === 'xas' ? `Eg ${xasBandResults.results.length}` : (xpsPlotMode === 'vb-dos' ? `Peaks ${vbDosFiles.reduce((sum, file) => sum + file.peaks.length, 0)}` : xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
         ]}
       />
 
@@ -4366,6 +4982,7 @@ export default function PlotFileTool({
             {[
               { id: 'fit' as const, label: 'XPS 峰擬合圖', detail: 'Component panels / ratio' },
               { id: 'vbm' as const, label: 'VBM 線性外推', detail: 'VB linear extrapolation' },
+              { id: 'vb-dos' as const, label: 'VB-DOS 初步指認', detail: 'VB / Ga2O3 pDOS-DFT' },
             ].map(mode => (
               <button
                 key={mode.id}
@@ -4637,7 +5254,7 @@ export default function PlotFileTool({
               </div>
             </aside>
           </div>
-          ) : (
+          ) : xpsPlotMode === 'vbm' ? (
           <div className="mb-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
             <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
               <div className="analysis-section-card p-4">
@@ -4804,6 +5421,179 @@ export default function PlotFileTool({
                   <NumInput label="圖寬(px)" value={vbmStyle.exportWidth} onChange={value => setVbmStyle(prev => ({ ...prev, exportWidth: Math.max(420, value) }))} min={420} max={3000} step={20} />
                   <NumInput label="圖高(px)" value={vbmStyle.exportHeight} onChange={value => setVbmStyle(prev => ({ ...prev, exportHeight: Math.max(320, value) }))} min={320} max={4000} step={20} />
                   <NumInput label="PNG 倍率" value={vbmStyle.exportScale} onChange={value => setVbmStyle(prev => ({ ...prev, exportScale: clamp(value, 1, 6) }))} min={1} max={6} step={0.5} />
+                </div>
+              </div>
+            </aside>
+          </div>
+          ) : (
+          <div className="mb-4 grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
+            <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+              <div className="analysis-section-card p-4">
+                <p className="text-sm font-semibold text-[var(--text-main)]">XPS VB 光譜檔</p>
+                <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">支援 CSV/TXT/TSV；會讀取每個檔案前兩個數值欄位，第一欄作 Binding Energy，第二欄作 intensity。</p>
+                <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
+                  上傳 VB CSV/TXT
+                  <input type="file" multiple accept=".csv,.txt,.dat,.tsv" className="hidden" onChange={event => { void importVbDosFiles(event.target.files); event.target.value = '' }} />
+                </label>
+                {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
+                {vbDosFiles.length > 0 && (
+                  <div className="mt-3 space-y-3">
+                    {vbDosFiles.map((file, fileIndex) => (
+                      <div key={file.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                        <input
+                          value={file.sampleLabel}
+                          onChange={event => updateVbDosFile(file.id, { sampleLabel: event.target.value })}
+                          className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs font-semibold text-[var(--input-text)] focus:outline-none"
+                        />
+                        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--text-soft)]">
+                          <span className="truncate">{file.name}</span>
+                          <button type="button" onClick={() => setVbDosFiles(current => current.filter(item => item.id !== file.id))} className="text-rose-400">移除</button>
+                        </div>
+                        <p className="mt-2 text-[10px] leading-4 text-[var(--text-soft)]">X: {file.xColumn} / Y: {file.yColumn}</p>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <NumInput label="VBM (eV)" value={file.vbm} onChange={value => updateVbDosFile(file.id, { vbm: value })} step={0.01} />
+                          <ColorInput label="線色" value={file.color || xpsSampleColor(file.sampleLabel, fileIndex)} onChange={value => updateVbDosFile(file.id, { color: value })} />
+                        </div>
+                      </div>
+                    ))}
+                    <button type="button" onClick={() => setVbDosFiles([])} className="text-xs text-rose-400">清除全部</button>
+                  </div>
+                )}
+              </div>
+
+              {vbDosFiles.length > 0 && (
+                <div className="analysis-section-card p-4">
+                  <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">Peak / shoulder 標註</p>
+                  <div className="space-y-3">
+                    {vbDosFiles.map(file => (
+                      <details key={file.id} open className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                        <summary className="cursor-pointer text-xs font-semibold text-[var(--text-main)]">{file.sampleLabel} ({file.peaks.length})</summary>
+                        <div className="mt-3 space-y-3">
+                          {file.peaks.map(peak => (
+                            <div key={peak.id} className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] p-2">
+                              <label className="flex items-center justify-between gap-3 text-xs text-[var(--text-main)]">
+                                <span>{peak.relEnergy.toFixed(2)} eV / BE {peak.be.toFixed(2)} eV</span>
+                                <input type="checkbox" checked={peak.visible} onChange={event => updateVbDosPeak(file.id, peak.id, { visible: event.target.checked })} className="accent-[var(--accent-secondary)]" />
+                              </label>
+                              <input
+                                value={peak.label.replace(/<br>/g, '\n')}
+                                onChange={event => updateVbDosPeak(file.id, peak.id, { label: event.target.value.replace(/\n/g, '<br>') })}
+                                className="mt-2 w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none"
+                              />
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <NumInput label="標籤 X" value={peak.labelXShift} onChange={value => updateVbDosPeak(file.id, peak.id, { labelXShift: clamp(value, -180, 180) })} min={-180} max={180} step={2} />
+                                <NumInput label="標籤 Y" value={peak.labelYShift} onChange={value => updateVbDosPeak(file.id, peak.id, { labelYShift: clamp(value, -180, 180) })} min={-180} max={180} step={2} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </aside>
+
+            <section className="space-y-4">
+              <div className="analysis-section-card p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-[var(--text-main)]">VB-DOS 初步峰來源指認圖</p>
+                    <p className="mt-1 text-xs text-[var(--text-soft)]">Intensity 先扣最小值再歸一化；ΔE = Binding Energy - VBM，並加入 Ga2O3 pDOS/DFT 定性指認區域。</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" disabled={!vbDosFigure || exporting} onClick={() => { void exportVbDosPlot('png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">PNG</button>
+                    <button type="button" disabled={!vbDosFigure || exporting} onClick={() => { void exportVbDosPlot('pdf') }} className="rounded-full border border-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-[var(--accent-secondary)] disabled:opacity-40">PDF</button>
+                    <button type="button" disabled={!vbDosFigure || exporting} onClick={() => { void exportVbDosPlot('svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">SVG</button>
+                    <button type="button" disabled={vbDosFiles.length === 0} onClick={exportVbDosPeaksCsv} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">峰表 CSV</button>
+                  </div>
+                </div>
+                {vbDosFigure ? (
+                  <Plot data={vbDosFigure.data} layout={vbDosFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: Math.max(520, 210 * vbDosFiles.length + 220) }} />
+                ) : (
+                  <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">上傳 VB CSV/TXT 後預覽圖會顯示在這裡。</div>
+                )}
+              </div>
+
+              <div className="analysis-section-card p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">pDOS/DFT 初步指認區域</p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {VB_DOS_ASSIGNMENT_REGIONS.map(region => (
+                    <div key={region.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs leading-5 text-[var(--text-main)]">
+                      <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ backgroundColor: region.color }} />
+                      <span className="font-semibold">{region.start.toFixed(1)}-{region.end.toFixed(1)} eV below VBM</span>
+                      <p className="mt-1 text-[var(--text-soft)]">{region.label}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs leading-5 text-[var(--text-soft)]">{VB_DOS_ASSIGNMENT_NOTE}</p>
+              </div>
+            </section>
+
+            <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+              <div className="analysis-section-card p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">VB-DOS 圖面設定</p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">圖標題</span>
+                    <input value={vbDosStyle.titleLabel} onChange={event => setVbDosStyle(prev => ({ ...prev, titleLabel: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">字體</span>
+                    <select value={vbDosStyle.fontFamily} onChange={event => setVbDosStyle(prev => ({ ...prev, fontFamily: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none">
+                      <option value="Times New Roman, Times, serif">Times New Roman</option>
+                      <option value="DejaVu Sans, Arial, sans-serif">DejaVu Sans</option>
+                    </select>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="X 左端(eV)" value={vbDosStyle.xLeft} onChange={value => setVbDosStyle(prev => ({ ...prev, xLeft: value }))} step={0.1} />
+                    <NumInput label="X 右端(eV)" value={vbDosStyle.xRight} onChange={value => setVbDosStyle(prev => ({ ...prev, xRight: value }))} step={0.1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="垂直 offset" value={vbDosStyle.verticalOffset} onChange={value => setVbDosStyle(prev => ({ ...prev, verticalOffset: Math.max(0, value) }))} min={0} max={3} step={0.02} />
+                    <NumInput label="Y 上方留白" value={vbDosStyle.yMaxPadding} onChange={value => setVbDosStyle(prev => ({ ...prev, yMaxPadding: Math.max(0.1, value) }))} min={0.1} max={2} step={0.02} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="刻度字體" value={vbDosStyle.fontSize} onChange={value => setVbDosStyle(prev => ({ ...prev, fontSize: value }))} min={8} max={34} step={1} />
+                    <NumInput label="軸標題字體" value={vbDosStyle.axisTitleFontSize} onChange={value => setVbDosStyle(prev => ({ ...prev, axisTitleFontSize: value }))} min={10} max={42} step={1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="峰標註字體" value={vbDosStyle.annotationFontSize} onChange={value => setVbDosStyle(prev => ({ ...prev, annotationFontSize: value }))} min={8} max={30} step={1} />
+                    <NumInput label="區域標籤字體" value={vbDosStyle.regionFontSize} onChange={value => setVbDosStyle(prev => ({ ...prev, regionFontSize: value }))} min={8} max={24} step={1} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="線寬" value={vbDosStyle.lineWidth} onChange={value => setVbDosStyle(prev => ({ ...prev, lineWidth: clamp(value, 0.2, 6) }))} min={0.2} max={6} step={0.05} />
+                    <NumInput label="Peak marker" value={vbDosStyle.markerSize} onChange={value => setVbDosStyle(prev => ({ ...prev, markerSize: clamp(value, 1, 16) }))} min={1} max={16} step={0.5} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumInput label="框線粗細" value={vbDosStyle.axisLineWidth} onChange={value => setVbDosStyle(prev => ({ ...prev, axisLineWidth: clamp(value, 0.2, 8) }))} min={0.2} max={8} step={0.1} />
+                    <NumInput label="區域透明度" value={vbDosStyle.regionOpacity} onChange={value => setVbDosStyle(prev => ({ ...prev, regionOpacity: clamp(value, 0, 0.65) }))} min={0} max={0.65} step={0.02} />
+                  </div>
+                  {[
+                    ['showRegionLabels', '顯示 pDOS 區域標籤'],
+                    ['showPeakMarkers', '顯示 peak / shoulder 標註'],
+                    ['showLegend', '顯示圖例'],
+                  ].map(([key, label]) => (
+                    <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                      <span>{label}</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(vbDosStyle[key as keyof VbDosFigureStyle])}
+                        onChange={event => setVbDosStyle(prev => ({ ...prev, [key]: event.target.checked }))}
+                        className="accent-[var(--accent-secondary)]"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="analysis-section-card p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">600 dpi 匯出尺寸</p>
+                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                  <NumInput label="圖寬(px)" value={vbDosStyle.exportWidth} onChange={value => setVbDosStyle(prev => ({ ...prev, exportWidth: Math.max(900, value) }))} min={900} max={9000} step={100} />
+                  <NumInput label="圖高(px)" value={vbDosStyle.exportHeight} onChange={value => setVbDosStyle(prev => ({ ...prev, exportHeight: Math.max(700, value) }))} min={700} max={9000} step={100} />
+                  <NumInput label="倍率" value={vbDosStyle.exportScale} onChange={value => setVbDosStyle(prev => ({ ...prev, exportScale: clamp(value, 1, 3) }))} min={1} max={3} step={0.25} />
+                  <NumInput label="PDF DPI" value={vbDosStyle.exportDpi} onChange={value => setVbDosStyle(prev => ({ ...prev, exportDpi: Math.max(72, Math.round(value)) }))} min={72} max={1200} step={24} />
                 </div>
               </div>
             </aside>

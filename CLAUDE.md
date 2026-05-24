@@ -305,3 +305,13 @@ streamlit run app.py --server.port 8505
 - 檢查：DFT Streamlit 相關 Python 檔以 uv run python -m py_compile 驗證通過；一般沙盒內 uv cache 權限失敗，已改用非沙盒執行。
 - 檢查：前端 build 因環境找不到 npm/node 未能執行；已確認 web/frontend 具備 vite/client 型別設定，並以 git diff --check 檢查 patch，僅出現既有 LF/CRLF 提醒。
 - 檢查：確認 DFT Streamlit 服務 http://127.0.0.1:8505/_stcore/health 回傳 200 ok，可供 XPS/DFT iframe 內嵌載入。
+
+- 檢查：開始檢視 PlotFileTool / XPS 繪圖區結構，準備新增 VB-DOS 初步峰來源指認功能。
+
+- 重要判斷：VB-DOS 初步峰來源指認放在繪製圖檔區 PlotFileTool 的 XPS 子模式內，與峰擬合圖 / VBM 線性外推並列；因屬 XPS 圖，ΔE 軸仍採 XPS 慣例反向顯示，並保留使用者可調範圍。
+
+- 實作：PlotFileTool 的 XPS 子模式新增 VB-DOS 初步指認工作區，包含前兩數值欄自動讀取、min-subtract/max 歸一化、VBM ΔE 對齊、固定樣品配色、pDOS/DFT 區域、peak/shoulder 自動偵測與可編輯標註、峰表 CSV 與 PNG/PDF/SVG 匯出。
+
+- 檢查：嘗試執行 web/frontend 的 npm run build，但目前 shell 找不到 npm，未能進行前端建置。
+
+- 檢查：git diff --check 通過，僅顯示既有 LF/CRLF 提醒；再次確認 npm/node/本地 node_modules 目前不可用，因此仍無法執行前端 build。
