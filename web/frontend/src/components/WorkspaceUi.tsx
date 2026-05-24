@@ -151,8 +151,8 @@ export function ChartToolbar({
   actions,
 }: {
   title: string
-  colorValue: string
-  onColorChange: (value: string) => void
+  colorValue?: string
+  onColorChange?: (value: string) => void
   actions?: ReactNode
 }) {
   return (
@@ -160,14 +160,18 @@ export function ChartToolbar({
       <p className="text-sm font-semibold text-[var(--text-main)]">{title}</p>
       <div className="flex items-center gap-2">
         {actions}
-        <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-soft)]">線色</span>
-        <ThemeSelect
-          value={colorValue}
-          onChange={onColorChange}
-          options={LINE_COLOR_OPTIONS}
-          className="min-w-[6.25rem]"
-          buttonClassName="min-h-8 rounded-lg px-2 py-1 text-xs"
-        />
+        {colorValue !== undefined && onColorChange !== undefined && (
+          <>
+            <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-soft)]">線色</span>
+            <ThemeSelect
+              value={colorValue}
+              onChange={onColorChange}
+              options={LINE_COLOR_OPTIONS}
+              className="min-w-[6.25rem]"
+              buttonClassName="min-h-8 rounded-lg px-2 py-1 text-xs"
+            />
+          </>
+        )}
       </div>
     </div>
   )

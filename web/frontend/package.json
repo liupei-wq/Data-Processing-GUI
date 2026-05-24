@@ -14,6 +14,9 @@
     "test:raman": "tsc -p tsconfig.tests.json && node .tmp-tests/tests/raman/spectrumResults.test.js"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "plotly.js": "^2.32.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
