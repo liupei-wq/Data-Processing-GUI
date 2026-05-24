@@ -41,6 +41,14 @@ const PEAK_FWHM_MIN_ABS = 0.12
 const PEAK_FWHM_MAX_MULTIPLIER = 2.2
 const PEAK_FWHM_MIN_RATIO = 0.55
 const PEAK_AMPLITUDE_MAX_MULTIPLIER = 4.0
+type XpsMode = 'core_level' | 'valence_band' | 'dft'
+const XPS_MODE_LABELS: Record<XpsMode, string> = {
+  core_level: 'Core Level',
+  valence_band: 'Valence Band',
+  dft: 'DFT',
+}
+const XPS_DFT_PASSWORD = '931130'
+const DFT_STREAMLIT_URL = import.meta.env.VITE_DFT_STREAMLIT_URL ?? 'http://127.0.0.1:8505/?embed=true'
 
 const LINE_COLOR_OPTIONS = [
   { value: 'blue', label: 'Blue' },
@@ -1691,7 +1699,10 @@ export default function XPS({
   const [autoConverging, setAutoConverging] = useState(false)
 
   // mode
-  const [xpsMode, setXpsMode] = useState<'core_level' | 'valence_band'>('core_level')
+  const [xpsMode, setXpsMode] = useState<XpsMode>('core_level')
+  const [dftPassword, setDftPassword] = useState('')
+  const [dftUnlocked, setDftUnlocked] = useState(() => localStorage.getItem('nigiro-xps-dft-unlocked') === 'true')
+  const [dftPasswordError, setDftPasswordError] = useState<string | null>(null)
 
   // VBM extrapolation
   const [vbmEdgeLo, setVbmEdgeLo] = useState(1.0)
@@ -2927,6 +2938,17 @@ export default function XPS({
     ? (hasPreprocessStage || hasBackgroundStage || hasValidRangeStage || hasNormalizationStage)
     : overlayAnyStageEnabled
 
+  const unlockDftAnalyzer = () => {
+    if (dftPassword.trim() === XPS_DFT_PASSWORD) {
+      setDftUnlocked(true)
+      setDftPassword('')
+      setDftPasswordError(null)
+      localStorage.setItem('nigiro-xps-dft-unlocked', 'true')
+      return
+    }
+    setDftPasswordError('密碼錯誤，請重新輸入。')
+  }
+
   return (
     <div className={`flex h-screen flex-row overflow-hidden${sidebarResizing ? ' select-none' : ''}`}>
       {/* ── sidebar ── */}
@@ -2950,17 +2972,58 @@ export default function XPS({
               {/* Mode toggle */}
               <div className="px-4 py-3">
                 <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模式</p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {(['core_level', 'valence_band'] as const).map(m => (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(['core_level', 'valence_band', 'dft'] as const).map(m => (
                     <button key={m} type="button" onClick={() => setXpsMode(m)}
                       className={['rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors pressable',
                         xpsMode === m ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
                     >
-                      {m === 'core_level' ? 'Core Level' : 'Valence Band'}
+                      {XPS_MODE_LABELS[m]}
                     </button>
                   ))}
                 </div>
               </div>
+
+              {xpsMode === 'dft' && (
+                <div className="px-4 pt-2">
+                  <Section step={0} title="DFT 加密模組" hint="Valence Band DFT-informed Analyzer">
+                    <p className="mb-3 text-xs leading-5 text-[var(--text-soft)]">
+                      此區連結到 Ga2O3/NiO/p-Si valence band DFT-informed spectral analysis。此工具不執行 VASP/DFT，
+                      而是進行 VBM 對齊、分區積分、pDOS 展寬與 pDOS-based fitting。
+                    </p>
+                    {!dftUnlocked ? (
+                      <div className="space-y-2">
+                        <input
+                          type="password"
+                          value={dftPassword}
+                          onChange={event => {
+                            setDftPassword(event.target.value)
+                            setDftPasswordError(null)
+                          }}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter') unlockDftAnalyzer()
+                          }}
+                          placeholder="輸入密碼"
+                          className="w-full rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-xs text-[var(--text-main)] outline-none transition-colors focus:border-[var(--accent-strong)]"
+                        />
+                        {dftPasswordError && <p className="text-[10px] text-rose-300">{dftPasswordError}</p>}
+                        <button
+                          type="button"
+                          onClick={unlockDftAnalyzer}
+                          className="w-full rounded-lg bg-[var(--accent-secondary)] px-3 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-85"
+                        >
+                          解鎖 DFT Analyzer
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3 text-xs text-[var(--text-soft)]">
+                        <p className="font-semibold text-[var(--text-main)]">已解鎖</p>
+                        <p>DFT 工具會在中央工作區直接載入。</p>
+                      </div>
+                    )}
+                  </Section>
+                </div>
+              )}
 
               <div className="px-4 pt-4">
                 <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV / ASC / XLSX">
@@ -3894,7 +3957,7 @@ export default function XPS({
           description={moduleContent.description}
           chips={[
             { label: `資料量 ${rawFiles.length}` },
-            { label: `模式 ${xpsMode === 'core_level' ? 'Core Level' : 'Valence Band'}` },
+            { label: `模式 ${XPS_MODE_LABELS[xpsMode]}` },
             { label: `峰候選 ${peakCandidates.length}` },
           ]}
         />
@@ -3902,7 +3965,7 @@ export default function XPS({
         <InfoCardGrid
           items={[
             { label: '資料量', value: rawFiles.length > 0 ? `${rawFiles.length} 個` : '未載入' },
-            { label: '分析模式', value: xpsMode === 'core_level' ? 'Core Level' : 'Valence Band' },
+            { label: '分析模式', value: XPS_MODE_LABELS[xpsMode] },
             {
               label: '內插點數',
               value: currentParams.interpolate || (processingViewMode === 'overlay' && currentParams.average) ? `${effectiveNPoints} 點` : '未啟用',
@@ -3919,7 +3982,67 @@ export default function XPS({
           </div>
         )}
 
-        {rawFiles.length === 0 && !isBusy && !(vbmDataSource === 'imported' && importedVbmDataset) && (
+        {xpsMode === 'dft' && (
+          <div className="analysis-section-card mb-4 p-5">
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-[var(--text-main)]">Valence Band DFT-informed Analyzer</p>
+                <p className="mt-1 max-w-3xl text-xs leading-5 text-[var(--text-soft)]">
+                  Ga2O3/NiO/p-Si XPS valence band spectra 專用工具，支援 VBM 對齊、A-D 區域積分、DFT pDOS cross-section correction、
+                  Gaussian/Lorentzian/Voigt broadening、non-negative pDOS fitting 與 Markdown/HTML report 匯出。
+                </p>
+              </div>
+              <span className={`rounded-full border px-3 py-1 text-xs ${dftUnlocked ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' : 'border-amber-400/40 bg-amber-400/10 text-amber-200'}`}>
+                {dftUnlocked ? '已解鎖' : '需要密碼'}
+              </span>
+            </div>
+
+            {!dftUnlocked ? (
+              <div className="max-w-md space-y-3">
+                <input
+                  type="password"
+                  value={dftPassword}
+                  onChange={event => {
+                    setDftPassword(event.target.value)
+                    setDftPasswordError(null)
+                  }}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter') unlockDftAnalyzer()
+                  }}
+                  placeholder="輸入密碼以使用 DFT 模組"
+                  className="w-full rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-sm text-[var(--text-main)] outline-none transition-colors focus:border-[var(--accent-strong)]"
+                />
+                {dftPasswordError && <p className="text-xs text-rose-300">{dftPasswordError}</p>}
+                <button
+                  type="button"
+                  onClick={unlockDftAnalyzer}
+                  className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-85"
+                >
+                  解鎖
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="overflow-hidden rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)]">
+                  <iframe
+                    title="Valence Band DFT-informed Analyzer"
+                    src={DFT_STREAMLIT_URL}
+                    className="h-[72vh] min-h-[620px] w-full bg-white"
+                    loading="lazy"
+                  />
+                </div>
+                <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 text-xs leading-5 text-[var(--text-soft)]">
+                  <p className="mb-2 font-semibold text-[var(--text-main)]">DFT-informed，不是 DFT 計算</p>
+                  <p>
+                    內嵌視窗預設連線至 {DFT_STREAMLIT_URL}。若視窗未載入，請確認 Streamlit 服務已啟動；所有圖表與光譜資料匯出皆以 X 軸大值在左、小值在右為準。
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {xpsMode !== 'dft' && rawFiles.length === 0 && !isBusy && !(vbmDataSource === 'imported' && importedVbmDataset) && (
           <EmptyWorkspaceState
             module="xps"
             title={moduleContent.uploadTitle}
@@ -3928,7 +4051,7 @@ export default function XPS({
           />
         )}
 
-        {(rawFiles.length > 0 || (vbmDataSource === 'imported' && !!importedVbmDataset)) && (
+        {xpsMode !== 'dft' && (rawFiles.length > 0 || (vbmDataSource === 'imported' && !!importedVbmDataset)) && (
           <>
             {rawChartTraces.length > 0 && showRawSpectrumCard && (
               <div className="analysis-section-card mb-4 p-4">
