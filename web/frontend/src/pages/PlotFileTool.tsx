@@ -85,6 +85,8 @@ interface VbDosSpectrumFile {
   name: string
   sampleLabel: string
   color: string
+  sampleLabelXFraction: number
+  sampleLabelYOffset: number
   xColumn: string
   yColumn: string
   x: number[]
@@ -396,6 +398,9 @@ interface VbDosAssignmentRegion {
   label: string
   shortLabel: string
   color: string
+  labelXShift: number
+  labelYPaper: number
+  italicWords: string
 }
 
 interface VbDosFigureStyle {
@@ -671,6 +676,9 @@ const VB_DOS_ASSIGNMENT_REGIONS: VbDosAssignmentRegion[] = [
     label: 'VBM onset / O 2p-derived valence band edge / possible defect tail',
     shortLabel: 'VBM onset / O 2p edge',
     color: '#8dd3c7',
+    labelXShift: 0,
+    labelYPaper: 1.08,
+    italicWords: 'VBM,O 2p',
   },
   {
     id: 'upper-o2p',
@@ -679,6 +687,9 @@ const VB_DOS_ASSIGNMENT_REGIONS: VbDosAssignmentRegion[] = [
     label: 'upper O 2p valence band',
     shortLabel: 'upper O 2p',
     color: '#80b1d3',
+    labelXShift: 0,
+    labelYPaper: 1.005,
+    italicWords: 'O 2p',
   },
   {
     id: 'hybridized',
@@ -687,6 +698,9 @@ const VB_DOS_ASSIGNMENT_REGIONS: VbDosAssignmentRegion[] = [
     label: 'O 2p – Ga 4p / O 2s hybridized states',
     shortLabel: 'O 2p – Ga 4p / O 2s',
     color: '#fdb462',
+    labelXShift: 0,
+    labelYPaper: 1.08,
+    italicWords: 'O 2p,Ga 4p,O 2s',
   },
   {
     id: 'bonding',
@@ -695,6 +709,9 @@ const VB_DOS_ASSIGNMENT_REGIONS: VbDosAssignmentRegion[] = [
     label: 'lower O 2p / Ga–O bonding states',
     shortLabel: 'lower O 2p / Ga–O',
     color: '#b3de69',
+    labelXShift: 0,
+    labelYPaper: 1.005,
+    italicWords: 'O 2p,Ga–O',
   },
   {
     id: 'ga3d',
@@ -703,6 +720,9 @@ const VB_DOS_ASSIGNMENT_REGIONS: VbDosAssignmentRegion[] = [
     label: 'possible Ga 3d-derived semi-core contribution',
     shortLabel: 'possible Ga 3d semi-core',
     color: '#fccde5',
+    labelXShift: 0,
+    labelYPaper: 1.08,
+    italicWords: 'Ga 3d',
   },
 ]
 
@@ -835,6 +855,21 @@ function formatPlotLabel(label: string) {
   return label
     .replace(/_\{([^{}]+)\}/g, '<sub>$1</sub>')
     .replace(/_([A-Za-z0-9]+)/g, '<sub>$1</sub>')
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function formatItalicWords(label: string, italicWords: string) {
+  const words = italicWords
+    .split(/[,;\n]/)
+    .map(word => word.trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+  if (words.length === 0) return formatPlotLabel(label)
+  const pattern = new RegExp(`(${words.map(escapeRegExp).join('|')})`, 'gi')
+  return formatPlotLabel(label).replace(pattern, '<i>$1</i>')
 }
 
 function percentile(values: number[], pct: number) {
@@ -1142,8 +1177,8 @@ function parseVbmSpectrumText(text: string, fileName: string): VbmSpectrumFile {
   }
 }
 
-function vbDosAssignmentForEnergy(relEnergy: number) {
-  const region = VB_DOS_ASSIGNMENT_REGIONS.find(item => relEnergy >= item.start && relEnergy <= item.end)
+function vbDosAssignmentForEnergy(relEnergy: number, regions = VB_DOS_ASSIGNMENT_REGIONS) {
+  const region = regions.find(item => relEnergy >= item.start && relEnergy <= item.end)
   return region?.label ?? 'outside predefined Ga2O3 pDOS/DFT assignment windows'
 }
 
@@ -1172,7 +1207,7 @@ function normalizeVbDosIntensity(y: number[]) {
   return shifted.map(value => value / maxValue)
 }
 
-function detectVbDosPeaks(xRel: number[], yNorm: number[], beValues: number[]) {
+function detectVbDosPeaks(xRel: number[], yNorm: number[], beValues: number[], regions = VB_DOS_ASSIGNMENT_REGIONS) {
   const n = Math.min(xRel.length, yNorm.length, beValues.length)
   if (n < 3) return []
   const windowSize = Math.max(3, Math.min(11, Math.floor(n / 70) * 2 + 3))
@@ -1207,8 +1242,8 @@ function detectVbDosPeaks(xRel: number[], yNorm: number[], beValues: number[]) {
     .sort((a, b) => xRel[a.index] - xRel[b.index])
     .map((candidate, peakIndex): VbDosPeakAnnotation => {
       const relEnergy = xRel[candidate.index]
-      const assignment = vbDosAssignmentForEnergy(relEnergy)
-      const shortRegion = VB_DOS_ASSIGNMENT_REGIONS.find(region => relEnergy >= region.start && relEnergy <= region.end)?.shortLabel ?? 'unassigned'
+      const assignment = vbDosAssignmentForEnergy(relEnergy, regions)
+      const shortRegion = regions.find(region => relEnergy >= region.start && relEnergy <= region.end)?.shortLabel ?? 'unassigned'
       return {
         id: `peak-${peakIndex}-${relEnergy.toFixed(4)}`,
         be: beValues[candidate.index],
@@ -1260,6 +1295,8 @@ function parseVbDosSpectrumText(text: string, fileName: string, index: number): 
     name: fileName,
     sampleLabel,
     color: xpsSampleColor(sampleLabel, index),
+    sampleLabelXFraction: 0.99,
+    sampleLabelYOffset: 0.82,
     xColumn: headers[xIndex] ?? `Column ${xIndex + 1}`,
     yColumn: headers[yIndex] ?? `Column ${yIndex + 1}`,
     x: cleanX,
@@ -2860,20 +2897,20 @@ function vbDosDisplayPoints(file: VbDosSpectrumFile) {
     .sort((a, b) => a.x - b.x)
 }
 
-function recalcVbDosPeaks(file: VbDosSpectrumFile, vbm = file.vbm) {
+function recalcVbDosPeaks(file: VbDosSpectrumFile, vbm = file.vbm, regions = VB_DOS_ASSIGNMENT_REGIONS) {
   const yNorm = normalizeVbDosIntensity(file.y)
   const xRel = file.x.map(value => value - vbm)
-  return detectVbDosPeaks(xRel, yNorm, file.x)
+  return detectVbDosPeaks(xRel, yNorm, file.x, regions)
 }
 
-function buildVbDosFigure(files: VbDosSpectrumFile[], style: VbDosFigureStyle) {
+function buildVbDosFigure(files: VbDosSpectrumFile[], style: VbDosFigureStyle, regions: VbDosAssignmentRegion[]) {
   const data: Plotly.Data[] = []
   const annotations: Partial<Plotly.Annotations>[] = []
   const shapes: Partial<Plotly.Shape>[] = []
   const maxOffset = Math.max(0, (files.length - 1) * style.verticalOffset)
   const yMax = maxOffset + 1 + Math.max(0.18, style.yMaxPadding)
 
-  VB_DOS_ASSIGNMENT_REGIONS.forEach((region, index) => {
+  regions.forEach(region => {
     shapes.push({
       type: 'rect',
       xref: 'x',
@@ -2888,11 +2925,11 @@ function buildVbDosFigure(files: VbDosSpectrumFile[], style: VbDosFigureStyle) {
     })
     if (style.showRegionLabels) {
       annotations.push({
-        x: (region.start + region.end) / 2,
-        y: 1.08 - (index % 2) * 0.075,
+        x: (region.start + region.end) / 2 + region.labelXShift,
+        y: region.labelYPaper,
         xref: 'x',
         yref: 'paper',
-        text: region.shortLabel,
+        text: formatItalicWords(region.shortLabel, region.italicWords),
         showarrow: false,
         align: 'center',
         font: { family: style.fontFamily, size: style.regionFontSize, color: '#334155' },
@@ -2917,8 +2954,8 @@ function buildVbDosFigure(files: VbDosSpectrumFile[], style: VbDosFigureStyle) {
     })
 
     annotations.push({
-      x: style.xLeft - 0.12,
-      y: offset + 0.82,
+      x: style.xRight + (style.xLeft - style.xRight) * clamp(file.sampleLabelXFraction, 0, 1),
+      y: offset + file.sampleLabelYOffset,
       xref: 'x',
       yref: 'y',
       text: `<b>${file.sampleLabel}</b>`,
@@ -3697,6 +3734,7 @@ export default function PlotFileTool({
   const [vbmStyle, setVbmStyle] = useState<VbmFigureStyle>(DEFAULT_VBM_STYLE)
   const [vbDosFiles, setVbDosFiles] = useState<VbDosSpectrumFile[]>([])
   const [vbDosStyle, setVbDosStyle] = useState<VbDosFigureStyle>(DEFAULT_VB_DOS_STYLE)
+  const [vbDosRegions, setVbDosRegions] = useState<VbDosAssignmentRegion[]>(() => VB_DOS_ASSIGNMENT_REGIONS.map(region => ({ ...region })))
   const [xasBandFiles, setXasBandFiles] = useState<XasBandEdgeFile[]>([])
   const [xasBandPairs, setXasBandPairs] = useState<XasBandPair[]>([])
   const [xasBandStyle, setXasBandStyle] = useState<XasBandFigureStyle>(DEFAULT_XAS_BAND_STYLE)
@@ -3763,7 +3801,7 @@ export default function PlotFileTool({
   }, [vbmFiles])
   const vbmStackedFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmStackedFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
   const vbmSummaryFigure = useMemo(() => vbmResults.results.length > 0 ? buildVbmSummaryFigure(vbmResults.results, vbmStyle) : null, [vbmResults.results, vbmStyle])
-  const vbDosFigure = useMemo(() => vbDosFiles.length > 0 ? buildVbDosFigure(vbDosFiles, vbDosStyle) : null, [vbDosFiles, vbDosStyle])
+  const vbDosFigure = useMemo(() => vbDosFiles.length > 0 ? buildVbDosFigure(vbDosFiles, vbDosStyle, vbDosRegions) : null, [vbDosFiles, vbDosStyle, vbDosRegions])
   const xasBandResults = useMemo(() => calculateXasBandPairs(xasBandFiles, xasBandPairs), [xasBandFiles, xasBandPairs])
   const xasBandFigure = useMemo(() => xasBandResults.results.length > 0 ? buildXasBandOverlayFigure(xasBandResults.results, xasBandStyle) : null, [xasBandResults.results, xasBandStyle])
   const activeRamanFile = useMemo(
@@ -3881,14 +3919,22 @@ export default function PlotFileTool({
     if (errors.length > 0) setError(errors.join('; '))
   }
 
-  const updateVbDosFile = (fileId: string, patch: Partial<Pick<VbDosSpectrumFile, 'sampleLabel' | 'color' | 'vbm'>>) => {
+  const updateVbDosFile = (fileId: string, patch: Partial<Pick<VbDosSpectrumFile, 'sampleLabel' | 'color' | 'vbm' | 'sampleLabelXFraction' | 'sampleLabelYOffset'>>) => {
     setVbDosFiles(current => current.map(file => {
       if (file.id !== fileId) return file
       const next = { ...file, ...patch }
-      if (patch.vbm !== undefined) next.peaks = recalcVbDosPeaks(file, patch.vbm)
+      if (patch.vbm !== undefined) next.peaks = recalcVbDosPeaks(file, patch.vbm, vbDosRegions)
       if (patch.sampleLabel !== undefined && patch.color === undefined) next.color = xpsSampleColor(patch.sampleLabel, current.findIndex(item => item.id === fileId))
       return next
     }))
+  }
+
+  const updateVbDosRegion = (regionId: string, patch: Partial<VbDosAssignmentRegion>) => {
+    setVbDosRegions(current => current.map(region => region.id === regionId ? { ...region, ...patch } : region))
+  }
+
+  const resetVbDosRegions = () => {
+    setVbDosRegions(VB_DOS_ASSIGNMENT_REGIONS.map(region => ({ ...region })))
   }
 
   const updateVbDosPeak = (fileId: string, peakId: string, patch: Partial<Pick<VbDosPeakAnnotation, 'label' | 'visible' | 'labelXShift' | 'labelYShift'>>) => {
@@ -4173,7 +4219,7 @@ export default function PlotFileTool({
       Sample: file.sampleLabel,
       Peak_position_BE_eV: peak.be.toFixed(6),
       Peak_position_relative_to_VBM_eV: peak.relEnergy.toFixed(6),
-      Preliminary_assignment: peak.assignment,
+      Preliminary_assignment: vbDosAssignmentForEnergy(peak.relEnergy, vbDosRegions),
     })))
     const headers = ['Sample', 'Peak_position_BE_eV', 'Peak_position_relative_to_VBM_eV', 'Preliminary_assignment']
     downloadTextFile(rowsToCsv(headers, rows), 'xps_vb_dos_detected_peaks.csv', 'text/csv;charset=utf-8')
@@ -5454,6 +5500,10 @@ export default function PlotFileTool({
                           <NumInput label="VBM (eV)" value={file.vbm} onChange={value => updateVbDosFile(file.id, { vbm: value })} step={0.01} />
                           <ColorInput label="線色" value={file.color || xpsSampleColor(file.sampleLabel, fileIndex)} onChange={value => updateVbDosFile(file.id, { color: value })} />
                         </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <NumInput label="名稱 X(0-1)" value={file.sampleLabelXFraction} onChange={value => updateVbDosFile(file.id, { sampleLabelXFraction: clamp(value, 0, 1) })} min={0} max={1} step={0.01} />
+                          <NumInput label="名稱 Y offset" value={file.sampleLabelYOffset} onChange={value => updateVbDosFile(file.id, { sampleLabelYOffset: clamp(value, -0.5, 2.5) })} min={-0.5} max={2.5} step={0.02} />
+                        </div>
                       </div>
                     ))}
                     <button type="button" onClick={() => setVbDosFiles([])} className="text-xs text-rose-400">清除全部</button>
@@ -5518,7 +5568,7 @@ export default function PlotFileTool({
               <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">pDOS/DFT 初步指認區域</p>
                 <div className="grid gap-2 md:grid-cols-2">
-                  {VB_DOS_ASSIGNMENT_REGIONS.map(region => (
+                  {vbDosRegions.map(region => (
                     <div key={region.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs leading-5 text-[var(--text-main)]">
                       <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ backgroundColor: region.color }} />
                       <span className="font-semibold">{region.start.toFixed(1)}-{region.end.toFixed(1)} eV below VBM</span>
@@ -5583,6 +5633,46 @@ export default function PlotFileTool({
                         className="accent-[var(--accent-secondary)]"
                       />
                     </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="analysis-section-card p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">區域名稱 / 顏色 / 位置</p>
+                  <button type="button" onClick={resetVbDosRegions} className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">重設</button>
+                </div>
+                <div className="space-y-3">
+                  {vbDosRegions.map(region => (
+                    <details key={region.id} open className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                      <summary className="cursor-pointer text-xs font-semibold text-[var(--text-main)]">
+                        <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ backgroundColor: region.color }} />
+                        {region.start.toFixed(1)}-{region.end.toFixed(1)} eV
+                      </summary>
+                      <div className="mt-3 space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="區域起點" value={region.start} onChange={value => updateVbDosRegion(region.id, { start: value })} step={0.1} />
+                          <NumInput label="區域終點" value={region.end} onChange={value => updateVbDosRegion(region.id, { end: value })} step={0.1} />
+                        </div>
+                        <ColorInput label="區域顏色" value={region.color} onChange={value => updateVbDosRegion(region.id, { color: value })} />
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">圖上區域名稱</span>
+                          <input value={region.shortLabel} onChange={event => updateVbDosRegion(region.id, { shortLabel: event.target.value })} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">完整區域名稱 / CSV 指認</span>
+                          <input value={region.label} onChange={event => updateVbDosRegion(region.id, { label: event.target.value })} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">斜體詞語</span>
+                          <input value={region.italicWords} onChange={event => updateVbDosRegion(region.id, { italicWords: event.target.value })} placeholder="以逗號分隔，如 O 2p, Ga 4p" className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="名稱 X 位移(eV)" value={region.labelXShift} onChange={value => updateVbDosRegion(region.id, { labelXShift: clamp(value, -5, 5) })} min={-5} max={5} step={0.05} />
+                          <NumInput label="名稱 Y(paper)" value={region.labelYPaper} onChange={value => updateVbDosRegion(region.id, { labelYPaper: clamp(value, 0.75, 1.3) })} min={0.75} max={1.3} step={0.005} />
+                        </div>
+                      </div>
+                    </details>
                   ))}
                 </div>
               </div>

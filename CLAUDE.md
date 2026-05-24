@@ -315,3 +315,9 @@ streamlit run app.py --server.port 8505
 - 檢查：嘗試執行 web/frontend 的 npm run build，但目前 shell 找不到 npm，未能進行前端建置。
 
 - 檢查：git diff --check 通過，僅顯示既有 LF/CRLF 提醒；再次確認 npm/node/本地 node_modules 目前不可用，因此仍無法執行前端 build。
+
+- 重要判斷：VB-DOS 區域由固定常數升級為可編輯 state；區域名稱斜體採用使用者輸入關鍵詞後自動套用 <i>...</i>，避免要求使用者直接寫 HTML。
+
+- 實作：VB-DOS 新增可調整 pDOS/DFT 區域顏色、區域起訖、圖上區域名稱、完整 CSV 指認名稱、區域名稱位置，以及指定詞語自動斜體；同時每筆樣品新增數據名稱 X/Y 位置控制。
+
+- 檢查：VB-DOS 區域/名稱位置調整功能完成後再次嘗試 npm run build，但目前 shell 仍找不到 npm；改以 git diff --check 驗證格式，僅有既有 LF/CRLF 提醒。
