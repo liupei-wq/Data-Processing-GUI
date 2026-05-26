@@ -2398,6 +2398,16 @@ export default function XPS({
     setOverlayRsfRows([])
   }
 
+  const openOverlaySelector = () => {
+    const fallbackSelection = overlaySelection.length >= 2 ? overlaySelection : rawFileKeys
+    const nextSelection = fallbackSelection.length >= 2 ? fallbackSelection : rawFileKeys.slice(0, 2)
+    setOverlayDraftSelection(nextSelection)
+    if (nextSelection.length >= 2) {
+      enterOverlayMode(nextSelection)
+    }
+    setOverlaySelectorOpen(true)
+  }
+
   const updateSingleSessionState = (patch: Partial<DatasetSessionState>) => {
     if (!activeDatasetKey || restoringSessionRef.current) return
     setDatasetSessions(prev => {
@@ -2929,6 +2939,8 @@ export default function XPS({
 
   const overlayHasPreprocess = overlayState.params.interpolate || overlayState.params.average || Math.abs(overlayState.params.energy_shift) > 1e-8
   const overlayAnyStageEnabled = overlayHasPreprocess || overlayState.params.bg_enabled || overlayState.params.valid_range_enabled || hasNormalizationStage
+  const hasImportedVbmWorkspaceData = xpsMode === 'valence_band' && vbmDataSource === 'imported' && !!importedVbmDataset
+  const hasXpsWorkspaceData = rawFiles.length > 0 || hasImportedVbmWorkspaceData
 
   const showRawSpectrumCard = processingViewMode === 'single'
     ? !hasPreprocessStage
@@ -3197,10 +3209,7 @@ export default function XPS({
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
-                            setProcessingViewMode('overlay')
-                            setOverlaySelectorOpen(true)
-                          }}
+                          onClick={openOverlaySelector}
                           className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${processingViewMode === 'overlay' ? 'bg-[var(--accent-strong)] text-white' : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]'}`}
                         >
                           疊圖
@@ -3210,7 +3219,7 @@ export default function XPS({
                         <>
                           <button
                             type="button"
-                            onClick={() => setOverlaySelectorOpen(true)}
+                            onClick={openOverlaySelector}
                             className="w-full rounded-lg border border-[var(--accent-soft)] py-1.5 text-xs text-[var(--accent-strong)] transition-colors hover:bg-[var(--accent-soft)]"
                           >
                             選擇疊圖資料（{overlaySelection.length} 筆）
@@ -4042,7 +4051,7 @@ export default function XPS({
           </div>
         )}
 
-        {xpsMode !== 'dft' && rawFiles.length === 0 && !isBusy && !(vbmDataSource === 'imported' && importedVbmDataset) && (
+        {xpsMode !== 'dft' && !hasXpsWorkspaceData && !isBusy && (
           <EmptyWorkspaceState
             module="xps"
             title={moduleContent.uploadTitle}
@@ -4051,7 +4060,7 @@ export default function XPS({
           />
         )}
 
-        {xpsMode !== 'dft' && (rawFiles.length > 0 || (vbmDataSource === 'imported' && !!importedVbmDataset)) && (
+        {xpsMode !== 'dft' && hasXpsWorkspaceData && (
           <>
             {rawChartTraces.length > 0 && showRawSpectrumCard && (
               <div className="analysis-section-card mb-4 p-4">
@@ -5004,8 +5013,7 @@ export default function XPS({
                     if (overlayDraftSelection.length >= 2) {
                       enterOverlayMode(overlayDraftSelection)
                     } else {
-                      setOverlaySelection(overlayDraftSelection)
-                      setProcessingViewMode('single')
+                      enterSingleMode(activeDatasetIdx)
                     }
                     setOverlaySelectorOpen(false)
                   }}

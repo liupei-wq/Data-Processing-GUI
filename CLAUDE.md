@@ -321,3 +321,31 @@ streamlit run app.py --server.port 8505
 - 實作：VB-DOS 新增可調整 pDOS/DFT 區域顏色、區域起訖、圖上區域名稱、完整 CSV 指認名稱、區域名稱位置，以及指定詞語自動斜體；同時每筆樣品新增數據名稱 X/Y 位置控制。
 
 - 檢查：VB-DOS 區域/名稱位置調整功能完成後再次嘗試 npm run build，但目前 shell 仍找不到 npm；改以 git diff --check 驗證格式，僅有既有 LF/CRLF 提醒。
+
+- 檢查：使用者回報 XPS 分析流程不順暢，開始檢視 XPS 前端流程、API 串接、圖卡條件渲染與建置狀態。
+
+- 檢查：前端建置嘗試未完成；從 web/frontend 以相對路徑寫入 CLAUDE.md 被拒絕，且目前 shell 找不到 npm，因此暫以靜態檢查與 git diff 檢查替代。
+
+- 重要判斷：XPS 多檔疊圖流程不順的主因之一是切換疊圖時會先進入 overlay 空狀態，若尚未套用或取消選擇，中央工作區容易變成無資料感；決定改為預設全選並在無有效選擇時回單筆。
+
+- 實作：調整 XPS 多檔疊圖切換流程，新增 openOverlaySelector；按疊圖時預設選取全部可用檔案並立即建立 overlay 狀態，套用少於 2 筆時改用 enterSingleMode 乾淨回到單筆，避免中央工作區空白。
+
+- 檢查：完成 XPS 疊圖流程調整後執行 git diff --check，確認 patch 格式與空白問題。
+
+- 檢查：執行 XPS 後端相關 Python 語法檢查，確認 routers/xps.py、core/parsers.py、core/peak_fitting.py 未受流程調整影響。
+
+- 檢查：沙盒內 python -m py_compile 因 Windows logon session 錯誤失敗，改用非沙盒重跑 XPS 後端語法檢查。
+
+- 檢查：確認目前 python/py 為 WindowsApps stub，改嘗試使用既有 uv 入口執行 XPS 後端 py_compile。
+
+- 檢查：uv run python -m py_compile 因 uv cache 權限失敗，改用非沙盒執行 XPS 後端語法檢查。
+
+- 檢查：XPS 疊圖流程調整與後端 py_compile 後，再次執行 git diff --check 與 git status 確認變更範圍。
+
+- 檢查：XPS 後端相關 py_compile 已以 uv run 在非沙盒通過；git diff --check 通過，僅有既有 LF/CRLF 提醒。前端 build 因目前 shell 找不到 npm/node 未執行。
+
+- 重要判斷：XPS 只匯入 VBM 已處理光譜後切回 Core Level 會因 imported VBM 被當作工作區資料而造成中央空白；決定將 imported VBM 資料可用性限定在 Valence Band 模式。
+
+- 實作：XPS 工作區資料判斷新增 hasImportedVbmWorkspaceData / hasXpsWorkspaceData，將 imported VBM 光譜只限定於 Valence Band 模式，避免 Core Level 無 raw file 時中央空白。
+
+- 檢查：完成 XPS 工作區資料判斷調整後，再次執行 git diff --check。
