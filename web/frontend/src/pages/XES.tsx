@@ -3,7 +3,7 @@ import { formatUtc8Iso } from '../utils/time'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { EmptyWorkspaceState, GuidedSidebarSection, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { parseFiles, processData } from '../api/xes'
@@ -400,37 +400,8 @@ function DualRangeInput({
 }
 
 // ── SidebarCard ───────────────────────────────────────────────────────────────
-function SidebarCard({ step, title, hint, children, defaultOpen = true, onOpen }: {
-  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
-  onOpen?: () => void
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  const handleToggle = () => {
-    const next = !open
-    setOpen(next)
-    if (next && onOpen) onOpen()
-  }
-  return (
-    <div className="analysis-section-card mb-3 overflow-hidden rounded-[22px] p-0">
-      <button
-        type="button"
-        onClick={handleToggle}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-            {step}
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
-            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
-          </div>
-        </div>
-        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
-      </button>
-      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
-    </div>
-  )
+function SidebarCard(props: Parameters<typeof GuidedSidebarSection>[0]) {
+  return <GuidedSidebarSection {...props} />
 }
 
 // ── label / input helpers ──────────────────────────────────────────────────────
@@ -576,6 +547,8 @@ export default function XES({
   const [bg1, setBg1] = useState<ParsedSpectrum | null>(null)
   const [bg2, setBg2] = useState<ParsedSpectrum | null>(null)
   const [parseErrors, setParseErrors] = useState<string[]>([])
+  const [sectionOpen, setSectionOpen] = useState<Record<number, boolean>>({ 1: true, 2: false })
+  const hasTriggeredFirstUploadRef = useRef(false)
 
   const [params, setParams] = useState<ProcessParams>(DEFAULT_PARAMS)
   const [processed, setProcessed] = useState<ProcessedDataset[]>([])
@@ -605,6 +578,18 @@ export default function XES({
   const [vbmBaselineHi, setVbmBaselineHi] = useState<number>(0)
   const [showVbmExportPreview, setShowVbmExportPreview] = useState(false)
   const vbmRangeInitKeyRef = useRef<string | null>(null)
+
+  const setStepOpen = (step: number, next: boolean) => {
+    setSectionOpen(prev => ({ ...prev, [step]: next }))
+  }
+
+  useEffect(() => {
+    if (hasTriggeredFirstUploadRef.current) return
+    if (sampleFiles.length > 0) {
+      hasTriggeredFirstUploadRef.current = true
+      setSectionOpen(prev => ({ ...prev, 1: false, 2: true }))
+    }
+  }, [sampleFiles.length])
 
   const handleUpload = async (files: File[]) => {
     setSampleFiles(files)
@@ -913,7 +898,14 @@ export default function XES({
               {xesMode === 'xes' && (
                 <>
                   {/* Step 1 */}
-                  <SidebarCard step={1} title="載入資料" hint="載入光譜、背景與能量校正檔">
+                  <SidebarCard
+                    step={1}
+                    title="載入資料"
+                    hint="載入光譜、背景與能量校正檔"
+                    status={sampleFiles.length > 0 || samples.length > 0 ? 'on' : 'off'}
+                    open={sectionOpen[1]}
+                    onOpenChange={next => setStepOpen(1, next)}
+                  >
                     <Label>Sample 光譜（可多選）</Label>
                     <FileUpload onFiles={handleUpload} moduleLabel="XES" />
                     <Label>背景檔案（可選）</Label>
@@ -948,7 +940,15 @@ export default function XES({
                   </SidebarCard>
 
                   {/* Step 2 */}
-                  <SidebarCard step={2} title="內插 / 多檔平均" hint="均勻網格內插與資料集平均" defaultOpen={false}>
+                  <SidebarCard
+                    step={2}
+                    title="內插 / 多檔平均"
+                    hint="均勻網格內插與資料集平均"
+                    defaultOpen={false}
+                    status={samples.length === 0 ? 'locked' : (params.interpolate || params.average ? 'on' : 'off')}
+                    open={sectionOpen[2]}
+                    onOpenChange={next => setStepOpen(2, next)}
+                  >
                     <TogglePill label="內插至均勻網格" checked={params.interpolate} onChange={v => p('interpolate', v)} />
                     {params.interpolate && (
                       <div className="mt-2">
@@ -962,7 +962,13 @@ export default function XES({
                   </SidebarCard>
 
                   {/* Step 3 — I0 正規化 */}
-                  <SidebarCard step={3} title="I0 正規化（每筆除以監視訊號）" hint="每筆強度除以監視訊號" defaultOpen={false}>
+                  <SidebarCard
+                    step={3}
+                    title="I0 正規化（每筆除以監視訊號）"
+                    hint="每筆強度除以監視訊號"
+                    defaultOpen={false}
+                    status={samples.length === 0 ? 'locked' : (Object.keys(params.i0_values).length > 0 ? 'on' : 'off')}
+                  >
                     <div className="text-xs leading-5 text-[var(--text-soft)]">
                       每行輸入：<code className="rounded px-1 py-0.5 bg-[var(--card-ghost)]">檔名,I0數值</code>，I0 值須為正數。
                       套用後各曲線原始強度會先除以對應 I0，再進行背景扣除與歸一化。
@@ -1004,7 +1010,13 @@ export default function XES({
                   </SidebarCard>
 
                   {/* Step 4 — X 軸校正 */}
-                  <SidebarCard step={4} title="X 軸校正（pixel → eV）" hint="能量校正：pixel 轉 eV" defaultOpen={false}>
+                  <SidebarCard
+                    step={4}
+                    title="X 軸校正（pixel → eV）"
+                    hint="能量校正：pixel 轉 eV"
+                    defaultOpen={false}
+                    status={samples.length === 0 ? 'locked' : (energyCalibrated ? 'on' : 'off')}
+                  >
                     <Label>校正狀態</Label>
                     <Select
                       value={params.axis_calibration === 'table' ? 'table' : 'none'}
@@ -1050,7 +1062,13 @@ export default function XES({
                   </SidebarCard>
 
                   {/* Step 5 — 背景扣除 */}
-                  <SidebarCard step={5} title="背景扣除" hint="扣除對應背景檔案" defaultOpen={false}>
+                  <SidebarCard
+                    step={5}
+                    title="背景扣除"
+                    hint="扣除對應背景檔案"
+                    defaultOpen={false}
+                    status={samples.length === 0 ? 'locked' : (params.bg_method !== 'none' ? 'on' : 'off')}
+                  >
                     <Label>扣除方式</Label>
                     <Select value={params.bg_method} onChange={e => p('bg_method', e.target.value)}>
                       <option value="none">不扣除</option>
@@ -1062,7 +1080,13 @@ export default function XES({
                   </SidebarCard>
 
                   {/* Step 6 — 歸一化 */}
-                  <SidebarCard step={6} title="歸一化" hint="歸一化數據範圍" defaultOpen={false}>
+                  <SidebarCard
+                    step={6}
+                    title="歸一化"
+                    hint="歸一化數據範圍"
+                    defaultOpen={false}
+                    status={samples.length === 0 ? 'locked' : (params.norm_method !== 'none' ? 'on' : 'off')}
+                  >
                     <Label>歸一化方式</Label>
                     <Select value={params.norm_method} onChange={e => p('norm_method', e.target.value as ProcessParams['norm_method'])}>
                       <option value="none">不歸一化</option>
@@ -1082,7 +1106,13 @@ export default function XES({
                   </SidebarCard>
 
                   {/* Step 7 — 能帶對齊 */}
-                  <SidebarCard step={7} title="能帶對齊（XES/XAS）" hint="計算異質結價帶/導帶偏置" defaultOpen={false}>
+                  <SidebarCard
+                    step={7}
+                    title="能帶對齊（XES/XAS）"
+                    hint="計算異質結價帶/導帶偏置"
+                    defaultOpen={false}
+                    status={bandParams.enabled && bandResult ? 'on' : 'off'}
+                  >
                     <TogglePill label="啟用能帶對齊計算" checked={bandParams.enabled} onChange={v => bp('enabled', v)} />
                     {bandParams.enabled && (
                       <div className="mt-2 space-y-2 text-sm">
@@ -1123,7 +1153,12 @@ export default function XES({
               {xesMode === 'valence_band' && (
                 <>
                   {/* Step 1: 資料來源 */}
-                  <SidebarCard step={1} title="資料來源" hint="選擇或匯入價帶光譜數據">
+                  <SidebarCard
+                    step={1}
+                    title="資料來源"
+                    hint="選擇或匯入價帶光譜數據"
+                    status={vbmSpectrum ? 'on' : 'off'}
+                  >
                     <Label>資料來源模式</Label>
                     <Select
                       value={vbmDataSource}
@@ -1199,7 +1234,12 @@ export default function XES({
                   </SidebarCard>
 
                   {/* Step 2: VBM 線性外推設定 */}
-                  <SidebarCard step={2} title="VBM 線性外推" hint="設定切線與基準線區間">
+                  <SidebarCard
+                    step={2}
+                    title="VBM 線性外推"
+                    hint="設定切線與基準線區間"
+                    status={!vbmSpectrum ? 'locked' : (vbmIntersect ? 'on' : 'off')}
+                  >
                     {vbmSpectrum ? (
                       <div className="space-y-3">
                         <div className="grid grid-cols-2 gap-2">

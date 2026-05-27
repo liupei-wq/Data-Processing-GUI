@@ -775,6 +775,137 @@ export function GlassSection({
   )
 }
 
+export type GuidedSidebarSectionStatus = 'on' | 'off' | 'locked'
+
+export function GuidedSidebarSection({
+  step,
+  title,
+  hint,
+  children,
+  defaultOpen = true,
+  infoContent,
+  status,
+  open: controlledOpen,
+  onOpenChange,
+  onOpen,
+}: {
+  step: number
+  title: string
+  hint?: string
+  children: ReactNode
+  defaultOpen?: boolean
+  infoContent?: ReactNode
+  status?: GuidedSidebarSectionStatus
+  open?: boolean
+  onOpenChange?: (next: boolean) => void
+  onOpen?: () => void
+}) {
+  const [internalOpen, setInternalOpen] = useState(defaultOpen)
+  const open = controlledOpen ?? internalOpen
+  const [infoOpen, setInfoOpen] = useState(false)
+
+  const setOpen = (updater: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof updater === 'function' ? updater(open) : updater
+    if (onOpenChange) onOpenChange(next)
+    else setInternalOpen(next)
+    if (next && !open) onOpen?.()
+  }
+
+  useEffect(() => {
+    if (!infoOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setInfoOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [infoOpen])
+
+  const infoModal = infoOpen && infoContent && typeof document !== 'undefined'
+    ? createPortal(
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-[3px]"
+          onClick={() => setInfoOpen(false)}
+        >
+          <div
+            className="glass-panel max-h-[min(84vh,calc(100vh-3rem))] w-full max-w-2xl overflow-hidden rounded-[30px]"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--card-divider)] px-5 py-4">
+              <div>
+                <p className="text-base font-semibold text-[var(--text-main)]">{title}說明</p>
+                {hint && <p className="mt-1 text-sm text-[var(--text-soft)]">{hint}</p>}
+              </div>
+              <button
+                type="button"
+                onClick={() => setInfoOpen(false)}
+                className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable"
+              >
+                關閉
+              </button>
+            </div>
+            <div className="overflow-y-auto px-5 py-5 text-[15px] leading-7 text-[var(--text-soft)] sm:px-6 sm:text-base sm:leading-8">
+              {infoContent}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null
+
+  return (
+    <>
+      <div className="sidebar-stage-card step-card mb-3 overflow-hidden rounded-[24px]">
+        <div className="flex items-center">
+          <button
+            type="button"
+            onClick={() => setOpen(current => !current)}
+            className="step-header flex flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <span className={[
+                'step-number relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors',
+                status === 'locked'
+                  ? 'bg-[var(--card-ghost)] text-[var(--text-soft)] opacity-50'
+                  : 'bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-[var(--accent-tertiary)]',
+              ].join(' ')}>
+                {step}
+                {status === 'on' && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-emerald-400 ring-2 ring-[var(--panel-bg)]" aria-hidden />
+                )}
+                {status === 'off' && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full border border-[var(--text-soft)]/60 bg-transparent ring-2 ring-[var(--panel-bg)]" aria-hidden />
+                )}
+              </span>
+              <div className="min-w-0">
+                <div className="step-title truncate text-base font-semibold text-[var(--text-main)]">{title}</div>
+                {hint && <div className="step-subtitle mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
+              </div>
+            </div>
+            <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '-' : '+'}</span>
+          </button>
+          {infoContent && (
+            <button
+              type="button"
+              onClick={() => setInfoOpen(true)}
+              title="查看方法說明"
+              className={[
+                'mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition-colors',
+                infoOpen
+                  ? 'border-[var(--accent-secondary)] bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
+                  : 'border-[var(--card-border)] text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)]',
+              ].join(' ')}
+            >
+              ?
+            </button>
+          )}
+        </div>
+        {open && <div className="step-content space-y-3 p-4 pt-2">{children}</div>}
+      </div>
+      {infoModal}
+    </>
+  )
+}
+
 function ModuleTabs({ activeModule, onSelect }: { activeModule: AnalysisModuleId; onSelect?: (m: AnalysisModuleId) => void }) {
   return (
     <div className="module-tabs" role="tablist" aria-label="分析模組切換">

@@ -3,7 +3,7 @@ import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { formatUtc8Iso } from '../utils/time'
 import FileUpload from '../components/FileUpload'
-import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { EmptyWorkspaceState, GuidedSidebarSection, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest, PlotPopupUpdate } from '../hooks/usePlotPopups'
 import { downloadFitReport, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
@@ -525,34 +525,8 @@ function downloadFile(content: string, name: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-function Section({ step, title, hint, children, defaultOpen = true, onOpen }: {
-  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean
-  onOpen?: () => void
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  const handleToggle = () => {
-    const next = !open
-    setOpen(next)
-    if (next && onOpen) onOpen()
-  }
-  return (
-    <div className="analysis-section-card mb-3 overflow-hidden rounded-[22px] p-0">
-      <button type="button" onClick={handleToggle}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-            {step}
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
-            {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
-          </div>
-        </div>
-        <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
-      </button>
-      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
-    </div>
-  )
+function Section(props: Parameters<typeof GuidedSidebarSection>[0]) {
+  return <GuidedSidebarSection {...props} />
 }
 
 function NumInput({ label, value, onChange, min, max, step = 1, disabled = false }: {
@@ -972,6 +946,8 @@ export default function XAS({
   const [showWhiteLineMarkers, setShowWhiteLineMarkers] = useState(true)
   const [whiteLineEnabled, setWhiteLineEnabled] = useState(false)
   const [autoInterpPoints, setAutoInterpPoints] = useState(true)
+  const [sectionOpen, setSectionOpen] = useState<Record<number, boolean>>({ 1: true, 2: false })
+  const hasTriggeredFirstUploadRef = useRef(false)
   const [viewMode, setViewMode] = useState<'single' | 'overlay'>('single')
   const [overlaySelectedNames, setOverlaySelectedNames] = useState<string[]>([])
   const [showOverlayModal, setShowOverlayModal] = useState(false)
@@ -1019,6 +995,18 @@ export default function XAS({
   const [showCbmExportPreview, setShowCbmExportPreview] = useState(false)
   const cbmRangeInitKeyRef = useRef<string | null>(null)
 
+
+  const setStepOpen = (step: number, next: boolean) => {
+    setSectionOpen(prev => ({ ...prev, [step]: next }))
+  }
+
+  useEffect(() => {
+    if (hasTriggeredFirstUploadRef.current) return
+    if (rawFiles.length > 0) {
+      hasTriggeredFirstUploadRef.current = true
+      setSectionOpen(prev => ({ ...prev, 1: false, 2: true }))
+    }
+  }, [rawFiles.length])
 
   const isOverlayMode = viewMode === 'overlay'
   const clampedIdx = Math.min(selectedSingleIdx, Math.max(0, (result?.datasets.length ?? 1) - 1))
@@ -2048,7 +2036,14 @@ export default function XAS({
               <div className="px-4 pt-4">
               {xasMode === 'xas' && (<>
               {/* 1. 載入 */}
-              <Section step={1} title="載入資料" hint="DAT / XMU / NOR / TXT">
+              <Section
+                step={1}
+                title="載入資料"
+                hint="DAT / XMU / NOR / TXT"
+                status={rawFiles.length > 0 ? 'on' : 'off'}
+                open={sectionOpen[1]}
+                onOpenChange={next => setStepOpen(1, next)}
+              >
                 <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor', '.xlsx', '.xls']} />
                 <CheckRow label="TFY 使用 1 − TFY 翻轉" checked={flipTfy} onChange={v => { setFlipTfy(v); setRawFiles([]) }} />
                 {rawFiles.length > 0 && (
@@ -2103,7 +2098,15 @@ export default function XAS({
               </Section>
 
               {/* 2. 內插與資料模式 */}
-              <Section step={2} title="內插 / 資料模式" hint="多檔：單筆 / 疊圖 / 平均" defaultOpen={false}>
+              <Section
+                step={2}
+                title="內插 / 資料模式"
+                hint="多檔：單筆 / 疊圖 / 平均"
+                defaultOpen={false}
+                status={rawFiles.length === 0 ? 'locked' : (params.interpolate || viewMode === 'overlay' || params.average ? 'on' : 'off')}
+                open={sectionOpen[2]}
+                onOpenChange={next => setStepOpen(2, next)}
+              >
                 <TogglePill label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
                 {params.interpolate && (
                   <>
@@ -2225,13 +2228,25 @@ export default function XAS({
               </Section>
 
               {/* 3. 能量校正 */}
-              <Section step={3} title="能量校正" hint="校正能量軸零點" defaultOpen={false}>
+              <Section
+                step={3}
+                title="能量校正"
+                hint="校正能量軸零點"
+                defaultOpen={false}
+                status={rawFiles.length === 0 ? 'locked' : (Math.abs(params.energy_shift) > 0 ? 'on' : 'off')}
+              >
                 <NumInput label="能量位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
                 <p className="text-[10px] text-[var(--text-soft)]">正值向高能方向移，負值向低能移。</p>
               </Section>
 
               {/* 4. 歸一化 */}
-              <Section step={4} title="歸一化" hint="Athena Norm / Post-edge Step" defaultOpen={false}>
+              <Section
+                step={4}
+                title="歸一化"
+                hint="Athena Norm / Post-edge Step"
+                defaultOpen={false}
+                status={rawFiles.length === 0 ? 'locked' : (params.norm_method !== 'none' ? 'on' : 'off')}
+              >
                 <TogglePill
                   label="啟用歸一化"
                   checked={params.norm_method !== 'none'}
@@ -2322,7 +2337,13 @@ export default function XAS({
               </Section>
 
               {/* 5. White Line */}
-              <Section step={5} title="White Line 搜尋" hint="自動找最高點能量" defaultOpen={false}>
+              <Section
+                step={5}
+                title="White Line 搜尋"
+                hint="自動找最高點能量"
+                defaultOpen={false}
+                status={rawFiles.length === 0 ? 'locked' : (whiteLineEnabled ? 'on' : 'off')}
+              >
                 <TogglePill label="啟用 White Line 搜尋" checked={whiteLineEnabled} onChange={setWhiteLineEnabled} />
                 {whiteLineEnabled && (
                   <>
@@ -2798,7 +2819,12 @@ export default function XAS({
               {xasMode === 'conduction_band' && (<>
 
               {/* CBM Step 1: 資料來源與歸一化 */}
-              <Section step={1} title="資料來源 / 歸一化" hint="Min-Max 歸一化 → y ∈ [0, 1]">
+              <Section
+                step={1}
+                title="資料來源 / 歸一化"
+                hint="Min-Max 歸一化 → y ∈ [0, 1]"
+                status={effectiveCbmDataset ? 'on' : 'off'}
+              >
                 {/* Data source toggle */}
                 <div className="flex overflow-hidden rounded-xl border border-[var(--card-border)]">
                   {(['pipeline', 'imported'] as const).map((s, i) => (
@@ -2875,7 +2901,13 @@ export default function XAS({
               </Section>
 
               {/* CBM Step 2: CBM 線性外推 */}
-              <Section step={2} title="CBM 線性外推" hint="切線 × 基準線交點 → CBM" defaultOpen={true}>
+              <Section
+                step={2}
+                title="CBM 線性外推"
+                hint="切線 × 基準線交點 → CBM"
+                defaultOpen={true}
+                status={!effectiveCbmDataset ? 'locked' : (cbmPreviewCbm !== null ? 'on' : 'off')}
+              >
                 {!effectiveCbmDataset ? (
                   <p className="text-xs text-[var(--text-soft)]">請先在步驟 1 設定資料來源。</p>
                 ) : (

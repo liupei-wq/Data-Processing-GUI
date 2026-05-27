@@ -1,5 +1,7 @@
 # Nigiro Pro 協作手冊（精簡版）
 
+- 2026-05-27：重作先前遺失的導引式左側步驟流程。新增共用 `GuidedSidebarSection` 到 `web/frontend/src/components/WorkspaceUi.tsx`，支援狀態點、受控展開/收合、說明彈窗，以及 `onOpenChange`。XPS、XAS、XES 改接此共用元件；XPS/XAS/XES 的 Step 1 在首次載入資料後會自動收合並打開 Step 2，並依各分析步驟狀態顯示 on/off/locked。驗證：`npm run build` 通過，`git diff --check` 僅有既有 LF/CRLF 轉換提示；本機瀏覽器工具回報 `iab` 不可用，未做視覺截圖驗證。
+
 最後整理：2026-05-24
 
 > 這份 `CLAUDE.md` 是本專案的短版協作手冊。請只保留仍有效的規則、重要狀態、近期 1～2 週的功能摘要與精簡動作紀錄；避免重新累積逐步流水帳。
@@ -161,6 +163,37 @@ streamlit run app.py --server.port 8505
 - 若環境缺少 `npm` / `node`，在紀錄中明確註明「未能執行 build」。
 
 ## 精簡動作紀錄
+
+### 2026-05-27（續）
+
+- XPS 背景扣除與歸一化「啟用即套用」改為「請先選擇方法」：使用者反映「啟動後直接套用裡面的方法，後續切換方法時可能會有 bug」。改動：① 新增 `bgMethodAwaiting`、`normMethodAwaiting` 兩個 state；② 包裝 `handleBgEnabledToggle`（toggle ON 只設 awaiting=true、不動 `bg_enabled`；OFF 才真的關）+ `handlePickBgMethod`（使用者真的從下拉選方法時，才 set `bg_method` + `bg_enabled=true`）；歸一化同樣加 `handlePickNormMethod`、改寫 `setNormalizationEnabled`（之前會自動套用 ref 最後一次方法）。③ UI：TogglePill 視 `enabled || awaiting` 為 checked；方法下拉在 awaiting 時值為 `''` 並多一個首選項 `— 請先選擇方法 —`；起始/結束 BE、多項式次數、Tougaard B/C、norm 區間滑桿等其他欄位都改為「實際選好方法後才出現」，未選方法時改為虛線提示卡。這樣使用者按 Toggle 開啟後不會直接觸發某個 default 方法的處理流程，徹底解掉「方法切換時跳跳」的根因。後端演算法本身（Linear / Tougaard / Polynomial / AsLS / airPLS）尚未動，等使用者確認 UX 後再針對最常用的方法做穩定性優化。前端 `npm run build` 通過 0 錯誤。
+
+- 「論文風格」更名為「📄 標記點視圖 (Markers View)」：使用者反映 label 太口語化，換成 CasaXPS 等專業軟體的標準用詞「Markers View」。涉及 5 處按鈕 label、5 處 `title` hover 提示、5 處卡內描述段落（4338/4339、4502、4619、4746、4818），描述也把「散點」改為「標記點」、「符合 paper 中常見的表示方式」改為「期刊圖說常見格式」。背景扣除 / 歸一化 / 峰擬合 三類卡片共 5 個按鈕全部統一。前端 `npm run build` 通過 0 錯誤。
+
+- 「📄 論文風格」toggle 擴大套用到 XPS 歸一化與峰擬合卡：① 新增 `normPaperMode` 與 `fitPaperMode` state；② 修改 `buildFitTraces(dataset, fitResult, paletteKey, paperMode=false)` 新增第四個參數，paperMode 時把擬合輸入由 line 改為 markers + 主擬合/組件線寬略加粗（殘差仍 dot 線），其他擬合計算完全不變；③ 新增 `buildOverlayNormPaperTraces`（多檔：對應 input 散點 yaxis='y2' + output 實線）；single 模式則直接從既有 `normalizationChartTraces` 取出歸一化前/後兩條 traces inline 轉換為散點+線；④ overlay 歸一化、single 歸一化、峰擬合三張卡都加上「📄 論文風格」toggle 按鈕（位置：右卡標題列、放在 PairCardChromeButtons 旁邊；峰擬合卡在標題與描述之間）；⑤ 論文風格切換為純視覺，不影響擬合計算或歸一化處理流程，使用者切過去後總擬合 / 各峰組件 / 殘差 / 參數表全部保持原狀。前端 `npm run build` 通過 0 錯誤。
+
+- XPS 能量校正二次確認 modal + Valence Band 模式精簡步驟：
+  ① 能量校正：新增 `calibrationConfirmOpen` state 與 `requestAutoCalibration` 包裝。第一次按「計算偏移並套用」直接執行；已成功一次後（`calibrationResult?.success`）再按 → 彈確認 modal 提示「再次校正會把偏移量累加」，按鈕文字也會從「計算偏移並套用」改成「再次校正 (累加偏移)」，避免使用者誤連按造成 BE 校正過頭。
+  ② Valence Band 模式步驟精簡：根據使用者「VB 只留下內插/能量校正/有效範圍/歸一化/VBM 外推/能帶偏移」要求，在 `XPS.tsx` 中：背景扣除（原 step 4）與峰擬合（原 step 7）以 `xpsMode !== 'valence_band'` 包住整段隱藏；有效數據範圍（原 step 5 → VB step 4）、歸一化（原 step 6 → VB step 5）、VBM 線性外推（原 step 8 → VB step 6）、能帶偏移（原 step 9 → VB step 7）改為條件 step number `step={xpsMode === 'valence_band' ? X : Y}`。Core Level 模式維持原來的 step 編號 1~9。
+  前端 `npm run build` 通過 0 錯誤。
+
+### 2026-05-27（重做）
+
+- 盤點先前工作：使用者反映「歸一化沒有像背景扣除一樣有左右拖拉伸縮」。檢查後確認 v33.9 的 GuidedSidebarSection 重構意外砍掉了：① 共用元件 `web/frontend/src/components/SortableCardGrid.tsx`；② XPS.tsx 中 4 對 sortable pair cards 的接線。**XRD 完整保留**（XRD 用內部 dnd-kit 沒透過共用元件、未受影響：beautify Step 8、exportPreview 統一預覽、refMarkerLabelSize、5 分類側欄、衍生計算 Step 9~11、Tier 1 演算法、offset useEffect、漸進式引導等全在）。**XES/XAS 其他特性**（VBM 線性外推、Conduction Band 等）也都在。
+- 重建 `SortableCardGrid.tsx` 共用元件（功能等同先前版本：items array、可選 storageKey、selectedId 受控、render prop ctx 含 attributes/listeners/activatorRef/wide/onToggleWide/sortingGhost/overlay，內部 dnd-kit + DragOverlay + 半透明 ghost + 拖曳取消還原）。
+- 重新把 XPS 4 對「左右並排對卡」接上 `SortableCardGrid`：① overlay 背景扣除（含論文風格 toggle）② overlay 歸一化 ③ single 背景扣除（含論文風格 toggle）④ single 歸一化。每對用 `items={PAIR_ITEMS}` 與獨立 `storageKey` (`xps-pair-bg-overlay / xps-pair-norm-overlay / xps-pair-bg-single / xps-pair-norm-single`)。每張卡新增右上角 `⤡/⤢ 拉寬 + ↕ 拖曳手柄`（`PairCardChromeButtons` 共用 helper），左卡透過 `ChartToolbar.actions` slot 注入、右卡直接放在原本的標題列 flex 內（論文風格 toggle 旁邊）。前端 `npm run build` 通過 0 錯誤。
+
+### 2026-05-22（重建）
+
+- 由於使用者誤刪檔案、先前改動消失，依對話紀錄全部重做 XPS 背景扣除 / 歸一化 / 最終光譜卡片相關改動：
+  1. **`buildMainTraces`** 新增 `showProcessed: boolean = true` 參數，並在 `renderFinalChart` 內強制傳入 `true` 避免空圖 bug。
+  2. **`buildOverlayBackgroundTracesWithSeriesColors`** 新增 `showAfter: boolean = true` 參數。
+  3. 新增兩個 helper：`buildSinglePaperStyleTraces`、`buildOverlayPaperStyleTraces`（原始光譜散點 + Shirley 基線實線，符合 paper 慣用呈現）。
+  4. 新增 `bgPaperMode` state。
+  5. **背景扣除步驟（single / overlay 兩模式）** 改為「左右並排」：左卡顯示原始 + Shirley 基線（保留線色與 SeriesColorControls），右卡顯示扣背景後乾淨光譜；右卡右上角有 `📄 論文風格` toggle，啟用後切換為散點 + 實線基線。範圍滑桿與 CSV 匯出移到右卡底部（兩卡共用同一條背景區間 state）。標題統一為「背景扣除」，右卡移除重複的線色選擇器（與左卡同步顯示反而誤導）。
+  6. **歸一化步驟（single / overlay 兩模式）** 同樣改為「左右並排」：左卡顯示歸一化前（保留線色與 SeriesColorControls），右卡顯示歸一化後。範圍滑桿與 CSV 匯出移到右卡底部。標題統一為「歸一化」，右卡移除重複線色選擇器。
+  7. **最終處理光譜圖卡** 整段刪除（各階段卡片已能各自輸出 paper 圖）。保留 `renderFinalChart` 與 `openFinalChartPopup` 函式定義（避免破壞他處引用）。
+- 因 `node_modules` 隨檔案被刪一併消失，重跑 `npm install` 後 `npm run build` 順利通過 0 TypeScript 錯誤。
 
 ### 2026-05-24
 

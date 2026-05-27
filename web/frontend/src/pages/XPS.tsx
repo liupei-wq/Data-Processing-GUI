@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Plot from '../components/PlotlyChart'
+import { SortableCardGrid, type SortableCardContext } from '../components/SortableCardGrid'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { ANALYSIS_MODULES } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { EmptyWorkspaceState, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { EmptyWorkspaceState, GuidedSidebarSection, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { calibrateEnergy, downloadXpsFitReport, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
@@ -461,7 +462,7 @@ function chartLayout(xReversed = true, yAxisTitle = 'Intensity (a.u.)', secondar
   return layout
 }
 
-function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean, paletteKey: string, processedYAxis: 'y' | 'y2' = 'y'): Plotly.Data[] {
+function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: boolean, paletteKey: string, processedYAxis: 'y' | 'y2' = 'y', showProcessed: boolean = true): Plotly.Data[] {
   const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
   const traces: Plotly.Data[] = []
   if (showRaw) {
@@ -470,22 +471,28 @@ function buildMainTraces(dataset: ProcessedDataset, showRaw: boolean, showBg: bo
   if (showBg && dataset.y_background) {
     traces.push({ x: dataset.x, y: dataset.y_background, type: 'scatter', mode: 'lines', name: '背景', line: { color: palette.tertiary, width: 1.3, dash: 'dot' } })
   }
-  traces.push({ x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: palette.primary, width: 2.0 }, yaxis: processedYAxis })
+  if (showProcessed) {
+    traces.push({ x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '處理後', line: { color: palette.primary, width: 2.0 }, yaxis: processedYAxis })
+  }
   return traces
 }
 
-function buildFitTraces(dataset: ProcessedDataset, fitResult: FitResult, paletteKey: string): Plotly.Data[] {
+function buildFitTraces(dataset: ProcessedDataset, fitResult: FitResult, paletteKey: string, paperMode: boolean = false): Plotly.Data[] {
   const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+  // 論文風格：raw 輸入用散點呈現，擬合線維持實線；殘差以較淡點線疊在底部
+  const inputTrace: Plotly.Data = paperMode
+    ? { x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'markers', name: '擬合輸入', marker: { color: palette.secondary, size: 3.5, symbol: 'circle' } }
+    : { x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '擬合輸入', line: { color: palette.secondary, width: 1.4 } }
   const traces: Plotly.Data[] = [
-    { x: dataset.x, y: dataset.y_processed, type: 'scatter', mode: 'lines', name: '擬合輸入', line: { color: palette.secondary, width: 1.4 } },
-    { x: dataset.x, y: fitResult.y_fit, type: 'scatter', mode: 'lines', name: '總擬合', line: { color: palette.primary, width: 2.2 } },
+    inputTrace,
+    { x: dataset.x, y: fitResult.y_fit, type: 'scatter', mode: 'lines', name: '總擬合', line: { color: palette.primary, width: paperMode ? 2.6 : 2.2 } },
     { x: dataset.x, y: fitResult.residuals, type: 'scatter', mode: 'lines', name: '殘差', line: { color: palette.tertiary, width: 1.2, dash: 'dot' }, opacity: 0.7 },
   ]
   fitResult.y_individual.forEach((yLine, idx) => {
     const pk = fitResult.peaks[idx]
     traces.push({
       x: dataset.x, y: yLine, type: 'scatter', mode: 'lines',
-      name: pk?.Peak_Name || `Peak ${idx + 1}`, line: { width: 1.3, color: palette.series[idx % palette.series.length] }, opacity: 0.8,
+      name: pk?.Peak_Name || `Peak ${idx + 1}`, line: { width: paperMode ? 1.6 : 1.3, color: palette.series[idx % palette.series.length] }, opacity: 0.8,
     })
   })
   return traces
@@ -493,92 +500,8 @@ function buildFitTraces(dataset: ProcessedDataset, fitResult: FitResult, palette
 
 // ── small UI pieces ───────────────────────────────────────────────────────────
 
-function Section({ step, title, hint, children, defaultOpen = true, infoContent }: {
-  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean; infoContent?: React.ReactNode
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  const [infoOpen, setInfoOpen] = useState(false)
-
-  useEffect(() => {
-    if (!infoOpen) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setInfoOpen(false)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [infoOpen])
-
-  const infoModal = infoOpen && infoContent && typeof document !== 'undefined'
-    ? createPortal(
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-[3px]"
-          onClick={() => setInfoOpen(false)}
-        >
-          <div
-            className="glass-panel max-h-[min(84vh,calc(100vh-3rem))] w-full max-w-2xl overflow-hidden rounded-[30px]"
-            onClick={event => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-4 border-b border-[var(--card-divider)] px-5 py-4">
-              <div>
-                <p className="text-base font-semibold text-[var(--text-main)]">{title}說明</p>
-                {hint && <p className="mt-1 text-sm text-[var(--text-soft)]">{hint}</p>}
-              </div>
-              <button
-                type="button"
-                onClick={() => setInfoOpen(false)}
-                className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable"
-              >
-                關閉
-              </button>
-            </div>
-            <div className="overflow-y-auto px-5 py-5 text-[15px] leading-7 text-[var(--text-soft)] sm:px-6 sm:text-base sm:leading-8">
-              {infoContent}
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )
-    : null
-
-  return (
-    <>
-    <div className="sidebar-stage-card mb-3 overflow-hidden rounded-[24px]">
-      <div className="flex items-center">
-        <button
-          type="button"
-          onClick={() => setOpen(o => !o)}
-          className="flex flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
-        >
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-sm font-semibold text-[var(--accent-tertiary)]">
-              {step}
-            </span>
-            <div className="min-w-0">
-              <div className="truncate text-base font-semibold text-[var(--text-muted)]">{title}</div>
-              {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
-            </div>
-          </div>
-          <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
-        </button>
-        {infoContent && (
-          <button
-            type="button"
-            onClick={() => setInfoOpen(true)}
-            title="查看方法說明"
-            className={[
-              'mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition-colors',
-              infoOpen
-                ? 'border-[var(--accent-secondary)] bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
-                : 'border-[var(--card-border)] text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)]',
-            ].join(' ')}
-          >?</button>
-        )}
-      </div>
-      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
-    </div>
-    {infoModal}
-    </>
-  )
+function Section(props: Parameters<typeof GuidedSidebarSection>[0]) {
+  return <GuidedSidebarSection {...props} />
 }
 
 function NumInput({ label, value, onChange, min, max, step = 1, disabled = false }: {
@@ -913,6 +836,46 @@ function ChartToolbar({
     </div>
   )
 }
+
+/** 左右並排對卡專用：右上角的拖曳手柄 + 拉寬/縮回切換 */
+function PairCardChromeButtons({ ctx }: { ctx: SortableCardContext<{ id: string }> }) {
+  if (ctx.overlay) {
+    return (
+      <span className="rounded-lg border border-[var(--accent-strong)]/35 bg-[var(--accent-strong)]/10 px-2 py-1 text-[10px] font-bold text-[var(--accent-strong)]">
+        拖曳中
+      </span>
+    )
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); ctx.onToggleWide() }}
+        className={[
+          'flex h-7 items-center gap-1 rounded-lg border px-2 text-[10px] font-semibold transition-colors pressable',
+          ctx.wide
+            ? 'border-[var(--accent-strong)]/45 bg-[var(--accent-strong)]/10 text-[var(--accent-strong)] hover:bg-[var(--accent-strong)]/15'
+            : 'border-[var(--card-border)] bg-[var(--card-ghost)] text-[var(--text-soft)] hover:border-[var(--accent-strong)]/50 hover:text-[var(--text-main)]',
+        ].join(' ')}
+        title={ctx.wide ? '縮回半寬' : '拉寬為整列'}
+      >
+        {ctx.wide ? '⤡' : '⤢'}
+      </button>
+      <button
+        ref={ctx.activatorRef}
+        type="button"
+        className="flex h-7 w-7 cursor-grab touch-none items-center justify-center rounded-lg border border-[var(--card-border)] bg-[var(--card-ghost)] text-sm font-bold text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] active:cursor-grabbing pressable"
+        title="拖曳交換左右"
+        {...ctx.attributes}
+        {...(ctx.listeners as any)}
+      >
+        ↕
+      </button>
+    </div>
+  )
+}
+
+const PAIR_ITEMS = [{ id: 'left' as const }, { id: 'right' as const }]
 
 function SeriesColorControls({
   items,
@@ -1557,11 +1520,103 @@ function getOverlayProcessedStageDatasets(stage: ProcessResult | null | undefine
   return stage.datasets
 }
 
+// 論文風格背景扣除預覽：原始 (raw input) 以散點呈現、Shirley/Tougaard 基線以實線疊加。
+function buildSinglePaperStyleTraces(
+  rawInput: ProcessedDataset | null,
+  bgResult: ProcessedDataset | null,
+  paletteKey: string,
+): Plotly.Data[] {
+  if (!rawInput || !bgResult?.y_background) return []
+  const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.orange
+  return [
+    {
+      x: rawInput.x,
+      y: rawInput.y_processed,
+      type: 'scatter',
+      mode: 'markers',
+      name: '原始光譜',
+      marker: { color: palette.secondary, size: 4, symbol: 'circle' },
+    },
+    {
+      x: bgResult.x,
+      y: bgResult.y_background,
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Shirley 基線',
+      line: { color: palette.primary, width: 2.2 },
+    },
+  ]
+}
+
+function buildOverlayPaperStyleTraces(
+  datasets: ProcessedDataset[],
+  resolveColorKey: (name: string, index: number) => string,
+): Plotly.Data[] {
+  return datasets.flatMap((dataset, index) => {
+    if (!dataset.y_background) return []
+    const paletteKey = resolveColorKey(dataset.name, index)
+    const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+    return [
+      {
+        x: dataset.x,
+        y: dataset.y_raw,
+        type: 'scatter' as const,
+        mode: 'markers' as const,
+        name: `${dataset.name}｜原始`,
+        marker: { color: palette.secondary, size: 3.5, symbol: 'circle' as const },
+      },
+      {
+        x: dataset.x,
+        y: dataset.y_background,
+        type: 'scatter' as const,
+        mode: 'lines' as const,
+        name: `${dataset.name}｜Shirley 基線`,
+        line: { color: palette.primary, width: 2 },
+      },
+    ]
+  })
+}
+
+/** 歸一化「論文風格」多檔疊圖：每筆都用 (散點+線) */
+function buildOverlayNormPaperTraces(
+  inputDatasets: Array<{ name: string; x: number[]; y: number[] }>,
+  outputDatasets: Array<{ name: string; x: number[]; y: number[] }>,
+  resolveColorKey: (name: string, index: number) => string,
+): Plotly.Data[] {
+  const traces: Plotly.Data[] = []
+  outputDatasets.forEach((dataset, index) => {
+    const paletteKey = resolveColorKey(dataset.name, index)
+    const palette = LINE_COLOR_PALETTES[paletteKey] ?? LINE_COLOR_PALETTES.blue
+    const input = inputDatasets.find(d => d.name === dataset.name) ?? inputDatasets[index]
+    if (input) {
+      traces.push({
+        x: input.x,
+        y: input.y,
+        type: 'scatter' as const,
+        mode: 'markers' as const,
+        name: `${dataset.name}｜歸一化前`,
+        marker: { color: palette.secondary, size: 3.5, symbol: 'circle' as const },
+        yaxis: 'y2',
+      })
+    }
+    traces.push({
+      x: dataset.x,
+      y: dataset.y,
+      type: 'scatter' as const,
+      mode: 'lines' as const,
+      name: `${dataset.name}｜歸一化後`,
+      line: { color: palette.primary, width: 2 },
+    })
+  })
+  return traces
+}
+
 function buildOverlayBackgroundTracesWithSeriesColors(
   datasets: ProcessedDataset[],
   resolveColorKey: (name: string, index: number) => string,
   showBefore: boolean,
   showBackground: boolean,
+  showAfter: boolean = true,
 ): Plotly.Data[] {
   return datasets.flatMap((dataset, index) => {
     const paletteKey = resolveColorKey(dataset.name, index)
@@ -1589,14 +1644,16 @@ function buildOverlayBackgroundTracesWithSeriesColors(
         opacity: 0.94,
       })
     }
-    traces.push({
-      x: dataset.x,
-      y: dataset.y_processed,
-      type: 'scatter',
-      mode: 'lines',
-      name: `${dataset.name}｜扣背景後`,
-      line: { color: palette.primary, width: 2 },
-    })
+    if (showAfter) {
+      traces.push({
+        x: dataset.x,
+        y: dataset.y_processed,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${dataset.name}｜扣背景後`,
+        line: { color: palette.primary, width: 2 },
+      })
+    }
     return traces
   })
 }
@@ -1654,11 +1711,32 @@ export default function XPS({
   const [processingKeys, setProcessingKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [autoInterpPoints, setAutoInterpPoints] = useState(true)
+  const [sectionOpen, setSectionOpen] = useState<Record<number, boolean>>({ 1: true, 2: false })
+  const hasTriggeredFirstUploadRef = useRef(false)
+
+  const setStepOpen = (step: number, next: boolean) => {
+    setSectionOpen(prev => ({ ...prev, [step]: next }))
+  }
+
+  useEffect(() => {
+    if (hasTriggeredFirstUploadRef.current) return
+    if (rawFiles.length > 0) {
+      hasTriggeredFirstUploadRef.current = true
+      setSectionOpen(prev => ({ ...prev, 1: false, 2: true }))
+    }
+  }, [rawFiles.length])
 
   // display
   const [showRaw, setShowRaw] = useState(true)
   const [showBg, setShowBg] = useState(true)
   const [showXpsBgBefore, setShowXpsBgBefore] = useState(true)
+  // 背景扣除右卡的論文風格開關：原始光譜以散點呈現、Shirley 基線以實線疊加
+  const [bgPaperMode, setBgPaperMode] = useState(false)
+  const [normPaperMode, setNormPaperMode] = useState(false)
+  const [fitPaperMode, setFitPaperMode] = useState(false)
+  // 等待使用者選方法的旗標：啟用後但還沒挑方法時為 true，避免直接套上既有的 default method
+  const [bgMethodAwaiting, setBgMethodAwaiting] = useState(false)
+  const [normMethodAwaiting, setNormMethodAwaiting] = useState(false)
   const [activeDatasetIdx, setActiveDatasetIdx] = useState(0)
   const [rawHidden, setRawHidden] = useState<string[]>([])
   const [overlayHidden, setOverlayHidden] = useState<string[]>([])
@@ -1684,6 +1762,8 @@ export default function XPS({
   const [manualEnergyShiftEnabled, setManualEnergyShiftEnabled] = useState(false)
   const [calibrationDatasetIdx, setCalibrationDatasetIdx] = useState(0)
   const [calibrationResult, setCalibrationResult] = useState<CalibrationResult | null>(null)
+  // 能量校正二次確認 modal（第一次按直接跑，第二次以上需確認以免累加 offset）
+  const [calibrationConfirmOpen, setCalibrationConfirmOpen] = useState<boolean>(false)
   const [calibrationLoading, setCalibrationLoading] = useState(false)
   const [calibrationError, setCalibrationError] = useState<string | null>(null)
 
@@ -2463,11 +2543,36 @@ export default function XPS({
 
   const setNormalizationEnabled = (enabled: boolean) => {
     if (!enabled) {
+      setNormMethodAwaiting(false)
       set('norm_method')('none')
       return
     }
-    const fallbackMethod = processingViewMode === 'overlay' ? overlayNormMethodRef.current : singleNormMethodRef.current
-    applyNormalizationMethod(fallbackMethod)
+    // 開啟後不直接套用上次的方法，先進入「等待選方法」狀態
+    setNormMethodAwaiting(true)
+  }
+
+  /** 使用者實際從下拉選單挑了一個歸一化方法：解除等待旗標並套用 */
+  const handlePickNormMethod = (method: Exclude<ProcessParams['norm_method'], 'none'>) => {
+    setNormMethodAwaiting(false)
+    applyNormalizationMethod(method)
+  }
+
+  /** 背景扣除 toggle 包裝：開啟時不直接 set bg_enabled=true，先進入等待狀態 */
+  const handleBgEnabledToggle = (next: boolean) => {
+    if (next) {
+      setBgMethodAwaiting(true)
+      // 故意不 set bg_enabled = true，避免直接用既有的 default bg_method 跑一輪
+    } else {
+      setBgMethodAwaiting(false)
+      set('bg_enabled')(false)
+    }
+  }
+
+  /** 使用者從下拉選單挑了一個背景方法：解除等待旗標、寫入方法、啟用背景扣除 */
+  const handlePickBgMethod = (method: ProcessParams['bg_method']) => {
+    setBgMethodAwaiting(false)
+    set('bg_method')(method)
+    set('bg_enabled')(true)
   }
 
   const setCurrentAutoInterpPoints = (value: boolean) => {
@@ -2488,6 +2593,17 @@ export default function XPS({
 
   const setCalibrationPeak = (label: string) => {
     setCalibrationPeakLabel(label)
+  }
+
+  /** 使用者按下「計算偏移並套用」按鈕的入口。
+   *  第一次按（calibrationResult 還沒成功）直接執行；
+   *  已成功過一次後再按 → 跳確認 modal，提示偏移會再次累加。 */
+  const requestAutoCalibration = () => {
+    if (calibrationResult?.success) {
+      setCalibrationConfirmOpen(true)
+      return
+    }
+    void handleAutoCalibration()
   }
 
   const handleAutoCalibration = async () => {
@@ -2763,6 +2879,7 @@ export default function XPS({
               processingViewMode === 'single' ? showBg : false,
               chartLineColors.final,
               useAreaSecondaryAxis ? 'y2' : 'y',
+              true,  // 永遠顯示處理後曲線
             )) as Plotly.Data[], finalHidden)}
         layout={finalLayout as Plotly.Layout}
         config={withPlotFullscreen()}
@@ -2998,7 +3115,7 @@ export default function XPS({
 
               {xpsMode === 'dft' && (
                 <div className="px-4 pt-2">
-                  <Section step={0} title="DFT 加密模組" hint="Valence Band DFT-informed Analyzer">
+                  <Section step={0} title="DFT 加密模組" hint="Valence Band DFT-informed Analyzer" status={dftUnlocked ? 'on' : 'off'}>
                     <p className="mb-3 text-xs leading-5 text-[var(--text-soft)]">
                       此區連結到 Ga2O3/NiO/p-Si valence band DFT-informed spectral analysis。此工具不執行 VASP/DFT，
                       而是進行 VBM 對齊、分區積分、pDOS 展寬與 pDOS-based fitting。
@@ -3038,7 +3155,14 @@ export default function XPS({
               )}
 
               <div className="px-4 pt-4">
-                <Section step={1} title="載入檔案" hint="XY / VMS / TXT / CSV / ASC / XLSX">
+                <Section
+                  step={1}
+                  title="載入檔案"
+                  hint="XY / VMS / TXT / CSV / ASC / XLSX"
+                  status={rawFiles.length > 0 ? 'on' : 'off'}
+                  open={sectionOpen[1]}
+                  onOpenChange={next => setStepOpen(1, next)}
+                >
                   <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}</div>
                   <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="XPS" accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc', '.xlsx', '.xls']} />
                   {rawFiles.length > 0 && (
@@ -3055,7 +3179,15 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={2} title="內插 / 資料模式" hint="多檔：單筆 / 疊圖 / 平均" defaultOpen={false} infoContent={
+                <Section
+                  step={2}
+                  title="內插 / 資料模式"
+                  hint="多檔：單筆 / 疊圖 / 平均"
+                  defaultOpen={false}
+                  status={rawFiles.length === 0 ? 'locked' : (interpolationEnabled || processingViewMode === 'overlay' ? 'on' : 'off')}
+                  open={sectionOpen[2]}
+                  onOpenChange={next => setStepOpen(2, next)}
+                  infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">內插說明</p>
                     <p>
@@ -3269,7 +3401,13 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={3} title="能量校正" hint="手動位移 + 標準樣品自動校正" defaultOpen={false}>
+                <Section
+                  step={3}
+                  title="能量校正"
+                  hint="手動位移 + 標準樣品自動校正"
+                  defaultOpen={false}
+                  status={rawFiles.length === 0 ? 'locked' : (currentManualEnergyShiftEnabled || calibrationResult?.success ? 'on' : 'off')}
+                >
                   <TogglePill label="手動調整偏移量" checked={currentManualEnergyShiftEnabled} onChange={setCurrentManualEnergyShiftEnabled} />
                   {currentManualEnergyShiftEnabled && (
                     <NumInput label="手動 BE 位移 (eV)" value={currentParams.energy_shift} onChange={set('energy_shift')} step={0.01} />
@@ -3333,11 +3471,11 @@ export default function XPS({
                       )}
                       <button
                         type="button"
-                        onClick={handleAutoCalibration}
+                        onClick={requestAutoCalibration}
                         disabled={calibrationLoading || !standardDataset || !calibrationPeakLabel || !calibrationPeak}
                         className="w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50 pressable"
                       >
-                        {calibrationLoading ? '校正中…' : '計算偏移並套用'}
+                        {calibrationLoading ? '校正中…' : (calibrationResult?.success ? '再次校正 (累加偏移)' : '計算偏移並套用')}
                       </button>
                       {calibrationError && <p className="text-xs text-rose-400">{calibrationError}</p>}
                       {calibrationResult?.success && (
@@ -3356,7 +3494,14 @@ export default function XPS({
                   </div>
                 </Section>
 
-                <Section step={4} title="背景扣除" hint="Shirley / Tougaard / Linear" defaultOpen={false} infoContent={
+                {xpsMode !== 'valence_band' && (
+                <Section
+                  step={4}
+                  title="背景扣除"
+                  hint="Shirley / Tougaard / Linear"
+                  defaultOpen={false}
+                  status={rawFiles.length === 0 ? 'locked' : (currentParams.bg_enabled ? 'on' : 'off')}
+                  infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">背景扣除方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">Linear</span> — 線性連接起點與終點 bg(E)=aE+b。適用背景緩慢線性變化的簡單情況。峰頂遠超出線性基線時可能低估背景。</div>
@@ -3368,11 +3513,19 @@ export default function XPS({
                     <div><span className="font-medium text-[var(--text-main)]">airPLS</span> — 自適應迭代加權懲罰最小二乘法，自動調整各點權重，不需手動調非對稱參數。適合複雜背景形狀，通常比 AsLS 更穩健。</div>
                   </div>
                 }>
-                  <TogglePill label="啟用背景扣除" checked={currentParams.bg_enabled} onChange={set('bg_enabled')} />
-                  {currentParams.bg_enabled && (
+                  <TogglePill
+                    label="啟用背景扣除"
+                    checked={currentParams.bg_enabled || bgMethodAwaiting}
+                    onChange={handleBgEnabledToggle}
+                  />
+                  {(currentParams.bg_enabled || bgMethodAwaiting) && (
                     <>
-                      <CustomSelect label="方法" value={currentParams.bg_method} onChange={v => set('bg_method')(v as ProcessParams['bg_method'])}
+                      <CustomSelect
+                        label="方法"
+                        value={bgMethodAwaiting ? '' : currentParams.bg_method}
+                        onChange={v => { if (v) handlePickBgMethod(v as ProcessParams['bg_method']) }}
                         options={[
+                          ...(bgMethodAwaiting ? [{ value: '', label: '— 請先選擇方法 —' }] : []),
                           { value: 'linear', label: 'Linear' },
                           { value: 'shirley', label: 'Shirley' },
                           { value: 'shirley_linear', label: 'Shirley + Linear Offset' },
@@ -3382,22 +3535,37 @@ export default function XPS({
                           { value: 'airpls', label: 'airPLS' },
                         ]}
                       />
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="起始 BE (eV)" value={currentParams.bg_x_start ?? beMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
-                        <NumInput label="結束 BE (eV)" value={currentParams.bg_x_end ?? beMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
-                      </div>
-                      {currentParams.bg_method === 'polynomial' && <NumInput label="多項式次數" value={currentParams.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />}
-                      {currentParams.bg_method === 'tougaard' && (
-                        <div className="grid grid-cols-2 gap-2">
-                          <NumInput label="B" value={currentParams.bg_tougaard_B} onChange={set('bg_tougaard_B')} step={10} />
-                          <NumInput label="C" value={currentParams.bg_tougaard_C} onChange={set('bg_tougaard_C')} step={10} />
-                        </div>
+                      {bgMethodAwaiting ? (
+                        <p className="rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)]/60 px-3 py-2 text-[11px] leading-5 text-[var(--text-soft)]">
+                          請先從上面下拉選單挑一個背景方法，挑完後才會開始套用、繪圖與顯示其它參數。
+                        </p>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-2 gap-2">
+                            <NumInput label="起始 BE (eV)" value={currentParams.bg_x_start ?? beMin} onChange={v => set('bg_x_start')(v)} step={0.1} />
+                            <NumInput label="結束 BE (eV)" value={currentParams.bg_x_end ?? beMax} onChange={v => set('bg_x_end')(v)} step={0.1} />
+                          </div>
+                          {currentParams.bg_method === 'polynomial' && <NumInput label="多項式次數" value={currentParams.bg_poly_deg} onChange={set('bg_poly_deg')} min={1} max={10} />}
+                          {currentParams.bg_method === 'tougaard' && (
+                            <div className="grid grid-cols-2 gap-2">
+                              <NumInput label="B" value={currentParams.bg_tougaard_B} onChange={set('bg_tougaard_B')} step={10} />
+                              <NumInput label="C" value={currentParams.bg_tougaard_C} onChange={set('bg_tougaard_C')} step={10} />
+                            </div>
+                          )}
+                        </>
                       )}
                     </>
                   )}
                 </Section>
+                )}
 
-                <Section step={5} title="有效數據範圍" hint="背景後裁切有效 BE 區間" defaultOpen={false} infoContent={
+                <Section
+                  step={xpsMode === 'valence_band' ? 4 : 5}
+                  title="有效數據範圍"
+                  hint="背景後裁切有效 BE 區間"
+                  defaultOpen={false}
+                  status={rawFiles.length === 0 ? 'locked' : (currentParams.valid_range_enabled ? 'on' : 'off')}
+                  infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">有效數據範圍</p>
                     <p>此步驟會在背景扣除後裁切資料，只保留指定 BE 區間。後續歸一化、峰擬合、RSF 與匯出都會使用裁切後的有效資料。</p>
@@ -3426,7 +3594,13 @@ export default function XPS({
                   )}
                 </Section>
 
-                <Section step={6} title="歸一化" hint="統一強度尺度" defaultOpen={false} infoContent={
+                <Section
+                  step={xpsMode === 'valence_band' ? 5 : 6}
+                  title="歸一化"
+                  hint="統一強度尺度"
+                  defaultOpen={false}
+                  status={rawFiles.length === 0 ? 'locked' : (hasNormalizationStage ? 'on' : 'off')}
+                  infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">歸一化方法說明</p>
                     <div><span className="font-medium text-[var(--text-main)]">不歸一化 (None)</span> — 保留原始強度。適合已完成儀器強度校正的資料，或需比較絕對強度的情況。</div>
@@ -3437,26 +3611,47 @@ export default function XPS({
                     <p className="mt-1 text-[var(--text-soft)]">注意：歸一化後的強度不再具有物理意義的絕對值，RSF 定量分析應在歸一化前進行，或確保各組資料採用相同歸一化條件。</p>
                   </div>
                 }>
-                  <TogglePill label="啟用歸一化" checked={hasNormalizationStage} onChange={setNormalizationEnabled} />
-                  {hasNormalizationStage && (
+                  <TogglePill
+                    label="啟用歸一化"
+                    checked={hasNormalizationStage || normMethodAwaiting}
+                    onChange={setNormalizationEnabled}
+                  />
+                  {(hasNormalizationStage || normMethodAwaiting) && (
                     <>
-                      <CustomSelect label="方法" value={currentParams.norm_method} onChange={v => applyNormalizationMethod(v as Exclude<ProcessParams['norm_method'], 'none'>)}
+                      <CustomSelect
+                        label="方法"
+                        value={normMethodAwaiting ? '' : currentParams.norm_method}
+                        onChange={v => { if (v) handlePickNormMethod(v as Exclude<ProcessParams['norm_method'], 'none'>) }}
                         options={[
+                          ...(normMethodAwaiting ? [{ value: '', label: '— 請先選擇方法 —' }] : []),
                           { value: 'min_max', label: 'Min–Max' },
                           { value: 'max', label: 'Max' },
                           { value: 'area', label: 'Area' },
                           { value: 'mean_region', label: 'Mean Region' },
                         ]}
                       />
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumInput label="起始 (eV)" value={currentParams.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
-                        <NumInput label="結束 (eV)" value={currentParams.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
-                      </div>
+                      {normMethodAwaiting ? (
+                        <p className="rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)]/60 px-3 py-2 text-[11px] leading-5 text-[var(--text-soft)]">
+                          請先從上面下拉選單挑一個歸一化方法，挑完後才會開始套用、繪圖與顯示區間滑桿。
+                        </p>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput label="起始 (eV)" value={currentParams.norm_x_start ?? beMin} onChange={v => set('norm_x_start')(v)} step={0.1} />
+                          <NumInput label="結束 (eV)" value={currentParams.norm_x_end ?? beMax} onChange={v => set('norm_x_end')(v)} step={0.1} />
+                        </div>
+                      )}
                     </>
                   )}
                 </Section>
 
-                <Section step={7} title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'} hint="元素資料庫選峰 / 手動新增 / Voigt" defaultOpen={false}>
+                {xpsMode !== 'valence_band' && (
+                <Section
+                  step={7}
+                  title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'}
+                  hint="元素資料庫選峰 / 手動新增 / Voigt"
+                  defaultOpen={false}
+                  status={rawFiles.length === 0 || overlayNonAverageMode ? 'locked' : (peakCandidates.length > 0 || currentFitResult ? 'on' : 'off')}
+                >
                   {overlayNonAverageMode && (
                     <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-3 text-[10px] leading-5 text-amber-300">
                       不平均疊圖模式下會同時存在多條處理後光譜，峰擬合與 RSF 需要單一輸入光譜，因此這裡先鎖定。請啟用「平均所有疊圖數據」，或切回單筆資料後再擬合。
@@ -3726,9 +3921,16 @@ export default function XPS({
                   </div>
                   {!overlayNonAverageMode && fitError && <p className="text-xs text-rose-400">{fitError}</p>}
                 </Section>
+                )}
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={8} title="VBM 線性外推" hint="切線 x 基準線交點" defaultOpen={false}>
+                  <Section
+                    step={6}
+                    title="VBM 線性外推"
+                    hint="切線 x 基準線交點"
+                    defaultOpen={false}
+                    status={!effectiveVbmDataset ? 'locked' : (vbmResult?.success ? 'on' : 'off')}
+                  >
                     <p className="text-[10px] text-[var(--text-soft)]">先把你輸入的兩個 x 值映射到光譜點，再以各點附近 20% 搜尋窗挑選切線與基準線用點；切線取最大正斜率，基準線取最平斜率，兩條線交點就是 VBM。</p>
 
                     {/* data source toggle */}
@@ -3900,7 +4102,13 @@ export default function XPS({
                 )}
 
                 {xpsMode === 'valence_band' && (
-                  <Section step={9} title="能帶偏移" hint="VBM 差值法 / Kraut Method" defaultOpen={false}>
+                  <Section
+                    step={7}
+                    title="能帶偏移"
+                    hint="VBM 差值法 / Kraut Method"
+                    defaultOpen={false}
+                    status={bandOffsetResult ? 'on' : 'off'}
+                  >
                     <CustomSelect label="方法" value={bandOffsetMethod}
                       onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
                       options={[{ value: 'vbm_diff', label: 'VBM 差值法' }, { value: 'kraut', label: 'Kraut Method' }]}
@@ -4128,68 +4336,116 @@ export default function XPS({
             )}
 
             {/* ── overlay: background stage ── */}
-            {overlayPreprocessDatasets.length >= overlayMinCount && overlayState.params.bg_enabled && (
-              <div className="analysis-section-card mb-4 p-4">
-                <ChartToolbar
-                  title={overlayState.params.bg_enabled ? '多筆疊圖：背景扣除後' : '多筆疊圖：背景扣除（未啟用）'}
-                  colorValue={chartLineColors.overlayBg}
-                  onColorChange={value => {
-                    setChartLineColors(current => ({ ...current, overlayBg: value }))
-                    applyOverlayPalette(value)
-                  }}
-                />
-                <div className="mb-3">
-                  <SeriesColorControls
-                    items={overlaySeriesItems}
-                    colorKeys={overlaySeriesColorKeys}
-                    onColorChange={handleSeriesColorChange}
-                  />
-                </div>
-                <div className="mb-3 flex items-center gap-3">
-                  <CheckRow label="顯示扣背景前" checked={showXpsBgBefore} onChange={setShowXpsBgBefore} />
-                  <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
-                </div>
-                <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {overlayState.params.bg_enabled
-                    ? `${overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}橘色區塊是目前設定的背景扣除區間。`
-                    : '目前未啟用背景扣除，這一階段直接沿用前處理結果。'}
-                </p>
-                <Plot
-                  data={applyHidden(buildOverlayBackgroundTracesWithSeriesColors(
-                    overlayBackgroundProcessedDatasets.length >= overlayMinCount ? overlayBackgroundProcessedDatasets : overlayPreprocessProcessedDatasets,
-                    getDatasetColorKey,
-                    showXpsBgBefore,
-                    showBg,
-                  ) as Plotly.Data[], overlayBgHidden)}
-                  layout={overlayBgLayout as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 340 }}
-                  onLegendClick={makeLegendClick(setOverlayBgHidden) as never}
-                  onLegendDoubleClick={() => false}
-                />
-                {overlayState.params.bg_enabled && renderRangeControlCard(
-                  '背景區間',
-                  '看著疊圖調整共用背景範圍',
-                  beMin,
-                  beMax,
-                  overlayState.params.bg_x_start ?? beMin,
-                  overlayState.params.bg_x_end ?? beMax,
-                  ({ start, end }) => {
-                    setOverlayState(current => ({
-                      ...current,
-                      params: {
-                        ...current.params,
-                        bg_x_start: start,
-                        bg_x_end: end,
-                      },
-                    }))
-                  },
-                )}
-                <div className="mt-3 flex justify-start">
-                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayBackgroundDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_bg.csv', 'text/csv')} />
-                </div>
-              </div>
-            )}
+            {overlayPreprocessDatasets.length >= overlayMinCount && overlayState.params.bg_enabled && (() => {
+              const overlayBgDatasets = overlayBackgroundProcessedDatasets.length >= overlayMinCount
+                ? overlayBackgroundProcessedDatasets
+                : overlayPreprocessProcessedDatasets
+              return (
+                <SortableCardGrid
+                  items={PAIR_ITEMS}
+                  storageKey="xps-pair-bg-overlay"
+                  gridClassName="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2"
+                >
+                  {(ctx) => ctx.item.id === 'left' ? (
+                    <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
+                      <ChartToolbar
+                        title="背景扣除"
+                        colorValue={chartLineColors.overlayBg}
+                        onColorChange={value => {
+                          setChartLineColors(current => ({ ...current, overlayBg: value }))
+                          applyOverlayPalette(value)
+                        }}
+                        actions={<PairCardChromeButtons ctx={ctx} />}
+                      />
+                      <div className="mb-3">
+                        <SeriesColorControls
+                          items={overlaySeriesItems}
+                          colorKeys={overlaySeriesColorKeys}
+                          onColorChange={handleSeriesColorChange}
+                        />
+                      </div>
+                      <p className="mb-3 text-xs text-[var(--text-soft)]">各筆原始光譜（虛線）疊加對應的 Shirley/Tougaard 基線（虛線）。橘色區塊為共用的背景積分區間。</p>
+                      <Plot
+                        data={applyHidden(buildOverlayBackgroundTracesWithSeriesColors(
+                          overlayBgDatasets,
+                          getDatasetColorKey,
+                          true, true, false,
+                        ) as Plotly.Data[], overlayBgHidden)}
+                        layout={overlayBgLayout as Plotly.Layout}
+                        config={withPlotFullscreen()}
+                        style={{ width: '100%', height: 340 }}
+                        onLegendClick={makeLegendClick(setOverlayBgHidden) as never}
+                        onLegendDoubleClick={() => false}
+                      />
+                    </div>
+                  ) : (
+                    <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-[var(--text-main)]">背景扣除</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setBgPaperMode(v => !v)}
+                            className={[
+                              'shrink-0 rounded-[14px] px-3 py-1.5 text-xs font-semibold transition-all',
+                              bgPaperMode
+                                ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_22%,transparent)] text-[var(--accent-secondary)] [box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent)]'
+                                : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                            ].join(' ')}
+                            title="切換為標記點視圖：原始光譜以散點呈現、Shirley 基線以實線疊加（期刊圖說常見格式）"
+                          >
+                            {bgPaperMode ? '✓ 標記點視圖' : '📄 標記點視圖'}
+                          </button>
+                          <PairCardChromeButtons ctx={ctx} />
+                        </div>
+                      </div>
+                      <p className="mb-3 text-xs text-[var(--text-soft)]">
+                        {bgPaperMode
+                          ? '各筆原始光譜以標記點呈現，對應 Shirley/Tougaard 基線以實線疊加（期刊圖說常見格式）。'
+                          : `${overlayState.params.average ? '多檔平均光譜背景扣除後的結果。' : '各筆資料背景扣除後的結果疊圖。'}線色與左卡同步。`}
+                      </p>
+                      <Plot
+                        data={applyHidden((bgPaperMode
+                          ? buildOverlayPaperStyleTraces(overlayBgDatasets, getDatasetColorKey)
+                          : buildOverlayBackgroundTracesWithSeriesColors(
+                              overlayBgDatasets,
+                              getDatasetColorKey,
+                              false, false, true,
+                            )) as Plotly.Data[], overlayBgHidden)}
+                        layout={overlayBgLayout as Plotly.Layout}
+                        config={withPlotFullscreen()}
+                        style={{ width: '100%', height: 340 }}
+                        onLegendClick={makeLegendClick(setOverlayBgHidden) as never}
+                        onLegendDoubleClick={() => false}
+                      />
+                      <div className="mt-3">
+                        {renderRangeControlCard(
+                          '背景區間',
+                          '同時影響左右兩張圖：看著基線與扣除結果調整範圍',
+                          beMin,
+                          beMax,
+                          overlayState.params.bg_x_start ?? beMin,
+                          overlayState.params.bg_x_end ?? beMax,
+                          ({ start, end }) => {
+                            setOverlayState(current => ({
+                              ...current,
+                              params: {
+                                ...current.params,
+                                bg_x_start: start,
+                                bg_x_end: end,
+                              },
+                            }))
+                          },
+                        )}
+                      </div>
+                      <div className="mt-3 flex justify-start">
+                        <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayBackgroundDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_bg.csv', 'text/csv')} />
+                      </div>
+                    </div>
+                  )}
+                </SortableCardGrid>
+              )
+            })()}
 
             {/* ── overlay: effective range stage ── */}
             {overlayFinalDatasets.length >= overlayMinCount && overlayValidRangeDatasets.length >= overlayMinCount && overlayState.params.valid_range_enabled && (
@@ -4245,57 +4501,112 @@ export default function XPS({
             )}
 
             {/* ── overlay: normalization stage ── */}
-            {overlayFinalDatasets.length >= overlayMinCount && overlayNormalizationDatasets.length >= overlayMinCount && hasNormalizationStage && (
-              <div className="analysis-section-card mb-4 p-4">
-                <ChartToolbar
-                  title="多筆疊圖：歸一化後"
-                  colorValue={chartLineColors.overlayNorm}
-                  onColorChange={value => {
-                    setChartLineColors(current => ({ ...current, overlayNorm: value }))
-                    applyOverlayPalette(value)
-                  }}
-                />
-                <div className="mb-3">
-                  <SeriesColorControls
-                    items={overlaySeriesItems}
-                    colorKeys={overlaySeriesColorKeys}
-                    onColorChange={handleSeriesColorChange}
-                  />
-                </div>
-                <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {overlayState.params.average ? '多檔平均光譜歸一化後的結果。' : '各筆資料歸一化後的結果疊圖。'}綠色區塊是目前設定的歸一化區間。
-                </p>
-                <Plot
-                  data={applyHidden(buildOverlayTracesWithSeriesColors(overlayNormalizationDatasets, getDatasetColorKey) as Plotly.Data[], overlayNormHidden)}
-                  layout={overlayNormLayout as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 340 }}
-                  onLegendClick={makeLegendClick(setOverlayNormHidden) as never}
-                  onLegendDoubleClick={() => false}
-                />
-                {hasNormalizationStage && renderRangeControlCard(
-                  '歸一化區間',
-                  '共用這組區間套用到所有疊圖資料',
-                  beMin,
-                  beMax,
-                  overlayState.params.norm_x_start ?? beMin,
-                  overlayState.params.norm_x_end ?? beMax,
-                  ({ start, end }) => {
-                    setOverlayState(current => ({
-                      ...current,
-                      params: {
-                        ...current.params,
-                        norm_x_start: start,
-                        norm_x_end: end,
-                      },
-                    }))
-                  },
-                )}
-                <div className="mt-3 flex justify-start">
-                  <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayNormalizationDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_norm.csv', 'text/csv')} />
-                </div>
-              </div>
-            )}
+            {overlayFinalDatasets.length >= overlayMinCount && overlayNormalizationDatasets.length >= overlayMinCount && hasNormalizationStage && (() => {
+              const overlayNormInput = overlayState.params.valid_range_enabled && overlayValidRangeDatasets.length >= overlayMinCount
+                ? overlayValidRangeDatasets
+                : overlayState.params.bg_enabled && overlayBackgroundDatasets.length >= overlayMinCount
+                  ? overlayBackgroundDatasets
+                  : overlayPreprocessDatasets
+              return (
+                <SortableCardGrid
+                  items={PAIR_ITEMS}
+                  storageKey="xps-pair-norm-overlay"
+                  gridClassName="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2"
+                >
+                  {(ctx) => ctx.item.id === 'left' ? (
+                    <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
+                      <ChartToolbar
+                        title="歸一化"
+                        colorValue={chartLineColors.overlayNorm}
+                        onColorChange={value => {
+                          setChartLineColors(current => ({ ...current, overlayNorm: value }))
+                          applyOverlayPalette(value)
+                        }}
+                        actions={<PairCardChromeButtons ctx={ctx} />}
+                      />
+                      <div className="mb-3">
+                        <SeriesColorControls
+                          items={overlaySeriesItems}
+                          colorKeys={overlaySeriesColorKeys}
+                          onColorChange={handleSeriesColorChange}
+                        />
+                      </div>
+                      <p className="mb-3 text-xs text-[var(--text-soft)]">歸一化前：送入歸一化的疊圖（背景扣除 / 有效範圍後的結果）。綠色區塊為共用的歸一化採樣區間。</p>
+                      <Plot
+                        data={applyHidden(buildOverlayTracesWithSeriesColors(overlayNormInput, getDatasetColorKey) as Plotly.Data[], overlayNormHidden)}
+                        layout={overlayNormLayout as Plotly.Layout}
+                        config={withPlotFullscreen()}
+                        style={{ width: '100%', height: 340 }}
+                        onLegendClick={makeLegendClick(setOverlayNormHidden) as never}
+                        onLegendDoubleClick={() => false}
+                      />
+                    </div>
+                  ) : (
+                    <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-[var(--text-main)]">歸一化</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setNormPaperMode(v => !v)}
+                            className={[
+                              'shrink-0 rounded-[14px] px-3 py-1.5 text-xs font-semibold transition-all',
+                              normPaperMode
+                                ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_22%,transparent)] text-[var(--accent-secondary)] [box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent)]'
+                                : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                            ].join(' ')}
+                            title="切換為標記點視圖：歸一化前以散點呈現、歸一化後以實線疊加（期刊圖說常見格式）"
+                          >
+                            {normPaperMode ? '✓ 標記點視圖' : '📄 標記點視圖'}
+                          </button>
+                          <PairCardChromeButtons ctx={ctx} />
+                        </div>
+                      </div>
+                      <p className="mb-3 text-xs text-[var(--text-soft)]">
+                        {normPaperMode
+                          ? '各筆歸一化前光譜以標記點呈現（共用右側 Y2 軸），歸一化後以實線疊加（期刊圖說常見的「前後對照」格式）。'
+                          : `歸一化後：${overlayState.params.average ? '多檔平均光譜歸一化後的結果。' : '各筆資料歸一化後的結果疊圖。'}線色與左卡同步。`}
+                      </p>
+                      <Plot
+                        data={applyHidden((normPaperMode
+                          ? buildOverlayNormPaperTraces(overlayNormInput, overlayNormalizationDatasets, getDatasetColorKey)
+                          : buildOverlayTracesWithSeriesColors(overlayNormalizationDatasets, getDatasetColorKey)) as Plotly.Data[], overlayNormHidden)}
+                        layout={(normPaperMode
+                          ? { ...overlayNormLayout, yaxis2: { overlaying: 'y', side: 'right', title: { text: '歸一化前強度 (a.u.)' } } }
+                          : overlayNormLayout) as Plotly.Layout}
+                        config={withPlotFullscreen()}
+                        style={{ width: '100%', height: 340 }}
+                        onLegendClick={makeLegendClick(setOverlayNormHidden) as never}
+                        onLegendDoubleClick={() => false}
+                      />
+                      <div className="mt-3">
+                        {renderRangeControlCard(
+                          '歸一化區間',
+                          '同時影響左右兩張圖：共用這組區間套用到所有疊圖資料',
+                          beMin,
+                          beMax,
+                          overlayState.params.norm_x_start ?? beMin,
+                          overlayState.params.norm_x_end ?? beMax,
+                          ({ start, end }) => {
+                            setOverlayState(current => ({
+                              ...current,
+                              params: {
+                                ...current.params,
+                                norm_x_start: start,
+                                norm_x_end: end,
+                              },
+                            }))
+                          },
+                        )}
+                      </div>
+                      <div className="mt-3 flex justify-start">
+                        <ExportBtn label="下載此步驟 CSV" onClick={() => downloadFile(buildStageCsv(overlayNormalizationDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_overlay_norm.csv', 'text/csv')} />
+                      </div>
+                    </div>
+                  )}
+                </SortableCardGrid>
+              )
+            })()}
 
 
             {processingViewMode === 'single' && hasPreprocessStage && preprocessChartTraces.length > 0 && (
@@ -4323,50 +4634,94 @@ export default function XPS({
               </div>
             )}
             {processingViewMode === 'single' && backgroundChartTraces.length > 0 && hasBackgroundStage && (
-              <div className="analysis-section-card mb-4 p-4">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
-                  <div className="flex items-center gap-4">
+              <SortableCardGrid
+                items={PAIR_ITEMS}
+                storageKey="xps-pair-bg-single"
+                gridClassName="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2"
+              >
+                {(ctx) => ctx.item.id === 'left' ? (
+                  <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
                     <ChartToolbar
                       title="背景扣除"
                       colorValue={chartLineColors.background}
                       onColorChange={value => setChartLineColors(current => ({ ...current, background: value }))}
+                      actions={<PairCardChromeButtons ctx={ctx} />}
+                    />
+                    <p className="mb-3 text-xs text-[var(--text-soft)]">原始光譜（線）疊加 Shirley/Tougaard 計算出的背景基線（虛線）。橘色區塊為目前的背景積分區間。</p>
+                    <Plot
+                      data={applyHidden(backgroundChartTraces
+                        .filter(t => t.name === '背景扣除前' || t.name === '背景線') as Plotly.Data[], bgHidden)}
+                      layout={backgroundLayout as Plotly.Layout}
+                      config={withPlotFullscreen()}
+                      style={{ width: '100%', height: 340 }}
+                      onLegendClick={makeLegendClick(setBgHidden) as never}
+                      onLegendDoubleClick={() => false}
                     />
                   </div>
-                  <div className="flex items-center gap-3">
-                    <CheckRow label="顯示扣背景前" checked={showXpsBgBefore} onChange={setShowXpsBgBefore} />
-                    <CheckRow label="顯示背景線" checked={showBg} onChange={setShowBg} />
+                ) : (
+                  <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-[var(--text-main)]">背景扣除</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setBgPaperMode(v => !v)}
+                          className={[
+                            'shrink-0 rounded-[14px] px-3 py-1.5 text-xs font-semibold transition-all',
+                            bgPaperMode
+                              ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_22%,transparent)] text-[var(--accent-secondary)] [box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                          title="切換為標記點視圖：原始光譜以散點呈現、Shirley 基線以實線疊加（期刊圖說常見格式）"
+                        >
+                          {bgPaperMode ? '✓ 標記點視圖' : '📄 標記點視圖'}
+                        </button>
+                        <PairCardChromeButtons ctx={ctx} />
+                      </div>
+                    </div>
+                    <p className="mb-3 text-xs text-[var(--text-soft)]">
+                      {bgPaperMode
+                        ? '原始光譜以標記點呈現，Shirley/Tougaard 基線以實線疊加（期刊圖說常見格式）。'
+                        : '扣完背景後的乾淨光譜。線色與左卡同步（由左上「線色」切換）。'}
+                    </p>
+                    <Plot
+                      data={applyHidden(((): Plotly.Data[] => {
+                        if (bgPaperMode) {
+                          return buildSinglePaperStyleTraces(backgroundChartInput, backgroundDataset ?? null, chartLineColors.background)
+                        }
+                        return backgroundChartTraces.filter(t => t.name === '背景扣除後') as Plotly.Data[]
+                      })(), bgHidden)}
+                      layout={backgroundLayout as Plotly.Layout}
+                      config={withPlotFullscreen()}
+                      style={{ width: '100%', height: 340 }}
+                      onLegendClick={makeLegendClick(setBgHidden) as never}
+                      onLegendDoubleClick={() => false}
+                    />
+                    {hasBackgroundStage && (
+                      <div className="mt-3">
+                        {renderRangeControlCard(
+                          '背景區間',
+                          '同時影響左右兩張圖：看著基線與扣除結果調整範圍',
+                          bgDataXMin,
+                          bgDataXMax,
+                          currentParams.bg_x_start ?? bgDataXMin,
+                          currentParams.bg_x_end ?? bgDataXMax,
+                          ({ start, end }) => {
+                            set('bg_x_start')(start)
+                            set('bg_x_end')(end)
+                          },
+                        )}
+                      </div>
+                    )}
+                    <div className="mt-3 flex justify-start">
+                      <ExportBtn
+                        label="下載此步驟 CSV"
+                        onClick={() => downloadFile(buildStageCsv(backgroundStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_background_stage.csv', 'text/csv')}
+                      />
+                    </div>
                   </div>
-                </div>
-                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是前一階段的結果。圖上橘色區塊是你目前選擇的背景區間。</p>
-                <Plot
-                  data={applyHidden(backgroundChartTraces
-                    .filter(t => showBg || t.name !== '背景線')
-                    .filter(t => showXpsBgBefore || t.name !== '背景扣除前') as Plotly.Data[], bgHidden)}
-                  layout={backgroundLayout as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 340 }}
-                  onLegendClick={makeLegendClick(setBgHidden) as never}
-                  onLegendDoubleClick={() => false}
-                />
-                {hasBackgroundStage && renderRangeControlCard(
-                  '背景區間',
-                  '看著背景線與前後對照調整範圍',
-                  bgDataXMin,
-                  bgDataXMax,
-                  currentParams.bg_x_start ?? bgDataXMin,
-                  currentParams.bg_x_end ?? bgDataXMax,
-                  ({ start, end }) => {
-                    set('bg_x_start')(start)
-                    set('bg_x_end')(end)
-                  },
                 )}
-                <div className="mt-3 flex justify-start">
-                  <ExportBtn
-                    label="下載此步驟 CSV"
-                    onClick={() => downloadFile(buildStageCsv(backgroundStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_background_stage.csv', 'text/csv')}
-                  />
-                </div>
-              </div>
+              </SortableCardGrid>
             )}
 
             {processingViewMode === 'single' && validRangeChartTraces.length > 0 && hasValidRangeStage && (
@@ -4407,83 +4762,129 @@ export default function XPS({
             )}
 
             {processingViewMode === 'single' && normalizationChartTraces.length > 0 && hasNormalizationStage && (
-              <div className="analysis-section-card mb-4 p-4">
-                <ChartToolbar
-                  title="歸一化"
-                  colorValue={chartLineColors.normalization}
-                  onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
-                />
-                <p className="mb-3 text-xs text-[var(--text-soft)]">輸入是背景扣除後的光譜；若未啟用背景扣除，則直接使用前處理結果。綠色區塊是歸一化區間。</p>
-                <Plot
-                  data={applyHidden(normalizationChartTraces as Plotly.Data[], normHidden)}
-                  layout={normalizationLayout as Plotly.Layout}
-                  config={withPlotFullscreen()}
-                  style={{ width: '100%', height: 340 }}
-                  onLegendClick={makeLegendClick(setNormHidden) as never}
-                  onLegendDoubleClick={() => false}
-                />
-                {hasNormalizationStage && renderRangeControlCard(
-                  '歸一化區間',
-                  '直接在圖下微調要採樣的能量範圍',
-                  normDataXMin,
-                  normDataXMax,
-                  currentParams.norm_x_start ?? normDataXMin,
-                  currentParams.norm_x_end ?? normDataXMax,
-                  ({ start, end }) => {
-                    set('norm_x_start')(start)
-                    set('norm_x_end')(end)
-                  },
-                )}
-                <div className="mt-3 flex justify-start">
-                  <ExportBtn
-                    label="下載此步驟 CSV"
-                    onClick={() => downloadFile(buildStageCsv(normalizationStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_normalization_stage.csv', 'text/csv')}
-                  />
-                </div>
-              </div>
-            )}
-
-            {currentDisplayDataset && (processingViewMode === 'single' ? result : fitTargetDataset) && showFinalSpectrumCard && (
-              <div className="analysis-section-card mb-4 p-4">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-4">
-                  <div>
+              <SortableCardGrid
+                items={PAIR_ITEMS}
+                storageKey="xps-pair-norm-single"
+                gridClassName="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2"
+              >
+                {(ctx) => ctx.item.id === 'left' ? (
+                  <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
                     <ChartToolbar
-                      title={`最終處理光譜${currentFitResult ? '（含擬合結果）' : ''}`}
-                      colorValue={chartLineColors.final}
-                      onColorChange={value => setChartLineColors(current => ({ ...current, final: value }))}
-                      actions={onOpenPlotPopup ? (
-                        <button type="button" className="chart-popup-button" onClick={openFinalChartPopup}>
-                          彈出圖表
-                        </button>
-                      ) : undefined}
+                      title="歸一化"
+                      colorValue={chartLineColors.normalization}
+                      onColorChange={value => setChartLineColors(current => ({ ...current, normalization: value }))}
+                      actions={<PairCardChromeButtons ctx={ctx} />}
+                    />
+                    <p className="mb-3 text-xs text-[var(--text-soft)]">歸一化前：送入歸一化的光譜（背景扣除 / 有效範圍後的結果）。綠色區塊為歸一化取樣區間。</p>
+                    <Plot
+                      data={applyHidden(normalizationChartTraces.filter(t => t.name === '歸一化前') as Plotly.Data[], normHidden)}
+                      layout={normalizationLayout as Plotly.Layout}
+                      config={withPlotFullscreen()}
+                      style={{ width: '100%', height: 340 }}
+                      onLegendClick={makeLegendClick(setNormHidden) as never}
+                      onLegendDoubleClick={() => false}
                     />
                   </div>
-                  {processingViewMode === 'single' ? (
-                    <CheckRow label="顯示原始" checked={showRaw} onChange={setShowRaw} />
-                  ) : (
-                    <p className="text-xs text-[var(--text-soft)]">疊圖平均模式下這張圖顯示多檔平均後的單一結果。</p>
-                  )}
-                </div>
-                {renderFinalChart()}
-                <div className="mt-3 flex justify-start">
-                  <ExportBtn
-                    label="下載此步驟 CSV"
-                    onClick={() => downloadFile(buildStageCsv(finalStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_final_stage.csv', 'text/csv')}
-                  />
-                </div>
-              </div>
+                ) : (
+                  <div className={['analysis-section-card p-4', ctx.sortingGhost ? 'opacity-30' : '', ctx.overlay ? 'shadow-[0_34px_110px_rgba(15,23,42,0.48)] ring-1 ring-[var(--accent-strong)]/50' : ''].filter(Boolean).join(' ')}>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-[var(--text-main)]">歸一化</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setNormPaperMode(v => !v)}
+                          className={[
+                            'shrink-0 rounded-[14px] px-3 py-1.5 text-xs font-semibold transition-all',
+                            normPaperMode
+                              ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_22%,transparent)] text-[var(--accent-secondary)] [box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent)]'
+                              : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                          ].join(' ')}
+                          title="切換為標記點視圖：歸一化前以散點呈現、歸一化後以實線疊加（期刊圖說常見格式）"
+                        >
+                          {normPaperMode ? '✓ 標記點視圖' : '📄 標記點視圖'}
+                        </button>
+                        <PairCardChromeButtons ctx={ctx} />
+                      </div>
+                    </div>
+                    <p className="mb-3 text-xs text-[var(--text-soft)]">
+                      {normPaperMode
+                        ? '歸一化前光譜以標記點呈現（右側 Y2 軸），歸一化後以實線疊加（期刊圖說常見的「前後對照」格式）。'
+                        : '歸一化後：完成歸一化的光譜，可直接用於 paper 圖表。線色與左卡同步。'}
+                    </p>
+                    <Plot
+                      data={applyHidden(((): Plotly.Data[] => {
+                        if (normPaperMode) {
+                          const before = normalizationChartTraces.find(t => t.name === '歸一化前')
+                          const after = normalizationChartTraces.find(t => t.name === '歸一化後')
+                          const traces: Plotly.Data[] = []
+                          if (before) traces.push({ ...(before as any), type: 'scatter', mode: 'markers', marker: { color: (before as any).line?.color, size: 4, symbol: 'circle' }, yaxis: 'y2' } as Plotly.Data)
+                          if (after) traces.push({ ...(after as any), type: 'scatter', mode: 'lines', line: { ...(after as any).line, width: 2.4 } } as Plotly.Data)
+                          return traces
+                        }
+                        return normalizationChartTraces.filter(t => t.name === '歸一化後') as Plotly.Data[]
+                      })(), normHidden)}
+                      layout={(normPaperMode
+                        ? { ...normalizationLayout, yaxis2: { overlaying: 'y', side: 'right', title: { text: '歸一化前強度 (a.u.)' } } }
+                        : normalizationLayout) as Plotly.Layout}
+                      config={withPlotFullscreen()}
+                      style={{ width: '100%', height: 340 }}
+                      onLegendClick={makeLegendClick(setNormHidden) as never}
+                      onLegendDoubleClick={() => false}
+                    />
+                    <div className="mt-3">
+                      {renderRangeControlCard(
+                        '歸一化區間',
+                        '同時影響左右兩張圖：拖曳調整歸一化採樣範圍',
+                        normDataXMin,
+                        normDataXMax,
+                        currentParams.norm_x_start ?? normDataXMin,
+                        currentParams.norm_x_end ?? normDataXMax,
+                        ({ start, end }) => {
+                          set('norm_x_start')(start)
+                          set('norm_x_end')(end)
+                        },
+                      )}
+                    </div>
+                    <div className="mt-3 flex justify-start">
+                      <ExportBtn
+                        label="下載此步驟 CSV"
+                        onClick={() => downloadFile(buildStageCsv(normalizationStageDatasets, 'binding_energy_eV', 'intensity_processed'), 'xps_normalization_stage.csv', 'text/csv')}
+                      />
+                    </div>
+                  </div>
+                )}
+              </SortableCardGrid>
             )}
+
+            {/* 最終處理光譜圖卡已移除：各階段（前處理 / 背景扣除 / 有效範圍 / 歸一化）皆有自己的左右並排圖卡，可直接製作 paper 圖。 */}
 
             {fitTargetDataset && currentFitResult && currentFitResult.peaks.length > 0 && (
               <div className="analysis-section-card mb-4 p-4">
-                <p className="mb-2 text-sm font-semibold text-[var(--text-main)]">峰擬合光譜</p>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-[var(--text-main)]">峰擬合光譜</p>
+                  <button
+                    type="button"
+                    onClick={() => setFitPaperMode(v => !v)}
+                    className={[
+                      'shrink-0 rounded-[14px] px-3 py-1.5 text-xs font-semibold transition-all',
+                      fitPaperMode
+                        ? 'bg-[color:color-mix(in_srgb,var(--accent-secondary)_22%,transparent)] text-[var(--accent-secondary)] [box-shadow:inset_0_0_0_1.5px_color-mix(in_srgb,var(--accent-secondary)_55%,transparent)]'
+                        : 'border border-[var(--card-border)] text-[var(--text-soft)] hover:text-[var(--text-main)]',
+                    ].join(' ')}
+                    title="切換為標記點視圖：擬合輸入以散點呈現、擬合線/峰組件以實線疊加（期刊圖說常見格式，純視覺切換、不影響擬合計算）"
+                  >
+                    {fitPaperMode ? '✓ 標記點視圖' : '📄 標記點視圖'}
+                  </button>
+                </div>
                 <p className="mb-3 text-xs text-[var(--text-soft)]">
-                  {processingViewMode === 'overlay'
-                    ? '疊圖平均模式下這裡會直接對「多檔平均後的單一結果」做擬合，避免拿多條未平均光譜一起擬合。'
-                    : '這張圖會獨立顯示擬合輸入、總擬合、各峰組件與殘差，避免只疊在最終圖上不明顯。'}
+                  {fitPaperMode
+                    ? '擬合輸入以標記點呈現，總擬合與各峰組件以實線疊加（殘差仍以點線顯示）。純視覺切換，擬合結果與參數均不變。'
+                    : (processingViewMode === 'overlay'
+                      ? '疊圖平均模式下這裡會直接對「多檔平均後的單一結果」做擬合，避免拿多條未平均光譜一起擬合。'
+                      : '這張圖會獨立顯示擬合輸入、總擬合、各峰組件與殘差，避免只疊在最終圖上不明顯。')}
                 </p>
                 <Plot
-                  data={applyHidden(buildFitTraces(fitTargetDataset, currentFitResult, chartLineColors.final) as Plotly.Data[], fitHidden)}
+                  data={applyHidden(buildFitTraces(fitTargetDataset, currentFitResult, chartLineColors.final, fitPaperMode) as Plotly.Data[], fitHidden)}
                   layout={chartLayout() as Plotly.Layout}
                   config={withPlotFullscreen()}
                   style={{ width: '100%', height: 380 }}
@@ -5246,6 +5647,54 @@ export default function XPS({
                   )
                 })}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 能量校正二次確認 modal ── */}
+      {calibrationConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-[3px]"
+          onClick={() => setCalibrationConfirmOpen(false)}
+        >
+          <div
+            className="glass-panel flex w-full max-w-md flex-col overflow-hidden rounded-[24px]"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="border-b border-[var(--card-divider)] px-5 py-4">
+              <p className="text-base font-semibold text-[var(--text-main)]">⚠️ 已校正過一次，確定再來一次嗎？</p>
+            </div>
+            <div className="space-y-2 px-5 py-4 text-sm leading-6 text-[var(--text-soft)]">
+              <p>
+                目前已套用偏移 <span className="font-mono font-semibold text-[var(--text-main)]">
+                  {(calibrationResult?.offset_ev ?? 0) >= 0 ? '+' : ''}
+                  {(calibrationResult?.offset_ev ?? 0).toFixed(3)} eV
+                </span>。
+              </p>
+              <p>
+                再次點擊「計算偏移並套用」會把<span className="font-semibold text-rose-300">新算出的偏移再加到目前值上（累加）</span>，
+                可能讓 BE 校正過頭。如果只是想微調或重做，請先在上方手動把 BE 位移歸零再校正一次。
+              </p>
+            </div>
+            <div className="flex shrink-0 justify-end gap-2 border-t border-[var(--card-divider)] px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setCalibrationConfirmOpen(false)}
+                className="rounded-full border border-[var(--card-border)] px-4 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCalibrationConfirmOpen(false)
+                  void handleAutoCalibration()
+                }}
+                className="rounded-full bg-rose-500/85 px-5 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 pressable"
+              >
+                繼續累加校正
+              </button>
             </div>
           </div>
         </div>
