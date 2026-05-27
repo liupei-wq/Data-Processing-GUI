@@ -7,7 +7,7 @@ import FileUpload from '../components/FileUpload'
 import type { ParsedFile, ProcessParams, ProcessedDataset } from '../types/xrd'
 import { DEFAULT_PARAMS } from '../components/ProcessingPanel'
 
-export type SingleToolKind = 'background' | 'normalize' | 'gaussian'
+export type SingleToolKind = 'background' | 'normalize' | 'gaussian' | 'arctan'
 
 type BackgroundMethod = 'linear' | 'shirley' | 'polynomial' | 'asls' | 'airpls'
 type NormalizeMethod = 'min_max' | 'max' | 'area'
@@ -32,6 +32,17 @@ const TOOL_META: Record<SingleToolKind, { title: string; subtitle: string; descr
     description: '固定 FWHM 與高度，手動定位中心；或用「切到最低點」自動對齊。',
     accent: 'var(--accent-tertiary)',
   },
+  arctan: {
+    title: 'Arctan 扣除',
+    subtitle: 'Arctan Subtraction',
+    description: '用三個主參數建立階梯型 Arctan 模型，適合扣除 step-like 或緩慢轉折訊號。',
+    accent: '#f59e0b',
+  },
+}
+
+function buildArctanModel(x: number[], center: number, width: number, height: number): number[] {
+  const safeWidth = Math.max(Math.abs(width), 0.001)
+  return x.map(xv => height * (Math.atan((xv - center) / safeWidth) / Math.PI + 0.5))
 }
 
 function findMinimumInRange(x: number[], y: number[], start: number, end: number): RangeMinimum | null {
@@ -97,19 +108,19 @@ function buildSingleToolCsv(
   rangeStart: number,
   rangeEnd: number,
   minimum: RangeMinimum | null,
-  gaussianModelOverride?: number[] | null,
-  gaussianSubtractedOverride?: number[] | null,
+  modelOverride?: number[] | null,
+  subtractedOverride?: number[] | null,
 ): string {
-  const header = ['x', 'raw', 'background', 'gaussian_model', 'gaussian_subtracted', 'processed']
-  const gaussianModel = gaussianModelOverride ?? dataset.y_gaussian_model
-  const gaussianSubtracted = gaussianSubtractedOverride ?? dataset.y_gaussian_subtracted
-  const processedCol = gaussianSubtractedOverride ? gaussianSubtracted : dataset.y_processed
+  const header = ['x', 'raw', 'background', 'template_model', 'template_subtracted', 'processed']
+  const templateModel = modelOverride ?? dataset.y_gaussian_model
+  const templateSubtracted = subtractedOverride ?? dataset.y_gaussian_subtracted
+  const processedCol = subtractedOverride ? templateSubtracted : dataset.y_processed
   const rows = dataset.x.map((xv, i) => [
     xv.toFixed(6),
     dataset.y_raw[i]?.toFixed(6) ?? '',
     dataset.y_background?.[i]?.toFixed(6) ?? '',
-    gaussianModel?.[i]?.toFixed(6) ?? '',
-    gaussianSubtracted?.[i]?.toFixed(6) ?? '',
+    templateModel?.[i]?.toFixed(6) ?? '',
+    templateSubtracted?.[i]?.toFixed(6) ?? '',
     processedCol?.[i]?.toFixed(6) ?? '',
   ])
   const summary = minimum
@@ -142,10 +153,11 @@ function buildParams(
   gaussianNonnegativeGuard: boolean,
   gaussianCenter: number,
 ): ProcessParams {
+  const isTemplateTool = tool === 'gaussian' || tool === 'arctan'
   return {
     ...DEFAULT_PARAMS,
-    interpolate: tool === 'gaussian',
-    n_points: tool === 'gaussian' ? 1200 : 1000,
+    interpolate: isTemplateTool,
+    n_points: isTemplateTool ? 1200 : 1000,
     average: false,
     bg_enabled: tool === 'background',
     bg_method: tool === 'background' ? backgroundMethod : 'none',
@@ -252,7 +264,7 @@ export default function SingleProcessTool({
   const [selectedDatasetName, setSelectedDatasetName] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [gaussianApplyVersion, setGaussianApplyVersion] = useState(0)
+  const [templateApplyVersion, setTemplateApplyVersion] = useState(0)
   const [snapToMinimumEnabled, setSnapToMinimumEnabled] = useState(false)
   const [snapPhase, setSnapPhase] = useState<'idle' | 'minimum_found' | 'gaussian_generated'>('idle')
   const [confirmedSnapRange, setConfirmedSnapRange] = useState<{ start: number; end: number } | null>(null)
@@ -282,6 +294,9 @@ export default function SingleProcessTool({
   const [minimumRangeEnd, setMinimumRangeEnd] = useState(406)
   const [gaussianCenter, setGaussianCenter] = useState(30)
   const [importedGaussianCurve, setImportedGaussianCurve] = useState<{ x: number[]; y: number[]; name: string } | null>(null)
+  const [arctanCenter, setArctanCenter] = useState(30)
+  const [arctanWidth, setArctanWidth] = useState(1)
+  const [arctanHeight, setArctanHeight] = useState(1)
 
   // ── Reset on tool change ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -289,7 +304,7 @@ export default function SingleProcessTool({
     setResult([])
     setSelectedDatasetName('')
     setError(null)
-    setGaussianApplyVersion(0)
+    setTemplateApplyVersion(0)
     setBackgroundMethod('linear')
     setBgRangeStart(null)
     setBgRangeEnd(null)
@@ -307,6 +322,9 @@ export default function SingleProcessTool({
     setMinimumRangeEnd(406)
     setGaussianCenter(30)
     setImportedGaussianCurve(null)
+    setArctanCenter(30)
+    setArctanWidth(1)
+    setArctanHeight(1)
     setSnapToMinimumEnabled(false)
     setSnapPhase('idle')
     setConfirmedSnapRange(null)
@@ -327,6 +345,10 @@ export default function SingleProcessTool({
   const activeDataset: ProcessedDataset | null =
     result.find(d => d.name === selectedDatasetName) ?? result[0] ?? null
 
+  const isGaussianTool = tool === 'gaussian'
+  const isArctanTool = tool === 'arctan'
+  const isTemplateTool = isGaussianTool || isArctanTool
+
   // ── Gaussian derived state ───────────────────────────────────────────────────
 
   // Minimum in the confirmed search range — only when snap is enabled and range confirmed
@@ -345,7 +367,7 @@ export default function SingleProcessTool({
 
   // Client-side Gaussian model: use imported curve if available, otherwise compute from params
   const clientGaussianModel = useMemo((): number[] | null => {
-    if (tool !== 'gaussian' || !activeDataset) return null
+    if (!isGaussianTool || !activeDataset) return null
     // Imported gaussian curve takes priority
     if (importedGaussianCurve) {
       return interpolateY(activeDataset.x, importedGaussianCurve.x, importedGaussianCurve.y)
@@ -359,16 +381,28 @@ export default function SingleProcessTool({
       }
     }
     return model
-  }, [tool, activeDataset, importedGaussianCurve, gaussianFwhm, gaussianCenter, gaussianHeight])
+  }, [isGaussianTool, activeDataset, importedGaussianCurve, gaussianFwhm, gaussianCenter, gaussianHeight])
+
+  const clientArctanModel = useMemo((): number[] | null => {
+    if (!isArctanTool || !activeDataset) return null
+    return buildArctanModel(activeDataset.x, arctanCenter, arctanWidth, arctanHeight)
+  }, [isArctanTool, activeDataset, arctanCenter, arctanWidth, arctanHeight])
+
+  const currentTemplateModel = isGaussianTool ? clientGaussianModel : isArctanTool ? clientArctanModel : null
+  const templateLabel = isGaussianTool ? '高斯' : isArctanTool ? 'Arctan' : '模板'
+  const templateCenter = isGaussianTool ? gaussianCenter : arctanCenter
+  const templateWidth = isGaussianTool ? gaussianFwhm : arctanWidth
+  const templateHeight = isGaussianTool ? gaussianHeight : arctanHeight
+  const templateWidthLabel = isGaussianTool ? '半高寬 FWHM' : '轉折寬度'
 
   // Client-side subtraction — always instant, exact when center is manually placed
   const clientAfterY = useMemo((): number[] | null => {
-    if (!activeDataset || !clientGaussianModel) return null
+    if (!activeDataset || !currentTemplateModel) return null
     return activeDataset.y_raw.map((v, i) => {
-      const sub = v - (clientGaussianModel[i] ?? 0)
+      const sub = v - (currentTemplateModel[i] ?? 0)
       return gaussianNonnegativeGuard ? Math.max(0, sub) : sub
     })
-  }, [activeDataset, clientGaussianModel, gaussianNonnegativeGuard])
+  }, [activeDataset, currentTemplateModel, gaussianNonnegativeGuard])
 
   // Residual at the minimum (from client-side after)
   const minimumResidual = useMemo(() => {
@@ -385,24 +419,31 @@ export default function SingleProcessTool({
       type: 'scatter', mode: 'lines', name: 'Raw',
       line: { color: '#000000', width: 1.5 },
     }]
-    if (tool === 'gaussian' && clientGaussianModel) {
-      traces.push({ x: activeDataset.x, y: clientGaussianModel, type: 'scatter', mode: 'lines', name: 'Gaussian model', line: { color: '#cc0000', width: 1.5, dash: 'dash' } })
+    if (isTemplateTool && currentTemplateModel) {
+      traces.push({
+        x: activeDataset.x,
+        y: currentTemplateModel,
+        type: 'scatter',
+        mode: 'lines',
+        name: isGaussianTool ? 'Gaussian model' : 'Arctan model',
+        line: { color: '#cc0000', width: 1.5, dash: 'dash' },
+      })
     } else if (tool === 'background' && activeDataset.y_background) {
       traces.push({ x: activeDataset.x, y: activeDataset.y_background, type: 'scatter', mode: 'lines', name: 'Background', line: { color: '#cc0000', width: 1.5, dash: 'dash' } })
     }
     return traces
-  }, [activeDataset, tool, clientGaussianModel])
+  }, [activeDataset, tool, isTemplateTool, isGaussianTool, currentTemplateModel])
 
   const previewChart2Traces = useMemo((): Plotly.Data[] => {
     if (!activeDataset) return []
-    if (tool === 'gaussian' && clientAfterY) {
-      return [{ x: activeDataset.x, y: clientAfterY, type: 'scatter', mode: 'lines', name: 'Gaussian subtracted', line: { color: '#000000', width: 1.5 } }]
+    if (isTemplateTool && clientAfterY) {
+      return [{ x: activeDataset.x, y: clientAfterY, type: 'scatter', mode: 'lines', name: `${templateLabel} subtracted`, line: { color: '#000000', width: 1.5 } }]
     }
     if (tool === 'background' && activeDataset.y_processed) {
       return [{ x: activeDataset.x, y: activeDataset.y_processed, type: 'scatter', mode: 'lines', name: 'Background subtracted', line: { color: '#000000', width: 1.5 } }]
     }
     return []
-  }, [activeDataset, tool, clientAfterY])
+  }, [activeDataset, tool, isTemplateTool, clientAfterY, templateLabel])
 
   // ── Snap-to-minimum handlers ─────────────────────────────────────────────────
 
@@ -442,7 +483,7 @@ export default function SingleProcessTool({
 
   // Auto-process: background/normalize only
   useEffect(() => {
-    if (tool === 'gaussian') return
+    if (isTemplateTool) return
     if (rawFiles.length === 0) return
     let cancelled = false
     setIsLoading(true)
@@ -452,15 +493,15 @@ export default function SingleProcessTool({
       .catch(e => { if (!cancelled) setError(String((e as Error).message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
-  }, [tool, rawFiles, debouncedParams])
+  }, [isTemplateTool, rawFiles, debouncedParams])
 
   // Gaussian: initial backend call to get interpolated x/y_raw (manual apply via button)
-  const gaussianParamsRef = useRef(params)
-  gaussianParamsRef.current = params
+  const templateParamsRef = useRef(params)
+  templateParamsRef.current = params
 
   useEffect(() => {
-    if (tool !== 'gaussian' || rawFiles.length === 0 || gaussianApplyVersion === 0) return
-    const currentParams = gaussianParamsRef.current
+    if (!isTemplateTool || rawFiles.length === 0 || templateApplyVersion === 0) return
+    const currentParams = templateParamsRef.current
     let cancelled = false
     setIsLoading(true)
     setError(null)
@@ -469,7 +510,7 @@ export default function SingleProcessTool({
       .catch(e => { if (!cancelled) setError(String((e as Error).message)) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }
-  }, [tool, rawFiles, gaussianApplyVersion])
+  }, [isTemplateTool, rawFiles, templateApplyVersion])
 
   // ── File upload ──────────────────────────────────────────────────────────────
   const handleFiles = useCallback(async (files: File[]) => {
@@ -489,8 +530,11 @@ export default function SingleProcessTool({
         setNormEnd(xMax)
         setGaussianHeight(Math.max(yMax * 0.08, 0.01))
         setGaussianCenter((xMin + xMax) / 2)
-        if (tool === 'gaussian') {
-          setGaussianApplyVersion(v => v + 1)
+        setArctanCenter((xMin + xMax) / 2)
+        setArctanWidth(Math.max((xMax - xMin) * 0.05, 0.01))
+        setArctanHeight(Math.max(yMax * 0.08, 0.01))
+        if (isTemplateTool) {
+          setTemplateApplyVersion(v => v + 1)
         }
       }
     } catch (e: unknown) {
@@ -498,7 +542,7 @@ export default function SingleProcessTool({
     } finally {
       setIsLoading(false)
     }
-  }, [tool])
+  }, [isTemplateTool])
 
   // ── Slider bounds ────────────────────────────────────────────────────────────
   const gSliderXMin = rawFiles.length > 0 ? Math.min(...rawFiles.flatMap(f => f.x)) : 0
@@ -517,11 +561,13 @@ export default function SingleProcessTool({
       type: 'scatter', mode: 'lines', name: '原始',
       line: { color: '#94a3b8', width: 1.7 },
     }]
-    if (tool === 'gaussian' && clientGaussianModel) {
+    if (isTemplateTool && currentTemplateModel) {
       traces.push({
-        x: activeDataset.x, y: clientGaussianModel,
+        x: activeDataset.x, y: currentTemplateModel,
         type: 'scatter', mode: 'lines',
-        name: importedGaussianCurve ? '高斯模型（匯入）' : '高斯模型（即時）',
+        name: isGaussianTool
+          ? (importedGaussianCurve ? '高斯模型（匯入）' : '高斯模型（即時）')
+          : 'Arctan 模型（即時）',
         line: { color: '#f97316', width: 2.4, dash: 'dash' },
       })
     }
@@ -548,15 +594,15 @@ export default function SingleProcessTool({
       })
     }
     return traces
-  }, [activeDataset, tool, clientGaussianModel, importedGaussianCurve, anchorMinimum])
+  }, [activeDataset, tool, isTemplateTool, isGaussianTool, currentTemplateModel, importedGaussianCurve, anchorMinimum])
 
   // After chart always uses client-side subtraction (instant, exact)
   const afterTraces = useMemo((): Plotly.Data[] => {
     if (!activeDataset) return []
-    if (tool === 'gaussian' && clientAfterY) {
+    if (isTemplateTool && clientAfterY) {
       return [{
         x: activeDataset.x, y: clientAfterY,
-        type: 'scatter', mode: 'lines', name: '高斯扣除後（即時）',
+        type: 'scatter', mode: 'lines', name: `${templateLabel} 扣除後（即時）`,
         line: { color: '#38bdf8', width: 2.2 },
       }]
     }
@@ -568,7 +614,7 @@ export default function SingleProcessTool({
       }]
     }
     return []
-  }, [activeDataset, tool, clientAfterY])
+  }, [activeDataset, tool, isTemplateTool, clientAfterY, templateLabel])
 
   const beforeLayout = useMemo(() => {
     const base = chartLayout()
@@ -586,7 +632,7 @@ export default function SingleProcessTool({
       } as Plotly.Shape)
     }
     // Only show parameter indicator lines in manual mode (no imported curve, snap not active)
-    if (tool === 'gaussian' && !importedGaussianCurve && !snapToMinimumEnabled && Number.isFinite(gaussianCenter)) {
+    if (isGaussianTool && !importedGaussianCurve && !snapToMinimumEnabled && Number.isFinite(gaussianCenter)) {
       // Center vertical line (solid orange)
       shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: gaussianCenter, x1: gaussianCenter, y0: 0, y1: 1, line: { color: '#f97316', width: 1.5 } } as Plotly.Shape)
       // FWHM left boundary (dashed orange)
@@ -598,9 +644,15 @@ export default function SingleProcessTool({
       // FWHM bracket at y = height/2 (dotted orange)
       shapes.push({ type: 'line', xref: 'x', yref: 'y', x0: gaussianCenter - gaussianFwhm / 2, x1: gaussianCenter + gaussianFwhm / 2, y0: gaussianHeight / 2, y1: gaussianHeight / 2, line: { color: '#f97316', width: 1.5, dash: 'dot' } } as Plotly.Shape)
     }
+    if (isArctanTool && Number.isFinite(arctanCenter)) {
+      shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: arctanCenter, x1: arctanCenter, y0: 0, y1: 1, line: { color: '#f97316', width: 1.5 } } as Plotly.Shape)
+      shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: arctanCenter - arctanWidth, x1: arctanCenter - arctanWidth, y0: 0, y1: 1, line: { color: '#f97316', width: 1, dash: 'dash' } } as Plotly.Shape)
+      shapes.push({ type: 'line', xref: 'x', yref: 'paper', x0: arctanCenter + arctanWidth, x1: arctanCenter + arctanWidth, y0: 0, y1: 1, line: { color: '#f97316', width: 1, dash: 'dash' } } as Plotly.Shape)
+      shapes.push({ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: arctanHeight, y1: arctanHeight, line: { color: '#38bdf8', width: 1, dash: 'dot' } } as Plotly.Shape)
+    }
     if (shapes.length > 0) base.shapes = shapes
     return base
-  }, [tool, selectedDatasetName, gaussianCenter, gaussianFwhm, gaussianHeight, snapToMinimumEnabled, snapPhase, confirmedSnapRange, importedGaussianCurve])
+  }, [tool, selectedDatasetName, isGaussianTool, isArctanTool, gaussianCenter, gaussianFwhm, gaussianHeight, snapToMinimumEnabled, snapPhase, confirmedSnapRange, importedGaussianCurve, arctanCenter, arctanWidth, arctanHeight])
 
   const afterLayout = useMemo(() => {
     const base = chartLayout()
@@ -613,43 +665,53 @@ export default function SingleProcessTool({
     if (!activeDataset) return
     const csv = buildSingleToolCsv(
       activeDataset, minimumRangeStart, minimumRangeEnd, anchorMinimum,
-      tool === 'gaussian' ? clientGaussianModel : null,
-      tool === 'gaussian' ? clientAfterY : null,
+      isTemplateTool ? currentTemplateModel : null,
+      isTemplateTool ? clientAfterY : null,
     )
     downloadFile(csv, `${activeDataset.name.replace(/\.[^.]+$/, '')}_${tool}_processed.csv`, 'text/csv;charset=utf-8')
-  }, [activeDataset, tool, minimumRangeStart, minimumRangeEnd, anchorMinimum, clientGaussianModel, clientAfterY])
+  }, [activeDataset, tool, minimumRangeStart, minimumRangeEnd, anchorMinimum, isTemplateTool, currentTemplateModel, clientAfterY])
 
   const handleExportChart1 = useCallback(() => {
     if (!activeDataset) return
     const stem = activeDataset.name.replace(/\.[^.]+$/, '')
-    if (tool === 'gaussian' && clientGaussianModel) {
+    if (isGaussianTool && clientGaussianModel) {
       const header = 'x,raw,gaussian_model'
       const rows = activeDataset.x.map((xv, i) =>
         `${xv.toFixed(6)},${activeDataset.y_raw[i]?.toFixed(6) ?? ''},${clientGaussianModel[i]?.toFixed(6) ?? ''}`)
       downloadFile([header, ...rows].join('\n'), `${stem}_raw_gaussian_model.csv`, 'text/csv;charset=utf-8')
+    } else if (isArctanTool && clientArctanModel) {
+      const header = 'x,raw,arctan_model'
+      const rows = activeDataset.x.map((xv, i) =>
+        `${xv.toFixed(6)},${activeDataset.y_raw[i]?.toFixed(6) ?? ''},${clientArctanModel[i]?.toFixed(6) ?? ''}`)
+      downloadFile([header, ...rows].join('\n'), `${stem}_raw_arctan_model.csv`, 'text/csv;charset=utf-8')
     } else if (tool === 'background' && activeDataset.y_background) {
       const header = 'x,raw,background'
       const rows = activeDataset.x.map((xv, i) =>
         `${xv.toFixed(6)},${activeDataset.y_raw[i]?.toFixed(6) ?? ''},${activeDataset.y_background![i]?.toFixed(6) ?? ''}`)
       downloadFile([header, ...rows].join('\n'), `${stem}_raw_background.csv`, 'text/csv;charset=utf-8')
     }
-  }, [activeDataset, tool, clientGaussianModel])
+  }, [activeDataset, tool, isGaussianTool, isArctanTool, clientGaussianModel, clientArctanModel])
 
   const handleExportChart2 = useCallback(() => {
     if (!activeDataset) return
     const stem = activeDataset.name.replace(/\.[^.]+$/, '')
-    if (tool === 'gaussian' && clientAfterY) {
+    if (isGaussianTool && clientAfterY) {
       const header = 'x,gaussian_subtracted'
       const rows = activeDataset.x.map((xv, i) =>
         `${xv.toFixed(6)},${clientAfterY[i]?.toFixed(6) ?? ''}`)
       downloadFile([header, ...rows].join('\n'), `${stem}_gaussian_subtracted.csv`, 'text/csv;charset=utf-8')
+    } else if (isArctanTool && clientAfterY) {
+      const header = 'x,arctan_subtracted'
+      const rows = activeDataset.x.map((xv, i) =>
+        `${xv.toFixed(6)},${clientAfterY[i]?.toFixed(6) ?? ''}`)
+      downloadFile([header, ...rows].join('\n'), `${stem}_arctan_subtracted.csv`, 'text/csv;charset=utf-8')
     } else if (tool === 'background' && activeDataset.y_processed) {
       const header = 'x,background_subtracted'
       const rows = activeDataset.x.map((xv, i) =>
         `${xv.toFixed(6)},${activeDataset.y_processed[i]?.toFixed(6) ?? ''}`)
       downloadFile([header, ...rows].join('\n'), `${stem}_background_subtracted.csv`, 'text/csv;charset=utf-8')
     }
-  }, [activeDataset, tool, clientAfterY])
+  }, [activeDataset, tool, isGaussianTool, isArctanTool, clientAfterY])
 
   const handleDownloadGaussianCsv = useCallback(() => {
     if (!activeDataset || !clientGaussianModel) return
@@ -771,7 +833,7 @@ export default function SingleProcessTool({
   }, [isDragging, getDataXFromClientX, getDataYFromClientY, applyAnchoredSnap])
 
   const plotConfig = withPlotFullscreen({ scrollZoom: false, displayModeBar: true, doubleClick: 'reset+autosize' })
-  const showTwoCharts = tool === 'gaussian' || tool === 'background'
+  const showTwoCharts = isTemplateTool || tool === 'background'
   const renderBeforeChart = (minHeight = 360) => (
     <Plot
       data={beforeTraces}
@@ -912,7 +974,7 @@ export default function SingleProcessTool({
           )}
 
           {/* ── Gaussian controls ── */}
-          {tool === 'gaussian' && (
+          {isGaussianTool && (
             <div className="space-y-3">
 
               {/* Template params */}
@@ -978,7 +1040,7 @@ export default function SingleProcessTool({
 
                 {/* Import gaussian curve */}
                 <div className="mt-2">
-                  <div className="mb-1 text-xs text-[var(--text-soft)]">匯入高斯曲線資料</div>
+                  <div className="mb-1 text-xs text-[var(--text-soft)]">匯入外部模板曲線</div>
                   {importedGaussianCurve ? (
                     <div className="flex items-center gap-2 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] px-3 py-2">
                       <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-main)]">{importedGaussianCurve.name}</span>
@@ -1086,6 +1148,45 @@ export default function SingleProcessTool({
 
             </div>
           )}
+
+          {isArctanTool && (
+            <div className="analysis-section-card rounded-[20px] p-4">
+              <div className="mb-1 text-sm font-semibold text-[var(--text-muted)]">Arctan 模板</div>
+              <div className="mb-3 text-[11px] leading-5 text-[var(--text-soft)]">
+                這裡保留 3 個主參數輸入；拉桿在中間圖下，方便你一邊看圖一邊調。
+              </div>
+              <label className="mb-3 flex items-start gap-2.5 rounded-[14px] border border-[var(--card-border)] bg-[color:color-mix(in_srgb,var(--surface-elevated)_88%,transparent)] px-3 py-2.5">
+                <input type="checkbox" checked={gaussianNonnegativeGuard}
+                  onChange={e => setGaussianNonnegativeGuard(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded" style={{ accentColor: 'var(--accent-strong)' }}
+                />
+                <span className="text-xs leading-5 text-[var(--text-main)]">
+                  避免負值保護
+                  <span className="block text-[var(--text-soft)]">扣除太深時，結果會限制在 0 以上</span>
+                </span>
+              </label>
+              <div className="space-y-3">
+                <label className="block">
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">中心位置</span>
+                  <input type="number" value={arctanCenter} step={0.01}
+                    onChange={e => setArctanCenter(Number(e.target.value))}
+                    className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">轉折寬度</span>
+                  <input type="number" value={arctanWidth} min={0.001} step={0.01}
+                    onChange={e => setArctanWidth(Math.max(0.001, Number(e.target.value)))}
+                    className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-[var(--text-soft)]">高度</span>
+                  <input type="number" value={arctanHeight} min={0} step={0.01}
+                    onChange={e => setArctanHeight(Math.max(0, Number(e.target.value)))}
+                    className="theme-input w-full rounded-xl px-3 py-2 text-sm" />
+                </label>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -1099,7 +1200,8 @@ export default function SingleProcessTool({
               <div>
                 <div className="text-sm font-semibold text-[var(--text-muted)]">處理結果</div>
                 <div className="mt-1 text-xs text-[var(--text-soft)]">
-                  {tool === 'gaussian' && '上圖：原始 + 高斯模型（即時）；下圖：扣除後（前端即時計算，無需套用）。'}
+                  {isGaussianTool && '上圖：原始 + 高斯模型（即時）；下圖：扣除後（前端即時計算，無需套用）。'}
+                  {isArctanTool && '上圖：原始 + Arctan 模型（即時）；下圖：Arctan 扣除後結果。'}
                   {tool === 'background' && '上圖：原始 + 背景基準線；下圖：扣背景後結果。'}
                   {tool === 'normalize' && '原始訊號與歸一化後曲線同圖對比。'}
                 </div>
@@ -1139,7 +1241,8 @@ export default function SingleProcessTool({
             <div className="glass-panel rounded-[24px] p-4">
               <div className="mb-2 flex items-center gap-3">
                 <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text-soft)]">
-                  {tool === 'gaussian' ? '原始訊號 + 高斯模型（即時）'
+                  {isGaussianTool ? '原始訊號 + 高斯模型（即時）'
+                    : isArctanTool ? '原始訊號 + Arctan 模型（即時）'
                     : tool === 'background' ? '原始訊號 + 背景基準線' : '處理前後'}
                 </span>
                 {onOpenPlotPopup && (
@@ -1153,17 +1256,17 @@ export default function SingleProcessTool({
               </div>
 
               {/* Gaussian: chart + right-side vertical height slider */}
-              {tool === 'gaussian' ? (
+              {isTemplateTool ? (
                 <>
                   <div className="flex items-stretch gap-1">
                     <div
                       ref={chartContainerRef}
                       className="relative min-w-0 flex-1"
-                      style={{ cursor: snapPhase === 'gaussian_generated' ? (isDragging ? 'grabbing' : 'ew-resize') : undefined }}
+                      style={{ cursor: isGaussianTool && snapPhase === 'gaussian_generated' ? (isDragging ? 'grabbing' : 'ew-resize') : undefined }}
                     >
                       {renderBeforeChart(320)}
                       {/* Transparent overlay for drag-to-reposition gaussian in snap mode */}
-                      {snapToMinimumEnabled && snapPhase === 'gaussian_generated' && (
+                      {isGaussianTool && snapToMinimumEnabled && snapPhase === 'gaussian_generated' && (
                         <div
                           className="absolute inset-0"
                           style={{ zIndex: 10, cursor: isDragging ? 'grabbing' : 'ew-resize' }}
@@ -1176,23 +1279,31 @@ export default function SingleProcessTool({
                       <span className="text-[9px] text-[var(--text-soft)]" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>高度 H</span>
                       <input
                         type="range"
-                        value={gaussianHeight}
+                        value={templateHeight}
                         min={0}
                         max={heightSliderMax}
                         step={heightSliderMax / 500}
-                        disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
-                        onChange={e => { setGaussianHeight(Number(e.target.value)); setImportedGaussianCurve(null) }}
+                        disabled={isGaussianTool && snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                        onChange={e => {
+                          const value = Number(e.target.value)
+                          if (isGaussianTool) {
+                            setGaussianHeight(value)
+                            setImportedGaussianCurve(null)
+                          } else {
+                            setArctanHeight(value)
+                          }
+                        }}
                         style={{
                           writingMode: 'vertical-lr',
                           direction: 'rtl',
                           width: '28px',
                           height: '260px',
-                          cursor: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 'not-allowed' : 'pointer',
+                          cursor: (isGaussianTool && snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 'not-allowed' : 'pointer',
                           accentColor: '#38bdf8',
-                          opacity: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined,
+                          opacity: (isGaussianTool && snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined,
                         }}
                       />
-                      <span className="font-mono text-[9px] text-[var(--text-soft)]">{gaussianHeight.toFixed(2)}</span>
+                      <span className="font-mono text-[9px] text-[var(--text-soft)]">{templateHeight.toFixed(2)}</span>
                     </div>
                   </div>
 
@@ -1200,43 +1311,59 @@ export default function SingleProcessTool({
                   <div className="mt-3 space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-[var(--text-soft)]">
-                        中心位置{snapToMinimumEnabled && snapPhase === 'gaussian_generated' && <span className="ml-1 text-[var(--accent-secondary)]">（按住圖中拖動）</span>}
+                        中心位置{isGaussianTool && snapToMinimumEnabled && snapPhase === 'gaussian_generated' && <span className="ml-1 text-[var(--accent-secondary)]">（按住圖中拖動）</span>}
                       </span>
-                      <span className="font-mono text-xs text-[var(--text-main)]">{gaussianCenter.toFixed(3)}</span>
+                      <span className="font-mono text-xs text-[var(--text-main)]">{templateCenter.toFixed(3)}</span>
                     </div>
                     <input
                       type="range"
-                      value={gaussianCenter}
+                      value={templateCenter}
                       min={gSliderXMin}
                       max={gSliderXMax}
                       step={gSliderXRange / 1000}
-                      disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
-                      onChange={e => { setGaussianCenter(Number(e.target.value)); setImportedGaussianCurve(null) }}
+                      disabled={isGaussianTool && snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                      onChange={e => {
+                        const value = Number(e.target.value)
+                        if (isGaussianTool) {
+                          setGaussianCenter(value)
+                          setImportedGaussianCurve(null)
+                        } else {
+                          setArctanCenter(value)
+                        }
+                      }}
                       className="w-full cursor-pointer"
-                      style={{ accentColor: '#f97316', opacity: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined }}
+                      style={{ accentColor: '#f97316', opacity: (isGaussianTool && snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined }}
                     />
                   </div>
 
-                  {/* Horizontal FWHM slider */}
+                  {/* Horizontal width slider */}
                   <div className="mt-2 space-y-1">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-[var(--text-soft)]">半高寬 FWHM</span>
-                      <span className="font-mono text-xs text-[var(--text-main)]">{gaussianFwhm.toFixed(3)}</span>
+                      <span className="text-xs text-[var(--text-soft)]">{templateWidthLabel}</span>
+                      <span className="font-mono text-xs text-[var(--text-main)]">{templateWidth.toFixed(3)}</span>
                     </div>
                     <input
                       type="range"
-                      value={gaussianFwhm}
+                      value={templateWidth}
                       min={0.001}
                       max={fwhmSliderMax}
                       step={fwhmSliderMax / 500}
-                      disabled={snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
-                      onChange={e => { setGaussianFwhm(Number(e.target.value)); setImportedGaussianCurve(null) }}
+                      disabled={isGaussianTool && snapToMinimumEnabled && snapPhase !== 'gaussian_generated'}
+                      onChange={e => {
+                        const value = Number(e.target.value)
+                        if (isGaussianTool) {
+                          setGaussianFwhm(value)
+                          setImportedGaussianCurve(null)
+                        } else {
+                          setArctanWidth(value)
+                        }
+                      }}
                       className="w-full cursor-pointer"
-                      style={{ accentColor: '#f97316', opacity: (snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined }}
+                      style={{ accentColor: '#f97316', opacity: (isGaussianTool && snapToMinimumEnabled && snapPhase !== 'gaussian_generated') ? 0.4 : undefined }}
                     />
                     <div className="flex justify-between text-[10px] text-[var(--text-soft)]">
-                      <span>← {(gaussianCenter - gaussianFwhm / 2).toFixed(3)}</span>
-                      <span>{(gaussianCenter + gaussianFwhm / 2).toFixed(3)} →</span>
+                      <span>← {(templateCenter - templateWidth / 2).toFixed(3)}</span>
+                      <span>{(templateCenter + templateWidth / 2).toFixed(3)} →</span>
                     </div>
                   </div>
                 </>
@@ -1259,7 +1386,7 @@ export default function SingleProcessTool({
           {activeDataset && showTwoCharts && afterTraces.length > 0 && (
             <div className="glass-panel rounded-[24px] p-4">
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text-soft)]">
-                {tool === 'gaussian' ? '扣除後結果（前端即時）' : '扣背景後結果'}
+                {isTemplateTool ? `${templateLabel} 扣除後結果（前端即時）` : '扣背景後結果'}
               </div>
               {onOpenPlotPopup && (
                 <div className="mb-2 flex justify-end">
@@ -1289,8 +1416,8 @@ export default function SingleProcessTool({
             <div className="border-b border-[var(--card-divider)] px-6 py-4">
               <div className="text-sm font-semibold text-[var(--text-main)]">
                 {exportPreviewKind === 'chart1'
-                  ? (tool === 'gaussian' ? '原始訊號 + 高斯模型' : '原始訊號 + 背景基準線')
-                  : (tool === 'gaussian' ? '高斯扣除後' : '背景扣除後')}
+                  ? (isGaussianTool ? '原始訊號 + 高斯模型' : isArctanTool ? '原始訊號 + Arctan 模型' : '原始訊號 + 背景基準線')
+                  : (isGaussianTool ? '高斯扣除後' : isArctanTool ? 'Arctan 扣除後' : '背景扣除後')}
               </div>
               <div className="mt-0.5 text-xs text-[var(--text-soft)]">{activeDataset.name} — Origin Pro 風格預覽</div>
             </div>

@@ -1,5 +1,9 @@
 # Nigiro Pro 協作手冊（精簡版）
 
+- 2026-05-27：協助修復本地前端啟動時的 `@dnd-kit` import 失敗。確認 `web/frontend/package.json` 與 `package-lock.json` 已宣告 `@dnd-kit/core`、`@dnd-kit/sortable`、`@dnd-kit/utilities`，但使用者本地 `node_modules` 缺少實際套件目錄，導致 Vite 報 `[plugin:vite:import-analysis] Failed to resolve import "@dnd-kit/core"`。在 `web/frontend` 以提升權限執行 `npm install @dnd-kit/core@^6.3.1 @dnd-kit/sortable@^10.0.0 @dnd-kit/utilities@^3.2.2` 後，`npm run build` 已恢復通過；`git diff --check` 通過。建置僅剩既有 chunk size warning，非錯誤。
+
+- 2026-05-27：調整 `Single Process Tool` 單一處理右側選單。`web/frontend/src/pages/SingleProcessTool.tsx` 新增 `arctan` 工具型別與前端即時計算 `Arctan 扣除` 流程，比照高斯模板扣除提供兩張圖卡（原始+模型、扣除後）與 3 個主參數：中心位置、轉折寬度、高度；共用既有非負值保護。同步把高斯模板區的「匯入高斯曲線資料」改為較中性的「匯入外部模板曲線」，並把 CSV 匯出欄位補上 `arctan_model` / `arctan_subtracted`。`web/frontend/src/App.tsx` 新增 `tool-arctan` 工作區入口。驗證：`git diff --check` 通過；`cd web/frontend && npm run build` 仍被專案既有缺件卡住，錯誤為 `@dnd-kit/core` / `@dnd-kit/sortable` 缺模組與既有 `implicit any`，非本次修改新引入。
+
 - 2026-05-27：重作先前遺失的導引式左側步驟流程。新增共用 `GuidedSidebarSection` 到 `web/frontend/src/components/WorkspaceUi.tsx`，支援狀態點、受控展開/收合、說明彈窗，以及 `onOpenChange`。XPS、XAS、XES 改接此共用元件；XPS/XAS/XES 的 Step 1 在首次載入資料後會自動收合並打開 Step 2，並依各分析步驟狀態顯示 on/off/locked。驗證：`npm run build` 通過，`git diff --check` 僅有既有 LF/CRLF 轉換提示；本機瀏覽器工具回報 `iab` 不可用，未做視覺截圖驗證。
 
 最後整理：2026-05-24

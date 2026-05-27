@@ -63,6 +63,7 @@ const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
   { id: 'tool-background', label: '背景扣除', detail: '單一處理' },
   { id: 'tool-normalize', label: '歸一化', detail: '單一處理' },
   { id: 'tool-gaussian', label: '高斯模板扣除', detail: '單一處理' },
+  { id: 'tool-arctan', label: 'Arctan 扣除', detail: '單一處理' },
 ]
 
 const ATHENA_WORKSPACE: { id: WorkspaceId; label: string; detail: string } = {
@@ -545,6 +546,7 @@ export default function App() {
           {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" onOpenPlotPopup={openPlotPopup} />}
           {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'tool-arctan' && <SingleProcessTool tool="arctan" onOpenPlotPopup={openPlotPopup} />}
         </WorkspaceErrorBoundary>
       </main>
       <PlotPopupHost popupPlots={popupPlots} onClose={closePlotPopup} />
