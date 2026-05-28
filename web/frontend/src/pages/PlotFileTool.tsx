@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import Plot, { PlotlyApi } from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { ModuleTopBar } from '../components/WorkspaceUi'
@@ -6,6 +7,7 @@ import { withPlotFullscreen } from '../components/plotConfig'
 
 type PlotModule = 'xps' | 'raman' | 'xrd' | 'xas' | 'xes'
 type XpsPlotMode = 'fit' | 'vbm' | 'vb-dos'
+type XpsPositionTarget = 'x-axis-title' | 'y-axis-title' | 'panel-title' | 'sample-label'
 type RamanPlotMode = 'single' | 'overlay'
 type RamanConfidenceFilter = 'all' | 'high' | 'medium-up' | 'low-only'
 type RamanReferenceLabelMode = 'full' | 'material-shift' | 'shift' | 'index'
@@ -66,6 +68,62 @@ interface XasBandPair {
   xesFileId: string
   xasFileId: string
   color: string
+}
+
+interface XrdSourceTrace {
+  id: string
+  sourceColumn: number
+  label: string
+  shortLabel: string
+  color: string
+  offset: number
+  linewidth: number
+  visible: boolean
+  y: number[]
+}
+
+interface XrdTableFile {
+  id: string
+  name: string
+  xColumn: string
+  x: number[]
+  traces: XrdSourceTrace[]
+}
+
+interface XrdReferencePeak {
+  id: string
+  x: number
+  text: string
+  lineColor: string
+  textYFrac: number
+  textXOffset?: number
+  enabled: boolean
+}
+
+interface XrdFigureStyle {
+  xShift: number
+  normalizeEachCurve: boolean
+  showTitle: boolean
+  figureTitle: string
+  xMin: number
+  xMax: number
+  yMin: number | null
+  yMax: number | null
+  axisLabelSize: number
+  tickLabelSize: number
+  curveLabelSize: number
+  peakLabelSize: number
+  titleSize: number
+  referenceLabelYShift: number
+  referenceLabelYMaxFraction: number
+  showReferencePeaks: boolean
+  showLegend: boolean
+  xAxisTitle: string
+  yAxisTitle: string
+  exportWidth: number
+  exportHeight: number
+  exportScale: number
+  exportDpi: number
 }
 
 interface VbDosPeakAnnotation {
@@ -192,6 +250,10 @@ interface PlotFigureStyle {
   yAxisFontSize: number
   xAxisTitleStandoff: number
   yAxisTitleStandoff: number
+  panelTitleXPaper: number
+  panelTitleYFraction: number
+  sampleLabelXPaper: number
+  sampleLabelYFraction: number
   axisLineWidth: number
   labelFontSize: number
   panelTitleFontSize: number
@@ -442,7 +504,7 @@ type PlotlyExportApi = {
 const MODULES: { id: PlotModule; label: string; detail: string; enabled: boolean }[] = [
   { id: 'xps', label: 'XPS', detail: 'fit spectra / VBM / VB-DOS', enabled: true },
   { id: 'raman', label: 'Raman', detail: 'fit deconvolution', enabled: true },
-  { id: 'xrd', label: 'XRD', detail: '預留：繞射峰與 stacked patterns', enabled: false },
+  { id: 'xrd', label: 'XRD', detail: 'stacked log plot / reference peaks', enabled: true },
   { id: 'xas', label: 'XAS', detail: 'XES/XAS overlay + band gap', enabled: true },
   { id: 'xes', label: 'XES', detail: '預留：發射光譜比較', enabled: false },
 ]
@@ -452,6 +514,50 @@ const XPS_SAMPLE_COLORS: Record<string, string> = {
   '50-0': '#136DE4',
   '45-5': '#E42213',
   '40-10': '#252526',
+}
+
+const XRD_TRACE_PRESETS = [
+  { label: '40/10 (1013)', shortLabel: '40/10', color: '#252526', offset: 0.00, linewidth: 0.5 },
+  { label: '45/5 (1020-1)', shortLabel: '45/5', color: '#E42213', offset: 0.71, linewidth: 0.5 },
+  { label: '50/0 (1014)', shortLabel: '50/0', color: '#136DE4', offset: 1.46, linewidth: 0.5 },
+]
+
+const DEFAULT_XRD_REFERENCE_PEAKS: XrdReferencePeak[] = [
+  { id: 'si-400', x: 69.1923, text: '(400)', lineColor: '#252526', textYFrac: 0.97, textXOffset: -1.0, enabled: true },
+  { id: 'nio-111', x: 37.2326, text: '(111)', lineColor: '#916dda', textYFrac: 0.88, enabled: true },
+  { id: 'bgo-201', x: 18.9, text: '(-201)', lineColor: '#38905f', textYFrac: 0.97, enabled: true },
+  { id: 'bgo-400', x: 30.1682, text: '(400)', lineColor: '#38905f', textYFrac: 0.97, enabled: true },
+  { id: 'bgo-002', x: 31.7043, text: '(002)', lineColor: '#38905f', textYFrac: 0.88, enabled: true },
+  { id: 'bgo-111', x: 33.49, text: '(-111)', lineColor: '#38905f', textYFrac: 0.97, enabled: true },
+  { id: 'bgo-402', x: 38.439, text: '(-402)', lineColor: '#38905f', textYFrac: 0.97, enabled: true },
+  { id: 'bgo-603', x: 59.19, text: '(-603)', lineColor: '#38905f', textYFrac: 0.97, enabled: true },
+  { id: 'nio-220', x: 62.8699, text: '(220)', lineColor: '#916dda', textYFrac: 0.88, enabled: true },
+]
+
+const DEFAULT_XRD_STYLE: XrdFigureStyle = {
+  xShift: -0.02,
+  normalizeEachCurve: true,
+  showTitle: true,
+  figureTitle: ' ',
+  xMin: 15,
+  xMax: 80,
+  yMin: null,
+  yMax: null,
+  axisLabelSize: 12,
+  tickLabelSize: 10,
+  curveLabelSize: 9,
+  peakLabelSize: 10,
+  titleSize: 11,
+  referenceLabelYShift: -0.10,
+  referenceLabelYMaxFraction: 0.88,
+  showReferencePeaks: true,
+  showLegend: true,
+  xAxisTitle: '2θ (deg)',
+  yAxisTitle: 'Intensity (log cps)',
+  exportWidth: 1488,
+  exportHeight: 1008,
+  exportScale: 3,
+  exportDpi: 600,
 }
 const ROMAN_COMPONENT_LABELS = ['O<sub>Ⅰ</sub>', 'O<sub>Ⅱ</sub>', 'O<sub>Ⅲ</sub>', 'O<sub>Ⅳ</sub>', 'O<sub>Ⅴ</sub>']
 const ROMAN_COMPONENT_COLORS = ['#9b59b6', '#18a81f', '#1f78b4', '#f97316', '#a855f7']
@@ -506,6 +612,10 @@ const DEFAULT_STYLE: PlotFigureStyle = {
   yAxisFontSize: 22,
   xAxisTitleStandoff: 18,
   yAxisTitleStandoff: 18,
+  panelTitleXPaper: 0.03,
+  panelTitleYFraction: 0.84,
+  sampleLabelXPaper: 0.97,
+  sampleLabelYFraction: 0.74,
   axisLineWidth: 1.6,
   labelFontSize: 18,
   panelTitleFontSize: 26,
@@ -1384,6 +1494,229 @@ function parseXasBandSpectrumText(text: string, fileName: string, kind: XasBandF
     displayEnd: xMax,
     ...ranges,
   }
+}
+
+function inferXrdColumnLabel(header: string, index: number) {
+  const preset = XRD_TRACE_PRESETS[index - 1]
+  if (preset) return preset.label
+  return header && !/^Column\s+\d+$/i.test(header) ? header : `Trace ${index}`
+}
+
+function parseXrdStackedText(text: string, fileName: string): XrdTableFile {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !/^(#|%|!|\/\/)/.test(line))
+  if (lines.length < 3) throw new Error(`${fileName}: XRD table needs at least three data rows`)
+  const firstLine = lines[0].replace(/^\uFEFF/, '')
+  const delimiter = firstLine.includes('\t') ? '\t' : (firstLine.includes(',') ? ',' : 'whitespace')
+  const firstCells = splitDelimitedLine(firstLine, delimiter)
+  const firstRowIsNumeric = firstCells.length >= 2 && firstCells.filter(cell => Number.isFinite(Number(cell))).length >= 2
+  const headers = firstRowIsNumeric ? firstCells.map((_, index) => `Column ${index + 1}`) : firstCells
+  const dataLines = firstRowIsNumeric ? lines : lines.slice(1)
+  const rows = dataLines.map(line => splitDelimitedLine(line, delimiter))
+  const numericIndexes = headers
+    .map((_, columnIndex) => ({
+      index: columnIndex,
+      count: rows.map(row => Number(row[columnIndex])).filter(Number.isFinite).length,
+    }))
+    .filter(item => item.count >= 3)
+    .sort((a, b) => a.index - b.index)
+    .map(item => item.index)
+  if (numericIndexes.length < 2) throw new Error(`${fileName}: XRD table needs one 2theta column and at least one intensity column`)
+
+  const xIndex = numericIndexes[0]
+  const yIndexes = numericIndexes.slice(1)
+  const x: number[] = []
+  const yColumns = yIndexes.map(() => [] as number[])
+  rows.forEach(row => {
+    const xValue = Number(row[xIndex])
+    if (!Number.isFinite(xValue)) return
+    const yValues = yIndexes.map(index => Number(row[index]))
+    if (yValues.every(value => !Number.isFinite(value))) return
+    x.push(xValue)
+    yValues.forEach((value, index) => {
+      yColumns[index].push(Number.isFinite(value) ? value : Number.NaN)
+    })
+  })
+  if (x.length < 3) throw new Error(`${fileName}: XRD table has too few valid 2theta points`)
+
+  const traces = yColumns.map((y, index): XrdSourceTrace => {
+    const preset = XRD_TRACE_PRESETS[index] ?? XRD_TRACE_PRESETS[XRD_TRACE_PRESETS.length - 1]
+    const sourceColumn = yIndexes[index]
+    return {
+      id: `xrd-${fileName}-${sourceColumn}-${Math.random().toString(36).slice(2, 8)}`,
+      sourceColumn,
+      label: inferXrdColumnLabel(headers[sourceColumn] ?? '', index + 1),
+      shortLabel: preset?.shortLabel ?? `Trace ${index + 1}`,
+      color: preset?.color ?? DEFAULT_COMPONENT_COLORS[index % DEFAULT_COMPONENT_COLORS.length] ?? '#111827',
+      offset: preset?.offset ?? index * 0.75,
+      linewidth: preset?.linewidth ?? 0.5,
+      visible: true,
+      y,
+    }
+  })
+
+  return {
+    id: `xrd-table-${fileName}-${Math.random().toString(36).slice(2, 8)}`,
+    name: fileName,
+    xColumn: headers[xIndex] ?? '2theta',
+    x,
+    traces,
+  }
+}
+
+function processXrdCurve(yRaw: number[], normalize: boolean) {
+  const finite = yRaw.filter(Number.isFinite)
+  if (finite.length === 0) return null
+  const baseline = percentile(finite, 0.01)
+  const yLog = yRaw.map(value => {
+    if (!Number.isFinite(value)) return Number.NaN
+    const corrected = Math.max(value - baseline + 1, 1)
+    return Math.log10(corrected)
+  })
+  if (!normalize) return yLog
+  const valid = yLog.filter(Number.isFinite)
+  if (valid.length === 0) return null
+  const lo = percentile(valid, 0.01)
+  const hi = percentile(valid, 0.997)
+  const denom = Number.isFinite(hi - lo) && hi > lo ? hi - lo : 1
+  return yLog.map(value => Number.isFinite(value) ? (value - lo) / denom : Number.NaN)
+}
+
+function buildXrdStackedFigure(
+  table: XrdTableFile,
+  style: XrdFigureStyle,
+  referencePeaks: XrdReferencePeak[],
+): { data: Plotly.Data[]; layout: Partial<Plotly.Layout>; processedRows: Array<Record<string, unknown>> } | null {
+  const data: Plotly.Data[] = []
+  const annotations: Partial<Plotly.Annotations>[] = []
+  const shapes: Partial<Plotly.Shape>[] = []
+  const processedRows = table.x.map((xValue, index) => ({ '2theta': xValue + style.xShift, row: index + 1 } as Record<string, unknown>))
+  const plottedOffsets: number[] = []
+  const plottedValues: number[] = []
+
+  table.traces.filter(trace => trace.visible).forEach(trace => {
+    const yProcessed = processXrdCurve(trace.y, style.normalizeEachCurve)
+    if (!yProcessed) return
+    const xShifted = table.x.map(value => value + style.xShift)
+    const yPlot = yProcessed.map(value => Number.isFinite(value) ? value + trace.offset : Number.NaN)
+    plottedOffsets.push(trace.offset)
+    plottedValues.push(...yPlot.filter(Number.isFinite))
+    processedRows.forEach((row, index) => {
+      row[trace.label] = Number.isFinite(yPlot[index]) ? yPlot[index] : ''
+    })
+    data.push({
+      x: xShifted,
+      y: yPlot,
+      type: 'scatter',
+      mode: 'lines',
+      name: trace.label,
+      line: { color: trace.color, width: trace.linewidth },
+      hovertemplate: `${trace.label}<br>2theta %{x:.3f}<br>Intensity %{y:.4f}<extra></extra>`,
+    })
+  })
+
+  if (data.length === 0) return null
+  const yMinAuto = plottedOffsets.length > 0 ? Math.min(...plottedOffsets) - 0.25 : Math.min(...plottedValues, 0)
+  const yMaxAuto = yMinAuto + 3.125
+  const yMin = Number.isFinite(style.yMin ?? NaN) ? Number(style.yMin) : yMinAuto
+  const yMax = Number.isFinite(style.yMax ?? NaN) ? Number(style.yMax) : yMaxAuto
+
+  if (style.showReferencePeaks) {
+    referencePeaks.filter(peak => peak.enabled).forEach(peak => {
+      const xPeak = peak.x + style.xShift
+      if (xPeak < style.xMin || xPeak > style.xMax) return
+      shapes.push({
+        type: 'line',
+        xref: 'x',
+        yref: 'paper',
+        x0: xPeak,
+        x1: xPeak,
+        y0: 0,
+        y1: 1,
+        line: { color: peak.lineColor, width: 0.7, dash: 'dash' },
+        opacity: 0.85,
+        layer: 'below',
+      })
+      const yFraction = Math.min(peak.textYFrac + style.referenceLabelYShift, style.referenceLabelYMaxFraction)
+      annotations.push({
+        x: xPeak + (peak.textXOffset ?? 0),
+        y: yMin + (yMax - yMin) * clamp(yFraction, 0, 1),
+        xref: 'x',
+        yref: 'y',
+        text: peak.text,
+        textangle: -90,
+        showarrow: false,
+        xanchor: 'center',
+        yanchor: 'bottom',
+        font: { family: 'Times New Roman, Times, serif', size: style.peakLabelSize, color: peak.lineColor },
+        bgcolor: 'rgba(255,255,255,0.88)',
+        borderpad: 1,
+      })
+    })
+  }
+
+  if (style.showTitle) {
+    annotations.push({
+      x: 0.03,
+      y: 0.95,
+      xref: 'paper',
+      yref: 'paper',
+      text: `<b>${style.figureTitle || ' '}</b>`,
+      showarrow: false,
+      xanchor: 'left',
+      yanchor: 'top',
+      font: { family: 'Times New Roman, Times, serif', size: style.titleSize, color: '#111827' },
+    })
+  }
+
+  return {
+    data,
+    processedRows,
+    layout: {
+      autosize: true,
+      paper_bgcolor: '#ffffff',
+      plot_bgcolor: '#ffffff',
+      font: { family: 'Times New Roman, Times, serif', size: style.tickLabelSize, color: '#111827' },
+      margin: { l: 120, r: 110, t: 70, b: 92 },
+      showlegend: style.showLegend,
+      legend: { x: 0.99, y: 0.98, xanchor: 'right', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.78)', font: { size: style.curveLabelSize, family: 'Times New Roman, Times, serif', color: '#111827' } },
+      xaxis: {
+        range: [style.xMin, style.xMax],
+        title: { text: style.xAxisTitle, font: { family: 'Times New Roman, Times, serif', size: style.axisLabelSize, color: '#111827' }, standoff: 16 },
+        showgrid: false,
+        zeroline: false,
+        showline: true,
+        mirror: true,
+        linewidth: 0.8,
+        linecolor: '#111827',
+        ticks: 'inside',
+        dtick: 10,
+        minor: { dtick: 2, ticks: 'inside' },
+        tickfont: { family: 'Times New Roman, Times, serif', size: style.tickLabelSize, color: '#111827' },
+      },
+      yaxis: {
+        range: [yMin, yMax],
+        title: { text: style.yAxisTitle, font: { family: 'Times New Roman, Times, serif', size: style.axisLabelSize, color: '#111827' }, standoff: 18 },
+        showgrid: false,
+        zeroline: false,
+        showline: true,
+        mirror: true,
+        linewidth: 0.8,
+        linecolor: '#111827',
+        ticks: 'inside',
+        showticklabels: false,
+      },
+      annotations: annotations as unknown as Plotly.Layout['annotations'],
+      shapes: shapes as Plotly.Shape[],
+    },
+  }
+}
+
+function buildXrdProcessedCsv(rows: Array<Record<string, unknown>>) {
+  const headers = Array.from(new Set(rows.flatMap(row => Object.keys(row)))).filter(header => header !== 'row')
+  return rowsToCsv(headers, rows)
 }
 
 function parseFitSpectrumText(text: string, fileName: string): FitSpectrumFile {
@@ -3266,8 +3599,8 @@ function buildXpsPanelFigure(files: FitSpectrumFile[], style: PlotFigureStyle, s
     })
 
     annotations.push({
-      x: 0.03,
-      y: yDomainEnd - panelHeight * 0.16,
+      x: style.panelTitleXPaper,
+      y: yDomainStart + panelHeight * clamp(style.panelTitleYFraction, 0, 1.2),
       xref: 'paper',
       yref: 'paper',
       text: `<b>${style.titleLabel || 'XPS'}</b>`,
@@ -3277,8 +3610,8 @@ function buildXpsPanelFigure(files: FitSpectrumFile[], style: PlotFigureStyle, s
       font: { color: '#111827', size: style.panelTitleFontSize, family: style.fontFamily },
     })
     annotations.push({
-      x: 0.97,
-      y: yDomainEnd - panelHeight * 0.26,
+      x: style.sampleLabelXPaper,
+      y: yDomainStart + panelHeight * clamp(style.sampleLabelYFraction, 0, 1.2),
       xref: 'paper',
       yref: 'paper',
       text: `<b>${file.sampleLabel}</b>`,
@@ -3591,8 +3924,8 @@ function buildXpsCombinedFigure(files: FitSpectrumFile[], style: PlotFigureStyle
     })
 
     annotations.push({
-      x: panelXDomain[0] + 0.022,
-      y: yDomainEnd - panelHeight * 0.16,
+      x: panelXDomain[0] + (panelXDomain[1] - panelXDomain[0]) * clamp(style.panelTitleXPaper, -0.2, 1.2),
+      y: yDomainStart + panelHeight * clamp(style.panelTitleYFraction, 0, 1.2),
       xref: 'paper',
       yref: 'paper',
       text: `<b>${style.titleLabel || 'XPS'}</b>`,
@@ -3602,8 +3935,8 @@ function buildXpsCombinedFigure(files: FitSpectrumFile[], style: PlotFigureStyle
       font: { color: '#111827', size: style.panelTitleFontSize, family: style.fontFamily },
     })
     annotations.push({
-      x: panelXDomain[1] - 0.012,
-      y: yDomainEnd - panelHeight * 0.12,
+      x: panelXDomain[0] + (panelXDomain[1] - panelXDomain[0]) * clamp(style.sampleLabelXPaper, -0.2, 1.2),
+      y: yDomainStart + panelHeight * clamp(style.sampleLabelYFraction, 0, 1.2),
       xref: 'paper',
       yref: 'paper',
       text: `<b>${file.sampleLabel}</b>`,
@@ -3755,6 +4088,24 @@ function ColorInput({ label, value, onChange }: { label: string; value: string; 
   )
 }
 
+function PositionTargetBox({ label, value, active, onClick }: { label: string; value: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        'rounded-xl border px-3 py-2 text-left transition-colors',
+        active
+          ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
+          : 'border-[var(--card-border)] bg-[var(--card-ghost)] text-[var(--text-main)] hover:border-[var(--accent-secondary)]',
+      ].join(' ')}
+    >
+      <span className="block text-xs font-semibold">{label}</span>
+      <span className="mt-1 block text-[10px] text-[var(--text-soft)]">{value}</span>
+    </button>
+  )
+}
+
 export default function PlotFileTool({
   onModuleSelect,
 }: {
@@ -3765,6 +4116,7 @@ export default function PlotFileTool({
   const [files, setFiles] = useState<FitSpectrumFile[]>([])
   const [xpsOffsetSettings, setXpsOffsetSettings] = useState<XpsOffsetSettings>(DEFAULT_XPS_OFFSET_SETTINGS)
   const [style, setStyle] = useState<PlotFigureStyle>(DEFAULT_STYLE)
+  const [xpsPositionTarget, setXpsPositionTarget] = useState<XpsPositionTarget>('x-axis-title')
   const [componentStyles, setComponentStyles] = useState<Record<string, ComponentStyle>>({})
   const [vbmFiles, setVbmFiles] = useState<VbmSpectrumFile[]>([])
   const [vbmStyle, setVbmStyle] = useState<VbmFigureStyle>(DEFAULT_VBM_STYLE)
@@ -3774,6 +4126,9 @@ export default function PlotFileTool({
   const [xasBandFiles, setXasBandFiles] = useState<XasBandEdgeFile[]>([])
   const [xasBandPairs, setXasBandPairs] = useState<XasBandPair[]>([])
   const [xasBandStyle, setXasBandStyle] = useState<XasBandFigureStyle>(DEFAULT_XAS_BAND_STYLE)
+  const [xrdTable, setXrdTable] = useState<XrdTableFile | null>(null)
+  const [xrdStyle, setXrdStyle] = useState<XrdFigureStyle>(DEFAULT_XRD_STYLE)
+  const [xrdReferencePeaks, setXrdReferencePeaks] = useState<XrdReferencePeak[]>(() => DEFAULT_XRD_REFERENCE_PEAKS.map(peak => ({ ...peak })))
   const [ramanFiles, setRamanFiles] = useState<RamanFitPlotFile[]>([])
   const [ramanStyle, setRamanStyle] = useState<RamanFigureStyle>(DEFAULT_RAMAN_STYLE)
   const [selectedRamanId, setSelectedRamanId] = useState<string>('')
@@ -3787,6 +4142,7 @@ export default function PlotFileTool({
   const [ramanReferenceDbError, setRamanReferenceDbError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const xpsJoystickRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -3840,6 +4196,10 @@ export default function PlotFileTool({
   const vbDosFigure = useMemo(() => vbDosFiles.length > 0 ? buildVbDosFigure(vbDosFiles, vbDosStyle, vbDosRegions) : null, [vbDosFiles, vbDosStyle, vbDosRegions])
   const xasBandResults = useMemo(() => calculateXasBandPairs(xasBandFiles, xasBandPairs, xasBandStyle.normalizeIntensity), [xasBandFiles, xasBandPairs, xasBandStyle.normalizeIntensity])
   const xasBandFigure = useMemo(() => xasBandResults.results.length > 0 ? buildXasBandOverlayFigure(xasBandResults.results, xasBandStyle) : null, [xasBandResults.results, xasBandStyle])
+  const xrdFigure = useMemo(
+    () => xrdTable ? buildXrdStackedFigure(xrdTable, xrdStyle, xrdReferencePeaks) : null,
+    [xrdReferencePeaks, xrdStyle, xrdTable],
+  )
   const activeRamanFile = useMemo(
     () => ramanFiles.find(file => file.id === selectedRamanId) ?? ramanFiles[0] ?? null,
     [ramanFiles, selectedRamanId],
@@ -4250,6 +4610,102 @@ export default function PlotFileTool({
     }
   }
 
+  const importXrdFile = async (fileList: FileList | null) => {
+    const file = fileList?.[0]
+    if (!file) return
+    setError(null)
+    try {
+      const text = await file.text()
+      setXrdTable(parseXrdStackedText(text, file.name))
+      setActiveModule('xrd')
+    } catch (importError: unknown) {
+      setError(String((importError as Error).message ?? importError))
+    }
+  }
+
+  const updateXrdTrace = (traceId: string, patch: Partial<XrdSourceTrace>) => {
+    setXrdTable(current => current
+      ? { ...current, traces: current.traces.map(trace => trace.id === traceId ? { ...trace, ...patch } : trace) }
+      : current)
+  }
+
+  const updateXrdReferencePeak = (peakId: string, patch: Partial<XrdReferencePeak>) => {
+    setXrdReferencePeaks(current => current.map(peak => peak.id === peakId ? { ...peak, ...patch } : peak))
+  }
+
+  const nudgeXpsPosition = (target: XpsPositionTarget, dx: number, dy: number) => {
+    setStyle(prev => {
+      const step = Math.max(Math.hypot(dx, dy) / 18, 0.35)
+      if (target === 'x-axis-title') {
+        return { ...prev, xAxisTitleStandoff: clamp(prev.xAxisTitleStandoff + dy * step * 0.08, 0, 120) }
+      }
+      if (target === 'y-axis-title') {
+        return { ...prev, yAxisTitleStandoff: clamp(prev.yAxisTitleStandoff - dx * step * 0.08, 0, 120) }
+      }
+      const xDelta = dx * step * 0.0018
+      const yDelta = -dy * step * 0.0018
+      if (target === 'panel-title') {
+        return {
+          ...prev,
+          panelTitleXPaper: clamp(prev.panelTitleXPaper + xDelta, -0.2, 1.2),
+          panelTitleYFraction: clamp(prev.panelTitleYFraction + yDelta, 0, 1.2),
+        }
+      }
+      return {
+        ...prev,
+        sampleLabelXPaper: clamp(prev.sampleLabelXPaper + xDelta, -0.2, 1.2),
+        sampleLabelYFraction: clamp(prev.sampleLabelYFraction + yDelta, 0, 1.2),
+      }
+    })
+  }
+
+  const handleXpsJoystickPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = xpsJoystickRef.current?.getBoundingClientRect()
+    if (!rect) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const dx = event.clientX - (rect.left + rect.width / 2)
+    const dy = event.clientY - (rect.top + rect.height / 2)
+    const radius = Math.max(rect.width, rect.height) / 2
+    const distance = Math.hypot(dx, dy)
+    if (distance < 4) return
+    const limited = Math.min(distance, radius)
+    nudgeXpsPosition(xpsPositionTarget, (dx / distance) * limited, (dy / distance) * limited)
+  }
+
+  const exportXrdPlot = async (format: 'png' | 'svg' | 'pdf') => {
+    if (!xrdFigure) return
+    setExporting(true)
+    setError(null)
+    const container = document.createElement('div')
+    const width = xrdStyle.exportWidth
+    const height = xrdStyle.exportHeight
+    const scale = Math.max(1, xrdStyle.exportScale)
+    container.style.position = 'fixed'
+    container.style.left = '-10000px'
+    container.style.top = '0'
+    container.style.width = `${width}px`
+    container.style.height = `${height}px`
+    document.body.appendChild(container)
+    try {
+      const plotly = PlotlyApi as unknown as PlotlyExportApi
+      await plotly.newPlot(container, xrdFigure.data, { ...xrdFigure.layout, autosize: false, width, height }, { staticPlot: true, displayModeBar: false, responsive: false })
+      if (format === 'pdf') {
+        const dataUrl = await plotly.toImage(container, { format: 'jpeg', width, height, scale })
+        const pdf = buildSingleImagePdf(dataUrl, width * scale, height * scale, xrdStyle.exportDpi)
+        downloadBlob(pdf, 'xrd_stacked_plot.pdf')
+      } else {
+        const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? scale : 1 })
+        downloadDataUrl(dataUrl, `xrd_stacked_plot.${format}`)
+      }
+      plotly.purge(container)
+    } catch (exportError: unknown) {
+      setError(String((exportError as Error).message ?? exportError))
+    } finally {
+      container.remove()
+      setExporting(false)
+    }
+  }
+
   const exportVbDosPeaksCsv = () => {
     const rows = vbDosFiles.flatMap(file => file.peaks.map(peak => ({
       Sample: file.sampleLabel,
@@ -4344,9 +4800,9 @@ export default function PlotFileTool({
         description="集中管理 Raman、XRD、XPS、XAS、XES 的投稿圖輸出；Raman 圖檔輸出已集中到此工作區。"
         chips={[
           { label: `目前 ${activeModule.toUpperCase()}` },
-          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : activeModule === 'xas' ? 'XES/XAS band gap' : (xpsPlotMode === 'vb-dos' ? 'VB-DOS 初步指認' : xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
-          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : activeModule === 'xas' ? xasBandFiles.length : (xpsPlotMode === 'vb-dos' ? vbDosFiles.length : xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
-          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : activeModule === 'xas' ? `Eg ${xasBandResults.results.length}` : (xpsPlotMode === 'vb-dos' ? `Peaks ${vbDosFiles.reduce((sum, file) => sum + file.peaks.length, 0)}` : xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : activeModule === 'xas' ? 'XES/XAS band gap' : activeModule === 'xrd' ? 'XRD stacked log plot' : (xpsPlotMode === 'vb-dos' ? 'VB-DOS 初步指認' : xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
+          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : activeModule === 'xas' ? xasBandFiles.length : activeModule === 'xrd' ? (xrdTable ? 1 : 0) : (xpsPlotMode === 'vb-dos' ? vbDosFiles.length : xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : activeModule === 'xas' ? `Eg ${xasBandResults.results.length}` : activeModule === 'xrd' ? `Traces ${xrdTable?.traces.filter(trace => trace.visible).length ?? 0}` : (xpsPlotMode === 'vb-dos' ? `Peaks ${vbDosFiles.reduce((sum, file) => sum + file.peaks.length, 0)}` : xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
         ]}
       />
 
@@ -5053,6 +5509,127 @@ export default function PlotFileTool({
             </div>
           </aside>
         </div>
+      ) : activeModule === 'xrd' ? (
+        <div className="mb-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
+          <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+            <div className="analysis-section-card p-4">
+              <p className="text-sm font-semibold text-[var(--text-main)]">XRD stacked log plot</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">A 欄為 2θ，後續欄位為 40/10、45/5、50/0 強度；會套用 baseline、log10、normalize 與垂直 offset。</p>
+              <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
+                匯入 XRD TXT/CSV
+                <input type="file" accept=".txt,.csv,.dat,.tsv,.xy" className="hidden" onChange={event => { void importXrdFile(event.target.files); event.target.value = '' }} />
+              </label>
+              {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
+              {xrdTable && (
+                <div className="mt-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs leading-5 text-[var(--text-main)]">
+                  <p className="font-semibold">{xrdTable.name}</p>
+                  <p className="text-[var(--text-soft)]">X: {xrdTable.xColumn} / {xrdTable.x.length} points / {xrdTable.traces.length} traces</p>
+                  <button type="button" onClick={() => setXrdTable(null)} className="mt-2 text-rose-400">清除 XRD 檔案</button>
+                </div>
+              )}
+            </div>
+
+            {xrdTable && (
+              <div className="analysis-section-card p-4">
+                <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">曲線設定</p>
+                <div className="space-y-3">
+                  {xrdTable.traces.map(trace => (
+                    <div key={trace.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                      <label className="flex items-center justify-between gap-3 text-xs text-[var(--text-main)]">
+                        <span className="font-semibold">{trace.shortLabel}</span>
+                        <input type="checkbox" checked={trace.visible} onChange={event => updateXrdTrace(trace.id, { visible: event.target.checked })} className="accent-[var(--accent-secondary)]" />
+                      </label>
+                      <input value={trace.label} onChange={event => updateXrdTrace(trace.id, { label: event.target.value })} className="mt-2 w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <ColorInput label="線色" value={trace.color} onChange={value => updateXrdTrace(trace.id, { color: value })} />
+                        <NumInput label="Offset" value={trace.offset} onChange={value => updateXrdTrace(trace.id, { offset: value })} step={0.01} />
+                        <NumInput label="線寬" value={trace.linewidth} onChange={value => updateXrdTrace(trace.id, { linewidth: clamp(value, 0.05, 6) })} min={0.05} max={6} step={0.05} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </aside>
+
+          <section className="space-y-4">
+            <div className="analysis-section-card p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-[var(--text-main)]">XRD stacked plot</p>
+                  <p className="mt-1 text-xs text-[var(--text-soft)]">移植 OriginPro 腳本的 log offset 疊圖與參考峰標註。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={!xrdFigure || exporting} onClick={() => { void exportXrdPlot('png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">PNG</button>
+                  <button type="button" disabled={!xrdFigure || exporting} onClick={() => { void exportXrdPlot('svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">SVG</button>
+                  <button type="button" disabled={!xrdFigure || exporting} onClick={() => { void exportXrdPlot('pdf') }} className="rounded-full border border-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-[var(--accent-secondary)] disabled:opacity-40">PDF</button>
+                  <button type="button" disabled={!xrdFigure} onClick={() => xrdFigure && downloadTextFile(buildXrdProcessedCsv(xrdFigure.processedRows), 'xrd_log_offset.csv', 'text/csv;charset=utf-8')} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">CSV</button>
+                </div>
+              </div>
+              {xrdFigure ? (
+                <Plot data={xrdFigure.data} layout={xrdFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: 620 }} />
+              ) : (
+                <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] text-sm text-[var(--text-soft)]">請匯入 XRD 多欄資料以建立 stacked log plot</div>
+              )}
+            </div>
+          </section>
+
+          <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+            <div className="analysis-section-card p-4">
+              <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">圖面設定</p>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="X shift" value={xrdStyle.xShift} onChange={value => setXrdStyle(prev => ({ ...prev, xShift: value }))} step={0.01} />
+                  <NumInput label="X min" value={xrdStyle.xMin} onChange={value => setXrdStyle(prev => ({ ...prev, xMin: value }))} step={1} />
+                  <NumInput label="X max" value={xrdStyle.xMax} onChange={value => setXrdStyle(prev => ({ ...prev, xMax: value }))} step={1} />
+                  <NumInput label="Y min" value={xrdStyle.yMin ?? 0} onChange={value => setXrdStyle(prev => ({ ...prev, yMin: value }))} step={0.05} />
+                  <NumInput label="Y max" value={xrdStyle.yMax ?? 3} onChange={value => setXrdStyle(prev => ({ ...prev, yMax: value }))} step={0.05} />
+                </div>
+                <button type="button" onClick={() => setXrdStyle(prev => ({ ...prev, yMin: null, yMax: null }))} className="rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">Y range 自動</button>
+                <label className="block">
+                  <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">圖題</span>
+                  <input value={xrdStyle.figureTitle} onChange={event => setXrdStyle(prev => ({ ...prev, figureTitle: event.target.value }))} className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="軸標題字" value={xrdStyle.axisLabelSize} onChange={value => setXrdStyle(prev => ({ ...prev, axisLabelSize: clamp(value, 4, 42) }))} min={4} max={42} />
+                  <NumInput label="刻度字" value={xrdStyle.tickLabelSize} onChange={value => setXrdStyle(prev => ({ ...prev, tickLabelSize: clamp(value, 3, 32) }))} min={3} max={32} />
+                  <NumInput label="圖例字" value={xrdStyle.curveLabelSize} onChange={value => setXrdStyle(prev => ({ ...prev, curveLabelSize: clamp(value, 3, 28) }))} min={3} max={28} />
+                  <NumInput label="峰標籤字" value={xrdStyle.peakLabelSize} onChange={value => setXrdStyle(prev => ({ ...prev, peakLabelSize: clamp(value, 3, 28) }))} min={3} max={28} />
+                </div>
+                {[
+                  ['normalizeEachCurve', '每條曲線各自 normalize'],
+                  ['showReferencePeaks', '顯示參考峰'],
+                  ['showLegend', '顯示圖例'],
+                  ['showTitle', '顯示圖題'],
+                ].map(([key, label]) => (
+                  <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2 text-xs text-[var(--text-main)]">
+                    <span>{label}</span>
+                    <input type="checkbox" checked={Boolean(xrdStyle[key as keyof XrdFigureStyle])} onChange={event => setXrdStyle(prev => ({ ...prev, [key]: event.target.checked }))} className="accent-[var(--accent-secondary)]" />
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="analysis-section-card p-4">
+              <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">參考峰</p>
+              <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                {xrdReferencePeaks.map(peak => (
+                  <div key={peak.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <label className="flex items-center justify-between gap-3 text-xs text-[var(--text-main)]">
+                      <span><span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ backgroundColor: peak.lineColor }} />{peak.text} / {peak.x.toFixed(3)}</span>
+                      <input type="checkbox" checked={peak.enabled} onChange={event => updateXrdReferencePeak(peak.id, { enabled: event.target.checked })} className="accent-[var(--accent-secondary)]" />
+                    </label>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <NumInput label="2θ" value={peak.x} onChange={value => updateXrdReferencePeak(peak.id, { x: value })} step={0.001} />
+                      <ColorInput label="顏色" value={peak.lineColor} onChange={value => updateXrdReferencePeak(peak.id, { lineColor: value })} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={() => setXrdReferencePeaks(DEFAULT_XRD_REFERENCE_PEAKS.map(peak => ({ ...peak })))} className="mt-3 rounded-lg border border-[var(--card-border)] px-3 py-1.5 text-xs font-semibold text-[var(--text-main)]">重設參考峰</button>
+            </div>
+          </aside>
+        </div>
       ) : activeModule !== 'xps' ? (
         <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-6">
           <p className="text-sm font-semibold text-[var(--text-main)]">{activeModule.toUpperCase()} 繪圖介面已預留</p>
@@ -5089,6 +5666,7 @@ export default function PlotFileTool({
           </div>
 
           {xpsPlotMode === 'fit' ? (
+          <>
           <div className="mb-4 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)_380px]">
             <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
               <div className="analysis-section-card p-4">
@@ -5228,9 +5806,14 @@ export default function PlotFileTool({
                     <NumInput label="X 軸字體" value={style.xAxisFontSize} onChange={value => setStyle(prev => ({ ...prev, xAxisFontSize: value }))} min={8} max={42} step={1} />
                     <NumInput label="Y 軸字體" value={style.yAxisFontSize} onChange={value => setStyle(prev => ({ ...prev, yAxisFontSize: value }))} min={8} max={42} step={1} />
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumInput label="X 標題距離" value={style.xAxisTitleStandoff} onChange={value => setStyle(prev => ({ ...prev, xAxisTitleStandoff: clamp(value, 0, 120) }))} min={0} max={120} step={1} />
-                    <NumInput label="Y 標題距離" value={style.yAxisTitleStandoff} onChange={value => setStyle(prev => ({ ...prev, yAxisTitleStandoff: clamp(value, 0, 120) }))} min={0} max={120} step={1} />
+                  <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">位置調整模式</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <PositionTargetBox label="X軸標題" value={`距離 ${style.xAxisTitleStandoff.toFixed(1)}`} active={xpsPositionTarget === 'x-axis-title'} onClick={() => setXpsPositionTarget('x-axis-title')} />
+                      <PositionTargetBox label="Y軸標題" value={`距離 ${style.yAxisTitleStandoff.toFixed(1)}`} active={xpsPositionTarget === 'y-axis-title'} onClick={() => setXpsPositionTarget('y-axis-title')} />
+                      <PositionTargetBox label="Panel標題" value={`X ${style.panelTitleXPaper.toFixed(2)} / Y ${style.panelTitleYFraction.toFixed(2)}`} active={xpsPositionTarget === 'panel-title'} onClick={() => setXpsPositionTarget('panel-title')} />
+                      <PositionTargetBox label="樣品標籤" value={`X ${style.sampleLabelXPaper.toFixed(2)} / Y ${style.sampleLabelYFraction.toFixed(2)}`} active={xpsPositionTarget === 'sample-label'} onClick={() => setXpsPositionTarget('sample-label')} />
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <NumInput label="刻度字體" value={style.fontSize} onChange={value => setStyle(prev => ({ ...prev, fontSize: value }))} min={8} max={34} step={1} />
@@ -5341,6 +5924,29 @@ export default function PlotFileTool({
               </div>
             </aside>
           </div>
+          <div className="fixed bottom-5 right-5 z-[900] rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-3 shadow-[var(--card-shadow)]">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-[var(--text-main)]">360度搖桿</span>
+              <span className="text-[10px] text-[var(--text-soft)]">
+                {xpsPositionTarget === 'x-axis-title' ? 'X軸標題' : xpsPositionTarget === 'y-axis-title' ? 'Y軸標題' : xpsPositionTarget === 'panel-title' ? 'Panel標題' : '樣品標籤'}
+              </span>
+            </div>
+            <div
+              ref={xpsJoystickRef}
+              onPointerDown={handleXpsJoystickPointer}
+              onPointerMove={event => { if (event.buttons === 1) handleXpsJoystickPointer(event) }}
+              className="relative h-28 w-28 touch-none rounded-full border border-[var(--accent-secondary)] bg-[var(--card-ghost)]"
+              role="slider"
+              aria-label="XPS position joystick"
+            >
+              <div className="absolute left-1/2 top-2 h-3 w-px -translate-x-1/2 rounded-full bg-[var(--text-soft)]" />
+              <div className="absolute bottom-2 left-1/2 h-3 w-px -translate-x-1/2 rounded-full bg-[var(--text-soft)]" />
+              <div className="absolute left-2 top-1/2 h-px w-3 -translate-y-1/2 rounded-full bg-[var(--text-soft)]" />
+              <div className="absolute right-2 top-1/2 h-px w-3 -translate-y-1/2 rounded-full bg-[var(--text-soft)]" />
+              <div className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[var(--card-border)] bg-[var(--accent-soft)]" />
+            </div>
+          </div>
+          </>
           ) : xpsPlotMode === 'vbm' ? (
           <div className="mb-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
             <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">

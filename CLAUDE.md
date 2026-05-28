@@ -397,3 +397,9 @@ streamlit run app.py --server.port 8505
 - 實作：XPS 工作區資料判斷新增 hasImportedVbmWorkspaceData / hasXpsWorkspaceData，將 imported VBM 光譜只限定於 Valence Band 模式，避免 Core Level 無 raw file 時中央空白。
 
 - 檢查：完成 XPS 工作區資料判斷調整後，再次執行 git diff --check。
+
+- 2026-05-29：實作 PlotFileTool XPS 位置調整模式，將 X/Y 軸標題距離與 panel/樣品標籤改為可點選框，並新增右下角 360 度搖桿依選取項目微調；同時開啟 PlotFileTool XRD，新增多欄 XRD 匯入、log10 baseline/normalize/offset 疊圖、固定參考峰與 PNG/SVG/PDF/CSV 匯出。
+
+- 2026-05-29：檢查 PlotFileTool XPS/XRD 改動；npm run build 因當前 shell 找不到 npm 且前端子目錄無 CLAUDE.md 讀取失敗未能執行，改於專案根目錄跑 git diff --check，結果僅有既有 LF/CRLF warning，無 whitespace error。
+
+- 2026-05-29：複查 PlotFileTool XPS/XRD JSX 與 diff 範圍，補上 XRD 狀態 chips；再次執行 git diff --check，僅回報 LF/CRLF warning，無 whitespace error。
