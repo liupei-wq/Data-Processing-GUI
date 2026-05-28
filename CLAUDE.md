@@ -175,6 +175,9 @@ streamlit run app.py --server.port 8505
 - 實作：`PlotFileTool` 的 XES/XAS band gap 圖面設定新增手動 Y 軸範圍；加入 `yMin` 與 `manualYRange` 設定，預設仍自動依數據撐開 Y 軸，開啟「手動 Y 範圍」時才固定使用使用者輸入的 Y 下限 / Y 上限，並同步調整 Eg 線、VBM/CBM/Eg 標註與垂直形狀的 Y 位置。
 - 檢查：嘗試執行 `web/frontend` 的 `npm run build`，但目前 shell 找不到 `npm` / `node`，未能執行前端建置；改以 `git diff --check` 驗證通過，僅有既有 LF/CRLF 提醒。同步以 `rg` 確認 XES/XAS band gap 只剩手動 `normalizeIntensity` 路徑會觸發歸一化。
 - 檢查：完成手動 Y 軸範圍後再次確認目前 shell 的 `node` / `npm` 皆為 NOT_FOUND，因此仍無法執行前端 build；`git diff --check` 通過，工作區變更範圍限於 `CLAUDE.md` 與 `web/frontend/src/pages/PlotFileTool.tsx`，僅有既有 LF/CRLF 提醒。
+- 重要判斷：使用者截圖顯示 XES/XAS band gap 圖的自動 Y 軸會被數值最大值、外推輔助線或遠端高值牽動，導致主要光譜沒有落在正常視覺範圍；決定自動範圍改以實際顯示光譜的穩健百分位數估算，手動 Y 範圍仍維持最高優先權。
+- 實作：`PlotFileTool.tsx` 新增 `percentileValue` 與 `resolveXasBandAutoYRange`，XES/XAS band gap 自動 Y 軸只採用顯示中的 XES/XAS 主光譜曲線估算，排除 tangent/baseline 外推輔助線與 edgeY 對 range 的牽制；raw 強度模式也不再強制套用 0.3 或預設 yMax 作為上限，避免資料因配合極值而被壓扁。
+- 檢查：完成 XES/XAS band gap 自動 Y 軸範圍修正後，`git diff --check` 通過且變更範圍仍限於 `CLAUDE.md` 與 `PlotFileTool.tsx`；目前 shell 仍找不到 `node` / `npm`，未能執行前端 build，僅有既有 LF/CRLF 提醒。
 
 ### 2026-05-27（續）
 

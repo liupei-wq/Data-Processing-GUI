@@ -2452,6 +2452,32 @@ function xasBandDisplayPoints(result: XasBandEdgeResult) {
   return { x: result.x, y: result.yNorm }
 }
 
+function percentileValue(values: number[], percentile: number) {
+  const finite = values.filter(Number.isFinite).sort((a, b) => a - b)
+  if (finite.length === 0) return 0
+  if (finite.length === 1) return finite[0]
+  const position = clamp(percentile, 0, 1) * (finite.length - 1)
+  const lower = Math.floor(position)
+  const upper = Math.ceil(position)
+  if (lower === upper) return finite[lower]
+  return finite[lower] + (finite[upper] - finite[lower]) * (position - lower)
+}
+
+function resolveXasBandAutoYRange(primaryValues: number[], style: XasBandFigureStyle): [number, number] {
+  const finite = primaryValues.filter(Number.isFinite)
+  if (finite.length === 0) return [Math.min(style.yMin, -0.04), Math.max(style.yMax, 0.3)]
+  const robustMin = percentileValue(finite, 0.01)
+  const robustMax = percentileValue(finite, 0.99)
+  const coreSpan = Math.max(robustMax - robustMin, Math.abs(robustMax) * 0.08, Math.abs(robustMin) * 0.08, 0.05)
+  const pad = coreSpan * 0.1
+  const autoMin = Math.min(robustMin - pad, 0)
+  const autoMax = Math.max(robustMax + pad, autoMin + 0.05)
+  if (style.normalizeIntensity) {
+    return [Math.min(style.yMin, autoMin, -0.04), Math.max(style.yMax, autoMax, 0.3)]
+  }
+  return [Math.min(style.yMin, autoMin), autoMax]
+}
+
 function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandFigureStyle) {
   const allX = results.flatMap(result => [...result.xes.x, ...result.xas.x, result.xes.edge, result.xas.edge])
   const data: Plotly.Data[] = []
@@ -2503,20 +2529,8 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
     const xasTangent = xasBandLinePoints(result.xas, result.xas.tangentLine, xasFitStart, xasFitEnd)
     const xesDisplay = xasBandDisplayPoints(result.xes)
     const xasDisplay = xasBandDisplayPoints(result.xas)
-    const panelValues = [
-      ...xesDisplay.y,
-      ...xasDisplay.y,
-      ...xesBaseline.y,
-      ...xesTangent.y,
-      ...xasBaseline.y,
-      ...xasTangent.y,
-      result.xes.edgeY,
-      result.xas.edgeY,
-    ].filter(Number.isFinite)
-    const panelDataMax = Math.max(...panelValues, 0)
-    const panelDataMin = Math.min(...panelValues, 0)
-    const autoYMax = style.normalizeIntensity ? Math.max(style.yMax, 0.3) : Math.max(style.yMax, panelDataMax * 1.08, 0.3)
-    const autoYMin = style.normalizeIntensity ? Math.min(style.yMin, -0.04) : Math.min(style.yMin, -0.04, panelDataMin * 1.08)
+    const primaryPanelValues = [...xesDisplay.y, ...xasDisplay.y].filter(Number.isFinite)
+    const [autoYMin, autoYMax] = resolveXasBandAutoYRange(primaryPanelValues, style)
     const hasManualYRange = style.manualYRange && Number.isFinite(style.yMin) && Number.isFinite(style.yMax) && style.yMin < style.yMax
     const panelYMin = hasManualYRange ? style.yMin : autoYMin
     const panelYMax = hasManualYRange ? style.yMax : autoYMax
