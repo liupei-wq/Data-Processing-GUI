@@ -403,3 +403,29 @@ streamlit run app.py --server.port 8505
 - 2026-05-29：檢查 PlotFileTool XPS/XRD 改動；npm run build 因當前 shell 找不到 npm 且前端子目錄無 CLAUDE.md 讀取失敗未能執行，改於專案根目錄跑 git diff --check，結果僅有既有 LF/CRLF warning，無 whitespace error。
 
 - 2026-05-29：複查 PlotFileTool XPS/XRD JSX 與 diff 範圍，補上 XRD 狀態 chips；再次執行 git diff --check，僅回報 LF/CRLF warning，無 whitespace error。
+
+[2026-05-29] 實作：修正 Docker build 回報 PlotFileTool XRD reference peak annotation textangle 型別錯誤；將 XRD annotations 暫存型別改為 object[]，保留 numeric -90 並由 layout 既有 cast 輸出給 Plotly。
+
+[2026-05-29] 檢查：修正 PlotFileTool XRD annotation 型別後執行 git diff --check，結果僅有既有 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-05-29] 檢查：嘗試於 web/frontend 執行 npm run build 驗證 Docker TS2322 修正，但本機 PowerShell 找不到 npm；同次指令讀取 CLAUDE.md 的相對路徑多退一層造成讀取失敗，後續改回專案根目錄讀取與檢查。
+
+[2026-05-29] 檢查：本機 PowerShell 找不到 docker 指令，無法在目前環境重跑 Docker build；已以原始錯誤位置與 git diff --check 驗證修正範圍。
+
+[2026-05-29] 檢查：確認 web/frontend/node_modules/.bin 內沒有本機 tsc，可用建置工具不在目前 PowerShell PATH/工作目錄中。
+
+[2026-05-29] 實作：在繪製圖檔區 XAS 新增『特殊擬合：531 eV leading edge』模塊；固定 40-10/45-5/50-0 VBM，XAS baseline 使用 529.50-530.30 eV median，CBM 使用 531.25-531.55 eV 線性擬合交 baseline，輸出外推圖、Band gap 趨勢長條圖與 Bandgap_XAS_XES_531peak_method_summary.csv。
+
+[2026-05-29] 檢查：新增 XAS 特殊擬合後執行 git diff --check，結果僅有 CLAUDE.md 與 PlotFileTool.tsx 的 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-05-29] 檢查：確認目前 PowerShell 環境找不到 npm，web/frontend/node_modules/.bin 也沒有 tsc，因此無法在本機執行 npm run build；本次以 git diff --check 與程式碼檢視驗證。
+
+[2026-05-29] 重要判斷：初次插入特殊擬合 UI 時定位到相同 section 結尾，曾落在 XRD 區塊；已移除並重新插入 XAS 中央區塊，確認 rg 僅在 XAS band gap 區後出現特殊擬合。
+
+[2026-05-29] 檢查：移動 XAS 特殊擬合 UI 後再次執行 git diff --check，結果仍僅有 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-05-29] 實作：XAS 特殊擬合新增趨勢檢查，三個樣品齊全時判斷 40-10 > 45-5 > 50-0，並在 UI 與 summary CSV 標示 pass/check/not enough samples。
+
+[2026-05-29] 檢查：補上 XAS 特殊擬合趨勢檢查後再次執行 git diff --check，結果僅有 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-05-29] 檢查：以 rg --files 搜尋專案內 XAS_40-10/45-5/50-0_norm_524-532max.csv 測試資料，未在工作區找到，因此未執行資料級 band gap 驗算。

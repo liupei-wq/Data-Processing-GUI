@@ -13,6 +13,7 @@ type RamanConfidenceFilter = 'all' | 'high' | 'medium-up' | 'low-only'
 type RamanReferenceLabelMode = 'full' | 'material-shift' | 'shift' | 'index'
 type RamanReferenceLineDash = 'solid' | 'dash' | 'dot' | 'dashdot'
 type XasBandFileKind = 'xes' | 'xas'
+type XasSpecialSample = '40-10' | '45-5' | '50-0'
 
 interface FitSpectrumFile {
   id: string
@@ -386,6 +387,20 @@ interface XasBandPairResult {
   bandGap: number
 }
 
+interface XasSpecialFitResult {
+  sample: XasSpecialSample
+  file: XasBandEdgeFile
+  x: number[]
+  y: number[]
+  baseline: number
+  fitSlope: number
+  fitIntercept: number
+  fitR2: number
+  cbm: number
+  vbm: number
+  bandGap: number
+}
+
 interface VbmLinePoint {
   x: number
   y: number
@@ -729,6 +744,13 @@ const DEFAULT_RAMAN_STYLE: RamanFigureStyle = {
 }
 
 const XAS_BAND_COLORS = ['#1f77b4', '#2ca25f', '#c0392b', '#9467bd', '#f97316', '#0f766e', '#be123c', '#4b5563']
+const XAS_SPECIAL_BASELINE_RANGE: [number, number] = [529.50, 530.30]
+const XAS_SPECIAL_FIT_RANGE: [number, number] = [531.25, 531.55]
+const XAS_SPECIAL_SAMPLES: Array<{ sample: XasSpecialSample; vbm: number; color: string }> = [
+  { sample: '40-10', vbm: 527.154, color: '#252526' },
+  { sample: '45-5', vbm: 527.149, color: '#E42213' },
+  { sample: '50-0', vbm: 527.209, color: '#136DE4' },
+]
 
 const DEFAULT_XAS_BAND_STYLE: XasBandFigureStyle = {
   fontFamily: 'Times New Roman, Times, serif',
@@ -1590,7 +1612,7 @@ function buildXrdStackedFigure(
   referencePeaks: XrdReferencePeak[],
 ): { data: Plotly.Data[]; layout: Partial<Plotly.Layout>; processedRows: Array<Record<string, unknown>> } | null {
   const data: Plotly.Data[] = []
-  const annotations: Partial<Plotly.Annotations>[] = []
+  const annotations: object[] = []
   const shapes: Partial<Plotly.Shape>[] = []
   const processedRows = table.x.map((xValue, index) => ({ '2theta': xValue + style.xShift, row: index + 1 } as Record<string, unknown>))
   const plottedOffsets: number[] = []
@@ -2783,6 +2805,315 @@ function xasBandDisplayPoints(result: XasBandEdgeResult) {
     y: points.map(point => point.y),
   }
   return { x: result.x, y: result.yNorm }
+}
+
+function medianValue(values: number[]) {
+  const finite = values.filter(Number.isFinite).sort((a, b) => a - b)
+  if (finite.length === 0) return Number.NaN
+  const middle = Math.floor(finite.length / 2)
+  if (finite.length % 2 === 1) return finite[middle]
+  return (finite[middle - 1] + finite[middle]) / 2
+}
+
+function linearRegressionFit(x: number[], y: number[]) {
+  const n = Math.min(x.length, y.length)
+  if (n < 2) return null
+  const points = Array.from({ length: n }, (_, index) => ({ x: x[index], y: y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+  if (points.length < 2) return null
+  const meanX = points.reduce((sum, point) => sum + point.x, 0) / points.length
+  const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length
+  const ssX = points.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0)
+  if (Math.abs(ssX) < 1e-15) return null
+  const ssXY = points.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0)
+  const slope = ssXY / ssX
+  const intercept = meanY - slope * meanX
+  const ssRes = points.reduce((sum, point) => sum + (point.y - (slope * point.x + intercept)) ** 2, 0)
+  const ssTot = points.reduce((sum, point) => sum + (point.y - meanY) ** 2, 0)
+  const r2 = ssTot <= 1e-15 ? 1 : 1 - ssRes / ssTot
+  return { slope, intercept, r2, pointCount: points.length }
+}
+
+function xasSpecialSampleFromText(value: string): XasSpecialSample | null {
+  const normalized = value.toLowerCase().replace(/[_\s]+/g, '-')
+  if (/(^|-)40-?10($|-)/.test(normalized) || normalized.includes('40-10')) return '40-10'
+  if (/(^|-)45-?5($|-)/.test(normalized) || normalized.includes('45-5')) return '45-5'
+  if (/(^|-)50-?0($|-)/.test(normalized) || normalized.includes('50-0')) return '50-0'
+  return null
+}
+
+function calculateXasSpecialFit(file: XasBandEdgeFile, config: { sample: XasSpecialSample; vbm: number; color: string }): XasSpecialFitResult {
+  const points = file.x
+    .map((xValue, index) => ({ x: xValue, y: file.y[index] }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => a.x - b.x)
+  if (points.length < 3) throw new Error(`${config.sample}: XAS data has too few valid points`)
+
+  const baselinePoints = points.filter(point => point.x >= XAS_SPECIAL_BASELINE_RANGE[0] && point.x <= XAS_SPECIAL_BASELINE_RANGE[1])
+  const baseline = medianValue(baselinePoints.map(point => point.y))
+  if (!Number.isFinite(baseline)) throw new Error(`${config.sample}: no XAS baseline points in 529.50-530.30 eV`)
+
+  const fitPoints = points.filter(point => point.x >= XAS_SPECIAL_FIT_RANGE[0] && point.x <= XAS_SPECIAL_FIT_RANGE[1])
+  const fit = linearRegressionFit(fitPoints.map(point => point.x), fitPoints.map(point => point.y))
+  if (!fit) throw new Error(`${config.sample}: no valid XAS fit line in 531.25-531.55 eV`)
+  if (Math.abs(fit.slope) < 1e-15) throw new Error(`${config.sample}: XAS fit slope is too small`)
+
+  const cbm = (baseline - fit.intercept) / fit.slope
+  const bandGap = cbm - config.vbm
+  if (!Number.isFinite(cbm) || !Number.isFinite(bandGap)) throw new Error(`${config.sample}: CBM or Eg is not finite`)
+
+  return {
+    sample: config.sample,
+    file,
+    x: points.map(point => point.x),
+    y: points.map(point => point.y),
+    baseline,
+    fitSlope: fit.slope,
+    fitIntercept: fit.intercept,
+    fitR2: fit.r2,
+    cbm,
+    vbm: config.vbm,
+    bandGap,
+  }
+}
+
+function calculateXasSpecialFits(files: XasBandEdgeFile[]) {
+  const xasFiles = files.filter(file => file.kind === 'xas')
+  const results: XasSpecialFitResult[] = []
+  const errors: string[] = []
+  XAS_SPECIAL_SAMPLES.forEach(config => {
+    const matched = xasFiles.find(file => xasSpecialSampleFromText(`${file.sampleLabel} ${file.name}`) === config.sample)
+    if (!matched) {
+      errors.push(`${config.sample}: missing XAS file`)
+      return
+    }
+    try {
+      results.push(calculateXasSpecialFit(matched, config))
+    } catch (fitError: unknown) {
+      errors.push(String((fitError as Error).message ?? fitError))
+    }
+  })
+  return { results, errors }
+}
+
+function buildXasSpecialSummaryCsv(results: XasSpecialFitResult[]) {
+  const trendCheck = xasSpecialTrendCheck(results)
+  const rows = results.map(result => ({
+    Sample: result.sample,
+    XAS_file: result.file.name,
+    VBM_eV: result.vbm.toFixed(6),
+    CBM_eV: result.cbm.toFixed(6),
+    Band_gap_eV: result.bandGap.toFixed(6),
+    XAS_baseline: result.baseline.toFixed(8),
+    XAS_fit_slope: result.fitSlope.toFixed(10),
+    XAS_fit_intercept: result.fitIntercept.toFixed(10),
+    XAS_fit_R2: result.fitR2.toFixed(8),
+    XAS_baseline_range_eV: `${XAS_SPECIAL_BASELINE_RANGE[0].toFixed(2)}-${XAS_SPECIAL_BASELINE_RANGE[1].toFixed(2)}`,
+    XAS_fit_range_eV: `${XAS_SPECIAL_FIT_RANGE[0].toFixed(2)}-${XAS_SPECIAL_FIT_RANGE[1].toFixed(2)}`,
+    Trend_check_40_10_gt_45_5_gt_50_0: trendCheck,
+  }))
+  const headers = ['Sample', 'XAS_file', 'VBM_eV', 'CBM_eV', 'Band_gap_eV', 'XAS_baseline', 'XAS_fit_slope', 'XAS_fit_intercept', 'XAS_fit_R2', 'XAS_baseline_range_eV', 'XAS_fit_range_eV', 'Trend_check_40_10_gt_45_5_gt_50_0']
+  return rowsToCsv(headers, rows)
+}
+
+function xasSpecialTrendCheck(results: XasSpecialFitResult[]) {
+  const bySample = Object.fromEntries(results.map(result => [result.sample, result])) as Partial<Record<XasSpecialSample, XasSpecialFitResult>>
+  const r4010 = bySample['40-10']
+  const r455 = bySample['45-5']
+  const r500 = bySample['50-0']
+  if (!r4010 || !r455 || !r500) return 'not enough samples'
+  return r4010.bandGap > r455.bandGap && r455.bandGap > r500.bandGap ? 'pass' : 'check'
+}
+
+function buildXasSpecialExtrapolationFigure(results: XasSpecialFitResult[], style: XasBandFigureStyle) {
+  const data: Plotly.Data[] = []
+  const annotations: object[] = []
+  const shapes: Partial<Plotly.Shape>[] = []
+  const ordered = XAS_SPECIAL_SAMPLES
+    .map(config => results.find(result => result.sample === config.sample))
+    .filter(Boolean) as XasSpecialFitResult[]
+  const n = Math.max(ordered.length, 1)
+  const gap = 0.035
+  const panelHeight = (1 - gap * Math.max(n - 1, 0)) / n
+  const allX = ordered.flatMap(result => [...result.x, result.vbm, result.cbm])
+  const globalXMin = Math.min(...allX, 526.8)
+  const globalXMax = Math.max(...allX, 532.2)
+  const xMin = Math.min(globalXMin, 526.8)
+  const xMax = Math.max(globalXMax, 532.2)
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    showlegend: style.showLegend,
+    legend: { x: 0.02, y: 0.98, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.75)', font: { size: Math.max(10, style.fontSize - 2), family: style.fontFamily } },
+    hovermode: 'closest',
+    margin: { l: 92, r: 42, t: 38, b: 78 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    annotations: annotations as unknown as Plotly.Layout['annotations'],
+    shapes: shapes as Plotly.Shape[],
+  }
+
+  ordered.forEach((result, index) => {
+    const suffix = index === 0 ? '' : String(index + 1)
+    const xAxisName = `xaxis${suffix}`
+    const yAxisName = `yaxis${suffix}`
+    const xRef = `x${suffix}`
+    const yRef = `y${suffix}`
+    const config = XAS_SPECIAL_SAMPLES.find(item => item.sample === result.sample) ?? XAS_SPECIAL_SAMPLES[0]
+    const yDomainStart = 1 - (index + 1) * panelHeight - index * gap
+    const yDomainEnd = yDomainStart + panelHeight
+    const displayPoints = result.x.map((xValue, pointIndex) => ({ x: xValue, y: result.y[pointIndex] }))
+      .filter(point => point.x >= xMin && point.x <= xMax)
+    const finiteY = displayPoints.map(point => point.y).filter(Number.isFinite)
+    const yLow = Math.min(...finiteY, result.baseline)
+    const yHigh = Math.max(...finiteY, result.baseline, result.fitSlope * XAS_SPECIAL_FIT_RANGE[1] + result.fitIntercept)
+    const ySpan = Math.max(yHigh - yLow, 0.05)
+    const yMin = yLow - ySpan * 0.12
+    const yMax = yHigh + ySpan * 0.26
+    const yAt = (fraction: number) => yMin + (yMax - yMin) * fraction
+    const egY = yAt(0.22)
+    const fitLineStart = Math.min(result.cbm, XAS_SPECIAL_FIT_RANGE[0]) - 0.02
+    const fitLineEnd = XAS_SPECIAL_FIT_RANGE[1] + 0.08
+    const fitLineX = buildLinearGrid(fitLineStart, fitLineEnd, 90)
+
+    ;(layout as Record<string, unknown>)[xAxisName] = {
+      range: [xMin, xMax],
+      anchor: yRef,
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      title: index === n - 1 ? { text: 'Energy (eV)', font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: style.xAxisTitleStandoff } : undefined,
+      showticklabels: index === n - 1,
+      minor: { ticks: 'inside' },
+    } as Plotly.Layout['xaxis']
+    ;(layout as Record<string, unknown>)[yAxisName] = {
+      domain: [yDomainStart, yDomainEnd],
+      anchor: xRef,
+      range: [yMin, yMax],
+      title: index === Math.floor(n / 2) ? { text: 'Normalized XAS intensity', font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: style.yAxisTitleStandoff } : undefined,
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+      tickfont: { size: style.fontSize, family: style.fontFamily },
+      minor: { ticks: 'inside' },
+    } as Plotly.Layout['yaxis']
+
+    shapes.push(
+      { type: 'rect', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: XAS_SPECIAL_BASELINE_RANGE[0], x1: XAS_SPECIAL_BASELINE_RANGE[1], y0: yMin, y1: yMax, fillcolor: 'rgba(107,114,128,0.08)', line: { width: 0 }, layer: 'below' },
+      { type: 'rect', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: XAS_SPECIAL_FIT_RANGE[0], x1: XAS_SPECIAL_FIT_RANGE[1], y0: yMin, y1: yMax, fillcolor: hexToRgba(config.color, 0.08), line: { width: 0 }, layer: 'below' },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.vbm, x1: result.vbm, y0: yMin, y1: yMax, line: { color: style.vbmColor, width: 1.2, dash: 'dash' } },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.cbm, x1: result.cbm, y0: yMin, y1: yMax, line: { color: style.cbmColor, width: 1.2, dash: 'dash' } },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.vbm, x1: result.cbm, y0: egY, y1: egY, line: { color: '#8a6d00', width: 1.3 } },
+    )
+
+    data.push(
+      {
+        x: displayPoints.map(point => point.x),
+        y: displayPoints.map(point => point.y),
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: `${result.sample} XAS`,
+        showlegend: index === 0 && style.showLegend,
+        line: { color: config.color, width: style.xasLineWidth },
+        hovertemplate: `${result.sample} XAS<br>%{x:.3f} eV<br>%{y:.5f}<extra></extra>`,
+      },
+      {
+        x: [xMin, xMax],
+        y: [result.baseline, result.baseline],
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Baseline median',
+        showlegend: index === 0 && style.showLegend,
+        line: { color: style.baselineColor, width: style.fitLineWidth, dash: 'dot' },
+        hoverinfo: 'skip',
+      },
+      {
+        x: fitLineX,
+        y: fitLineX.map(xValue => result.fitSlope * xValue + result.fitIntercept),
+        xaxis: xRef as never,
+        yaxis: yRef as never,
+        type: 'scatter',
+        mode: 'lines',
+        name: '531 eV fit',
+        showlegend: index === 0 && style.showLegend,
+        line: { color: style.tangentColor, width: style.fitLineWidth, dash: 'dash' },
+        hovertemplate: 'fit<br>%{x:.3f} eV<br>%{y:.5f}<extra></extra>',
+      },
+    )
+
+    annotations.push(
+      { x: 0.99, y: yDomainStart + panelHeight * 0.82, xref: 'paper', yref: 'paper', text: `<b>${result.sample}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color: config.color } },
+      { x: result.vbm, y: yAt(0.92), xref: xRef, yref: yRef, text: `VBM ${result.vbm.toFixed(3)} eV`, showarrow: false, xanchor: 'right', font: { size: style.vbmLabelFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.cbm, y: yAt(0.92), xref: xRef, yref: yRef, text: `CBM ${result.cbm.toFixed(3)} eV`, showarrow: false, xanchor: 'left', font: { size: style.cbmLabelFontSize, family: style.fontFamily, color: style.cbmColor } },
+      { x: (result.vbm + result.cbm) / 2, y: egY, xref: xRef, yref: yRef, text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, yshift: -18, font: { size: style.egLabelFontSize, family: style.fontFamily, color: '#6b5600' } },
+      { x: XAS_SPECIAL_FIT_RANGE[1], y: yAt(0.08), xref: xRef, yref: yRef, text: `R<sup>2</sup> ${result.fitR2.toFixed(4)}`, showarrow: false, xanchor: 'right', font: { size: Math.max(10, style.annotationFontSize - 2), family: style.fontFamily, color: '#4b5563' } },
+    )
+  })
+
+  return { data, layout }
+}
+
+function buildXasSpecialTrendFigure(results: XasSpecialFitResult[], style: XasBandFigureStyle) {
+  const ordered = XAS_SPECIAL_SAMPLES
+    .map(config => results.find(result => result.sample === config.sample))
+    .filter(Boolean) as XasSpecialFitResult[]
+  const colors = ordered.map(result => XAS_SPECIAL_SAMPLES.find(config => config.sample === result.sample)?.color ?? '#4b5563')
+  const yValues = ordered.map(result => result.bandGap)
+  const finite = yValues.filter(Number.isFinite)
+  const minY = Math.min(...finite, 3.6)
+  const maxY = Math.max(...finite, 3.9)
+  const pad = Math.max((maxY - minY) * 0.25, 0.04)
+  const data: Plotly.Data[] = [{
+    x: ordered.map(result => result.sample),
+    y: yValues,
+    type: 'bar',
+    marker: { color: colors },
+    text: yValues.map(value => `${value.toFixed(3)} eV`),
+    textposition: 'outside',
+    hovertemplate: '%{x}<br>Eg %{y:.4f} eV<extra></extra>',
+  }]
+  const layout: Partial<Plotly.Layout> = {
+    autosize: true,
+    paper_bgcolor: '#ffffff',
+    plot_bgcolor: '#ffffff',
+    showlegend: false,
+    margin: { l: 82, r: 34, t: 36, b: 72 },
+    font: { family: style.fontFamily, size: style.fontSize, color: '#111827' },
+    xaxis: {
+      title: { text: 'Sample', font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: 14 },
+      showgrid: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+    },
+    yaxis: {
+      title: { text: 'Band gap (eV)', font: { size: style.axisTitleFontSize, family: style.fontFamily }, standoff: 16 },
+      range: [minY - pad, maxY + pad],
+      showgrid: false,
+      zeroline: false,
+      showline: true,
+      mirror: true,
+      linewidth: style.axisLineWidth,
+      linecolor: '#111827',
+      ticks: 'inside',
+    },
+  }
+  return { data, layout }
 }
 
 function percentileValue(values: number[], percentile: number) {
@@ -4196,6 +4527,10 @@ export default function PlotFileTool({
   const vbDosFigure = useMemo(() => vbDosFiles.length > 0 ? buildVbDosFigure(vbDosFiles, vbDosStyle, vbDosRegions) : null, [vbDosFiles, vbDosStyle, vbDosRegions])
   const xasBandResults = useMemo(() => calculateXasBandPairs(xasBandFiles, xasBandPairs, xasBandStyle.normalizeIntensity), [xasBandFiles, xasBandPairs, xasBandStyle.normalizeIntensity])
   const xasBandFigure = useMemo(() => xasBandResults.results.length > 0 ? buildXasBandOverlayFigure(xasBandResults.results, xasBandStyle) : null, [xasBandResults.results, xasBandStyle])
+  const xasSpecialResults = useMemo(() => calculateXasSpecialFits(xasBandFiles), [xasBandFiles])
+  const xasSpecialFigure = useMemo(() => xasSpecialResults.results.length > 0 ? buildXasSpecialExtrapolationFigure(xasSpecialResults.results, xasBandStyle) : null, [xasBandStyle, xasSpecialResults.results])
+  const xasSpecialTrendFigure = useMemo(() => xasSpecialResults.results.length > 0 ? buildXasSpecialTrendFigure(xasSpecialResults.results, xasBandStyle) : null, [xasBandStyle, xasSpecialResults.results])
+  const xasSpecialTrendStatus = useMemo(() => xasSpecialTrendCheck(xasSpecialResults.results), [xasSpecialResults.results])
   const xrdFigure = useMemo(
     () => xrdTable ? buildXrdStackedFigure(xrdTable, xrdStyle, xrdReferencePeaks) : null,
     [xrdReferencePeaks, xrdStyle, xrdTable],
@@ -4487,7 +4822,7 @@ export default function PlotFileTool({
     }))
   }
 
-  const exportPlot = async (kind: 'panels' | 'summary' | 'vbm-stacked' | 'vbm-summary' | 'xas-band' | `vbm-single:${string}`, format: 'png' | 'svg') => {
+  const exportPlot = async (kind: 'panels' | 'summary' | 'vbm-stacked' | 'vbm-summary' | 'xas-band' | 'xas-special' | 'xas-special-trend' | `vbm-single:${string}`, format: 'png' | 'svg') => {
     const singleVbmId = kind.startsWith('vbm-single:') ? kind.slice('vbm-single:'.length) : ''
     const singleVbmResult = singleVbmId ? vbmResults.results.find(result => result.file.id === singleVbmId) : null
     const figure = kind === 'panels'
@@ -4500,6 +4835,10 @@ export default function PlotFileTool({
             ? vbmSummaryFigure
             : kind === 'xas-band'
               ? xasBandFigure
+              : kind === 'xas-special'
+                ? xasSpecialFigure
+                : kind === 'xas-special-trend'
+                  ? xasSpecialTrendFigure
               : singleVbmResult
                 ? buildVbmSingleFigure(singleVbmResult, vbmStyle)
                 : null
@@ -4507,15 +4846,17 @@ export default function PlotFileTool({
     setExporting(true)
     setError(null)
     const container = document.createElement('div')
-    const width = kind === 'xas-band'
+    const width = kind === 'xas-band' || kind === 'xas-special' || kind === 'xas-special-trend'
       ? xasBandStyle.exportWidth
       : kind.startsWith('vbm')
       ? vbmStyle.exportWidth
       : kind === 'panels'
         ? style.exportWidth
         : Math.max(style.exportWidth, 1200)
-    const height = kind === 'xas-band'
+    const height = kind === 'xas-band' || kind === 'xas-special'
       ? xasBandStyle.exportHeight
+      : kind === 'xas-special-trend'
+        ? Math.max(420, Math.round(xasBandStyle.exportHeight * 0.6))
       : kind.startsWith('vbm')
       ? (kind === 'vbm-summary' ? Math.max(420, Math.round(vbmStyle.exportHeight * 0.45)) : vbmStyle.exportHeight)
       : kind === 'panels'
@@ -4530,9 +4871,13 @@ export default function PlotFileTool({
     try {
       const plotly = PlotlyApi as unknown as PlotlyExportApi
       await plotly.newPlot(container, figure.data, { ...figure.layout, autosize: false, width, height }, { staticPlot: true, displayModeBar: false, responsive: false })
-      const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? (kind === 'xas-band' ? xasBandStyle.exportScale : kind.startsWith('vbm') ? vbmStyle.exportScale : style.exportScale) : 1 })
+      const dataUrl = await plotly.toImage(container, { format, width, height, scale: format === 'png' ? (kind === 'xas-band' || kind === 'xas-special' || kind === 'xas-special-trend' ? xasBandStyle.exportScale : kind.startsWith('vbm') ? vbmStyle.exportScale : style.exportScale) : 1 })
       const exportName = kind === 'xas-band'
         ? `xas_xes_band_gap_overlay.${format}`
+        : kind === 'xas-special'
+        ? `xas_xes_531peak_special_fit.${format}`
+        : kind === 'xas-special-trend'
+        ? `xas_xes_531peak_band_gap_trend.${format}`
         : kind.startsWith('vbm-single:')
         ? `xps_vbm_${safeFileStem(singleVbmResult?.file.sampleLabel ?? 'single')}.${format}`
         : `xps_${kind.replace('-', '_')}_figure.${format}`
@@ -4787,6 +5132,10 @@ export default function PlotFileTool({
       ...xasBandResults.results.map(result => `${result.pair.sampleLabel}: VBM=${result.xes.edge.toFixed(3)} eV, CBM=${result.xas.edge.toFixed(3)} eV, Eg=${result.bandGap.toFixed(3)} eV, XES display=${result.xes.file.displayStart}-${result.xes.file.displayEnd} eV, XAS display=${result.xas.file.displayStart}-${result.xas.file.displayEnd} eV`),
     ]
     downloadTextFile(lines.join('\n'), 'xas_xes_band_gap_summary.txt')
+  }
+
+  const exportXasSpecialSummaryCsv = () => {
+    downloadTextFile(buildXasSpecialSummaryCsv(xasSpecialResults.results), 'Bandgap_XAS_XES_531peak_method_summary.csv', 'text/csv;charset=utf-8')
   }
 
   const xesBandFiles = xasBandFiles.filter(file => file.kind === 'xes')
@@ -5340,6 +5689,70 @@ export default function PlotFileTool({
                 </div>
               </div>
             )}
+
+            <div className="analysis-section-card p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-[var(--text-main)]">特殊擬合：531 eV leading edge</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">固定使用 XAS 529.50-530.30 eV baseline median、531.25-531.55 eV 線性擬合與前次校正 XES VBM；不重新做全域歸一化。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={!xasSpecialFigure || exporting} onClick={() => { void exportPlot('xas-special', 'png') }} className="rounded-full bg-[var(--accent-secondary)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">外推 PNG</button>
+                  <button type="button" disabled={!xasSpecialFigure || exporting} onClick={() => { void exportPlot('xas-special', 'svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">外推 SVG</button>
+                  <button type="button" disabled={!xasSpecialTrendFigure || exporting} onClick={() => { void exportPlot('xas-special-trend', 'png') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">趨勢 PNG</button>
+                  <button type="button" disabled={!xasSpecialTrendFigure || exporting} onClick={() => { void exportPlot('xas-special-trend', 'svg') }} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">趨勢 SVG</button>
+                  <button type="button" disabled={xasSpecialResults.results.length === 0} onClick={exportXasSpecialSummaryCsv} className="rounded-full border border-[var(--card-border)] px-4 py-2 text-xs font-semibold text-[var(--text-main)] disabled:opacity-40">summary CSV</button>
+                </div>
+              </div>
+              {xasSpecialResults.errors.length > 0 && (
+                <div className="mb-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3">
+                  {xasSpecialResults.errors.map(item => <p key={item} className="text-xs text-amber-300">{item}</p>)}
+                </div>
+              )}
+              {xasSpecialResults.results.length > 0 && (
+                <p className={[
+                  'mb-3 rounded-xl border px-3 py-2 text-xs font-semibold',
+                  xasSpecialTrendStatus === 'pass'
+                    ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                    : 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+                ].join(' ')}
+                >
+                  趨勢檢查：{xasSpecialTrendStatus === 'pass' ? '符合 40-10 > 45-5 > 50-0' : xasSpecialTrendStatus === 'not enough samples' ? '樣品不足，需三個 XAS 檔案' : '未符合 40-10 > 45-5 > 50-0，請檢查資料或擬合區間'}
+                </p>
+              )}
+              {xasSpecialFigure ? (
+                <div className="space-y-4">
+                  <Plot data={xasSpecialFigure.data} layout={xasSpecialFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: Math.max(500, 250 * xasSpecialResults.results.length) }} />
+                  {xasSpecialTrendFigure && <Plot data={xasSpecialTrendFigure.data} layout={xasSpecialTrendFigure.layout as Plotly.Layout} config={withPlotFullscreen()} style={{ width: '100%', height: 420 }} />}
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-left text-xs text-[var(--text-main)]">
+                      <thead className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-soft)]">
+                        <tr>
+                          {['Sample', 'VBM', 'CBM', 'Eg', 'Slope', 'Intercept', 'R2'].map(header => <th key={header} className="whitespace-nowrap px-3 py-2">{header}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {xasSpecialResults.results.map(result => (
+                          <tr key={result.sample} className="border-t border-[var(--card-border)]">
+                            <td className="whitespace-nowrap px-3 py-2 font-semibold">{result.sample}</td>
+                            <td className="whitespace-nowrap px-3 py-2">{result.vbm.toFixed(3)}</td>
+                            <td className="whitespace-nowrap px-3 py-2">{result.cbm.toFixed(3)}</td>
+                            <td className="whitespace-nowrap px-3 py-2 font-semibold text-[var(--accent-secondary)]">{result.bandGap.toFixed(3)}</td>
+                            <td className="whitespace-nowrap px-3 py-2">{result.fitSlope.toExponential(4)}</td>
+                            <td className="whitespace-nowrap px-3 py-2">{result.fitIntercept.toExponential(4)}</td>
+                            <td className="whitespace-nowrap px-3 py-2">{result.fitR2.toFixed(4)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 text-center text-sm text-[var(--text-soft)]">
+                  上傳 XAS_40-10_norm_524-532max.csv、XAS_45-5_norm_524-532max.csv、XAS_50-0_norm_524-532max.csv 到 XAS 檔案後，特殊擬合會顯示在這裡。
+                </div>
+              )}
+            </div>
           </section>
 
           <aside className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
