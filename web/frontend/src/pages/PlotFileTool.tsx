@@ -357,7 +357,9 @@ interface XasBandFigureStyle {
   axisLineWidth: number
   xLeft: number
   xRight: number
+  yMin: number
   yMax: number
+  manualYRange: boolean
   xesTitle: string
   xasTitle: string
   xAxisTitle: string
@@ -633,7 +635,9 @@ const DEFAULT_XAS_BAND_STYLE: XasBandFigureStyle = {
   axisLineWidth: 1.5,
   xLeft: 519,
   xRight: 545,
+  yMin: -0.04,
   yMax: 1.18,
+  manualYRange: false,
   xesTitle: 'XES',
   xasTitle: 'XAS',
   xAxisTitle: 'Photon energy / Emission energy (eV)',
@@ -2511,9 +2515,13 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
     ].filter(Number.isFinite)
     const panelDataMax = Math.max(...panelValues, 0)
     const panelDataMin = Math.min(...panelValues, 0)
-    const panelYMax = style.normalizeIntensity ? Math.max(style.yMax, 0.3) : Math.max(style.yMax, panelDataMax * 1.08, 0.3)
-    const panelYMin = style.normalizeIntensity ? -0.04 : Math.min(-0.04, panelDataMin * 1.08)
-    const panelY = panelYMax * clamp(style.egLineYFraction, 0.02, 0.98)
+    const autoYMax = style.normalizeIntensity ? Math.max(style.yMax, 0.3) : Math.max(style.yMax, panelDataMax * 1.08, 0.3)
+    const autoYMin = style.normalizeIntensity ? Math.min(style.yMin, -0.04) : Math.min(style.yMin, -0.04, panelDataMin * 1.08)
+    const hasManualYRange = style.manualYRange && Number.isFinite(style.yMin) && Number.isFinite(style.yMax) && style.yMin < style.yMax
+    const panelYMin = hasManualYRange ? style.yMin : autoYMin
+    const panelYMax = hasManualYRange ? style.yMax : autoYMax
+    const panelYAt = (fraction: number) => panelYMin + (panelYMax - panelYMin) * fraction
+    const panelY = panelYAt(clamp(style.egLineYFraction, 0.02, 0.98))
 
     ;(layout as Record<string, unknown>)[xAxisName] = {
       range: [xMin, xMax],
@@ -2547,9 +2555,9 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
     } as Plotly.Layout['yaxis']
 
     shapes.push(
-      { type: 'rect', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xas.edge, y0: panelYMin / 2, y1: panelYMax, fillcolor: hexToRgba(style.gapColor, style.gapOpacity), line: { width: 0 }, layer: 'below' },
-      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xes.edge, y0: panelYMin / 2, y1: panelYMax, line: { color: style.vbmColor, width: 1.2, dash: 'dash' } },
-      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xas.edge, x1: result.xas.edge, y0: panelYMin / 2, y1: panelYMax, line: { color: style.cbmColor, width: 1.2, dash: 'dash' } },
+      { type: 'rect', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xas.edge, y0: panelYMin, y1: panelYMax, fillcolor: hexToRgba(style.gapColor, style.gapOpacity), line: { width: 0 }, layer: 'below' },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xes.edge, y0: panelYMin, y1: panelYMax, line: { color: style.vbmColor, width: 1.2, dash: 'dash' } },
+      { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xas.edge, x1: result.xas.edge, y0: panelYMin, y1: panelYMax, line: { color: style.cbmColor, width: 1.2, dash: 'dash' } },
       { type: 'line', xref: xRef as Plotly.Shape['xref'], yref: yRef as Plotly.Shape['yref'], x0: result.xes.edge, x1: result.xas.edge, y0: panelY, y1: panelY, line: { color: '#8a6d00', width: 1.2 } },
     )
 
@@ -2590,9 +2598,9 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
     }
 
     annotations.push(
-      { x: result.xes.edge + style.vbmLabelXShift, y: panelYMax * clamp(style.vbmLabelYFraction, 0, 1.2), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>VBM<br>${result.xes.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'right', font: { size: style.vbmLabelFontSize, family: style.fontFamily, color: style.vbmColor } },
-      { x: result.xas.edge + style.cbmLabelXShift, y: panelYMax * clamp(style.cbmLabelYFraction, 0, 1.2), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>CBM<br>${result.xas.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'left', font: { size: style.cbmLabelFontSize, family: style.fontFamily, color: style.cbmColor } },
-      { x: (result.xes.edge + result.xas.edge) / 2, y: panelYMax * clamp(style.egLabelYFraction, 0, 1.2), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, font: { size: style.egLabelFontSize, family: style.fontFamily, color: '#6b5600' } },
+      { x: result.xes.edge + style.vbmLabelXShift, y: panelYAt(clamp(style.vbmLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>VBM<br>${result.xes.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'right', font: { size: style.vbmLabelFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.xas.edge + style.cbmLabelXShift, y: panelYAt(clamp(style.cbmLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>CBM<br>${result.xas.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'left', font: { size: style.cbmLabelFontSize, family: style.fontFamily, color: style.cbmColor } },
+      { x: (result.xes.edge + result.xas.edge) / 2, y: panelYAt(clamp(style.egLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, font: { size: style.egLabelFontSize, family: style.fontFamily, color: '#6b5600' } },
       { x: style.sampleLabelXPaper, y: sampleLabelY, xref: 'paper', yref: 'paper', text: `<b>${result.pair.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color } },
     )
     if (index === 0) {
@@ -4942,7 +4950,10 @@ export default function PlotFileTool({
                   <NumInput label="X 左端" value={xasBandStyle.xLeft} onChange={value => setXasBandStyle(prev => ({ ...prev, xLeft: value }))} step={0.1} />
                   <NumInput label="X 右端" value={xasBandStyle.xRight} onChange={value => setXasBandStyle(prev => ({ ...prev, xRight: value }))} step={0.1} />
                 </div>
-                <NumInput label={xasBandStyle.normalizeIntensity ? 'Y 軸上限' : 'Y 軸上限下限值'} value={xasBandStyle.yMax} onChange={value => setXasBandStyle(prev => ({ ...prev, yMax: Math.max(0.3, value) }))} min={0.3} step={0.02} />
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="Y 下限" value={xasBandStyle.yMin} onChange={value => setXasBandStyle(prev => ({ ...prev, yMin: value }))} step={0.02} />
+                  <NumInput label="Y 上限" value={xasBandStyle.yMax} onChange={value => setXasBandStyle(prev => ({ ...prev, yMax: value }))} step={0.02} />
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <NumInput label="刻度字體" value={xasBandStyle.fontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, fontSize: clamp(value, 8, 34) }))} min={8} max={34} step={1} />
                   <NumInput label="軸標題字體" value={xasBandStyle.axisTitleFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, axisTitleFontSize: clamp(value, 10, 42) }))} min={10} max={42} step={1} />
@@ -5000,6 +5011,7 @@ export default function PlotFileTool({
                   <NumInput label="Eg 透明度" value={xasBandStyle.gapOpacity} onChange={value => setXasBandStyle(prev => ({ ...prev, gapOpacity: clamp(value, 0, 0.6) }))} min={0} max={0.6} step={0.02} />
                 </div>
                 {[
+                  ['manualYRange', '手動 Y 範圍'],
                   ['normalizeIntensity', '最大值歸一化'],
                   ['showFitGuides', '顯示外推輔助線'],
                   ['showLegend', '顯示圖例'],

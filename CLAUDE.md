@@ -172,7 +172,9 @@ streamlit run app.py --server.port 8505
 
 - 重要判斷：使用者要求「繪製圖檔」XAS 區上傳數據時不要強制歸一化；檢查後確認 `PlotFileTool.tsx` 的上傳解析保留 raw y，但 XES/XAS band gap 結果生成會固定套用最大值歸一化，需改成預設保留原始強度並把歸一化變成手動選項。
 - 實作：`web/frontend/src/pages/PlotFileTool.tsx` 的 XES/XAS band gap 外推改為預設保留上傳檔案原始強度；新增 `normalizeIntensity` 圖面設定與「最大值歸一化」checkbox，只有勾選時才做 max=1 歸一化。同步把預設 Y 軸標題改為 `Intensity (a.u.)`，歸一化開啟時顯示 `Normalized intensity (a.u.)`，且原始強度模式下會依每個 panel 的實際強度自動撐開 Y 軸上限。
+- 實作：`PlotFileTool` 的 XES/XAS band gap 圖面設定新增手動 Y 軸範圍；加入 `yMin` 與 `manualYRange` 設定，預設仍自動依數據撐開 Y 軸，開啟「手動 Y 範圍」時才固定使用使用者輸入的 Y 下限 / Y 上限，並同步調整 Eg 線、VBM/CBM/Eg 標註與垂直形狀的 Y 位置。
 - 檢查：嘗試執行 `web/frontend` 的 `npm run build`，但目前 shell 找不到 `npm` / `node`，未能執行前端建置；改以 `git diff --check` 驗證通過，僅有既有 LF/CRLF 提醒。同步以 `rg` 確認 XES/XAS band gap 只剩手動 `normalizeIntensity` 路徑會觸發歸一化。
+- 檢查：完成手動 Y 軸範圍後再次確認目前 shell 的 `node` / `npm` 皆為 NOT_FOUND，因此仍無法執行前端 build；`git diff --check` 通過，工作區變更範圍限於 `CLAUDE.md` 與 `web/frontend/src/pages/PlotFileTool.tsx`，僅有既有 LF/CRLF 提醒。
 
 ### 2026-05-27（續）
 
