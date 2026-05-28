@@ -73,22 +73,18 @@ interface XasBandPair {
 
 interface XrdSourceTrace {
   id: string
+  sourceFile: string
   sourceColumn: number
   label: string
   shortLabel: string
+  xColumn: string
+  yColumn: string
   color: string
   offset: number
   linewidth: number
   visible: boolean
-  y: number[]
-}
-
-interface XrdTableFile {
-  id: string
-  name: string
-  xColumn: string
   x: number[]
-  traces: XrdSourceTrace[]
+  y: number[]
 }
 
 interface XrdReferencePeak {
@@ -1524,12 +1520,36 @@ function inferXrdColumnLabel(header: string, index: number) {
   return header && !/^Column\s+\d+$/i.test(header) ? header : `Trace ${index}`
 }
 
-function parseXrdStackedText(text: string, fileName: string): XrdTableFile {
+function xrdMatchedPresetForLabel(label: string) {
+  const normalized = label.toLowerCase().replace(/[_\s]+/g, '-')
+  if (normalized.includes('40-10') || normalized.includes('40/10') || normalized.includes('1013')) return XRD_TRACE_PRESETS[0]
+  if (normalized.includes('45-5') || normalized.includes('45/5') || normalized.includes('1020')) return XRD_TRACE_PRESETS[1]
+  if (normalized.includes('50-0') || normalized.includes('50/0') || normalized.includes('1014')) return XRD_TRACE_PRESETS[2]
+  return null
+}
+
+function xrdPresetForLabel(label: string, fallbackIndex: number) {
+  const matched = xrdMatchedPresetForLabel(label)
+  if (matched) return matched
+  return XRD_TRACE_PRESETS[fallbackIndex]
+}
+
+function inferXrdTraceLabel(fileName: string, header: string, traceIndex: number, traceCount: number) {
+  const stem = safeFileStem(fileName)
+  const filePreset = xrdMatchedPresetForLabel(stem)
+  const headerPreset = xrdMatchedPresetForLabel(header)
+  if (traceCount === 1 && filePreset) return filePreset.label
+  if (headerPreset) return headerPreset.label
+  if (header && !/^Column\s+\d+$/i.test(header)) return header
+  return traceCount === 1 ? stem : inferXrdColumnLabel(header, traceIndex + 1)
+}
+
+function parseXrdTraceText(text: string, fileName: string, startIndex: number): XrdSourceTrace[] {
   const lines = text
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(line => line && !/^(#|%|!|\/\/)/.test(line))
-  if (lines.length < 3) throw new Error(`${fileName}: XRD table needs at least three data rows`)
+  if (lines.length < 3) throw new Error(`${fileName}: XRD data needs at least three data rows`)
   const firstLine = lines[0].replace(/^\uFEFF/, '')
   const delimiter = firstLine.includes('\t') ? '\t' : (firstLine.includes(',') ? ',' : 'whitespace')
   const firstCells = splitDelimitedLine(firstLine, delimiter)
@@ -1545,47 +1565,47 @@ function parseXrdStackedText(text: string, fileName: string): XrdTableFile {
     .filter(item => item.count >= 3)
     .sort((a, b) => a.index - b.index)
     .map(item => item.index)
-  if (numericIndexes.length < 2) throw new Error(`${fileName}: XRD table needs one 2theta column and at least one intensity column`)
+  if (numericIndexes.length < 2) throw new Error(`${fileName}: XRD data needs one 2theta column and at least one intensity column`)
 
   const xIndex = numericIndexes[0]
   const yIndexes = numericIndexes.slice(1)
-  const x: number[] = []
-  const yColumns = yIndexes.map(() => [] as number[])
+  const traceColumns = yIndexes.map(() => ({ x: [] as number[], y: [] as number[] }))
   rows.forEach(row => {
     const xValue = Number(row[xIndex])
     if (!Number.isFinite(xValue)) return
-    const yValues = yIndexes.map(index => Number(row[index]))
-    if (yValues.every(value => !Number.isFinite(value))) return
-    x.push(xValue)
-    yValues.forEach((value, index) => {
-      yColumns[index].push(Number.isFinite(value) ? value : Number.NaN)
+    yIndexes.forEach((columnIndex, index) => {
+      const yValue = Number(row[columnIndex])
+      if (!Number.isFinite(yValue)) return
+      traceColumns[index].x.push(xValue)
+      traceColumns[index].y.push(yValue)
     })
   })
-  if (x.length < 3) throw new Error(`${fileName}: XRD table has too few valid 2theta points`)
+  const validColumns = traceColumns
+    .map((column, index) => ({ ...column, index }))
+    .filter(column => column.x.length >= 3)
+  if (validColumns.length === 0) throw new Error(`${fileName}: XRD data has too few valid points`)
 
-  const traces = yColumns.map((y, index): XrdSourceTrace => {
-    const preset = XRD_TRACE_PRESETS[index] ?? XRD_TRACE_PRESETS[XRD_TRACE_PRESETS.length - 1]
-    const sourceColumn = yIndexes[index]
+  return validColumns.map((column, localIndex): XrdSourceTrace => {
+    const sourceColumn = yIndexes[column.index]
+    const header = headers[sourceColumn] ?? ''
+    const label = inferXrdTraceLabel(fileName, header, startIndex + localIndex, validColumns.length)
+    const preset = xrdPresetForLabel(`${fileName} ${header} ${label}`, startIndex + localIndex)
     return {
       id: `xrd-${fileName}-${sourceColumn}-${Math.random().toString(36).slice(2, 8)}`,
+      sourceFile: fileName,
       sourceColumn,
-      label: inferXrdColumnLabel(headers[sourceColumn] ?? '', index + 1),
-      shortLabel: preset?.shortLabel ?? `Trace ${index + 1}`,
-      color: preset?.color ?? DEFAULT_COMPONENT_COLORS[index % DEFAULT_COMPONENT_COLORS.length] ?? '#111827',
-      offset: preset?.offset ?? index * 0.75,
+      label,
+      shortLabel: preset?.shortLabel ?? safeFileStem(fileName),
+      xColumn: headers[xIndex] ?? '2theta',
+      yColumn: header || `Column ${sourceColumn + 1}`,
+      color: preset?.color ?? DEFAULT_COMPONENT_COLORS[(startIndex + localIndex) % DEFAULT_COMPONENT_COLORS.length] ?? '#111827',
+      offset: preset?.offset ?? (startIndex + localIndex) * 0.75,
       linewidth: preset?.linewidth ?? 0.5,
       visible: true,
-      y,
+      x: column.x,
+      y: column.y,
     }
   })
-
-  return {
-    id: `xrd-table-${fileName}-${Math.random().toString(36).slice(2, 8)}`,
-    name: fileName,
-    xColumn: headers[xIndex] ?? '2theta',
-    x,
-    traces,
-  }
 }
 
 function processXrdCurve(yRaw: number[], normalize: boolean) {
@@ -1607,26 +1627,28 @@ function processXrdCurve(yRaw: number[], normalize: boolean) {
 }
 
 function buildXrdStackedFigure(
-  table: XrdTableFile,
+  traces: XrdSourceTrace[],
   style: XrdFigureStyle,
   referencePeaks: XrdReferencePeak[],
 ): { data: Plotly.Data[]; layout: Partial<Plotly.Layout>; processedRows: Array<Record<string, unknown>> } | null {
   const data: Plotly.Data[] = []
   const annotations: object[] = []
   const shapes: Partial<Plotly.Shape>[] = []
-  const processedRows = table.x.map((xValue, index) => ({ '2theta': xValue + style.xShift, row: index + 1 } as Record<string, unknown>))
+  const processedRows: Array<Record<string, unknown>> = []
   const plottedOffsets: number[] = []
   const plottedValues: number[] = []
 
-  table.traces.filter(trace => trace.visible).forEach(trace => {
+  traces.filter(trace => trace.visible).forEach(trace => {
     const yProcessed = processXrdCurve(trace.y, style.normalizeEachCurve)
     if (!yProcessed) return
-    const xShifted = table.x.map(value => value + style.xShift)
+    const xShifted = trace.x.map(value => value + style.xShift)
     const yPlot = yProcessed.map(value => Number.isFinite(value) ? value + trace.offset : Number.NaN)
     plottedOffsets.push(trace.offset)
     plottedValues.push(...yPlot.filter(Number.isFinite))
-    processedRows.forEach((row, index) => {
-      row[trace.label] = Number.isFinite(yPlot[index]) ? yPlot[index] : ''
+    xShifted.forEach((xValue, index) => {
+      if (!processedRows[index]) processedRows[index] = { row: index + 1 }
+      processedRows[index][`${trace.label}_2theta`] = Number.isFinite(xValue) ? xValue : ''
+      processedRows[index][trace.label] = Number.isFinite(yPlot[index]) ? yPlot[index] : ''
     })
     data.push({
       x: xShifted,
@@ -4457,7 +4479,7 @@ export default function PlotFileTool({
   const [xasBandFiles, setXasBandFiles] = useState<XasBandEdgeFile[]>([])
   const [xasBandPairs, setXasBandPairs] = useState<XasBandPair[]>([])
   const [xasBandStyle, setXasBandStyle] = useState<XasBandFigureStyle>(DEFAULT_XAS_BAND_STYLE)
-  const [xrdTable, setXrdTable] = useState<XrdTableFile | null>(null)
+  const [xrdTraces, setXrdTraces] = useState<XrdSourceTrace[]>([])
   const [xrdStyle, setXrdStyle] = useState<XrdFigureStyle>(DEFAULT_XRD_STYLE)
   const [xrdReferencePeaks, setXrdReferencePeaks] = useState<XrdReferencePeak[]>(() => DEFAULT_XRD_REFERENCE_PEAKS.map(peak => ({ ...peak })))
   const [ramanFiles, setRamanFiles] = useState<RamanFitPlotFile[]>([])
@@ -4532,8 +4554,8 @@ export default function PlotFileTool({
   const xasSpecialTrendFigure = useMemo(() => xasSpecialResults.results.length > 0 ? buildXasSpecialTrendFigure(xasSpecialResults.results, xasBandStyle) : null, [xasBandStyle, xasSpecialResults.results])
   const xasSpecialTrendStatus = useMemo(() => xasSpecialTrendCheck(xasSpecialResults.results), [xasSpecialResults.results])
   const xrdFigure = useMemo(
-    () => xrdTable ? buildXrdStackedFigure(xrdTable, xrdStyle, xrdReferencePeaks) : null,
-    [xrdReferencePeaks, xrdStyle, xrdTable],
+    () => xrdTraces.length > 0 ? buildXrdStackedFigure(xrdTraces, xrdStyle, xrdReferencePeaks) : null,
+    [xrdReferencePeaks, xrdStyle, xrdTraces],
   )
   const activeRamanFile = useMemo(
     () => ramanFiles.find(file => file.id === selectedRamanId) ?? ramanFiles[0] ?? null,
@@ -4853,10 +4875,8 @@ export default function PlotFileTool({
       : kind === 'panels'
         ? style.exportWidth
         : Math.max(style.exportWidth, 1200)
-    const height = kind === 'xas-band' || kind === 'xas-special'
+    const height = kind === 'xas-band' || kind === 'xas-special' || kind === 'xas-special-trend'
       ? xasBandStyle.exportHeight
-      : kind === 'xas-special-trend'
-        ? Math.max(420, Math.round(xasBandStyle.exportHeight * 0.6))
       : kind.startsWith('vbm')
       ? (kind === 'vbm-summary' ? Math.max(420, Math.round(vbmStyle.exportHeight * 0.45)) : vbmStyle.exportHeight)
       : kind === 'panels'
@@ -4956,22 +4976,25 @@ export default function PlotFileTool({
   }
 
   const importXrdFile = async (fileList: FileList | null) => {
-    const file = fileList?.[0]
-    if (!file) return
+    if (!fileList) return
     setError(null)
-    try {
-      const text = await file.text()
-      setXrdTable(parseXrdStackedText(text, file.name))
-      setActiveModule('xrd')
-    } catch (importError: unknown) {
-      setError(String((importError as Error).message ?? importError))
+    const imported: XrdSourceTrace[] = []
+    const errors: string[] = []
+    for (const file of Array.from(fileList)) {
+      try {
+        const text = await file.text()
+        imported.push(...parseXrdTraceText(text, file.name, xrdTraces.length + imported.length))
+      } catch (importError: unknown) {
+        errors.push(String((importError as Error).message ?? importError))
+      }
     }
+    if (imported.length > 0) setXrdTraces(current => [...current, ...imported])
+    setActiveModule('xrd')
+    if (errors.length > 0) setError(errors.join('; '))
   }
 
   const updateXrdTrace = (traceId: string, patch: Partial<XrdSourceTrace>) => {
-    setXrdTable(current => current
-      ? { ...current, traces: current.traces.map(trace => trace.id === traceId ? { ...trace, ...patch } : trace) }
-      : current)
+    setXrdTraces(current => current.map(trace => trace.id === traceId ? { ...trace, ...patch } : trace))
   }
 
   const updateXrdReferencePeak = (peakId: string, patch: Partial<XrdReferencePeak>) => {
@@ -5150,8 +5173,8 @@ export default function PlotFileTool({
         chips={[
           { label: `目前 ${activeModule.toUpperCase()}` },
           { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? 'Raman 多樣品疊圖' : 'Raman deconvolution') : activeModule === 'xas' ? 'XES/XAS band gap' : activeModule === 'xrd' ? 'XRD stacked log plot' : (xpsPlotMode === 'vb-dos' ? 'VB-DOS 初步指認' : xpsPlotMode === 'vbm' ? 'VBM 線性外推' : '峰擬合圖') },
-          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : activeModule === 'xas' ? xasBandFiles.length : activeModule === 'xrd' ? (xrdTable ? 1 : 0) : (xpsPlotMode === 'vb-dos' ? vbDosFiles.length : xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
-          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : activeModule === 'xas' ? `Eg ${xasBandResults.results.length}` : activeModule === 'xrd' ? `Traces ${xrdTable?.traces.filter(trace => trace.visible).length ?? 0}` : (xpsPlotMode === 'vb-dos' ? `Peaks ${vbDosFiles.reduce((sum, file) => sum + file.peaks.length, 0)}` : xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
+          { label: `檔案 ${activeModule === 'raman' ? ramanFiles.length : activeModule === 'xas' ? xasBandFiles.length : activeModule === 'xrd' ? new Set(xrdTraces.map(trace => trace.sourceFile)).size : (xpsPlotMode === 'vb-dos' ? vbDosFiles.length : xpsPlotMode === 'vbm' ? vbmFiles.length : files.length)}` },
+          { label: activeModule === 'raman' ? (ramanPlotMode === 'overlay' ? `Ref ${selectedRamanReferencePeaks.length}` : `Peaks ${activeRamanFile ? visibleRamanComponents(activeRamanFile, ramanStyle).length : 0}/${activeRamanFile?.components.length ?? 0}`) : activeModule === 'xas' ? `Eg ${xasBandResults.results.length}` : activeModule === 'xrd' ? `Traces ${xrdTraces.filter(trace => trace.visible).length}` : (xpsPlotMode === 'vb-dos' ? `Peaks ${vbDosFiles.reduce((sum, file) => sum + file.peaks.length, 0)}` : xpsPlotMode === 'vbm' ? `VBM ${vbmResults.results.length}` : `Components ${keys.length}`) },
         ]}
       />
 
@@ -5930,29 +5953,30 @@ export default function PlotFileTool({
               <p className="mt-1 text-xs leading-5 text-[var(--text-soft)]">A 欄為 2θ，後續欄位為 40/10、45/5、50/0 強度；會套用 baseline、log10、normalize 與垂直 offset。</p>
               <label className="mt-3 block cursor-pointer rounded-xl border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)] px-4 py-5 text-center text-sm text-[var(--text-main)] hover:border-[var(--accent-secondary)]">
                 匯入 XRD TXT/CSV
-                <input type="file" accept=".txt,.csv,.dat,.tsv,.xy" className="hidden" onChange={event => { void importXrdFile(event.target.files); event.target.value = '' }} />
+                <input type="file" multiple accept=".txt,.csv,.dat,.tsv,.xy" className="hidden" onChange={event => { void importXrdFile(event.target.files); event.target.value = '' }} />
               </label>
               {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
-              {xrdTable && (
+              {xrdTraces.length > 0 && (
                 <div className="mt-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs leading-5 text-[var(--text-main)]">
-                  <p className="font-semibold">{xrdTable.name}</p>
-                  <p className="text-[var(--text-soft)]">X: {xrdTable.xColumn} / {xrdTable.x.length} points / {xrdTable.traces.length} traces</p>
-                  <button type="button" onClick={() => setXrdTable(null)} className="mt-2 text-rose-400">清除 XRD 檔案</button>
+                  <p className="font-semibold">{new Set(xrdTraces.map(trace => trace.sourceFile)).size} files / {xrdTraces.length} traces</p>
+                  <p className="text-[var(--text-soft)]">每條 trace 保留自己的 2theta 軸與點數。</p>
+                  <button type="button" onClick={() => setXrdTraces([])} className="mt-2 text-rose-400">清除 XRD 檔案</button>
                 </div>
               )}
             </div>
 
-            {xrdTable && (
+            {xrdTraces.length > 0 && (
               <div className="analysis-section-card p-4">
                 <p className="mb-3 text-sm font-semibold text-[var(--text-main)]">曲線設定</p>
                 <div className="space-y-3">
-                  {xrdTable.traces.map(trace => (
+                  {xrdTraces.map(trace => (
                     <div key={trace.id} className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
                       <label className="flex items-center justify-between gap-3 text-xs text-[var(--text-main)]">
                         <span className="font-semibold">{trace.shortLabel}</span>
                         <input type="checkbox" checked={trace.visible} onChange={event => updateXrdTrace(trace.id, { visible: event.target.checked })} className="accent-[var(--accent-secondary)]" />
                       </label>
                       <input value={trace.label} onChange={event => updateXrdTrace(trace.id, { label: event.target.value })} className="mt-2 w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                      <p className="mt-1 text-[10px] leading-4 text-[var(--text-soft)]">{trace.sourceFile}<br />X: {trace.xColumn} / Y: {trace.yColumn} / {trace.x.length} pts</p>
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <ColorInput label="線色" value={trace.color} onChange={value => updateXrdTrace(trace.id, { color: value })} />
                         <NumInput label="Offset" value={trace.offset} onChange={value => updateXrdTrace(trace.id, { offset: value })} step={0.01} />

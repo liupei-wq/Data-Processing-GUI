@@ -429,3 +429,15 @@ streamlit run app.py --server.port 8505
 [2026-05-29] 檢查：補上 XAS 特殊擬合趨勢檢查後再次執行 git diff --check，結果僅有 LF/CRLF 換行提示，未發現 whitespace error。
 
 [2026-05-29] 檢查：以 rg --files 搜尋專案內 XAS_40-10/45-5/50-0_norm_524-532max.csv 測試資料，未在工作區找到，因此未執行資料級 band gap 驗算。
+
+[2026-05-29] 實作：依要求將 XAS 特殊擬合圖檔輸出規格對齊一般 XES/XAS band gap 疊圖；xas-special 與 xas-special-trend 均使用 xasBandStyle.exportWidth/exportHeight/exportScale，不再替趨勢圖縮短高度。
+
+[2026-05-29] 檢查：對齊 XAS 特殊擬合圖檔輸出尺寸後執行 git diff --check，結果僅有 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-05-29] 實作：將繪製圖檔區 XRD 上傳模式由單一 table 檔改為多檔 trace 模式；input 支援 multiple，每個 XRD 檔案以自己的 2theta/intensity 軸產生 trace，buildXrdStackedFigure 改用 XrdSourceTrace[] 繪圖與輸出 CSV。
+
+[2026-05-29] 檢查：XRD 多檔 trace 上傳改動後執行 git diff --check，結果僅有 CLAUDE.md 與 PlotFileTool.tsx 的 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-05-29] 檢查：嘗試確認 npm 是否可用以重跑前端 build，但目前 PowerShell 環境仍找不到 npm；本次以 git diff --check 與程式碼檢視驗證。
+
+[2026-05-29] 檢查：補記 npm 不可用後再次執行 git diff --check，結果僅有 LF/CRLF 換行提示，未發現 whitespace error。
