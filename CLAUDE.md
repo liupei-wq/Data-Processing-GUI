@@ -168,6 +168,12 @@ streamlit run app.py --server.port 8505
 
 ## 精簡動作紀錄
 
+### 2026-05-29
+
+- 重要判斷：使用者要求「繪製圖檔」XAS 區上傳數據時不要強制歸一化；檢查後確認 `PlotFileTool.tsx` 的上傳解析保留 raw y，但 XES/XAS band gap 結果生成會固定套用最大值歸一化，需改成預設保留原始強度並把歸一化變成手動選項。
+- 實作：`web/frontend/src/pages/PlotFileTool.tsx` 的 XES/XAS band gap 外推改為預設保留上傳檔案原始強度；新增 `normalizeIntensity` 圖面設定與「最大值歸一化」checkbox，只有勾選時才做 max=1 歸一化。同步把預設 Y 軸標題改為 `Intensity (a.u.)`，歸一化開啟時顯示 `Normalized intensity (a.u.)`，且原始強度模式下會依每個 panel 的實際強度自動撐開 Y 軸上限。
+- 檢查：嘗試執行 `web/frontend` 的 `npm run build`，但目前 shell 找不到 `npm` / `node`，未能執行前端建置；改以 `git diff --check` 驗證通過，僅有既有 LF/CRLF 提醒。同步以 `rg` 確認 XES/XAS band gap 只剩手動 `normalizeIntensity` 路徑會觸發歸一化。
+
 ### 2026-05-27（續）
 
 - XPS 背景扣除與歸一化「啟用即套用」改為「請先選擇方法」：使用者反映「啟動後直接套用裡面的方法，後續切換方法時可能會有 bug」。改動：① 新增 `bgMethodAwaiting`、`normMethodAwaiting` 兩個 state；② 包裝 `handleBgEnabledToggle`（toggle ON 只設 awaiting=true、不動 `bg_enabled`；OFF 才真的關）+ `handlePickBgMethod`（使用者真的從下拉選方法時，才 set `bg_method` + `bg_enabled=true`）；歸一化同樣加 `handlePickNormMethod`、改寫 `setNormalizationEnabled`（之前會自動套用 ref 最後一次方法）。③ UI：TogglePill 視 `enabled || awaiting` 為 checked；方法下拉在 awaiting 時值為 `''` 並多一個首選項 `— 請先選擇方法 —`；起始/結束 BE、多項式次數、Tougaard B/C、norm 區間滑桿等其他欄位都改為「實際選好方法後才出現」，未選方法時改為虛線提示卡。這樣使用者按 Toggle 開啟後不會直接觸發某個 default 方法的處理流程，徹底解掉「方法切換時跳跳」的根因。後端演算法本身（Linear / Tougaard / Polynomial / AsLS / airPLS）尚未動，等使用者確認 UX 後再針對最常用的方法做穩定性優化。前端 `npm run build` 通過 0 錯誤。
