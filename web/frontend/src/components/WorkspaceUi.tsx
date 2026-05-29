@@ -906,6 +906,145 @@ export function GuidedSidebarSection({
   )
 }
 
+// ── Workspace flyout menu ────────────────────────────────────────────────────
+
+export type WorkspaceMenuItem = { id: string; label: string; detail?: string; group: 'analysis' | 'tool' }
+
+export const WORKSPACE_MENU_ITEMS: WorkspaceMenuItem[] = [
+  { id: 'workflow-raman', label: 'Raman', detail: '拉曼光譜分析', group: 'analysis' },
+  { id: 'workflow-xrd', label: 'XRD', detail: 'X 光繞射', group: 'analysis' },
+  { id: 'workflow-xas', label: 'XAS', detail: 'X 光吸收光譜', group: 'analysis' },
+  { id: 'workflow-xps', label: 'XPS', detail: 'X 光光電子能譜', group: 'analysis' },
+  { id: 'workflow-xes', label: 'XES', detail: 'X 光發射光譜', group: 'analysis' },
+  { id: 'tool-athena', label: 'XAS Athena 處理', detail: 'XAS Athena 流程', group: 'analysis' },
+  { id: 'tool-plot-files', label: '繪製圖檔', detail: 'PNG / SVG / PDF 匯出', group: 'tool' },
+  { id: 'tool-background', label: '背景扣除', detail: '單一處理', group: 'tool' },
+  { id: 'tool-normalize', label: '歸一化', detail: '單一處理', group: 'tool' },
+  { id: 'tool-gaussian', label: '高斯擬合', detail: '單一處理', group: 'tool' },
+  { id: 'tool-arctan', label: 'Arctan 扣除', detail: '單一處理', group: 'tool' },
+]
+
+export function WorkspaceMenuButton({
+  currentWorkspace,
+  onSelectWorkspace,
+  variant = 'sidebar',
+}: {
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
+  variant?: 'sidebar' | 'compact'
+}) {
+  const [open, setOpen] = useState(false)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const [panelPosition, setPanelPosition] = useState<{ top: number; left: number } | null>(null)
+
+  // Position panel to the right of button on open
+  useEffect(() => {
+    if (!open || !buttonRef.current) return
+    const updatePos = () => {
+      const rect = buttonRef.current?.getBoundingClientRect()
+      if (!rect) return
+      setPanelPosition({ top: rect.top, left: rect.right + 10 })
+    }
+    updatePos()
+    window.addEventListener('resize', updatePos)
+    window.addEventListener('scroll', updatePos, true)
+    return () => {
+      window.removeEventListener('resize', updatePos)
+      window.removeEventListener('scroll', updatePos, true)
+    }
+  }, [open])
+
+  // Click-outside to close
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (buttonRef.current?.contains(target)) return
+      if (panelRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    const escHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    document.addEventListener('keydown', escHandler)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('keydown', escHandler)
+    }
+  }, [open])
+
+  const currentItem = WORKSPACE_MENU_ITEMS.find(w => w.id === currentWorkspace)
+  const buttonClass = variant === 'compact'
+    ? 'workspace-menu-trigger workspace-menu-trigger--compact'
+    : 'workspace-menu-trigger'
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-label="切換工作區"
+        className={[buttonClass, open ? 'workspace-menu-trigger--open' : ''].join(' ').trim()}
+      >
+        <span className="workspace-menu-trigger__icon" aria-hidden="true">≡</span>
+        <span className="workspace-menu-trigger__copy">
+          <span className="workspace-menu-trigger__label">切換工作區</span>
+          {currentItem && (
+            <span className="workspace-menu-trigger__current">{currentItem.label}</span>
+          )}
+        </span>
+        <span className="workspace-menu-trigger__caret" aria-hidden="true">{open ? '◂' : '▸'}</span>
+      </button>
+
+      {open && panelPosition && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={panelRef}
+          className="workspace-menu-flyout glass-panel"
+          style={{ top: panelPosition.top, left: panelPosition.left }}
+          role="dialog"
+          aria-label="工作區選單"
+        >
+          <div className="workspace-menu-flyout__section">
+            <p className="workspace-menu-flyout__title">分析模組</p>
+            <div className="workspace-menu-flyout__list">
+              {WORKSPACE_MENU_ITEMS.filter(w => w.group === 'analysis').map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => { onSelectWorkspace?.(item.id); setOpen(false) }}
+                  className={['workspace-menu-flyout__item', currentWorkspace === item.id ? 'workspace-menu-flyout__item--active' : ''].join(' ').trim()}
+                >
+                  <span className="workspace-menu-flyout__item-label">{item.label}</span>
+                  {item.detail && <span className="workspace-menu-flyout__item-detail">{item.detail}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="workspace-menu-flyout__section">
+            <p className="workspace-menu-flyout__title">工具</p>
+            <div className="workspace-menu-flyout__list">
+              {WORKSPACE_MENU_ITEMS.filter(w => w.group === 'tool').map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => { onSelectWorkspace?.(item.id); setOpen(false) }}
+                  className={['workspace-menu-flyout__item', currentWorkspace === item.id ? 'workspace-menu-flyout__item--active' : ''].join(' ').trim()}
+                >
+                  <span className="workspace-menu-flyout__item-label">{item.label}</span>
+                  {item.detail && <span className="workspace-menu-flyout__item-detail">{item.detail}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
+
 function ModuleTabs({ activeModule, onSelect }: { activeModule: AnalysisModuleId; onSelect?: (m: AnalysisModuleId) => void }) {
   return (
     <div className="module-tabs" role="tablist" aria-label="分析模組切換">
@@ -932,18 +1071,22 @@ function ModuleTabs({ activeModule, onSelect }: { activeModule: AnalysisModuleId
 }
 
 export function StickySidebarHeader({
-  activeModule,
+  activeModule: _activeModule,
   subtitle,
-  onSelectModule,
+  onSelectModule: _onSelectModule,
   onCollapse,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   activeModule: AnalysisModuleId
   subtitle: string
   onSelectModule?: (module: AnalysisModuleId) => void
   onCollapse: () => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   return (
-    <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-10 pt-5">
+    <div className="sidebar-sticky-shell sticky top-0 z-20 px-4 pb-6 pt-5">
       <div className="sidebar-header-card relative rounded-[30px] px-5 pb-5 pt-4.5">
         <div className="sidebar-header-card__brand-row flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
@@ -958,9 +1101,11 @@ export function StickySidebarHeader({
           </div>
           <button type="button" onClick={onCollapse} className="sidebar-collapse-button btn btn-secondary mt-1 h-10 w-10 shrink-0 !px-0 text-sm">←</button>
         </div>
-        <div className="mt-4">
-          <ModuleTabs activeModule={activeModule} onSelect={onSelectModule} />
-        </div>
+        {onSelectWorkspace && (
+          <div className="mt-4">
+            <WorkspaceMenuButton currentWorkspace={currentWorkspace} onSelectWorkspace={onSelectWorkspace} />
+          </div>
+        )}
       </div>
     </div>
   )

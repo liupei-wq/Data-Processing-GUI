@@ -3,7 +3,8 @@ import { formatUtc8Iso } from '../utils/time'
 import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { EmptyWorkspaceState, GuidedSidebarSection, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { EmptyWorkspaceState, GuidedSidebarSection, MODULE_CONTENT, StickySidebarHeader } from '../components/WorkspaceUi'
+import { SampleBasketsButton, SampleBasketsPanel, type BasketFileItem, type SampleBasket } from '../components/SampleBaskets'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { parseFiles, processData } from '../api/xes'
@@ -499,9 +500,13 @@ function NumInput({ label, value, onChange, min, max, step = 1, disabled = false
 export default function XES({
   onModuleSelect,
   onOpenPlotPopup,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   onModuleSelect?: (m: AnalysisModuleId) => void
   onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   const moduleContent = MODULE_CONTENT.xes
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -594,6 +599,17 @@ export default function XES({
   const handleUpload = async (files: File[]) => {
     setSampleFiles(files)
   }
+
+  // ── Sample baskets ──────────────────────────────────────────────────────
+  const [basketsPanelOpen, setBasketsPanelOpen] = useState(true)
+  const [basketItems, setBasketItems] = useState<BasketFileItem[]>([])
+  const [baskets, setBaskets] = useState<SampleBasket[]>([])
+
+  const handleApplyBasket = useCallback(async (_basket: SampleBasket, basketFiles: File[]) => {
+    if (basketFiles.length === 0) return
+    setBasketsPanelOpen(false)
+    setSampleFiles(basketFiles)
+  }, [])
   const handleBg1Upload = (files: File[]) => { setBg1File(files[0] ?? null) }
   const handleBg2Upload = (files: File[]) => { setBg2File(files[0] ?? null) }
   const handleCalibrationUpload = async (files: File[]) => {
@@ -872,6 +888,8 @@ export default function XES({
               subtitle="Material Intelligence Engine"
               onSelectModule={onModuleSelect}
               onCollapse={() => setSidebarCollapsed(true)}
+              currentWorkspace={currentWorkspace}
+              onSelectWorkspace={onSelectWorkspace}
             />
 
             <div className="px-4 pt-2">
@@ -897,17 +915,26 @@ export default function XES({
             <div className="flex-1 px-4 py-4">
               {xesMode === 'xes' && (
                 <>
-                  {/* Step 1 */}
+                  {/* Step 1: 背景與能量校正 + 解析按鈕 */}
                   <SidebarCard
                     step={1}
-                    title="載入資料"
-                    hint="載入光譜、背景與能量校正檔"
+                    title="背景 / 能量校正 / 解析"
                     status={sampleFiles.length > 0 || samples.length > 0 ? 'on' : 'off'}
                     open={sectionOpen[1]}
                     onOpenChange={next => setStepOpen(1, next)}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">XES 載入與校正</p>
+                        <p>XES（X-ray Emission Spectroscopy）量的是核心電洞被外層電子填補時放出的螢光光子能量分布，常用於分辨同元素在不同化學環境下的價電子結構。一筆 raw XES 通常存成 pixel 對應強度的兩欄表格，需要做兩件事才能變成可分析的 spectrum：扣背景 + pixel→eV 校正。</p>
+                        <p className="font-semibold text-[var(--text-main)]">背景檔案</p>
+                        <p>用 beam off 或無樣品狀態下的同條件量測。Sample 光譜減 background 後可消除散射、暗電流、Bremsstrahlung 等與化學訊號無關的貢獻。沒有背景檔也可以跳過，後續可改用 Polynomial / AsLS 等演算法估計。</p>
+                        <p className="font-semibold text-[var(--text-main)]">能量校正檔</p>
+                        <p>標準格式：第一欄 pixel index、第二欄對應能量（eV）。系統會用插值（線性 / spline）把 pixel 軸轉成連續能量軸。建議用已知 emission line 已校正過的標準（如 Cu Kα₁ 8047.8 eV）。</p>
+                        <p className="font-semibold text-[var(--text-main)]">「解析檔案」按鈕</p>
+                        <p>把上面三類檔案餵給後端解析，建立 sample / bg 對應關係並切分多筆樣品。解析成功後才能進入後續內插、平均、扣背景等步驟。</p>
+                      </div>
+                    }
                   >
-                    <Label>Sample 光譜（可多選）</Label>
-                    <FileUpload onFiles={handleUpload} moduleLabel="XES" />
                     <Label>背景檔案（可選）</Label>
                     <FileUpload onFiles={handleBg1Upload} moduleLabel="背景" />
                     <Label>XES 能量校正檔 (.dat / .txt / .csv)</Label>
@@ -943,11 +970,23 @@ export default function XES({
                   <SidebarCard
                     step={2}
                     title="內插 / 多檔平均"
-                    hint="均勻網格內插與資料集平均"
                     defaultOpen={false}
                     status={samples.length === 0 ? 'locked' : (params.interpolate || params.average ? 'on' : 'off')}
                     open={sectionOpen[2]}
                     onOpenChange={next => setStepOpen(2, next)}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">內插（Interpolation）</p>
+                        <p>把不同檔案的能量軸統一到等間距網格。XES 的 raw 能量軸來自 pixel 校正，每張 spectrum 可能 step size 略不同；要做平均、扣背景或多筆疊圖時，必須在同一個 x 軸上。</p>
+                        <p>本流程用 cubic spline 對每筆光譜在 [E_min, E_max] 之間建立 N 個等距點，建議 N 取所有檔案點數中位數的 1~2 倍以保留細節又不過度 oversample。</p>
+                        <p className="font-semibold text-[var(--text-main)]">多檔平均</p>
+                        <p>把同樣品做了 2~3 次的測量取點對點平均，提升信噪比。需要先做內插（共同網格），平均才有意義。XES 的 emission line 強度通常很弱，多次量測平均是降低 Poisson noise 的主要手段。</p>
+                        <div className="space-y-2 text-sm">
+                          <div><span className="font-medium text-[var(--text-main)]">適用</span>：同樣品、同 beamline、同 mono 設定下的重複測量。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">不適用</span>：不同氧化態 / 不同位置的測量不要平均，會把 chemical shift 抹平。</div>
+                        </div>
+                      </div>
+                    }
                   >
                     <TogglePill label="內插至均勻網格" checked={params.interpolate} onChange={v => p('interpolate', v)} />
                     {params.interpolate && (
@@ -965,9 +1004,18 @@ export default function XES({
                   <SidebarCard
                     step={3}
                     title="I0 正規化（每筆除以監視訊號）"
-                    hint="每筆強度除以監視訊號"
                     defaultOpen={false}
                     status={samples.length === 0 ? 'locked' : (Object.keys(params.i0_values).length > 0 ? 'on' : 'off')}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">I₀ 正規化（Incident-flux normalization）</p>
+                        <p>同步輻射 beam 的入射光通量會隨時間（filling current 衰減）與 mono 角度而變動。為了讓不同檔案的螢光強度可以公平比較，要把每筆光譜 y(E) 除以該次量測時的入射通量 I₀（ion chamber 上游監視訊號）。</p>
+                        <p>公式：<code>I_norm(E) = I_sample(E) / I₀</code>。若每筆檔的 I₀ 不一致（如不同 fill、不同曝光時間），不做這步會造成樣品間絕對強度的比較失真。</p>
+                        <p className="font-semibold text-[var(--text-main)]">輸入格式</p>
+                        <p>每行寫 <code>檔名,I0值</code>。I₀ 取該次量測的平均 ion chamber 讀數或直接從 scan header 抄。</p>
+                        <p className="text-[var(--text-soft)]">提示：如果你只看單一樣品 / 單次量測，可以略過這步。多樣品 overlay 或定量比較絕對強度時才必要。</p>
+                      </div>
+                    }
                   >
                     <div className="text-xs leading-5 text-[var(--text-soft)]">
                       每行輸入：<code className="rounded px-1 py-0.5 bg-[var(--card-ghost)]">檔名,I0數值</code>，I0 值須為正數。
@@ -1013,9 +1061,21 @@ export default function XES({
                   <SidebarCard
                     step={4}
                     title="X 軸校正（pixel → eV）"
-                    hint="能量校正：pixel 轉 eV"
                     defaultOpen={false}
                     status={samples.length === 0 ? 'locked' : (energyCalibrated ? 'on' : 'off')}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">X 軸校正（Energy Calibration）</p>
+                        <p>XES 的偵測器（CCD / silicon drift detector）量到的是 pixel index，必須轉成能量 eV 才能做物理解釋。校正方法：對已知 emission line 的標準樣品（如 Cu Kα₁ 8047.8 eV、Cr Kβ 5946.8 eV）量一張光譜，紀錄該峰所在的 pixel，建立 pixel ↔ eV 的對應曲線。</p>
+                        <p className="font-semibold text-[var(--text-main)]">校正模式</p>
+                        <div className="space-y-2 text-sm">
+                          <div><span className="font-medium text-[var(--text-main)]">無校正（none）</span>：保留 pixel 軸，僅用於初步看 spectrum 形狀。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">線性映射</span>：<code>E(pixel) = a · pixel + b</code>，僅需兩點即可定。適合短能量區段（&lt; 50 eV span）。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">多點插值</span>：用校正檔的 N 個（pixel, eV）對做 spline 插值，能處理 mono / detector 非線性。建議 N ≥ 3。</div>
+                        </div>
+                        <p className="text-[var(--text-soft)]">提示：校正光譜的能量方向（遞增 / 遞減）由 detector geometry 決定，本工具會自動偵測；若顯示「非單調」表示校正檔本身有問題，需重新整理。</p>
+                      </div>
+                    }
                   >
                     <Label>校正狀態</Label>
                     <Select
@@ -1065,9 +1125,20 @@ export default function XES({
                   <SidebarCard
                     step={5}
                     title="背景扣除"
-                    hint="扣除對應背景檔案"
                     defaultOpen={false}
                     status={samples.length === 0 ? 'locked' : (params.bg_method !== 'none' ? 'on' : 'off')}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">背景扣除</p>
+                        <p>把 sample 光譜中與化學訊號無關的成分扣掉，留下純粹的 emission line。在 XES 中要扣的背景來源主要有：① 散射本底（Bremsstrahlung、彈性散射）；② Detector dark current；③ 環境輻射本底。</p>
+                        <p className="font-semibold text-[var(--text-main)]">方法</p>
+                        <div className="space-y-2 text-sm">
+                          <div><span className="font-medium text-[var(--text-main)]">不扣除</span>：保留原始強度，適用於背景已經被別處處理過、或 background 與 sample 比例 &lt; 1% 的情形。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">扣除背景檔案</span>：直接做 <code>I_sample(E) − I_bg(E)</code>。要求 sample 與 background 用相同曝光時間與相同 detector 設定，否則需先做 scaling。</div>
+                        </div>
+                        <p className="text-[var(--text-soft)]">提示：扣完後若有負值出現，通常表示背景檔案 over-subtract，可能 sample 與 bg 曝光時間不一致；可以加 scale factor 微調。</p>
+                      </div>
+                    }
                   >
                     <Label>扣除方式</Label>
                     <Select value={params.bg_method} onChange={e => p('bg_method', e.target.value)}>
@@ -1083,9 +1154,20 @@ export default function XES({
                   <SidebarCard
                     step={6}
                     title="歸一化"
-                    hint="歸一化數據範圍"
                     defaultOpen={false}
                     status={samples.length === 0 ? 'locked' : (params.norm_method !== 'none' ? 'on' : 'off')}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">歸一化（XES）</p>
+                        <p>讓多筆光譜的縱軸尺度一致，方便重疊比較峰位、峰寬、峰形。XES 通常比較關注 peak shape 而非絕對強度，所以歸一化的選擇影響不大，主要是視覺呈現。</p>
+                        <p className="font-semibold text-[var(--text-main)]">方法</p>
+                        <div className="space-y-2 text-sm">
+                          <div><span className="font-medium text-[var(--text-main)]">Min-Max</span>：<code>(y − min) / (max − min)</code>，把光譜壓到 [0, 1]。對 pre-edge 不為零的光譜會把 baseline 同時拉到 0，最常用。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">最大值 = 1</span>：只除以 max，不動 baseline。適合 baseline 已扣到 0 的情況。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">區間最大值</span>：對使用者指定能量範圍內的 max 做歸一化，避免被遠處離群點主宰。常用於 Kα/Kβ 兩峰只想對齊 Kβ 強度的情境。</div>
+                        </div>
+                      </div>
+                    }
                   >
                     <Label>歸一化方式</Label>
                     <Select value={params.norm_method} onChange={e => p('norm_method', e.target.value as ProcessParams['norm_method'])}>
@@ -1109,9 +1191,23 @@ export default function XES({
                   <SidebarCard
                     step={7}
                     title="能帶對齊（XES/XAS）"
-                    hint="計算異質結價帶/導帶偏置"
                     defaultOpen={false}
                     status={bandParams.enabled && bandResult ? 'on' : 'off'}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">XES / XAS 能帶對齊</p>
+                        <p>把 XES（價帶 VBM 對應的 emission edge）跟 XAS（導帶 CBM 對應的 absorption edge）兩條光譜在能量軸上對齊，由 emission high-energy edge 推估 VBM，由 absorption pre-edge 推估 CBM，兩者差值 ≈ band gap。</p>
+                        <p className="font-semibold text-[var(--text-main)]">計算公式</p>
+                        <p>對單一樣品 A：<code>E_gap(A) = E_CBM(A) − E_VBM(A)</code>，誤差 <code>σ_gap = √(σ_VBM² + σ_CBM²)</code>。</p>
+                        <p>對兩樣品 A、B 的能帶偏移：<code>ΔVBM = E_VBM(A) − E_VBM(B)</code>、<code>ΔCBM = E_CBM(A) − E_CBM(B)</code>，可分析價帶偏移（VBO）與導帶偏移（CBO）。</p>
+                        <p className="font-semibold text-[var(--text-main)]">使用前提</p>
+                        <div className="space-y-2 text-sm">
+                          <div>① XES 與 XAS 必須來自同一個核心能階（如同樣是 O K-edge），能量軸才有共同基準。</div>
+                          <div>② 兩條光譜的能量校正要在同一個標準下，避免引入系統偏移。</div>
+                          <div>③ VBM / CBM 由各自的線性外推得到（先在 XPS / XAS 工具中做完外推取得數值）。</div>
+                        </div>
+                      </div>
+                    }
                   >
                     <TogglePill label="啟用能帶對齊計算" checked={bandParams.enabled} onChange={v => bp('enabled', v)} />
                     {bandParams.enabled && (
@@ -1156,8 +1252,18 @@ export default function XES({
                   <SidebarCard
                     step={1}
                     title="資料來源"
-                    hint="選擇或匯入價帶光譜數據"
                     status={vbmSpectrum ? 'on' : 'off'}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">VBM 模式資料來源</p>
+                        <p>XES emission spectrum 的 high-energy edge 對應價帶頂部（VBM）。本子模式從兩個地方取得欲分析的光譜：</p>
+                        <div className="space-y-2 text-sm">
+                          <div><span className="font-medium text-[var(--text-main)]">處理管線（Pipeline）</span>：從 XES 主流程取得正在處理 / 已處理完的光譜（含背景扣除、歸一化等），調整主流程參數時這裡會即時同步。適合一邊微調主流程一邊看 VBM 變化。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">手動匯入（Imported）</span>：直接讀外部已處理好的雙欄 TXT/CSV，不需要走主流程。常用於檢查別人給的 spectrum、或快速驗算文獻資料。</div>
+                        </div>
+                        <p className="text-[var(--text-soft)]">提示：兩種模式可以隨時切換；同樣的外推區間設定下，兩者算出來的 VBM 應該一致（若不一致，多半是主流程歸一化跟匯入檔案的歸一化方式不同）。</p>
+                      </div>
+                    }
                   >
                     <Label>資料來源模式</Label>
                     <Select
@@ -1237,8 +1343,22 @@ export default function XES({
                   <SidebarCard
                     step={2}
                     title="VBM 線性外推"
-                    hint="設定切線與基準線區間"
                     status={!vbmSpectrum ? 'locked' : (vbmIntersect ? 'on' : 'off')}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">VBM 線性外推（XES）</p>
+                        <p>從 XES emission spectrum 的高能側 edge 推估價帶頂部 VBM。物理：XES 量的是 valence electron 填補 core hole 的螢光，spectrum 的 high-energy edge ≈ Fermi 能與 valence band maximum 的差。</p>
+                        <p className="font-semibold text-[var(--text-main)]">算法（與 XPS / XAS 共用）</p>
+                        <div className="space-y-2 text-sm">
+                          <div><span className="font-medium text-[var(--text-main)]">切線</span>：在 emission edge 上升段（XES 通常是右側往下降的 edge）找最大斜率的兩點，連線成 tangent。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">基準線</span>：在 emission edge 之上的平坦區（接近背景）找最平斜率，做為 baseline。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">交點</span>：聯立兩線方程式求 x_VBM。</div>
+                        </div>
+                        <p className="font-semibold text-[var(--text-main)]">與 XPS VBM 的差異</p>
+                        <p>XPS valence band 量電子被激發出來的動能（binding energy 軸反向），XES 量電子填補 core hole 的螢光（emission energy 軸正向）。但兩者的 VBM 物理意義相同，可以互相驗證。XPS VBM 解析度受儀器 photon energy 與電子分析儀限制，XES VBM 受偵測器解析度限制；同個樣品的兩種量法應該給出一致的 VBM。</p>
+                        <p className="text-[var(--text-soft)]">提示：算出的 VBM 可以匯出 TXT 給 Origin Pro，或在「能帶對齊」步驟與 CBM 計算 band gap。</p>
+                      </div>
+                    }
                   >
                     {vbmSpectrum ? (
                       <div className="space-y-3">
@@ -1320,29 +1440,6 @@ export default function XES({
       {/* main content */}
       <div className="min-h-0 flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
-          <ModuleTopBar
-            title={xesMode === 'valence_band' ? "Valence Band 分析" : moduleContent.title}
-            subtitle={xesMode === 'valence_band' ? "XES VBM 線性外推" : moduleContent.subtitle}
-            description={xesMode === 'valence_band' ? "將 XES 光譜做 Min-Max 歸一化後，以切線與基準線交點決定 VBM 能量。" : moduleContent.description}
-            chips={xesMode === 'valence_band' ? [
-              { label: `資料來源：${vbmDataSource === 'imported' ? '匯入光譜' : '處理流程結果'}` },
-              { label: vbmSpectrum ? `${vbmSpectrum.x.length} pts` : '未載入' },
-            ] : [
-              { label: `資料量 ${samples.length}` },
-              { label: `平均 ${params.average ? '開啟' : '關閉'}` },
-            ]}
-          />
-
-          <InfoCardGrid
-            items={xesMode === 'valence_band' ? [
-              { label: '資料來源', value: vbmDataSource === 'imported' ? '手動匯入' : '管線光譜' },
-              { label: 'VBM 能量 (eV)', value: vbmIntersect ? `${vbmIntersect.x.toFixed(4)} eV` : '未計算' },
-            ] : [
-              { label: '資料集', value: samples.length > 0 ? `${samples.length} 個` : '未載入' },
-              { label: '平均模式', value: params.average ? '開啟' : '關閉' },
-            ]}
-          />
-
           {/* status pills */}
           {xesMode === 'xes' ? (
             hasSamples && (
@@ -1865,6 +1962,27 @@ export default function XES({
           </div>
         )
       })()}
+
+      <SampleBasketsPanel
+        open={basketsPanelOpen}
+        onClose={() => setBasketsPanelOpen(false)}
+        items={basketItems}
+        baskets={baskets}
+        onChangeItems={setBasketItems}
+        onChangeBaskets={setBaskets}
+        onApplyBasket={handleApplyBasket}
+        moduleLabel="XES"
+        acceptFileExts={['.txt', '.csv', '.asc', '.dat', '.xlsx', '.xls']}
+      />
+
+      {!basketsPanelOpen && (
+        <SampleBasketsButton
+          open={basketsPanelOpen}
+          onToggle={() => setBasketsPanelOpen(true)}
+          basketCount={baskets.length}
+          unassignedCount={basketItems.filter(i => i.basketId === null).length}
+        />
+      )}
     </div>
   )
 }

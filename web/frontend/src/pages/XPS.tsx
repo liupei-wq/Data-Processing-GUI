@@ -5,7 +5,8 @@ import { SortableCardGrid, type SortableCardContext } from '../components/Sortab
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { ANALYSIS_MODULES } from '../components/AnalysisModuleNav'
 import FileUpload from '../components/FileUpload'
-import { EmptyWorkspaceState, GuidedSidebarSection, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { EmptyWorkspaceState, GuidedSidebarSection, MODULE_CONTENT, StickySidebarHeader } from '../components/WorkspaceUi'
+import { SampleBasketsButton, SampleBasketsPanel, type BasketFileItem, type SampleBasket } from '../components/SampleBaskets'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { calibrateEnergy, downloadXpsFitReport, fetchPeriodicTable, parseFiles, processData, fitPeaks, computeVbm, lookupRsf, fetchElementPeaks, listElements } from '../api/xps'
@@ -1663,9 +1664,13 @@ function buildOverlayBackgroundTracesWithSeriesColors(
 export default function XPS({
   onModuleSelect,
   onOpenPlotPopup,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   onModuleSelect?: (m: AnalysisModuleId) => void
   onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   const moduleContent = MODULE_CONTENT.xps
   const restoringSessionRef = useRef(false)
@@ -1773,6 +1778,26 @@ export default function XPS({
   const [peakCandidates, setPeakCandidates] = useState<PeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [overlayFitResult, setOverlayFitResult] = useState<FitResult | null>(null)
+  // ── Fit undo stack (snapshot post-fit state, undo restores previous fit) ──
+  type FitUndoSnapshot = { peakCandidates: PeakCandidate[]; fitResult: FitResult | null; overlayFitResult: FitResult | null }
+  const [fitUndoStack, setFitUndoStack] = useState<FitUndoSnapshot[]>([])
+  const FIT_UNDO_MAX = 10
+  const pushFitUndo = (peaks: PeakCandidate[], single: FitResult | null, overlay: FitResult | null) => {
+    setFitUndoStack(prev => {
+      const next = [...prev, { peakCandidates: peaks, fitResult: single, overlayFitResult: overlay }]
+      return next.length > FIT_UNDO_MAX ? next.slice(-FIT_UNDO_MAX) : next
+    })
+  }
+  const handleUndoFit = () => {
+    setFitUndoStack(prev => {
+      if (prev.length === 0) return prev
+      const snap = prev[prev.length - 1]
+      setPeakCandidates(snap.peakCandidates)
+      setFitResult(snap.fitResult)
+      setOverlayFitResult(snap.overlayFitResult)
+      return prev.slice(0, -1)
+    })
+  }
   const [isFitting, setIsFitting] = useState(false)
   const [fitError, setFitError] = useState<string | null>(null)
   const [fitHistory, setFitHistory] = useState<{ iter: number; r2: number; rmse: number; delta: number }[]>([])
@@ -2421,6 +2446,17 @@ export default function XPS({
     }
   }, [])
 
+  // ── Sample baskets ──────────────────────────────────────────────────────
+  const [basketsPanelOpen, setBasketsPanelOpen] = useState(true)
+  const [basketItems, setBasketItems] = useState<BasketFileItem[]>([])
+  const [baskets, setBaskets] = useState<SampleBasket[]>([])
+
+  const handleApplyBasket = useCallback(async (_basket: SampleBasket, basketFiles: File[]) => {
+    if (basketFiles.length === 0) return
+    setBasketsPanelOpen(false)
+    await handleFiles(basketFiles)
+  }, [handleFiles])
+
   const handleStandardFiles = useCallback(async (files: File[]) => {
     setCalibrationLoading(true)
     setCalibrationError(null)
@@ -2758,7 +2794,7 @@ export default function XPS({
       })
       // Update unlocked peak params with fitted values (OriginPro-style iterative refinement)
       const scale = fitTargetPeakScale
-      setPeakCandidates(prev => prev.map(pk => {
+      const newPeaks = peakCandidates.map(pk => {
         const activeIdx = activePeaks.indexOf(pk)
         if (activeIdx < 0) return pk
         const fitted = res.peaks[activeIdx]
@@ -2768,12 +2804,14 @@ export default function XPS({
         if (!pk.lock_fwhm)   updated = updatePeakFwhmSeed(updated, fitted.FWHM_eV, scale, { preserveBounds: true })
         if (!pk.lock_area)   updated = updatePeakAmplitudeSeed(updated, fitted.Height, scale)
         return updated
-      }))
-      if (processingViewMode === 'overlay') {
-        setOverlayFitResult(res)
-      } else {
-        setFitResult(res)
-      }
+      })
+      setPeakCandidates(newPeaks)
+      const isOverlay = processingViewMode === 'overlay'
+      const newSingle = isOverlay ? fitResult : res
+      const newOverlay = isOverlay ? res : overlayFitResult
+      if (isOverlay) setOverlayFitResult(res)
+      else setFitResult(res)
+      pushFitUndo(newPeaks, newSingle, newOverlay)
       return res
     } catch (e: unknown) { setFitError((e as Error).message); return null }
     finally { setIsFitting(false) }
@@ -2787,6 +2825,7 @@ export default function XPS({
     if (!fitTargetDataset) return
     setAutoConverging(true); setIsFitting(true); setFitError(null); setFitHistory([])
     let currentCandidates = peakCandidates
+    let lastRes: FitResult | null = null
     let prevR2 = 0
     const scale = fitTargetPeakScale
     try {
@@ -2820,12 +2859,21 @@ export default function XPS({
         })
         if (processingViewMode === 'overlay') setOverlayFitResult(res)
         else setFitResult(res)
+        lastRes = res
         if (delta < 0.00005 && iter > 0) break
         prevR2 = r2
       }
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally {
       setPeakCandidates(currentCandidates)
+      if (lastRes) {
+        const isOverlay = processingViewMode === 'overlay'
+        pushFitUndo(
+          currentCandidates,
+          isOverlay ? fitResult : lastRes,
+          isOverlay ? lastRes : overlayFitResult,
+        )
+      }
       setAutoConverging(false); setIsFitting(false)
     }
   }
@@ -3096,6 +3144,8 @@ export default function XPS({
                 subtitle="Material Intelligence Engine"
                 onSelectModule={onModuleSelect}
                 onCollapse={() => setSidebarCollapsed(true)}
+                currentWorkspace={currentWorkspace}
+                onSelectWorkspace={onSelectWorkspace}
               />
 
               {/* Mode toggle */}
@@ -3115,7 +3165,20 @@ export default function XPS({
 
               {xpsMode === 'dft' && (
                 <div className="px-4 pt-2">
-                  <Section step={0} title="DFT 加密模組" hint="Valence Band DFT-informed Analyzer" status={dftUnlocked ? 'on' : 'off'}>
+                  <Section step={0} title="DFT 加密模組" status={dftUnlocked ? 'on' : 'off'} infoContent={
+                    <div className="space-y-3">
+                      <p className="font-semibold text-[var(--text-main)]">DFT-informed XPS Valence Band Analysis</p>
+                      <p>進階分析模組：把實驗 XPS valence band spectrum 與 DFT 計算的 partial density of states（pDOS）做對齊與卷積比較。從 pDOS 推測 valence band 內各能階組成（如 O 2p / Ga 4s, 4p / Ni 3d 的相對貢獻），協助化學鍵分析、化合物分相鑑定。</p>
+                      <p className="font-semibold text-[var(--text-main)]">流程概要</p>
+                      <div className="space-y-2 text-sm">
+                        <div>① <span className="font-medium text-[var(--text-main)]">VBM 對齊</span>：把實驗 spectrum 與 DFT pDOS 對齊到同一個 VBM 參考點（VBM = 0 eV）。</div>
+                        <div>② <span className="font-medium text-[var(--text-main)]">分區積分</span>：在 valence band 範圍內切多個區段，分別計算 pDOS 各元素 / 軌道的積分強度。</div>
+                        <div>③ <span className="font-medium text-[var(--text-main)]">展寬（Broadening）</span>：對 pDOS 做 Gaussian / Lorentzian 卷積，模擬實驗儀器解析度與 lifetime broadening。</div>
+                        <div>④ <span className="font-medium text-[var(--text-main)]">pDOS-based fitting</span>：以展寬後 pDOS 為基函數擬合實驗 VB，定量各元素貢獻。</div>
+                      </div>
+                      <p className="text-[var(--text-soft)]">需要密碼解鎖。此模組會跳轉到外部 Streamlit 工具（Ga2O3_VB_Analyzer），需要先在本機啟動該服務。</p>
+                    </div>
+                  }>
                     <p className="mb-3 text-xs leading-5 text-[var(--text-soft)]">
                       此區連結到 Ga2O3/NiO/p-Si valence band DFT-informed spectral analysis。此工具不執行 VASP/DFT，
                       而是進行 VBM 對齊、分區積分、pDOS 展寬與 pDOS-based fitting。
@@ -3157,32 +3220,7 @@ export default function XPS({
               <div className="px-4 pt-4">
                 <Section
                   step={1}
-                  title="載入檔案"
-                  hint="XY / VMS / TXT / CSV / ASC / XLSX"
-                  status={rawFiles.length > 0 ? 'on' : 'off'}
-                  open={sectionOpen[1]}
-                  onOpenChange={next => setStepOpen(1, next)}
-                >
-                  <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}</div>
-                  <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="XPS" accept={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc', '.xlsx', '.xls']} />
-                  {rawFiles.length > 0 && (
-                    <div className="space-y-1">
-                      {rawFiles.map(f => (
-                        <div key={f.name} className="flex items-center gap-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-2.5 py-1.5 text-xs text-[var(--text-main)]">
-                          <span className="text-[var(--accent-tertiary)]">✓</span>
-                          <span className="truncate">{f.name}</span>
-                          <span className="ml-auto shrink-0 text-[var(--text-soft)]">{f.x.length} pts</span>
-                        </div>
-                      ))}
-                      <button onClick={() => { setRawFiles([]); setResult(null); setFitResult(null); setPeakCandidates([]) }} className="text-xs text-rose-400 hover:text-rose-300">清除全部</button>
-                    </div>
-                  )}
-                </Section>
-
-                <Section
-                  step={2}
                   title="內插 / 資料模式"
-                  hint="多檔：單筆 / 疊圖 / 平均"
                   defaultOpen={false}
                   status={rawFiles.length === 0 ? 'locked' : (interpolationEnabled || processingViewMode === 'overlay' ? 'on' : 'off')}
                   open={sectionOpen[2]}
@@ -3402,9 +3440,8 @@ export default function XPS({
                 </Section>
 
                 <Section
-                  step={3}
+                  step={2}
                   title="能量校正"
-                  hint="手動位移 + 標準樣品自動校正"
                   defaultOpen={false}
                   status={rawFiles.length === 0 ? 'locked' : (currentManualEnergyShiftEnabled || calibrationResult?.success ? 'on' : 'off')}
                 >
@@ -3496,9 +3533,8 @@ export default function XPS({
 
                 {xpsMode !== 'valence_band' && (
                 <Section
-                  step={4}
+                  step={3}
                   title="背景扣除"
-                  hint="Shirley / Tougaard / Linear"
                   defaultOpen={false}
                   status={rawFiles.length === 0 ? 'locked' : (currentParams.bg_enabled ? 'on' : 'off')}
                   infoContent={
@@ -3560,9 +3596,8 @@ export default function XPS({
                 )}
 
                 <Section
-                  step={xpsMode === 'valence_band' ? 4 : 5}
+                  step={xpsMode === 'valence_band' ? 3 : 4}
                   title="有效數據範圍"
-                  hint="背景後裁切有效 BE 區間"
                   defaultOpen={false}
                   status={rawFiles.length === 0 ? 'locked' : (currentParams.valid_range_enabled ? 'on' : 'off')}
                   infoContent={
@@ -3595,9 +3630,8 @@ export default function XPS({
                 </Section>
 
                 <Section
-                  step={xpsMode === 'valence_band' ? 5 : 6}
+                  step={xpsMode === 'valence_band' ? 4 : 5}
                   title="歸一化"
-                  hint="統一強度尺度"
                   defaultOpen={false}
                   status={rawFiles.length === 0 ? 'locked' : (hasNormalizationStage ? 'on' : 'off')}
                   infoContent={
@@ -3646,11 +3680,28 @@ export default function XPS({
 
                 {xpsMode !== 'valence_band' && (
                 <Section
-                  step={7}
+                  step={6}
                   title={overlayNonAverageMode ? '峰擬合（疊圖不平均停用）' : '峰擬合'}
-                  hint="元素資料庫選峰 / 手動新增 / Voigt"
                   defaultOpen={false}
                   status={rawFiles.length === 0 || overlayNonAverageMode ? 'locked' : (peakCandidates.length > 0 || currentFitResult ? 'on' : 'off')}
+                  infoContent={
+                    <div className="space-y-3">
+                      <p className="font-semibold text-[var(--text-main)]">XPS 峰擬合（Core Level）</p>
+                      <p>把 XPS core level spectrum 拆解成多個 component peaks，每個峰對應一種化學環境（如 Ni 2p₃/₂ 可分成 Ni⁰、Ni²⁺、Ni³⁺）。從各 peak 的位置（binding energy）判斷氧化態，從面積比換算原子比例。</p>
+                      <p className="font-semibold text-[var(--text-main)]">線形（profile）</p>
+                      <div className="space-y-2 text-sm">
+                        <div><span className="font-medium text-[var(--text-main)]">Gaussian</span>：純高斯，反映儀器解析度。</div>
+                        <div><span className="font-medium text-[var(--text-main)]">Lorentzian</span>：純洛倫茲，反映 core-hole lifetime。</div>
+                        <div><span className="font-medium text-[var(--text-main)]">Voigt / Pseudo-Voigt</span>：高斯與洛倫茲卷積（或線性混合），XPS 標準首選。</div>
+                        <div><span className="font-medium text-[var(--text-main)]">Gaussian-Lorentzian Sum/Product</span>：CasaXPS / Avantage 慣用形式。</div>
+                      </div>
+                      <p className="font-semibold text-[var(--text-main)]">峰來源</p>
+                      <p>① 從元素資料庫自動取入（依選定元素 / 軌道帶入文獻 BE 與分裂能）；② 手動加入（自訂位置）。每個峰可獨立鎖定 Center / FWHM / Area 來限制擬合自由度。</p>
+                      <p className="font-semibold text-[var(--text-main)]">面積換算原子比</p>
+                      <p>對 N 種元素：<code>n_i / n_j = (A_i / RSF_i) / (A_j / RSF_j)</code>，其中 A 是峰面積、RSF 是 relative sensitivity factor。本工具在峰擬合完成後可自動套用 RSF 庫計算量化結果。</p>
+                      <p className="text-[var(--text-soft)]">提示：高斯面積關係 <code>area = peak_height × FWHM × 1.0645</code>。不確定 FWHM 時可先用文獻典型值（金屬 ~0.8 eV、氧化物 ~1.5 eV）做 seed。</p>
+                    </div>
+                  }
                 >
                   {overlayNonAverageMode && (
                     <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-3 text-[10px] leading-5 text-amber-300">
@@ -3896,6 +3947,15 @@ export default function XPS({
                         >
                           {autoConverging ? '收斂中…' : '自動收斂'}
                         </button>
+                        <button
+                          type="button"
+                          onClick={handleUndoFit}
+                          disabled={isFitting || autoConverging || fitUndoStack.length === 0}
+                          title={fitUndoStack.length === 0 ? '尚無可回復的擬合結果' : `回到上一個擬合結果（剩 ${fitUndoStack.length} 步）`}
+                          className="rounded-lg border border-[var(--card-border)] px-3 py-2 text-xs font-medium text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          ↶ 回上一步{fitUndoStack.length > 0 ? ` (${fitUndoStack.length})` : ''}
+                        </button>
                       </div>
                       {fitHistory.length > 0 && (
                         <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
@@ -3925,11 +3985,25 @@ export default function XPS({
 
                 {xpsMode === 'valence_band' && (
                   <Section
-                    step={6}
+                    step={5}
                     title="VBM 線性外推"
-                    hint="切線 x 基準線交點"
                     defaultOpen={false}
                     status={!effectiveVbmDataset ? 'locked' : (vbmResult?.success ? 'on' : 'off')}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">VBM 線性外推（XPS Valence Band）</p>
+                        <p>從 XPS valence band spectrum 推估價帶頂部（VBM）能量。物理：valence band 在 Fermi 能附近的 emission edge 起點就是 VBM，量好就能對應 binding energy = 0 的位置。XPS BE 軸是反向的（左大右小），所以 leading edge 出現在 BE 較高的那一側，向 BE → 0 的方向下降。</p>
+                        <p className="font-semibold text-[var(--text-main)]">算法</p>
+                        <div className="space-y-2 text-sm">
+                          <div><span className="font-medium text-[var(--text-main)]">切線</span>：在 leading edge 中段選兩個 x 值，每個 x 在附近 20% 搜尋窗內挑選局部點對，從所有候選中取最大正斜率（XPS BE 軸 leading edge 上升方向）的兩點，連線成 tangent。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">基準線</span>：在 BE 接近 0 的平坦區挑兩個 x 值，同樣 20% 搜尋窗內取最平斜率的兩點，連線成 baseline。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">VBM 交點</span>：聯立兩條線方程求 x 軸交點，這個 BE 值就是 VBM。</div>
+                        </div>
+                        <p className="font-semibold text-[var(--text-main)]">資料來源</p>
+                        <p>可選 ① 處理流程結果（剛剛在 Core Level 跑完管線的光譜）或 ② 匯入已處理光譜（外部 TXT/CSV）。後者方便快速驗算別人提供的資料。</p>
+                        <p className="text-[var(--text-soft)]">提示：VBM 若算出負值表示切線與基準線在 BE = 0 的另一側交會，通常是區間設定錯誤；建議重新檢視切線是否選在真正的 leading edge 上。</p>
+                      </div>
+                    }
                   >
                     <p className="text-[10px] text-[var(--text-soft)]">先把你輸入的兩個 x 值映射到光譜點，再以各點附近 20% 搜尋窗挑選切線與基準線用點；切線取最大正斜率，基準線取最平斜率，兩條線交點就是 VBM。</p>
 
@@ -4103,11 +4177,23 @@ export default function XPS({
 
                 {xpsMode === 'valence_band' && (
                   <Section
-                    step={7}
+                    step={6}
                     title="能帶偏移"
-                    hint="VBM 差值法 / Kraut Method"
                     defaultOpen={false}
                     status={bandOffsetResult ? 'on' : 'off'}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">能帶偏移（Band Offset）</p>
+                        <p>分析異質結 / 介面結構時，兩種材料的價帶頂部不會剛好對齊，差值即為價帶偏移（VBO, ΔE_v）；導帶偏移（CBO, ΔE_c）則由 band gap 差推算。本步驟提供兩種計算方法：</p>
+                        <p className="font-semibold text-[var(--text-main)]">VBM 差值法（直接法）</p>
+                        <p>對材料 A 與 B 各自做 XPS VBM 線性外推，得到 VBM_A、VBM_B，VBO = VBM_A − VBM_B。要求 A、B 的 XPS 量測能量校正一致（同一 Fermi 能基準）。誤差 σ_VBO = √(σ_A² + σ_B²)。</p>
+                        <p className="font-semibold text-[var(--text-main)]">Kraut 法（核心能階對齊法）</p>
+                        <p>用同一片異質結介面上 A、B 的 core level 與其各自 valence band 的差，再加上純物質的 core level，得到偏移：</p>
+                        <p>ΔE_v = (E_CL,A^pure − E_VBM,A^pure) − (E_CL,B^pure − E_VBM,B^pure) + (E_CL,B − E_CL,A)^interface</p>
+                        <p>優點：避開 Fermi level pinning 與表面 charging 問題，只用 core level 與 valence band 的相對差值。常用於半導體 / 氧化物異質結。</p>
+                        <p className="text-[var(--text-soft)]">提示：Kraut 法精度通常較高，但要求 (1) 純物質與介面樣品各做一次 XPS，(2) 介面樣品的 A、B core level 與 valence band 都要量得到（介面要薄）。</p>
+                      </div>
+                    }
                   >
                     <CustomSelect label="方法" value={bandOffsetMethod}
                       onChange={v => setBandOffsetMethod(v as 'vbm_diff' | 'kraut')}
@@ -4168,28 +4254,6 @@ export default function XPS({
 
       {/* ── main content ── */}
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
-        <ModuleTopBar
-          title={moduleContent.title}
-          subtitle={moduleContent.subtitle}
-          description={moduleContent.description}
-          chips={[
-            { label: `資料量 ${rawFiles.length}` },
-            { label: `模式 ${XPS_MODE_LABELS[xpsMode]}` },
-            { label: `峰候選 ${peakCandidates.length}` },
-          ]}
-        />
-
-        <InfoCardGrid
-          items={[
-            { label: '資料量', value: rawFiles.length > 0 ? `${rawFiles.length} 個` : '未載入' },
-            { label: '分析模式', value: XPS_MODE_LABELS[xpsMode] },
-            {
-              label: '內插點數',
-              value: currentParams.interpolate || (processingViewMode === 'overlay' && currentParams.average) ? `${effectiveNPoints} 點` : '未啟用',
-            },
-          ]}
-        />
-
         {error && (
           <div className="mb-4 rounded-xl border border-rose-300/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">⚠ {error}</div>
         )}
@@ -5312,6 +5376,28 @@ export default function XPS({
           </>
         )}
       </main>
+
+      <SampleBasketsPanel
+        open={basketsPanelOpen}
+        onClose={() => setBasketsPanelOpen(false)}
+        items={basketItems}
+        baskets={baskets}
+        onChangeItems={setBasketItems}
+        onChangeBaskets={setBaskets}
+        onApplyBasket={handleApplyBasket}
+        applyDisabled={parseLoading}
+        moduleLabel="XPS"
+        acceptFileExts={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc', '.xlsx', '.xls']}
+      />
+
+      {!basketsPanelOpen && (
+        <SampleBasketsButton
+          open={basketsPanelOpen}
+          onToggle={() => setBasketsPanelOpen(true)}
+          basketCount={baskets.length}
+          unassignedCount={basketItems.filter(i => i.basketId === null).length}
+        />
+      )}
 
       {overlaySelectorOpen && (
         <div className="absolute inset-0 z-40 flex items-start justify-center bg-black/35 px-4 py-8 backdrop-blur-[2px]">

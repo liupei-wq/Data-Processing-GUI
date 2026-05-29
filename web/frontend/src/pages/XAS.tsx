@@ -3,7 +3,8 @@ import Plot from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
 import { formatUtc8Iso } from '../utils/time'
 import FileUpload from '../components/FileUpload'
-import { EmptyWorkspaceState, GuidedSidebarSection, InfoCardGrid, MODULE_CONTENT, ModuleTopBar, StickySidebarHeader } from '../components/WorkspaceUi'
+import { EmptyWorkspaceState, GuidedSidebarSection, MODULE_CONTENT, StickySidebarHeader } from '../components/WorkspaceUi'
+import { SampleBasketsButton, SampleBasketsPanel, SampleBasketsOverlayModal, type BasketFileItem, type SampleBasket } from '../components/SampleBaskets'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest, PlotPopupUpdate } from '../hooks/usePlotPopups'
 import { downloadFitReport, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
@@ -913,10 +914,14 @@ export default function XAS({
   onModuleSelect,
   onOpenPlotPopup,
   onUpdatePlotPopup,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   onModuleSelect?: (m: AnalysisModuleId) => void
   onOpenPlotPopup?: (popup: PlotPopupRequest) => string
   onUpdatePlotPopup?: (id: string, update: PlotPopupUpdate) => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   const moduleContent = MODULE_CONTENT.xas
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -965,6 +970,25 @@ export default function XAS({
   const [fitError, setFitError] = useState<string | null>(null)
   const [fitHistory, setFitHistory] = useState<{ iter: number; r2: number; rmse: number; delta: number }[]>([])
   const [autoConverging, setAutoConverging] = useState(false)
+  // ── Fit undo stack ────────────────────────────────────────────────────
+  type XasFitUndoSnapshot = { peakCandidates: XasPeakCandidate[]; fitResult: XasFitResult | null }
+  const [fitUndoStack, setFitUndoStack] = useState<XasFitUndoSnapshot[]>([])
+  const XAS_FIT_UNDO_MAX = 10
+  const pushFitUndo = useCallback((peaks: XasPeakCandidate[], result: XasFitResult | null) => {
+    setFitUndoStack(prev => {
+      const next = [...prev, { peakCandidates: peaks, fitResult: result }]
+      return next.length > XAS_FIT_UNDO_MAX ? next.slice(-XAS_FIT_UNDO_MAX) : next
+    })
+  }, [])
+  const handleUndoFit = useCallback(() => {
+    setFitUndoStack(prev => {
+      if (prev.length === 0) return prev
+      const snap = prev[prev.length - 1]
+      setFitPeakCandidates(snap.peakCandidates)
+      setFitResult(snap.fitResult)
+      return prev.slice(0, -1)
+    })
+  }, [])
   const [importedFitDataset, setImportedFitDataset] = useState<{ name: string; x: number[]; y: number[] } | null>(null)
   const [fitDataSource, setFitDataSource] = useState<'pipeline' | 'imported'>('pipeline')
   const [importedFitError, setImportedFitError] = useState<string | null>(null)
@@ -1212,7 +1236,7 @@ export default function XAS({
     window.addEventListener('mouseup', onUp)
   }, [sidebarWidth])
 
-  const handleFiles = useCallback(async (files: File[]) => {
+  const handleFiles = useCallback(async (files: File[], autoEnableAverage = false) => {
     setIsLoading(true); setError(null)
     try {
       const res = await parseFiles(files, flipTfy)
@@ -1227,10 +1251,27 @@ export default function XAS({
       setDraftMappings(initDraft)
       setModalFileIdx(0)
       setShowColModal(true)
+      if (autoEnableAverage && res.files.length > 1) {
+        setParams(prev => ({ ...prev, average: true }))
+      }
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally { setIsLoading(false) }
   }, [flipTfy])
+
+  // ── Sample baskets ──────────────────────────────────────────────────────
+  const [basketsPanelOpen, setBasketsPanelOpen] = useState(true)
+  const [basketItems, setBasketItems] = useState<BasketFileItem[]>([])
+  const [baskets, setBaskets] = useState<SampleBasket[]>([])
+  const [activeBasketId, setActiveBasketId] = useState<string | null>(null)
+  const [overlayModalOpen, setOverlayModalOpen] = useState(false)
+
+  const handleApplyBasket = useCallback(async (basket: SampleBasket, basketFiles: File[]) => {
+    if (basketFiles.length === 0) return
+    setBasketsPanelOpen(false)
+    setActiveBasketId(basket.id)
+    await handleFiles(basketFiles, basketFiles.length > 1)
+  }, [handleFiles])
 
   // load samples list once when fitting section is first needed
   const loadSamplesList = useCallback(async () => {
@@ -1321,7 +1362,7 @@ export default function XAS({
         return [...prev, { iter: prev.length + 1, r2, rmse, delta }]
       })
       // Update unlocked peak params with fitted values (OriginPro-style iterative refinement)
-      setFitPeakCandidates(prev => prev.map(pk => {
+      const newPeaks = fitPeakCandidates.map(pk => {
         const activeIdx = activePeaks.indexOf(pk)
         if (activeIdx < 0) return pk
         const fitted = res.peaks[activeIdx]
@@ -1331,12 +1372,14 @@ export default function XAS({
         if (!pk.lock_fwhm)   updated = updateXasPeakFwhmSeed(updated, fitted.FWHM_eV, datasetMax)
         if (!pk.lock_area)   updated = updateXasPeakAmplitudeSeed(updated, fitted.Height, datasetMax)
         return updated
-      }))
+      })
+      setFitPeakCandidates(newPeaks)
       setFitResult(res)
+      pushFitUndo(newPeaks, res)
       return res
     } catch (e: unknown) { setFitError((e as Error).message); return null }
     finally { setIsFitting(false) }
-  }, [fitEffective, fitPeakCandidates, fitProfile, fitNRestarts, fitRangeEnabled, fitRangeLo, fitRangeHi])
+  }, [fitEffective, fitPeakCandidates, fitProfile, fitNRestarts, fitRangeEnabled, fitRangeLo, fitRangeHi, pushFitUndo])
 
   const handleAutoConverge = useCallback(async () => {
     if (!fitEffective) return
@@ -1345,6 +1388,7 @@ export default function XAS({
     const { x, y } = fitEffective
     const datasetMax = Math.max(...y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
     let currentCandidates = fitPeakCandidates
+    let lastRes: XasFitResult | null = null
     let prevR2 = 0
     try {
       for (let iter = 0; iter < 10; iter++) {
@@ -1369,15 +1413,17 @@ export default function XAS({
           return updated
         })
         setFitResult(res)
+        lastRes = res
         if (delta < 0.00005 && iter > 0) break
         prevR2 = r2
       }
     } catch (e: unknown) { setFitError((e as Error).message) }
     finally {
       setFitPeakCandidates(currentCandidates)
+      if (lastRes) pushFitUndo(currentCandidates, lastRes)
       setAutoConverging(false); setIsFitting(false)
     }
-  }, [fitEffective, fitPeakCandidates, fitProfile, fitRangeEnabled, fitRangeLo, fitRangeHi])
+  }, [fitEffective, fitPeakCandidates, fitProfile, fitRangeEnabled, fitRangeLo, fitRangeHi, pushFitUndo])
 
   const set = <K extends keyof ProcessParams>(key: K) => (val: ProcessParams[K]) =>
     setParams(p => ({ ...p, [key]: val }))
@@ -1889,6 +1935,25 @@ export default function XAS({
     viewMode,
   ])
 
+  // Auto-sync active basket's cached spectrum to current pipeline result
+  useEffect(() => {
+    if (!activeBasketId || !activeDataset) return
+    setBaskets(prev => {
+      const target = prev.find(b => b.id === activeBasketId)
+      if (!target) return prev
+      // Avoid no-op state updates: compare reference identity of x/tey/tfy arrays
+      if (target.cachedX === activeDataset.x && target.cachedTey === activeDataset.tey_processed && target.cachedTfy === activeDataset.tfy_processed) {
+        return prev
+      }
+      return prev.map(b => b.id === activeBasketId ? {
+        ...b,
+        cachedX: activeDataset.x,
+        cachedTey: activeDataset.tey_processed,
+        cachedTfy: activeDataset.tfy_processed,
+      } : b)
+    })
+  }, [activeBasketId, activeDataset])
+
   // Auto-initialize CBM energy ranges when dataset first becomes available
   useEffect(() => {
     if (!effectiveCbmDataset) return
@@ -2016,6 +2081,8 @@ export default function XAS({
                 subtitle="Material Intelligence Engine"
                 onSelectModule={onModuleSelect}
                 onCollapse={() => setSidebarCollapsed(true)}
+                currentWorkspace={currentWorkspace}
+                onSelectWorkspace={onSelectWorkspace}
               />
 
               {/* Mode toggle */}
@@ -2035,19 +2102,12 @@ export default function XAS({
 
               <div className="px-4 pt-4">
               {xasMode === 'xas' && (<>
-              {/* 1. 載入 */}
-              <Section
-                step={1}
-                title="載入資料"
-                hint="DAT / XMU / NOR / TXT"
-                status={rawFiles.length > 0 ? 'on' : 'off'}
-                open={sectionOpen[1]}
-                onOpenChange={next => setStepOpen(1, next)}
-              >
-                <FileUpload onFiles={handleFiles} isLoading={isLoading} accept={['.dat', '.txt', '.csv', '.xmu', '.nor', '.xlsx', '.xls']} />
+              {/* XAS-only: TFY 翻轉 + 欄位對應（保留 XAS 特有設定） */}
+              <div className="theme-block mb-3 rounded-[18px] px-4 py-3 space-y-2">
                 <CheckRow label="TFY 使用 1 − TFY 翻轉" checked={flipTfy} onChange={v => { setFlipTfy(v); setRawFiles([]) }} />
                 {rawFiles.length > 0 && (
                   <div className="space-y-1">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">欄位對應</p>
                     {rawFiles.map((f) => {
                       const confirmed = columnMappings[f.name]
                       const effFile = effectiveFiles.find(e => e.name === f.name)
@@ -2076,36 +2136,38 @@ export default function XAS({
                           >
                             {confirmed ? '重設欄位' : '設定欄位'}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRawFiles(prev => prev.filter(r => r.name !== f.name))
-                              setColumnMappings(prev => { const next = { ...prev }; delete next[f.name]; return next })
-                            }}
-                            className="shrink-0 text-rose-400 hover:text-rose-300 text-sm leading-none"
-                          >×</button>
                         </div>
                       )
                     })}
                     {rawFiles.some(f => !columnMappings[f.name]) && (
                       <p className="text-[10px] text-amber-400">請為所有檔案設定欄位對應後才能繼續處理。</p>
                     )}
-                    <button onClick={() => { setRawFiles([]); setResult(null); setColumnMappings({}) }} className="text-xs text-rose-400 hover:text-rose-300">
-                      清除全部
-                    </button>
                   </div>
                 )}
-              </Section>
+              </div>
 
-              {/* 2. 內插與資料模式 */}
+              {/* 1. 內插與資料模式（原 Step 2） */}
               <Section
-                step={2}
+                step={1}
                 title="內插 / 資料模式"
-                hint="多檔：單筆 / 疊圖 / 平均"
                 defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (params.interpolate || viewMode === 'overlay' || params.average ? 'on' : 'off')}
                 open={sectionOpen[2]}
                 onOpenChange={next => setStepOpen(2, next)}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">內插（Interpolation）</p>
+                    <p>把每筆 XAS 光譜對應到等間距的能量網格上（cubic spline 內插）。原始 .dat / .xmu 各檔的能量步距可能不一致；若要做平均、疊圖比較或後續歸一化，需要先讓所有檔案落在同一個 x 軸網格。</p>
+                    <p>啟用「自動調整點數」會以各檔的能量 span 除以原始中位步距，估計出自然點數的中位數做為內插點數；通常會比手動猜測穩定。</p>
+                    <p className="font-semibold text-[var(--text-main)]">資料模式</p>
+                    <div className="space-y-2 text-sm">
+                      <div><span className="font-medium text-[var(--text-main)]">單筆檢視</span>：每次只看一筆光譜，後續所有分析都針對該筆獨立計算。適合在開始就確認資料品質。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">多檔疊圖（Overlay）</span>：把多筆光譜疊在同一張圖上比對形狀／edge 位置，方便檢查樣品間的差異。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">多檔平均（Average）</span>：對多筆同樣品 / 同條件的測量取平均提升 S/N。常用於同一片樣品做了 2~3 次掃描的情況。</div>
+                    </div>
+                    <p className="text-[var(--text-soft)]">提示：平均必須先做內插（讓所有檔在共同網格上）才能正確平均。</p>
+                  </div>
+                }
               >
                 <TogglePill label="啟用內插" checked={params.interpolate} onChange={set('interpolate')} />
                 {params.interpolate && (
@@ -2227,25 +2289,50 @@ export default function XAS({
                 )}
               </Section>
 
-              {/* 3. 能量校正 */}
+              {/* 2. 能量校正（原 Step 3） */}
               <Section
-                step={3}
+                step={2}
                 title="能量校正"
-                hint="校正能量軸零點"
                 defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (Math.abs(params.energy_shift) > 0 ? 'on' : 'off')}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">能量校正（Energy Shift）</p>
+                    <p>對能量軸做整體常數平移：<code>E_new = E_raw + ΔE</code>。在 XAS / XANES 中，不同 beamline、不同 monochromator 校正狀態、甚至同一機器在不同 fill 之後，量到的吸收邊位置可能會偏移 0.1~幾 eV。為了讓多片樣品 / 多次量測能在同一個能量基準上比較，必須先做整體位移校正。</p>
+                    <p className="font-semibold text-[var(--text-main)]">如何決定 ΔE</p>
+                    <div className="space-y-2 text-sm">
+                      <div><span className="font-medium text-[var(--text-main)]">標準樣品法</span>：在量你的樣品時同時量一個已知吸收邊能量的標準（如 Au foil L₃ 邊 11919 eV、Fe foil K 邊 7112 eV）。把標準量到的 edge 位置減去文獻值就是 ΔE。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">第一階導數最大值</span>：對 μ(E) 求一階導數，在 absorption edge 區段內取 dμ/dE 最大值的位置作為 E₀。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">文獻對照</span>：對已知氧化態的純化合物（如 NiO 對應 Ni²⁺）對齊到該樣品在文獻中的 edge 位置。</div>
+                    </div>
+                    <p className="text-[var(--text-soft)]">提示：正值向高能方向（右）移；負值向低能方向（左）移。多片樣品建議用同一個標準量得的 ΔE，避免引入系統誤差。</p>
+                  </div>
+                }
               >
                 <NumInput label="能量位移 (eV)" value={params.energy_shift} onChange={set('energy_shift')} step={0.01} />
                 <p className="text-[10px] text-[var(--text-soft)]">正值向高能方向移，負值向低能移。</p>
               </Section>
 
-              {/* 4. 歸一化 */}
+              {/* 3. 歸一化（原 Step 4） */}
               <Section
-                step={4}
+                step={3}
                 title="歸一化"
-                hint="Athena Norm / Post-edge Step"
                 defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (params.norm_method !== 'none' ? 'on' : 'off')}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">歸一化（Normalization）</p>
+                    <p>把原始 μ(E) 校正成「每個吸收原子貢獻」相當的尺度，這樣不同樣品厚度、不同濃度的光譜才能比強度。所有後續定量比較（吸收邊跳階高度、白線強度、Pre-edge peak 面積）都依賴正確的歸一化。</p>
+                    <p className="font-semibold text-[var(--text-main)]">方法選擇</p>
+                    <div className="space-y-2 text-sm">
+                      <div><span className="font-medium text-[var(--text-main)]">最大值法（max）</span>：把光譜最高點除為 1，最小點除為 0。最簡單，但對 white line 異常高的樣品敏感，後續定量會偏。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">Post-edge step</span>：取 pre-edge 區的線性外推與 post-edge 區的線性外推，在 E₀ 處的差值定義為「edge jump」，整條光譜除以這個跳階高度。這是 EXAFS 標準做法。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">Athena Norm</span>：Athena 軟體的標準流程。先扣 pre-edge 線性背景，再用 quadratic（默認）擬合 post-edge 並在 E₀ 處取值做為跳階高度。是 EXAFS / XANES 比較分析的最常用方法。</div>
+                    </div>
+                    <p className="font-semibold text-[var(--text-main)]">區間設定建議</p>
+                    <p>Pre-edge：典型 [E₀ - 150 eV, E₀ - 30 eV]，避免太靠 edge 而引入吸收訊號；Post-edge：典型 [E₀ + 150 eV, E₀ + 600 eV]，避免 EXAFS 振盪壓平。</p>
+                  </div>
+                }
               >
                 <TogglePill
                   label="啟用歸一化"
@@ -2336,13 +2423,26 @@ export default function XAS({
                 )}
               </Section>
 
-              {/* 5. White Line */}
+              {/* 4. White Line（原 Step 5） */}
               <Section
-                step={5}
+                step={4}
                 title="White Line 搜尋"
-                hint="自動找最高點能量"
                 defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (whiteLineEnabled ? 'on' : 'off')}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">White Line（白線峰）</p>
+                    <p>White line 是 XANES 在吸收邊正上方緊接出現的尖銳吸收峰。物理意義是：core electron 被激發進入 unoccupied 局域態（如 d-band、L-edge 的 d 軌道、K-edge 的 p 軌道），對應的態密度高時會出現尖峰。White line 強度跟峰位常用來判斷氧化態與配位環境。</p>
+                    <p className="font-semibold text-[var(--text-main)]">這個步驟做什麼</p>
+                    <p>在使用者指定的能量搜尋區間內，自動找最高點（吸收強度最大）的能量與強度。系統會在最終歸一化光譜上標出垂直線與峰頂位置。</p>
+                    <p className="font-semibold text-[var(--text-main)]">如何判讀</p>
+                    <div className="space-y-2 text-sm">
+                      <div><span className="font-medium text-[var(--text-main)]">氧化態</span>：氧化態越高，binding energy 越深，white line 位置會向高能方向 shift（chemical shift）。對 transition metal L-edge，常用 L₃ white line 位置定量比較。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">局域態密度</span>：white line 強度反映 unoccupied d-band 的態密度。配位變化（如 octahedral → tetrahedral）會改變 d-orbital splitting，進而改變強度。</div>
+                    </div>
+                    <p className="text-[var(--text-soft)]">提示：搜尋區間建議設在 edge 之後 0~10 eV 範圍，避免抓到 EXAFS 振盪的局部峰值。</p>
+                  </div>
+                }
               >
                 <TogglePill label="啟用 White Line 搜尋" checked={whiteLineEnabled} onChange={setWhiteLineEnabled} />
                 {whiteLineEnabled && (
@@ -2366,13 +2466,27 @@ export default function XAS({
                 )}
               </Section>
 
-              {/* 6. 峰擬合 */}
+              {/* 5. 峰擬合（原 Step 6） */}
               <Section
-                step={6}
+                step={5}
                 title="峰擬合"
-                hint="Voigt / Gaussian / Lorentzian"
                 defaultOpen={false}
                 onOpen={hasFitTarget ? loadSamplesList : undefined}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">峰擬合（Peak Fitting）</p>
+                    <p>把歸一化後的 XANES 拆解成多個峰，定量每個峰的位置、寬度、強度與面積。用於分辨多種化學物種（如氧化態混合）、量化局域態密度，或從 white line 結構推測配位環境。</p>
+                    <p className="font-semibold text-[var(--text-main)]">線形（profile）選擇</p>
+                    <div className="space-y-2 text-sm">
+                      <div><span className="font-medium text-[var(--text-main)]">Gaussian</span>：純高斯，適合儀器解析度有限造成的對稱峰。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">Lorentzian</span>：純洛倫茲，反映 core-hole lifetime broadening；尾巴拉得比高斯遠。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">Voigt</span>：高斯 ⊛ 洛倫茲卷積，物理上最正確但計算較重；XANES 標準選擇。</div>
+                    </div>
+                    <p className="font-semibold text-[var(--text-main)]">流程與技巧</p>
+                    <p>① 先從資料庫或手動加入初始峰（中心、FWHM、強度）。② 對不該動的參數打勾「鎖定」（如已知標準的中心位置）。③ 按「執行擬合」單次，看 R² 與殘差；若不夠好，按「自動收斂」最多迭代 10 次。④ 結果不滿意可按「↶ 回上一步」回到前次擬合再重調。</p>
+                    <p className="text-[var(--text-soft)]">提示：擬合會把未鎖定參數的擬合結果回寫到 seed，下次擬合會以這次結果為起點（OriginPro 風格）。多次嘗試時用「重設峰」可清空回到初始狀態。</p>
+                  </div>
+                }
               >
                 {/* ── 資料來源選擇 ── */}
                 <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] px-3 py-2.5 space-y-2">
@@ -2788,6 +2902,15 @@ export default function XAS({
                         >
                           {autoConverging ? '收斂中…' : '自動收斂'}
                         </button>
+                        <button
+                          type="button"
+                          onClick={handleUndoFit}
+                          disabled={isFitting || autoConverging || fitUndoStack.length === 0}
+                          title={fitUndoStack.length === 0 ? '尚無可回復的擬合結果' : `回到上一個擬合結果（剩 ${fitUndoStack.length} 步）`}
+                          className="rounded-lg border border-[var(--card-border)] px-3 py-2 text-xs font-medium text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          ↶ 回上一步{fitUndoStack.length > 0 ? ` (${fitUndoStack.length})` : ''}
+                        </button>
                       </div>
                       {fitHistory.length > 0 && (
                         <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-2">
@@ -2822,8 +2945,21 @@ export default function XAS({
               <Section
                 step={1}
                 title="資料來源 / 歸一化"
-                hint="Min-Max 歸一化 → y ∈ [0, 1]"
                 status={effectiveCbmDataset ? 'on' : 'off'}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">資料來源</p>
+                    <p>CBM 模式可以用兩種來源：① 主 XAS 處理流程跑完的 TEY / TFY 光譜（最常用，會跟主流程即時連動）；② 已處理過、來自外部軟體（如 Athena）的雙欄 TXT/CSV 檔（純檢查用，不依賴主流程）。</p>
+                    <p className="font-semibold text-[var(--text-main)]">Min-Max 歸一化</p>
+                    <p>套用公式 <code>y_norm = (y − min) / (max − min)</code> 把光譜映射到 [0, 1]。對 XAS CBM 線性外推來說，歸一化是必要前處理：</p>
+                    <div className="space-y-2 text-sm">
+                      <div>① 切線（吸收邊上升段）與基準線（pre-edge 平坦段）在不同樣品間要比較斜率與交點，需要先把垂直尺度對齊。</div>
+                      <div>② 後續若有多個樣品做 overlay 疊圖比對，沒先歸一化會被吸收強度差掩蓋掉細節。</div>
+                      <div>③ Min-Max 比起單純除最大值更穩定：把 pre-edge 也壓到 0，避免不同樣品 baseline 高度不同帶來的偏移。</div>
+                    </div>
+                    <p className="text-[var(--text-soft)]">提示：若你的光譜已經是 Athena flattened μ(E)，歸一化只是把垂直尺度壓到 [0,1]，不會改變 edge 形狀。</p>
+                  </div>
+                }
               >
                 {/* Data source toggle */}
                 <div className="flex overflow-hidden rounded-xl border border-[var(--card-border)]">
@@ -2904,9 +3040,23 @@ export default function XAS({
               <Section
                 step={2}
                 title="CBM 線性外推"
-                hint="切線 × 基準線交點 → CBM"
                 defaultOpen={true}
                 status={!effectiveCbmDataset ? 'locked' : (cbmPreviewCbm !== null ? 'on' : 'off')}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">CBM 線性外推（Conduction Band Minimum）</p>
+                    <p>從 XAS 吸收邊推估導帶底部能量位置，常用於半導體 / 氧化物 / 能源材料的能帶結構分析。物理原理是吸收邊起點對應 core electron 被激發到 LUMO（最低未占軌道），這個能量等於 Fermi 能與 CBM 之間的差。</p>
+                    <p className="font-semibold text-[var(--text-main)]">算法</p>
+                    <div className="space-y-2 text-sm">
+                      <div><span className="font-medium text-[var(--text-main)]">切線</span>：在使用者指定的吸收邊上升區間內，於每個輸入點附近 20% 視窗中找最大正斜率的兩點，連線得到切線方程 <code>y = m·x + b</code>。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">基準線</span>：在使用者指定的 pre-edge 平坦區間內，找最平斜率（接近 0）的兩點，連線得到 baseline。</div>
+                      <div><span className="font-medium text-[var(--text-main)]">CBM 交點</span>：聯立兩條直線方程求交點 <code>x_CBM = (b_base − b_tan) / (m_tan − m_base)</code>。</div>
+                    </div>
+                    <p className="font-semibold text-[var(--text-main)]">如何選好區間</p>
+                    <p>① 切線區間：選 edge 中段最陡的部分（dμ/dE 接近最大的範圍），避免拉太靠下緣（混到 baseline）或太靠上緣（混到 white line）。② 基準線區間：選 edge 起點前夠遠的平坦區，避免被吸收前的 EXAFS 振盪或雜訊影響。</p>
+                    <p className="text-[var(--text-soft)]">提示：相同樣品族（O K-edge、Ti L-edge 等）建議用相同的相對位置選區間，CBM 才有可比性。可開啟疊圖比對視窗即時對照樣品間的 edge 位置。</p>
+                  </div>
+                }
               >
                 {!effectiveCbmDataset ? (
                   <p className="text-xs text-[var(--text-soft)]">請先在步驟 1 設定資料來源。</p>
@@ -2966,27 +3116,6 @@ export default function XAS({
       {/* ── main content ── */}
       <main className="min-h-0 flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
-        <ModuleTopBar
-          title={moduleContent.title}
-          subtitle={moduleContent.subtitle}
-          description={moduleContent.description}
-          chips={[
-            { label: `資料量 ${effectiveFiles.length}` },
-            { label: `內插 ${params.interpolate ? `${effectiveNPoints} 點` : '未啟用'}` },
-            { label: `平均 ${params.average ? '開啟' : '關閉'}` },
-            { label: `White Line ${!whiteLineEnabled ? '關閉' : activeDataset?.white_line_tey != null || activeDataset?.white_line_tfy != null ? '已計算' : '未設定'}` },
-          ]}
-        />
-
-        <InfoCardGrid
-          items={[
-            { label: '資料集', value: effectiveFiles.length > 0 ? `${effectiveFiles.length} 個` : '未載入' },
-            { label: '平均模式', value: params.average ? '開啟' : '關閉' },
-            { label: '內插點數', value: params.interpolate ? `${effectiveNPoints} 點${autoInterpPoints ? '（自動）' : ''}` : '未啟用' },
-            { label: '能量範圍', value: activeDataset ? `${activeDataset.x[0].toFixed(1)} – ${activeDataset.x[activeDataset.x.length - 1].toFixed(1)} eV` : '未建立' },
-          ]}
-        />
-
         {/* error */}
         {error && (
           <div className="mb-4 rounded-xl border border-rose-300/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
@@ -3557,16 +3686,6 @@ export default function XAS({
         {/* ── Conduction Band main content ── */}
         {xasMode === 'conduction_band' && (
           <div className="space-y-4">
-            <ModuleTopBar
-              title="Conduction Band 分析"
-              subtitle="XAS CBM 線性外推"
-              description="將 XAS 光譜做 Min-Max 歸一化後，以切線與基準線交點決定 CBM 能量。"
-              chips={[
-                { label: `資料來源：${cbmDataSource === 'imported' ? '匯入光譜' : `${cbmChannel} 處理流程`}` },
-                { label: effectiveCbmDataset ? `${effectiveCbmDataset.x.length} pts` : '未載入' },
-              ]}
-            />
-
             {!effectiveCbmDataset && (
               <EmptyWorkspaceState
                 module="xas"
@@ -3676,6 +3795,55 @@ export default function XAS({
 
         </div>
       </main>
+
+      <SampleBasketsPanel
+        open={basketsPanelOpen}
+        onClose={() => setBasketsPanelOpen(false)}
+        items={basketItems}
+        baskets={baskets}
+        onChangeItems={setBasketItems}
+        onChangeBaskets={setBaskets}
+        onApplyBasket={handleApplyBasket}
+        applyDisabled={isLoading}
+        moduleLabel="XAS / XANES"
+        acceptFileExts={['.dat', '.txt', '.csv', '.xmu', '.nor', '.xlsx', '.xls']}
+        activeBasketId={activeBasketId}
+        onOpenOverlay={() => setOverlayModalOpen(true)}
+      />
+
+      <SampleBasketsOverlayModal
+        open={overlayModalOpen}
+        onClose={() => setOverlayModalOpen(false)}
+        baskets={baskets}
+        onChangeBaskets={setBaskets}
+        defaultChannel="TEY"
+        renderChart={(visibleBaskets, channel) => (
+          <Plot
+            data={visibleBaskets.map(b => {
+              const y = channel === 'TEY' ? b.cachedTey : b.cachedTfy
+              return {
+                x: b.cachedX ?? [],
+                y: y ?? [],
+                type: 'scatter' as const,
+                mode: 'lines' as const,
+                name: b.name,
+                line: { color: b.color, width: 2 },
+              }
+            }) as Plotly.Data[]}
+            layout={(() => {
+              const base = chartLayout('Energy (eV)', `${channel} Intensity`) as Plotly.Layout
+              return {
+                ...base,
+                margin: { l: 60, r: 20, t: 20, b: 50 },
+                showlegend: false,
+              }
+            })()}
+            config={withPlotFullscreen({ displaylogo: false })}
+            style={{ width: '100%', height: '100%' }}
+            useResizeHandler
+          />
+        )}
+      />
 
       {/* ── Column picker modal ──────────────────────────────────────────────── */}
       {showColModal && rawFiles.length > 0 && (() => {
@@ -4049,6 +4217,16 @@ export default function XAS({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Sample baskets trigger (only when panel closed) ── */}
+      {!basketsPanelOpen && (
+        <SampleBasketsButton
+          open={basketsPanelOpen}
+          onToggle={() => setBasketsPanelOpen(true)}
+          basketCount={baskets.length}
+          unassignedCount={basketItems.filter(i => i.basketId === null).length}
+        />
       )}
     </div>
   )

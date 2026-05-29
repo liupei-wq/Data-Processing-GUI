@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import Plot, { PlotlyApi } from '../components/PlotlyChart'
 import type { AnalysisModuleId } from '../components/AnalysisModuleNav'
-import { ModuleTopBar } from '../components/WorkspaceUi'
+import { ModuleTopBar, WorkspaceMenuButton } from '../components/WorkspaceUi'
 import { withPlotFullscreen } from '../components/plotConfig'
 
 type PlotModule = 'xps' | 'raman' | 'xrd' | 'xas' | 'xes'
@@ -4461,8 +4461,12 @@ function PositionTargetBox({ label, value, active, onClick }: { label: string; v
 
 export default function PlotFileTool({
   onModuleSelect,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   onModuleSelect?: (module: AnalysisModuleId) => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   const [activeModule, setActiveModule] = useState<PlotModule>('xps')
   const [xpsPlotMode, setXpsPlotMode] = useState<XpsPlotMode>('fit')
@@ -5166,6 +5170,11 @@ export default function PlotFileTool({
 
   return (
     <div className="flex min-h-screen flex-col overflow-y-auto bg-[var(--bg-canvas)] p-4 sm:p-5">
+      {onSelectWorkspace && (
+        <div className="mb-3 max-w-xs">
+          <WorkspaceMenuButton currentWorkspace={currentWorkspace} onSelectWorkspace={onSelectWorkspace} />
+        </div>
+      )}
       <ModuleTopBar
         title="繪製圖檔"
         subtitle="Publication Figure Builder"

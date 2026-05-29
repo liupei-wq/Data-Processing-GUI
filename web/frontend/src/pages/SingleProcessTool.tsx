@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from '../components/PlotlyChart'
 import { withPlotFullscreen } from '../components/plotConfig'
+import { WorkspaceMenuButton } from '../components/WorkspaceUi'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import { parseFiles, processData } from '../api/xrd'
 import FileUpload from '../components/FileUpload'
@@ -252,9 +253,13 @@ function SliderRow({
 export default function SingleProcessTool({
   tool,
   onOpenPlotPopup,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   tool: SingleToolKind
   onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   const meta = TOOL_META[tool]
 
@@ -874,6 +879,11 @@ export default function SingleProcessTool({
           <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--text-soft)]">單一處理工具</div>
           <div className="mt-1 text-lg font-semibold text-[var(--text-muted)]">{meta.title}</div>
           <div className="text-xs text-[var(--text-soft)]">{meta.subtitle}</div>
+          {onSelectWorkspace && (
+            <div className="mt-3">
+              <WorkspaceMenuButton currentWorkspace={currentWorkspace} onSelectWorkspace={onSelectWorkspace} variant="compact" />
+            </div>
+          )}
         </div>
 
         <div className="flex-1 space-y-3 p-4">

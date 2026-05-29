@@ -1,6 +1,6 @@
-import { Component, Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Component, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ANALYSIS_MODULES, type AnalysisModuleId } from './components/AnalysisModuleNav'
+import { type AnalysisModuleId } from './components/AnalysisModuleNav'
 import CursorParticles from './components/CursorParticles'
 import PlotPopupHost from './components/plots/PlotPopupHost'
 import { usePlotPopups } from './hooks/usePlotPopups'
@@ -58,20 +58,6 @@ const FONT_SCALES: { id: FontScale; label: string }[] = [
   { id: 'lg', label: '大' },
 ]
 
-const TOOL_WORKSPACES: { id: WorkspaceId; label: string; detail: string }[] = [
-  { id: 'tool-plot-files', label: '繪製圖檔', detail: '投稿圖輸出' },
-  { id: 'tool-background', label: '背景扣除', detail: '單一處理' },
-  { id: 'tool-normalize', label: '歸一化', detail: '單一處理' },
-  { id: 'tool-gaussian', label: '高斯模板扣除', detail: '單一處理' },
-  { id: 'tool-arctan', label: 'Arctan 扣除', detail: '單一處理' },
-]
-
-const ATHENA_WORKSPACE: { id: WorkspaceId; label: string; detail: string } = {
-  id: 'tool-athena',
-  label: 'XAS Athena 處理',
-  detail: '.xmu 資料夾 / Origin 匯出',
-}
-
 class WorkspaceErrorBoundary extends Component<
   { workspace: WorkspaceId; children: ReactNode },
   { hasError: boolean; errorMessage: string; errorStack: string }
@@ -128,9 +114,6 @@ class WorkspaceErrorBoundary extends Component<
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceId>('workflow-raman')
   const { popupPlots, openPlotPopup, updatePlotPopup, closePlotPopup, closeAllPlotPopups } = usePlotPopups()
-  const [workspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false)
-  const [workspaceLauncherPreview, setWorkspaceLauncherPreview] = useState(false)
-  const [workspaceLauncherDocked, setWorkspaceLauncherDocked] = useState(false)
   const [theme, setTheme] = useState<ThemeId>(() => {
     const saved = localStorage.getItem('nigiro-theme') as ThemeId | 'midnight' | null
     if (saved === 'midnight') return 'apricot'
@@ -147,9 +130,6 @@ export default function App() {
     if (saved && FONT_SCALES.some(item => item.id === saved)) return saved
     return 'md'
   })
-  const workspaceLauncherRef = useRef<HTMLDivElement | null>(null)
-  const workspaceLauncherCloseTimerRef = useRef<number | null>(null)
-
   const themeLauncherRef = useRef<HTMLDivElement | null>(null)
   const [showThemePanel, setShowThemePanel] = useState(false)
   const themeCloseTimerRef = useRef<number | null>(null)
@@ -193,9 +173,6 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      if (workspaceLauncherCloseTimerRef.current != null) {
-        window.clearTimeout(workspaceLauncherCloseTimerRef.current)
-      }
       if (themeCloseTimerRef.current != null) {
         window.clearTimeout(themeCloseTimerRef.current)
       }
@@ -204,10 +181,6 @@ export default function App() {
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
-      if (!workspaceLauncherRef.current?.contains(event.target as Node)) {
-        setWorkspaceLauncherOpen(false)
-        setWorkspaceLauncherPreview(false)
-      }
       if (!themeLauncherRef.current?.contains(event.target as Node)) {
         setShowThemePanel(false)
       }
@@ -215,8 +188,6 @@ export default function App() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setWorkspaceLauncherOpen(false)
-        setWorkspaceLauncherPreview(false)
         closeAllPlotPopups()
       }
     }
@@ -229,58 +200,6 @@ export default function App() {
     }
   }, [closeAllPlotPopups])
 
-  useEffect(() => {
-    const updateLauncherDocked = (scrollTop: number) => {
-      setWorkspaceLauncherDocked(scrollTop > 96)
-    }
-
-    const handleScroll = (event: Event) => {
-      const target = event.target
-      if (target instanceof Element) {
-        updateLauncherDocked(target.scrollTop)
-        return
-      }
-      if (target === document) {
-        updateLauncherDocked(document.documentElement.scrollTop || document.body.scrollTop || window.scrollY)
-        return
-      }
-      updateLauncherDocked(window.scrollY)
-    }
-
-    updateLauncherDocked(document.documentElement.scrollTop || document.body.scrollTop || window.scrollY)
-    window.addEventListener('scroll', handleScroll, true)
-    return () => window.removeEventListener('scroll', handleScroll, true)
-  }, [])
-
-  const openWorkspaceLauncherPreview = () => {
-    if (workspaceLauncherCloseTimerRef.current != null) {
-      window.clearTimeout(workspaceLauncherCloseTimerRef.current)
-      workspaceLauncherCloseTimerRef.current = null
-    }
-    setWorkspaceLauncherPreview(true)
-  }
-
-  const closeWorkspaceLauncherPreview = () => {
-    if (workspaceLauncherCloseTimerRef.current != null) {
-      window.clearTimeout(workspaceLauncherCloseTimerRef.current)
-    }
-    workspaceLauncherCloseTimerRef.current = window.setTimeout(() => {
-      if (!workspaceLauncherOpen) {
-        setWorkspaceLauncherPreview(false)
-      }
-      workspaceLauncherCloseTimerRef.current = null
-    }, 180)
-  }
-
-  const toggleWorkspaceLauncher = () => {
-    if (workspaceLauncherCloseTimerRef.current != null) {
-      window.clearTimeout(workspaceLauncherCloseTimerRef.current)
-      workspaceLauncherCloseTimerRef.current = null
-    }
-    setWorkspaceLauncherPreview(true)
-    setWorkspaceLauncherOpen(current => !current)
-  }
-
   const handleModuleSelect = (module: AnalysisModuleId) => {
     if (module === 'raman') setWorkspace('workflow-raman')
     if (module === 'xrd') setWorkspace('workflow-xrd')
@@ -289,13 +208,6 @@ export default function App() {
     if (module === 'xps') setWorkspace('workflow-xps')
     if (module === 'xes') setWorkspace('workflow-xes')
   }
-
-  const currentWorkspaceGroup = workspace === ATHENA_WORKSPACE.id
-    ? '分析模組'
-    : workspace.startsWith('tool-') ? '單一處理' : '分析模組'
-  const currentWorkspaceLabel = workspace.startsWith('tool-')
-    ? (workspace === ATHENA_WORKSPACE.id ? ATHENA_WORKSPACE.label : TOOL_WORKSPACES.find(item => item.id === workspace)?.label ?? '單一處理')
-    : (ANALYSIS_MODULES.find(item => `workflow-${item.id}` === workspace)?.label ?? '分析模組')
 
   const themeLauncher = (
     <div
@@ -428,125 +340,19 @@ export default function App() {
       <CursorParticles />
       {typeof document !== 'undefined' ? createPortal(themeLauncher, document.body) : themeLauncher}
 
-      <div
-        ref={workspaceLauncherRef}
-        className={[
-          'workspace-launcher fixed right-0 z-30 pr-3 sm:pr-4',
-          workspaceLauncherDocked ? 'top-4 translate-y-0 sm:top-5' : 'top-1/2 -translate-y-1/2',
-          workspaceLauncherPreview ? 'workspace-launcher--preview' : '',
-          workspaceLauncherOpen ? 'workspace-launcher--open' : '',
-          workspaceLauncherDocked ? 'workspace-launcher--docked' : '',
-        ].join(' ')}
-        onMouseEnter={openWorkspaceLauncherPreview}
-        onMouseLeave={() => {
-          closeWorkspaceLauncherPreview()
-        }}
-        onFocusCapture={openWorkspaceLauncherPreview}
-        onBlurCapture={event => {
-          const nextFocused = event.relatedTarget
-          if (!event.currentTarget.contains(nextFocused as Node | null)) {
-            setWorkspaceLauncherOpen(false)
-            closeWorkspaceLauncherPreview()
-          }
-        }}
-      >
-        <div className="workspace-launcher__panel">
-          <div className="workspace-launcher__section">
-            <div className="workspace-launcher__title">分析模組</div>
-            {ANALYSIS_MODULES.filter(item => item.id !== 'athena').map(item => {
-              const wsId = `workflow-${item.id}` as WorkspaceId
-              return (
-                <Fragment key={wsId}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWorkspace(wsId)
-                      setWorkspaceLauncherOpen(false)
-                      setWorkspaceLauncherPreview(false)
-                    }}
-                    className={[
-                      'workspace-launcher__item pressable',
-                      workspace === wsId ? 'workspace-launcher__item--active' : '',
-                    ].join(' ')}
-                  >
-                    <span className="workspace-launcher__item-label">{item.label}</span>
-                    <span className="workspace-launcher__item-detail">{item.detail}</span>
-                  </button>
-                  {item.id === 'xas' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setWorkspace(ATHENA_WORKSPACE.id)
-                        setWorkspaceLauncherOpen(false)
-                        setWorkspaceLauncherPreview(false)
-                      }}
-                      className={[
-                        'workspace-launcher__item pressable',
-                        workspace === ATHENA_WORKSPACE.id ? 'workspace-launcher__item--active' : '',
-                      ].join(' ')}
-                    >
-                      <span className="workspace-launcher__item-label">{ATHENA_WORKSPACE.label}</span>
-                      <span className="workspace-launcher__item-detail">{ATHENA_WORKSPACE.detail}</span>
-                    </button>
-                  )}
-                </Fragment>
-              )
-            })}
-          </div>
-
-          <div className="workspace-launcher__section">
-            <div className="workspace-launcher__title">工具</div>
-            {TOOL_WORKSPACES.map(item => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  setWorkspace(item.id)
-                  setWorkspaceLauncherOpen(false)
-                  setWorkspaceLauncherPreview(false)
-                }}
-                className={[
-                  'workspace-launcher__item pressable',
-                  workspace === item.id ? 'workspace-launcher__item--active' : '',
-                ].join(' ')}
-              >
-                <span className="workspace-launcher__item-label">{item.label}</span>
-                <span className="workspace-launcher__item-detail">{item.detail}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-        <button
-          type="button"
-          className="workspace-launcher__tab"
-          aria-expanded={workspaceLauncherOpen}
-          aria-label="切換分析工具選單"
-          onClick={event => {
-            event.stopPropagation()
-            toggleWorkspaceLauncher()
-          }}
-        >
-          <span className="workspace-launcher__tab-icon" aria-hidden="true">≡</span>
-          <span className="workspace-launcher__tab-copy">
-            <span className="workspace-launcher__tab-label">選單</span>
-            <span className="workspace-launcher__tab-detail">{currentWorkspaceGroup} · {currentWorkspaceLabel}</span>
-          </span>
-        </button>
-      </div>
-
       <main className="relative z-10 min-h-screen">
         <WorkspaceErrorBoundary workspace={workspace}>
-          {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} onUpdatePlotPopup={updatePlotPopup} />}
-          {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'tool-plot-files' && <PlotFileTool onModuleSelect={handleModuleSelect} />}
-          {workspace === 'tool-athena' && <Athena />}
-          {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" onOpenPlotPopup={openPlotPopup} />}
-          {workspace === 'tool-arctan' && <SingleProcessTool tool="arctan" onOpenPlotPopup={openPlotPopup} />}
+          {workspace === 'workflow-raman' && <Raman onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'workflow-xrd' && <XRD onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'workflow-xas' && <XAS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} onUpdatePlotPopup={updatePlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'workflow-xps' && <XPS onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'workflow-xes' && <XES onModuleSelect={handleModuleSelect} onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'tool-plot-files' && <PlotFileTool onModuleSelect={handleModuleSelect} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'tool-athena' && <Athena currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'tool-background' && <SingleProcessTool tool="background" onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'tool-normalize' && <SingleProcessTool tool="normalize" onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'tool-gaussian' && <SingleProcessTool tool="gaussian" onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
+          {workspace === 'tool-arctan' && <SingleProcessTool tool="arctan" onOpenPlotPopup={openPlotPopup} currentWorkspace={workspace} onSelectWorkspace={(id) => setWorkspace(id as WorkspaceId)} />}
         </WorkspaceErrorBoundary>
       </main>
       <PlotPopupHost popupPlots={popupPlots} onClose={closePlotPopup} />

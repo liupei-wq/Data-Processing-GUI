@@ -9,18 +9,17 @@ import {
   DatasetSelectionModal,
   DeferredRender,
   EmptyWorkspaceState,
-  GlassSection,
-  InfoCardGrid,
+  GuidedSidebarSection,
   LINE_COLOR_OPTIONS,
   LINE_COLOR_PALETTES,
   makeLegendClick,
   MODULE_CONTENT,
-  ModuleTopBar,
   ProcessingWorkspaceHeader,
   StickySidebarHeader,
   ThemeSelect,
   TogglePill,
 } from '../components/WorkspaceUi'
+import { SampleBasketsButton, SampleBasketsPanel, type BasketFileItem, type SampleBasket } from '../components/SampleBaskets'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest } from '../hooks/usePlotPopups'
 import {
@@ -1350,34 +1349,20 @@ function chartLayout(): Partial<Plotly.Layout> {
   }
 }
 
-function SidebarCard({
-  step,
-  title,
-  hint,
-  children,
-  defaultOpen = true,
-  infoContent,
-}: {
-  step: number
-  title: string
-  hint: string
-  children: ReactNode
-  defaultOpen?: boolean
-  infoContent?: ReactNode
-}) {
-  return (
-    <GlassSection step={step} title={title} hint={hint} defaultOpen={defaultOpen} infoContent={infoContent}>
-      {children}
-    </GlassSection>
-  )
+function SidebarCard(props: Parameters<typeof GuidedSidebarSection>[0]) {
+  return <GuidedSidebarSection {...props} />
 }
 
 export default function Raman({
   onModuleSelect,
   onOpenPlotPopup,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   onModuleSelect?: (module: AnalysisModuleId) => void
   onOpenPlotPopup?: (popup: PlotPopupRequest) => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   const moduleContent = MODULE_CONTENT.raman
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -1988,6 +1973,17 @@ export default function Raman({
       setIsLoading(false)
     }
   }, [])
+
+  // ── Sample baskets ──────────────────────────────────────────────────────
+  const [basketsPanelOpen, setBasketsPanelOpen] = useState(true)
+  const [basketItems, setBasketItems] = useState<BasketFileItem[]>([])
+  const [baskets, setBaskets] = useState<SampleBasket[]>([])
+
+  const handleApplyBasket = useCallback(async (_basket: SampleBasket, basketFiles: File[]) => {
+    if (basketFiles.length === 0) return
+    setBasketsPanelOpen(false)
+    await handleFiles(basketFiles)
+  }, [handleFiles])
 
   useEffect(() => {
     const validNames = new Set(rawFiles.map(file => file.name))
@@ -2966,6 +2962,8 @@ export default function Raman({
               subtitle="Material Intelligence Engine"
               onSelectModule={onModuleSelect}
               onCollapse={() => setSidebarCollapsed(true)}
+              currentWorkspace={currentWorkspace}
+              onSelectWorkspace={onSelectWorkspace}
             />
 
             <div className="px-4 py-3">
@@ -2986,31 +2984,7 @@ export default function Raman({
             </div>
 
             <div className="px-4 py-5">
-            <SidebarCard step={1} title="載入檔案" hint="支援 TXT / CSV / ASC / DAT / XLSX" infoContent={
-              <div className="space-y-3">
-                <p className="font-semibold text-[var(--text-main)]">載入檔案說明</p>
-                <p>可同時上傳多筆 Raman 光譜；後續可切換單檔查看或做疊圖比較，處理流程則會逐筆獨立執行。</p>
-              </div>
-            }>
-              <div className="mb-3 text-sm font-medium text-[var(--text-main)]">{moduleContent.uploadTitle}（可多選）</div>
-              <FileUpload onFiles={handleFiles} isLoading={isLoading} moduleLabel="Raman" accept={['.txt', '.csv', '.asc', '.dat', '.xlsx', '.xls']} />
-              {rawFiles.length > 0 && (
-                <div className="mt-3 space-y-1.5">
-                  {rawFiles.map(file => (
-                    <div
-                      key={file.name}
-                      className="analysis-subcard flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs text-[var(--text-main)]"
-                    >
-                      <span className="text-[var(--accent-tertiary)]">✓</span>
-                      <span className="truncate">{file.name}</span>
-                      <span className="shrink-0 text-[var(--text-soft)]">({file.x.length} pts)</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </SidebarCard>
-
-            <SidebarCard step={2} title="背景扣除" hint="baseline 修正" defaultOpen={false} infoContent={
+            <SidebarCard step={1} title="背景扣除" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">背景扣除說明</p>
                 <p>Raman 現在保留最核心的前處理鏈，只做背景扣除與歸一化。這一步負責移除基線漂移，讓真正的峰形比較清楚。</p>
@@ -3102,7 +3076,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={3} title="Si 基板校正扣除" hint="520 cm⁻¹ 診斷扣除" defaultOpen={false} infoContent={
+            <SidebarCard step={2} title="Si 基板校正扣除" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">Si 基板訊號校正</p>
                 <p>這一步不會把裸 Si 光譜整條硬扣掉；reference 模式會先做峰位偏移、強度縮放與局部 baseline 擬合，fit 模式則直接從樣品擬合 520 cm⁻¹ Si peak。</p>
@@ -3220,7 +3194,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={4} title="歸一化" hint="設定強度正規化方式" defaultOpen={false} infoContent={
+            <SidebarCard step={3} title="歸一化" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">歸一化說明</p>
                 <p>歸一化方便比較不同 Raman 光譜的峰型與相對強度，但不適合用來保留絕對訊號高低。</p>
@@ -3278,7 +3252,7 @@ export default function Raman({
               )}
             </SidebarCard>
 
-            <SidebarCard step={5} title="峰偵測與參考峰" hint="快速掃峰、選擇參考材料" defaultOpen={false} infoContent={
+            <SidebarCard step={4} title="峰偵測與參考峰" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰偵測與參考峰說明</p>
                 <p>峰偵測會直接在目前的處理後光譜上找局部極大值。它適合拿來快速建立候選峰，不代表每一個點都一定是物理上成立的 Raman band。</p>
@@ -3384,7 +3358,7 @@ export default function Raman({
               </div>
             </SidebarCard>
 
-            <SidebarCard step={6} title="峰位管理與擬合" hint="載入參考峰、手動加峰、執行擬合" defaultOpen={false} infoContent={
+            <SidebarCard step={5} title="峰位管理與擬合" defaultOpen={false} infoContent={
               <div className="space-y-3">
                 <p className="font-semibold text-[var(--text-main)]">峰位管理與擬合說明</p>
                 <p>這一步負責整理峰位表、加入手動峰並執行 staged global fitting。</p>
@@ -3753,26 +3727,6 @@ export default function Raman({
 
       <main className="workspace-main-scroll min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
-            <ModuleTopBar
-              title={moduleContent.title}
-              subtitle={moduleContent.subtitle}
-              description={moduleContent.description}
-              chips={[
-                { label: `資料量 ${rawFiles.length}` },
-                { label: `背景 ${backgroundMethodLabel}` },
-                { label: `參考峰 ${refPeaks.length}` },
-              ]}
-            />
-
-          <InfoCardGrid
-            items={[
-              { label: '資料集', value: activeDataset?.name ?? '未載入' },
-              { label: '背景扣除', value: backgroundMethodLabel },
-              { label: '歸一化', value: normalizationLabel },
-              { label: '參考峰', value: `${refPeaks.length}` },
-            ]}
-          />
-
           {error && (
             <div className="mb-5 rounded-[18px] border border-[color:color-mix(in_srgb,var(--accent-secondary)_28%,var(--card-border))] bg-[color:color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] px-4 py-3 text-sm text-[var(--text-main)]">
               {error}
@@ -5086,6 +5040,19 @@ export default function Raman({
           )}
         </div>
       </main>
+
+      <SampleBasketsPanel
+        open={basketsPanelOpen}
+        onClose={() => setBasketsPanelOpen(false)}
+        items={basketItems}
+        baskets={baskets}
+        onChangeItems={setBasketItems}
+        onChangeBaskets={setBaskets}
+        onApplyBasket={handleApplyBasket}
+        applyDisabled={isLoading}
+        moduleLabel="Raman"
+        acceptFileExts={['.txt', '.csv', '.asc', '.dat', '.xlsx', '.xls']}
+      />
       {editingCandidate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm">
           <div className="analysis-section-card max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-5 shadow-2xl">
@@ -5301,6 +5268,15 @@ export default function Raman({
             />
           </div>
         </div>
+      )}
+
+      {!basketsPanelOpen && (
+        <SampleBasketsButton
+          open={basketsPanelOpen}
+          onToggle={() => setBasketsPanelOpen(true)}
+          basketCount={baskets.length}
+          unassignedCount={basketItems.filter(i => i.basketId === null).length}
+        />
       )}
     </div>
   )

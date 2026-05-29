@@ -22,6 +22,7 @@ import {
   type AthenaScanResult,
 } from '../features/athena/athenaXmu'
 import { timestampForUtc8Filename } from '../utils/time'
+import { WorkspaceMenuButton } from '../components/WorkspaceUi'
 
 type AthenaPreviewMode = 'normalized' | 'flattened'
 type AthenaManualEditMode = 'remove' | 'restore'
@@ -189,7 +190,13 @@ function Section({
   )
 }
 
-export default function Athena() {
+export default function Athena({
+  currentWorkspace,
+  onSelectWorkspace,
+}: {
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
+} = {}) {
   const folderInputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [result, setResult] = useState<AthenaProcessResult | null>(null)
@@ -615,6 +622,11 @@ export default function Athena() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-5 py-6 lg:px-8">
+      {onSelectWorkspace && (
+        <div className="max-w-xs">
+          <WorkspaceMenuButton currentWorkspace={currentWorkspace} onSelectWorkspace={onSelectWorkspace} />
+        </div>
+      )}
       <div className="topbar-panel">
         <div className="topbar-eyebrow">Data Tool</div>
         <div className="module-title-row">

@@ -34,12 +34,12 @@ import {
   DEFAULT_SERIES_PALETTE_KEYS,
   DeferredRender,
   EmptyWorkspaceState,
-  InfoCardGrid,
+  GuidedSidebarSection,
   LINE_COLOR_PALETTES,
   MODULE_CONTENT,
-  ModuleTopBar,
   StickySidebarHeader,
 } from '../components/WorkspaceUi'
+import { SampleBasketsButton, SampleBasketsPanel, type BasketFileItem, type SampleBasket } from '../components/SampleBaskets'
 import { formatUtc8Iso, timestampForUtc8Filename } from '../utils/time'
 import { type XrdDesktopInputFile, type XrdDesktopReferenceDbRow } from '../types/xrdDesktop'
 
@@ -684,114 +684,11 @@ function CalcCardShell({
 
 // ── small UI pieces (100% 同步自 XPS) ───────────────────────────────────────────
 
-function Section({ step, title, hint, children, defaultOpen = true, infoContent, status, open: controlledOpen, onOpenChange }: {
-  step: number; title: string; hint?: string; children: React.ReactNode; defaultOpen?: boolean; infoContent?: React.ReactNode
-  status?: 'on' | 'off' | 'locked'
-  open?: boolean
-  onOpenChange?: (next: boolean) => void
-}) {
-  const [internalOpen, setInternalOpen] = useState(defaultOpen)
-  const open = controlledOpen ?? internalOpen
-  const setOpen = (updater: boolean | ((prev: boolean) => boolean)) => {
-    const next = typeof updater === 'function' ? updater(open) : updater
-    if (onOpenChange) onOpenChange(next)
-    else setInternalOpen(next)
-  }
-  const [infoOpen, setInfoOpen] = useState(false)
-
-  useEffect(() => {
-    if (!infoOpen) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setInfoOpen(false)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [infoOpen])
-
-  const infoModal = infoOpen && infoContent && typeof document !== 'undefined'
-    ? createPortal(
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-[3px]"
-          onClick={() => setInfoOpen(false)}
-        >
-          <div
-            className="glass-panel max-h-[min(84vh,calc(100vh-3rem))] w-full max-w-2xl overflow-hidden rounded-[30px]"
-            onClick={event => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-4 border-b border-[var(--card-divider)] px-5 py-4">
-              <div>
-                <p className="text-base font-semibold text-[var(--text-main)]">{title}說明</p>
-                {hint && <p className="mt-1 text-sm text-[var(--text-soft)]">{hint}</p>}
-              </div>
-              <button
-                type="button"
-                onClick={() => setInfoOpen(false)}
-                className="rounded-full border border-[var(--card-border)] px-3 py-1.5 text-sm text-[var(--text-soft)] transition-colors hover:text-[var(--text-main)] pressable"
-              >
-                關閉
-              </button>
-            </div>
-            <div className="overflow-y-auto px-5 py-5 text-[15px] leading-7 text-[var(--text-soft)] sm:px-6 sm:text-base sm:leading-8">
-              {infoContent}
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )
-    : null
-
+function Section(props: Parameters<typeof GuidedSidebarSection>[0]) {
   return (
-    <>
-    <div className="sidebar-stage-card mb-3 overflow-hidden rounded-[24px]">
-      <div className="flex items-center">
-        <button
-          type="button"
-          onClick={() => setOpen(o => !o)}
-          className="flex flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--card-ghost)]"
-        >
-          <div className="flex min-w-0 items-center gap-3">
-            <span className={[
-              'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors',
-              status === 'locked'
-                ? 'bg-[var(--card-ghost)] text-[var(--text-soft)] opacity-50'
-                : 'bg-[color:color-mix(in_srgb,var(--accent-tertiary)_16%,transparent)] text-[var(--accent-tertiary)]',
-            ].join(' ')}>
-              {step}
-              {status === 'on' && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-emerald-400 ring-2 ring-[var(--panel-bg)]" aria-hidden />
-              )}
-              {status === 'off' && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full border border-[var(--text-soft)]/60 bg-transparent ring-2 ring-[var(--panel-bg)]" aria-hidden />
-              )}
-            </span>
-            <div className="min-w-0">
-              <div className={[
-                'truncate text-base font-semibold',
-                status === 'locked' ? 'text-[var(--text-soft)]' : 'text-[var(--text-muted)]',
-              ].join(' ')}>{title}</div>
-              {hint && <div className="mt-0.5 text-[11px] text-[var(--text-soft)]">{hint}</div>}
-            </div>
-          </div>
-          <span className="shrink-0 text-sm text-[var(--text-soft)]">{open ? '−' : '+'}</span>
-        </button>
-        {infoContent && (
-          <button
-            type="button"
-            onClick={() => setInfoOpen(true)}
-            title="查看方法說明"
-            className={[
-              'mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition-colors',
-              infoOpen
-                ? 'border-[var(--accent-secondary)] bg-[var(--accent-soft)] text-[var(--accent-secondary)]'
-                : 'border-[var(--card-border)] text-[var(--text-soft)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)]',
-            ].join(' ')}
-          >?</button>
-        )}
-      </div>
-      {open && <div className="space-y-3 p-4 pt-2">{children}</div>}
+    <div className="px-4">
+      <GuidedSidebarSection {...props} />
     </div>
-    {infoModal}
-    </>
   )
 }
 
@@ -953,9 +850,13 @@ function TogglePill({ label, checked, onChange }: { label: string; checked: bool
 
 export default function XRD({
   onModuleSelect,
+  currentWorkspace,
+  onSelectWorkspace,
 }: {
   onModuleSelect?: (module: AnalysisModuleId) => void
   onOpenPlotPopup?: (popup: any) => void
+  currentWorkspace?: string
+  onSelectWorkspace?: (id: string) => void
 }) {
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('nigiro-xrd-sidebar-width'))
@@ -1331,6 +1232,17 @@ export default function XRD({
         alert(err.message)
       })
   }, [selectedDatasetId, rawFiles.length, normalizeCurves])
+
+  // ── Sample baskets ──────────────────────────────────────────────────────
+  const [basketsPanelOpen, setBasketsPanelOpen] = useState(true)
+  const [basketItems, setBasketItems] = useState<BasketFileItem[]>([])
+  const [baskets, setBaskets] = useState<SampleBasket[]>([])
+
+  const handleApplyBasket = useCallback(async (_basket: SampleBasket, basketFiles: File[]) => {
+    if (basketFiles.length === 0) return
+    setBasketsPanelOpen(false)
+    handleFilesUpload(basketFiles)
+  }, [handleFilesUpload])
 
   // 1. 本地數據前處理管線 (Pipeline)
   const processedTraces = useMemo(() => {
@@ -2385,70 +2297,28 @@ export default function XRD({
                 subtitle="桌面版流程模擬器"
                 onSelectModule={onModuleSelect}
                 onCollapse={() => setSidebarCollapsed(true)}
+                currentWorkspace={currentWorkspace}
+                onSelectWorkspace={onSelectWorkspace}
               />
 
-              {/* 📊 數據準備與校正 */}
-              <div className="px-4.5 pt-3 pb-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--accent-strong)] font-mono flex items-center gap-1.5">
-                    <span className="text-xs">📊</span> 數據準備與校正
-                  </span>
-                  <div className="h-[1px] flex-1 bg-gradient-to-r from-[color-mix(in_srgb,var(--accent-strong)_25%,transparent)] to-transparent" />
-                </div>
-              </div>
-
-              {/* Step 1: 上傳數據 */}
-              <Section step={1} title="上傳 XRD 數據" hint="匯入 .txt / .xy 文字格式" infoContent={step1Info}
-                status={rawFiles.length > 0 ? 'on' : 'off'}
-                open={sectionOpen[1]}
-                onOpenChange={v => setStepOpen(1, v)}>
-                <FileUpload
-                  accept={['.txt', '.xy', '.csv']}
-                  onFiles={handleFilesUpload}
-                  moduleLabel="XRD"
-                />
-
-                {rawFiles.length > 0 && (
-                  <div className="space-y-1.5 pt-2">
-                    <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">已載入光譜列表</p>
-                    <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
-                      {rawFiles.map(f => (
-                        <button
-                          key={f.id}
-                          type="button"
-                          onClick={() => setSelectedDatasetId(f.id)}
-                          className={[
-                            'flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors pressable',
-                            selectedDatasetId === f.id
-                              ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]'
-                              : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]',
-                          ].join(' ')}
-                        >
-                          <span
-                            className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0"
-                            style={{ backgroundColor: f.color }}
-                          />
-                          <span className="truncate flex-1">{f.name}</span>
-                          <span className="text-[10px] text-[var(--text-soft)] shrink-0">{f.x.length} 點</span>
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRawFiles([])
-                        setSelectedDatasetId(null)
-                      }}
-                      className="text-[10px] font-semibold text-rose-400 hover:text-rose-300 transition-colors mt-2 block"
-                    >
-                      ✕ 清除所有光譜
+              {/* 選擇當前顯示的光譜（XRD 特有：可單筆檢視某一筆） */}
+              {rawFiles.length > 0 && (
+                <div className="mx-4 mb-3 space-y-1 max-h-44 overflow-y-auto pr-1">
+                  <p className="px-1 pb-0.5 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">已載入光譜（點選切換）</p>
+                  {rawFiles.map(f => (
+                    <button key={f.id} type="button" onClick={() => setSelectedDatasetId(f.id)}
+                      className={['flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors pressable',
+                        selectedDatasetId === f.id ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}>
+                      <span className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0" style={{ backgroundColor: f.color }} />
+                      <span className="truncate flex-1">{f.name}</span>
+                      <span className="text-[10px] text-[var(--text-soft)] shrink-0">{f.x.length} 點</span>
                     </button>
-                  </div>
-                )}
-              </Section>
+                  ))}
+                </div>
+              )}
 
               {/* 🎨 顯示與外觀 分組標籤 */}
-              <div className="px-4.5 pt-4.5 pb-1">
+              <div className="px-4 pt-4 pb-1">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--accent-strong)] font-mono flex items-center gap-1.5">
                     <span className="text-xs">🎨</span> 顯示與外觀
@@ -2458,7 +2328,7 @@ export default function XRD({
               </div>
 
               {/* 顯示模式（背景內嵌、無卡片殼） */}
-              <div className="px-4.5 pt-1 pb-3">
+              <div className="px-4 pt-1 pb-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--text-soft)] font-mono">
                     顯示模式
@@ -2504,7 +2374,7 @@ export default function XRD({
               </div>
 
               {/* 疊圖外觀設定（已上移至 Step 2 前） */}
-              <Section step={5} title="疊圖外觀設定 (Plot Settings)" hint="設定線寬、調色與垂直偏移" infoContent={step5Info} defaultOpen={false}
+              <Section step={4} title="疊圖外觀設定" infoContent={step5Info} defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : 'on'}
                 open={sectionOpen[5]}
                 onOpenChange={v => setStepOpen(5, v)}>
@@ -2602,7 +2472,7 @@ export default function XRD({
               </Section>
 
               {/* ⚡ 訊號變換與前處理 */}
-              <div className="px-4.5 pt-4.5 pb-1">
+              <div className="px-4 pt-4 pb-1">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--accent-strong)] font-mono flex items-center gap-1.5">
                     <span className="text-xs">⚡</span> 訊號變換與前處理
@@ -2612,7 +2482,7 @@ export default function XRD({
               </div>
 
               {/* Step 2: X軸偏移微調 */}
-              <Section step={2} title="X軸偏移量微調 (X Shift)" hint="修正繞射角度 2θ 系統偏移" infoContent={step2Info} defaultOpen={false}
+              <Section step={1} title="X 軸偏移量微調" infoContent={step2Info} defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (rawFiles.some(f => (f.xShift || 0) !== 0) ? 'on' : 'off')}>
                 {rawFiles.length === 0 ? (
                   <p className="text-xs text-[var(--text-soft)] italic">請先載入 XRD 光譜數據</p>
@@ -2645,7 +2515,7 @@ export default function XRD({
               </Section>
 
               {/* Step 3: 背景校正與信號轉換 */}
-              <Section step={3} title="強度轉換與基線扣除" hint="強度取對數與基線百分位數估算" infoContent={step3Info} defaultOpen={false}
+              <Section step={2} title="強度轉換與基線扣除" infoContent={step3Info} defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (transformMode !== 'none' ? 'on' : 'off')}>
                 <div className="space-y-3">
                   <CustomSelect
@@ -2663,7 +2533,7 @@ export default function XRD({
               </Section>
 
               {/* Step 4: 強度歸一化 */}
-              <Section step={4} title="強度歸一化 (Normalization)" hint="預設關閉；需要 0~1 對齊時再啟用" infoContent={step4Info} defaultOpen={false}
+              <Section step={3} title="強度歸一化" infoContent={step4Info} defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (normalizeCurves ? 'on' : 'off')}>
                 <div className="space-y-3">
                   <TogglePill
@@ -2681,7 +2551,7 @@ export default function XRD({
 
               {/* Step 6: 固定參考峰 / 圖例 */}
               {/* 🔬 物相比對與峰位分析 */}
-              <div className="px-4.5 pt-4.5 pb-1">
+              <div className="px-4 pt-4 pb-1">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--accent-strong)] font-mono flex items-center gap-1.5">
                     <span className="text-xs">🔬</span> 物相比對與峰位分析
@@ -2690,7 +2560,7 @@ export default function XRD({
                 </div>
               </div>
 
-              <Section step={6} title="固定參考峰/圖例 (Markers)" hint="繪製標準相位垂直點虛線" infoContent={step6Info} defaultOpen={false}
+              <Section step={5} title="固定參考峰 / 圖例" infoContent={step6Info} defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (Object.values(enabledRefCompounds).some(Boolean) ? 'on' : 'off')}>
                 <div className="space-y-3">
                   <TogglePill
@@ -2728,7 +2598,7 @@ export default function XRD({
               </Section>
 
               {/* Step 7: 峰位偏移報告 */}
-              <Section step={7} title="峰位偏移比對 (Peak Shift)" hint="設定匹配門檻與容忍度" infoContent={step7Info} defaultOpen={false}
+              <Section step={6} title="峰位偏移比對" infoContent={step7Info} defaultOpen={false}
                 status={!Object.values(enabledRefCompounds).some(Boolean) ? 'locked' : 'on'}>
                 <div className="space-y-3">
                   <NumInput
@@ -2752,7 +2622,7 @@ export default function XRD({
               </Section>
 
               {/* 📐 圖表輸出與美化 分組標籤 */}
-              <div className="px-4.5 pt-4.5 pb-1">
+              <div className="px-4 pt-4 pb-1">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--accent-strong)] font-mono flex items-center gap-1.5">
                     <span className="text-xs">📐</span> 圖表輸出與美化
@@ -2762,7 +2632,7 @@ export default function XRD({
               </div>
 
               {/* 美化預覽圖卡 開關（控件在中間欄的美化卡內，這裡只有 enable toggle） */}
-              <Section step={8} title="圖表美化與匯出 (Beautify & Export)" hint="開啟後中間欄會出現可即時美化、PNG/CSV/TXT 匯出的圖卡" defaultOpen={false}
+              <Section step={7} title="圖表美化與匯出" defaultOpen={false}
                 status={rawFiles.length === 0 ? 'locked' : (beautifyEnabled ? 'on' : 'off')}>
                 <div className="space-y-2">
                   <TogglePill
@@ -2778,7 +2648,7 @@ export default function XRD({
               </Section>
 
               {/* 🧮 衍生計算工具 分組標籤 */}
-              <div className="px-4.5 pt-4.5 pb-1">
+              <div className="px-4 pt-4 pb-1">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--accent-strong)] font-mono flex items-center gap-1.5">
                     <span className="text-xs">🧮</span> 衍生計算工具
@@ -2787,7 +2657,7 @@ export default function XRD({
                 </div>
               </div>
 
-              <Section step={9} title="d-spacing (Bragg)" hint="d = λ / (2·sin θ)，由峰位算晶面間距（最基本）" defaultOpen={false}
+              <Section step={8} title="d-spacing" defaultOpen={false}
                 status={calcDspacing.enabled ? 'on' : 'off'}>
                 <TogglePill label="顯示 d-spacing 計算卡" checked={calcDspacing.enabled} onChange={v => setCalcDspacing(p => ({ ...p, enabled: v }))} />
                 <p className="mt-2 text-[11px] leading-5 text-[var(--text-soft)]">
@@ -2795,7 +2665,7 @@ export default function XRD({
                 </p>
               </Section>
 
-              <Section step={10} title="FWHM 計算" hint="量測指定峰位的半高全寬，後續 Scherrer 會用到" defaultOpen={false}
+              <Section step={9} title="FWHM 計算" defaultOpen={false}
                 status={calcFwhm.enabled ? 'on' : 'off'}>
                 <TogglePill label="顯示 FWHM 計算卡" checked={calcFwhm.enabled} onChange={v => setCalcFwhm(p => ({ ...p, enabled: v }))} />
                 <p className="mt-2 text-[11px] leading-5 text-[var(--text-soft)]">
@@ -2803,7 +2673,7 @@ export default function XRD({
                 </p>
               </Section>
 
-              <Section step={11} title="晶粒尺寸 D (Scherrer)" hint="D = K·λ / (β·cos θ)，需先取得 FWHM (β)" defaultOpen={false}
+              <Section step={10} title="晶粒尺寸 D" defaultOpen={false}
                 status={calcScherrer.enabled ? 'on' : 'off'}>
                 <TogglePill label="顯示 Scherrer 計算卡" checked={calcScherrer.enabled} onChange={v => setCalcScherrer(p => ({ ...p, enabled: v }))} />
                 <p className="mt-2 text-[11px] leading-5 text-[var(--text-soft)]">
@@ -2827,24 +2697,6 @@ export default function XRD({
       {/* ── 右側主內容欄 ── */}
       <main className="min-h-0 flex flex-1 flex-col overflow-y-auto px-5 py-8 sm:px-8 xl:px-10 xl:py-10">
         <div className="mx-auto w-full max-w-[1500px]">
-
-          {/* ModuleTopBar */}
-          <ModuleTopBar
-            title="XRD"
-            subtitle="X-ray Diffraction"
-            description="X-ray Diffraction Plotter & Phase Identifier"
-            chips={rawFiles.length > 0 ? [{ label: `已載入 ${rawFiles.length} 筆光譜` }] : [{ label: '請載入光譜以進行繪圖與疊圖' }]}
-          />
-
-          <InfoCardGrid
-            items={[
-              { label: '載入光譜', value: rawFiles.length > 0 ? `${rawFiles.length} 筆` : '未載入' },
-              { label: '顯示模式', value: viewMode === 'single' ? '單筆檢視' : viewMode === 'offset' ? 'Offset 偏移疊圖' : '純疊圖' },
-              { label: '強度轉換', value: transformMode === 'log10' ? 'Log10 對數' : transformMode === 'ln' ? 'Ln 自然對數' : transformMode === 'sqrt' ? '平方根' : '未轉換' },
-              { label: '歸一化', value: normalizeCurves ? '已啟用 0~1' : '未啟用' },
-              { label: '繞射角範圍 (2θ)', value: activeTrace ? `${activeTrace.x[0].toFixed(1)}° – ${activeTrace.x[activeTrace.x.length - 1].toFixed(1)}°` : '未載入' },
-            ]}
-          />
 
           {rawFiles.length === 0 ? (
             <EmptyWorkspaceState
@@ -3731,6 +3583,27 @@ export default function XRD({
       })()}
         </div>
       </main>
+
+      <SampleBasketsPanel
+        open={basketsPanelOpen}
+        onClose={() => setBasketsPanelOpen(false)}
+        items={basketItems}
+        baskets={baskets}
+        onChangeItems={setBasketItems}
+        onChangeBaskets={setBaskets}
+        onApplyBasket={handleApplyBasket}
+        moduleLabel="XRD"
+        acceptFileExts={['.txt', '.csv', '.xy', '.dat', '.xlsx', '.xls']}
+      />
+
+      {!basketsPanelOpen && (
+        <SampleBasketsButton
+          open={basketsPanelOpen}
+          onToggle={() => setBasketsPanelOpen(true)}
+          basketCount={baskets.length}
+          unassignedCount={basketItems.filter(i => i.basketId === null).length}
+        />
+      )}
     </div>
   )
 }
