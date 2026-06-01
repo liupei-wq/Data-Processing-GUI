@@ -72,7 +72,7 @@ export const REFERENCE_DB: Record<string, Omit<XrdDesktopReferenceDbRow, 'phase'
   'β-Ga2O3': [
     { hkl: '-201', twoTheta: 18.9, intensity: 100, tolerance: 0.3 },
     { hkl: '400', twoTheta: 30.1, intensity: 45, tolerance: 0.3 },
-    { hkl: '-111', twoTheta: 31.7, intensity: 35, tolerance: 0.3 },
+    { hkl: '002', twoTheta: 31.7, intensity: 35, tolerance: 0.3 },
     { hkl: '111', twoTheta: 35.2, intensity: 60, tolerance: 0.3 },
     { hkl: '-402', twoTheta: 38.4, intensity: 85, tolerance: 0.3 },
     { hkl: '-311', twoTheta: 45.8, intensity: 25, tolerance: 0.3 },
@@ -83,7 +83,7 @@ export const REFERENCE_DB: Record<string, Omit<XrdDesktopReferenceDbRow, 'phase'
     { hkl: '403', twoTheta: 64.6, intensity: 22, tolerance: 0.3 },
     { hkl: '-202', twoTheta: 23.5, intensity: 10, tolerance: 0.3 },
     { hkl: '310', twoTheta: 32.8, intensity: 12, tolerance: 0.3 },
-    { hkl: '110', twoTheta: 33.2, intensity: 8, tolerance: 0.3 },
+    { hkl: '-111', twoTheta: 33.2, intensity: 8, tolerance: 0.3 },
     { hkl: '-601', twoTheta: 41.7, intensity: 14, tolerance: 0.3 },
     { hkl: '020', twoTheta: 58.2, intensity: 18, tolerance: 0.3 },
     { hkl: '510', twoTheta: 62.1, intensity: 9, tolerance: 0.3 },
@@ -246,6 +246,28 @@ function calcScherrerD(twoThetaDeg: number, fwhmDeg: number, K: number, lambdaAn
   const c = Math.cos(theta)
   if (beta <= 0 || c <= 0) return NaN
   return (K * lambdaAng) / (beta * c)
+}
+
+type XrdCalcRecordKind = 'd-spacing' | 'FWHM' | 'Scherrer'
+
+type XrdCalcRecord = {
+  id: string
+  recordedAt: string
+  kind: XrdCalcRecordKind
+  sourceName: string
+  peakTwoThetaDeg: number
+  lambdaAngstrom?: number
+  dSpacingAngstrom?: number
+  dSpacingNm?: number
+  peakHeight?: number
+  baseline?: number
+  fwhmDeg?: number
+  leftHalfTwoTheta?: number
+  rightHalfTwoTheta?: number
+  kFactor?: number
+  crystalSizeAngstrom?: number
+  crystalSizeNm?: number
+  fwhmSource?: string
 }
 
 /**
@@ -982,6 +1004,7 @@ export default function XRD({
     enabled: false, imported: null, selectedSourceId: '', selectedPeakX: null,
     lambda: 1.5406,
   })
+  const [calcRecords, setCalcRecords] = useState<XrdCalcRecord[]>([])
 
   // 參考峰選擇彈窗拖曳與折疊折疊狀態
   const [refMarkersModalPos, setRefMarkersModalPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
@@ -1932,6 +1955,93 @@ export default function XRD({
     link.href = url; link.download = filename
     document.body.appendChild(link); link.click(); document.body.removeChild(link)
   }
+
+  const createCalcRecordId = (kind: XrdCalcRecordKind) => `${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  const formatRecordNumber = (value: number | undefined, digits = 4) =>
+    value != null && Number.isFinite(value) ? value.toFixed(digits) : ''
+  const excelCell = (value: string | number | undefined) =>
+    value == null ? '' : String(value).replace(/[\t\r\n]+/g, ' ').trim()
+
+  const handleAddDspacingRecord = useCallback(() => {
+    if (!dspacingResult) return
+    const src = resolveCalcSource(calcDspacing)
+    setCalcRecords(prev => [...prev, {
+      id: createCalcRecordId('d-spacing'),
+      recordedAt: formatUtc8Iso(new Date()),
+      kind: 'd-spacing',
+      sourceName: src?.name ?? '未指定資料源',
+      peakTwoThetaDeg: dspacingResult.peakX,
+      lambdaAngstrom: calcDspacing.lambda,
+      dSpacingAngstrom: dspacingResult.d,
+      dSpacingNm: dspacingResult.d / 10,
+    }])
+  }, [calcDspacing, dspacingResult, resolveCalcSource])
+
+  const handleAddFwhmRecord = useCallback(() => {
+    if (!fwhmResult) return
+    const src = resolveCalcSource(calcFwhm)
+    setCalcRecords(prev => [...prev, {
+      id: createCalcRecordId('FWHM'),
+      recordedAt: formatUtc8Iso(new Date()),
+      kind: 'FWHM',
+      sourceName: src?.name ?? '未指定資料源',
+      peakTwoThetaDeg: fwhmResult.peakX,
+      peakHeight: fwhmResult.peakHeight,
+      baseline: fwhmResult.baseline,
+      fwhmDeg: fwhmResult.fwhm,
+      leftHalfTwoTheta: fwhmResult.leftHalfX,
+      rightHalfTwoTheta: fwhmResult.rightHalfX,
+    }])
+  }, [calcFwhm, fwhmResult, resolveCalcSource])
+
+  const handleAddScherrerRecord = useCallback(() => {
+    if (!scherrerResult) return
+    const src = resolveCalcSource(calcScherrer)
+    setCalcRecords(prev => [...prev, {
+      id: createCalcRecordId('Scherrer'),
+      recordedAt: formatUtc8Iso(new Date()),
+      kind: 'Scherrer',
+      sourceName: src?.name ?? '未指定資料源',
+      peakTwoThetaDeg: scherrerResult.peakX,
+      lambdaAngstrom: calcScherrer.lambda,
+      kFactor: calcScherrer.K,
+      fwhmDeg: scherrerResult.fwhmDeg,
+      crystalSizeAngstrom: scherrerResult.D,
+      crystalSizeNm: scherrerResult.D / 10,
+      fwhmSource: scherrerResult.usedOverride ? 'manual_override' : 'auto_measured',
+    }])
+  }, [calcScherrer, scherrerResult, resolveCalcSource])
+
+  const handleCalcRecordsExcelExport = () => {
+    if (calcRecords.length === 0) return
+    const headers = [
+      'recorded_at', 'calculation', 'source', 'peak_2theta_deg', 'lambda_angstrom',
+      'd_spacing_angstrom', 'd_spacing_nm', 'peak_height', 'baseline',
+      'fwhm_deg', 'left_half_2theta', 'right_half_2theta',
+      'K', 'D_angstrom', 'D_nm', 'fwhm_source',
+    ]
+    const rows = calcRecords.map(record => [
+      record.recordedAt,
+      record.kind,
+      record.sourceName,
+      formatRecordNumber(record.peakTwoThetaDeg, 4),
+      formatRecordNumber(record.lambdaAngstrom, 4),
+      formatRecordNumber(record.dSpacingAngstrom, 4),
+      formatRecordNumber(record.dSpacingNm, 5),
+      formatRecordNumber(record.peakHeight, 4),
+      formatRecordNumber(record.baseline, 4),
+      formatRecordNumber(record.fwhmDeg, 5),
+      formatRecordNumber(record.leftHalfTwoTheta, 4),
+      formatRecordNumber(record.rightHalfTwoTheta, 4),
+      formatRecordNumber(record.kFactor, 4),
+      formatRecordNumber(record.crystalSizeAngstrom, 3),
+      formatRecordNumber(record.crystalSizeNm, 4),
+      record.fwhmSource ?? '',
+    ])
+    const content = '\ufeff' + [headers, ...rows].map(row => row.map(excelCell).join('\t')).join('\n')
+    downloadText(`XRD_Calculation_Records_${timestampForUtc8Filename()}.xls`, content, 'application/vnd.ms-excel')
+  }
+
   const handleFwhmExport = (sep: string, ext: string) => {
     if (!fwhmResult) return
     const lines = [
@@ -3017,6 +3127,10 @@ export default function XRD({
                         className="flex items-center gap-1.5 rounded-full border border-[var(--card-border)] hover:bg-[var(--card-ghost)] disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--text-main)] transition-all pressable">
                         📄 匯出 TXT (Tab)
                       </button>
+                      <button type="button" onClick={handleAddDspacingRecord} disabled={!dspacingResult}
+                        className="flex items-center gap-1.5 rounded-full border border-[var(--accent-strong)]/50 bg-[var(--accent-strong)]/10 hover:bg-[var(--accent-strong)]/15 disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-[var(--accent-strong)] transition-all pressable">
+                        + 記錄
+                      </button>
                     </>
                   }
                 />
@@ -3053,6 +3167,10 @@ export default function XRD({
                       <button type="button" onClick={() => handleFwhmExport('\t', 'txt')} disabled={!fwhmResult}
                         className="flex items-center gap-1.5 rounded-full border border-[var(--card-border)] hover:bg-[var(--card-ghost)] disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--text-main)] transition-all pressable">
                         📄 匯出 TXT (Tab)
+                      </button>
+                      <button type="button" onClick={handleAddFwhmRecord} disabled={!fwhmResult}
+                        className="flex items-center gap-1.5 rounded-full border border-[var(--accent-strong)]/50 bg-[var(--accent-strong)]/10 hover:bg-[var(--accent-strong)]/15 disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-[var(--accent-strong)] transition-all pressable">
+                        + 記錄
                       </button>
                     </>
                   }
@@ -3097,9 +3215,90 @@ export default function XRD({
                         className="flex items-center gap-1.5 rounded-full border border-[var(--card-border)] hover:bg-[var(--card-ghost)] disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--text-main)] transition-all pressable">
                         📄 匯出 TXT (Tab)
                       </button>
+                      <button type="button" onClick={handleAddScherrerRecord} disabled={!scherrerResult}
+                        className="flex items-center gap-1.5 rounded-full border border-[var(--accent-strong)]/50 bg-[var(--accent-strong)]/10 hover:bg-[var(--accent-strong)]/15 disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-[var(--accent-strong)] transition-all pressable">
+                        + 記錄
+                      </button>
                     </>
                   }
                 />
+              )}
+
+              {(calcDspacing.enabled || calcFwhm.enabled || calcScherrer.enabled || calcRecords.length > 0) && (
+                <div className="analysis-section-card p-4">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-white">計算結果記錄彙整</h4>
+                      <p className="text-[10px] text-slate-500 mt-0.5">
+                        已記錄 {calcRecords.length} 筆計算結果。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={handleCalcRecordsExcelExport} disabled={calcRecords.length === 0}
+                        className="flex items-center gap-1.5 rounded-full bg-[var(--accent-strong)] hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-white transition-all pressable">
+                        匯出 Excel
+                      </button>
+                      <button type="button" onClick={() => setCalcRecords([])} disabled={calcRecords.length === 0}
+                        className="flex items-center gap-1.5 rounded-full border border-[var(--card-border)] hover:bg-[var(--card-ghost)] disabled:opacity-30 disabled:cursor-not-allowed px-4 py-1.8 text-xs font-semibold text-[var(--text-muted)] hover:text-[var(--text-main)] transition-all pressable">
+                        清空記錄
+                      </button>
+                    </div>
+                  </div>
+
+                  {calcRecords.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-[var(--card-border)] bg-[var(--card-ghost)]/50 px-3 py-3 text-center text-[11px] text-[var(--text-soft)]">
+                      尚未加入任何計算結果。
+                    </div>
+                  ) : (
+                    <div className="analysis-table-wrap max-h-72 overflow-auto">
+                      <table className="analysis-data-table min-w-full text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-800 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                            <th className="px-3 py-2">時間</th>
+                            <th className="px-3 py-2">項目</th>
+                            <th className="px-3 py-2">來源</th>
+                            <th className="px-3 py-2">峰位 2θ</th>
+                            <th className="px-3 py-2">主要結果</th>
+                            <th className="px-3 py-2">補充</th>
+                            <th className="px-3 py-2 text-right">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {calcRecords.map(record => {
+                            const primary =
+                              record.kind === 'd-spacing'
+                                ? `d = ${formatRecordNumber(record.dSpacingAngstrom, 4)} Å`
+                                : record.kind === 'FWHM'
+                                  ? `FWHM = ${formatRecordNumber(record.fwhmDeg, 5)}°`
+                                  : `D = ${formatRecordNumber(record.crystalSizeNm, 4)} nm`
+                            const detail =
+                              record.kind === 'd-spacing'
+                                ? `λ ${formatRecordNumber(record.lambdaAngstrom, 4)} Å`
+                                : record.kind === 'FWHM'
+                                  ? `半高範圍 ${formatRecordNumber(record.leftHalfTwoTheta, 4)}-${formatRecordNumber(record.rightHalfTwoTheta, 4)}°`
+                                  : `β ${formatRecordNumber(record.fwhmDeg, 5)}° / K ${formatRecordNumber(record.kFactor, 4)}`
+                            return (
+                              <tr key={record.id} className="border-b border-slate-800/30 text-slate-300 hover:bg-slate-900/20 transition-all">
+                                <td className="px-3 py-2 font-mono text-[11px]">{record.recordedAt}</td>
+                                <td className="px-3 py-2 font-semibold text-slate-200">{record.kind}</td>
+                                <td className="px-3 py-2 max-w-[220px] truncate">{record.sourceName}</td>
+                                <td className="px-3 py-2 font-mono">{formatRecordNumber(record.peakTwoThetaDeg, 4)}°</td>
+                                <td className="px-3 py-2 font-mono font-bold text-[var(--accent)]">{primary}</td>
+                                <td className="px-3 py-2 font-mono text-[11px] text-slate-400">{detail}</td>
+                                <td className="px-3 py-2 text-right">
+                                  <button type="button" onClick={() => setCalcRecords(prev => prev.filter(item => item.id !== record.id))}
+                                    className="rounded-full border border-[var(--card-border)] px-2 py-1 text-[10px] font-semibold text-[var(--text-soft)] transition-colors hover:border-rose-400/50 hover:text-rose-300 pressable">
+                                    移除
+                                  </button>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* 峰位偏移比對結果表格 (與 XPS 視覺對齊的玻璃卡片與資料表格) */}

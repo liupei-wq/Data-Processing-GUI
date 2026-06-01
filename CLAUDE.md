@@ -455,3 +455,31 @@ streamlit run app.py --server.port 8505
 [2026-05-29] 檢查：嘗試確認 npm 是否可用以重跑前端 build，但目前 PowerShell 環境仍找不到 npm；本次以 git diff --check 與程式碼檢視驗證。
 
 [2026-05-29] 檢查：補記 npm 不可用後再次執行 git diff --check，結果僅有 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-06-01] 檢查：開始處理 XRD 記錄/Excel 匯出與 Ga2O3 峰位修正需求，已先讀取專案根目錄與 CLAUDE.md。
+
+[2026-06-01] 檢查：定位 XRD 主要前端實作在 web/frontend/src/pages/XRD.tsx；Ga2O3 內建參考峰也在同檔 REFERENCE_DB。
+
+[2026-06-01] 重要判斷：XRD 計算記錄採前端本地 state 彙整，匯出沿用既有 Raman 作法產生 Excel 可開啟的 .xls/TSV，避免新增 xlsx 套件與後端 API。
+
+[2026-06-01] 實作：XRD.tsx 已先修正 β-Ga2O3 參考峰 hkl：31.7° 由 -111 改 002，33.2° 由 110 改 -111；並新增 XRD 計算記錄型別。
+
+[2026-06-01] 實作：XRD 衍生計算工具新增 calcRecords state，準備收集 d-spacing、FWHM、Scherrer 每次按 + 的結果。
+
+[2026-06-01] 實作：XRD 計算工具新增三個 + 記錄 handler 與 Excel 相容 .xls 彙整匯出 helper，欄位涵蓋來源、峰位、d-spacing、FWHM、Scherrer D 與時間。
+
+[2026-06-01] 實作：XRD 三張衍生計算卡加入 + 記錄按鈕；新增計算結果記錄彙整卡，支援預覽記錄、移除單筆、清空與匯出 Excel。
+
+[2026-06-01] 檢查：首次前端 build 指令失敗；原因是從 web/frontend 工作目錄讀 CLAUDE.md 路徑誤用 ..\\CLAUDE.md，且該 shell 未找到 npm。準備改回專案根目錄讀取並檢查可用 Node/npm 路徑。
+
+[2026-06-01] 檢查：Get-Command/where.exe 均找不到 npm，當前環境無法執行 npm run build；改以原始碼檢查與 git diff 確認改動範圍。
+
+[2026-06-01] 檢查：git diff 檢視 XRD.tsx 改動，未見明顯 JSX 區塊閉合錯位；發現彙整卡說明可再收斂，準備微調文案。
+
+[2026-06-01] 實作：收斂 XRD 計算記錄彙整卡文案，只保留記錄筆數，減少操作說明文字。
+
+[2026-06-01] 檢查：執行 git diff --check（XRD.tsx、CLAUDE.md）通過；僅顯示既有 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-06-01] 檢查：再次確認 node.exe、npm.cmd、corepack.cmd 皆不可用，因此本輪無法執行 TypeScript/Vite build。
+
+[2026-06-01] 檢查：最終狀態確認僅修改 CLAUDE.md 與 web/frontend/src/pages/XRD.tsx；確認 + 記錄、Excel 匯出檔名與 Ga2O3 hkl 修正皆在 XRD.tsx 中。
