@@ -438,6 +438,8 @@ interface XasBandFigureStyle {
   xAxisTitle: string
   yAxisTitle: string
   normalizeIntensity: boolean
+  vbmLabelName: string
+  cbmLabelName: string
   xesTitleXPaper: number
   xesTitleYPaper: number
   xasTitleXPaper: number
@@ -771,6 +773,8 @@ const DEFAULT_XAS_BAND_STYLE: XasBandFigureStyle = {
   xAxisTitle: 'Photon energy / Emission energy (eV)',
   yAxisTitle: 'Intensity (a.u.)',
   normalizeIntensity: false,
+  vbmLabelName: 'VBM',
+  cbmLabelName: 'CBM',
   xesTitleXPaper: 0.07,
   xesTitleYPaper: 0.97,
   xasTitleXPaper: 0.88,
@@ -798,6 +802,14 @@ const DEFAULT_XAS_BAND_STYLE: XasBandFigureStyle = {
   exportWidth: 1500,
   exportHeight: 780,
   exportScale: 3,
+}
+
+function escapePlotlyText(value: string, fallback: string) {
+  const text = value.trim() || fallback
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 const VB_DOS_ASSIGNMENT_NOTE = 'The assignments are qualitative and based on reported Ga2O3 pDOS/DFT references. The VB spectra should not be fitted as independent chemical-state peaks.'
@@ -2962,6 +2974,8 @@ function buildXasSpecialExtrapolationFigure(results: XasSpecialFitResult[], styl
   const globalXMax = Math.max(...allX, 532.2)
   const xMin = Math.min(globalXMin, 526.8)
   const xMax = Math.max(globalXMax, 532.2)
+  const vbmLabel = escapePlotlyText(style.vbmLabelName, 'VBM')
+  const cbmLabel = escapePlotlyText(style.cbmLabelName, 'CBM')
   const layout: Partial<Plotly.Layout> = {
     autosize: true,
     paper_bgcolor: '#ffffff',
@@ -3078,8 +3092,8 @@ function buildXasSpecialExtrapolationFigure(results: XasSpecialFitResult[], styl
 
     annotations.push(
       { x: 0.99, y: yDomainStart + panelHeight * 0.82, xref: 'paper', yref: 'paper', text: `<b>${result.sample}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color: config.color } },
-      { x: result.vbm, y: yAt(0.92), xref: xRef, yref: yRef, text: `VBM ${result.vbm.toFixed(3)} eV`, showarrow: false, xanchor: 'right', font: { size: style.vbmLabelFontSize, family: style.fontFamily, color: style.vbmColor } },
-      { x: result.cbm, y: yAt(0.92), xref: xRef, yref: yRef, text: `CBM ${result.cbm.toFixed(3)} eV`, showarrow: false, xanchor: 'left', font: { size: style.cbmLabelFontSize, family: style.fontFamily, color: style.cbmColor } },
+      { x: result.vbm, y: yAt(0.92), xref: xRef, yref: yRef, text: `${vbmLabel} ${result.vbm.toFixed(3)} eV`, showarrow: false, xanchor: 'right', font: { size: style.vbmLabelFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.cbm, y: yAt(0.92), xref: xRef, yref: yRef, text: `${cbmLabel} ${result.cbm.toFixed(3)} eV`, showarrow: false, xanchor: 'left', font: { size: style.cbmLabelFontSize, family: style.fontFamily, color: style.cbmColor } },
       { x: (result.vbm + result.cbm) / 2, y: egY, xref: xRef, yref: yRef, text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, yshift: -18, font: { size: style.egLabelFontSize, family: style.fontFamily, color: '#6b5600' } },
       { x: XAS_SPECIAL_FIT_RANGE[1], y: yAt(0.08), xref: xRef, yref: yRef, text: `R<sup>2</sup> ${result.fitR2.toFixed(4)}`, showarrow: false, xanchor: 'right', font: { size: Math.max(10, style.annotationFontSize - 2), family: style.fontFamily, color: '#4b5563' } },
     )
@@ -3175,6 +3189,8 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
   const gap = 0.028
   const panelHeight = (1 - gap * Math.max(n - 1, 0)) / n
   const yAxisTitle = style.normalizeIntensity ? 'Normalized intensity (a.u.)' : style.yAxisTitle
+  const vbmLabel = escapePlotlyText(style.vbmLabelName, 'VBM')
+  const cbmLabel = escapePlotlyText(style.cbmLabelName, 'CBM')
   const layout: Partial<Plotly.Layout> = {
     autosize: true,
     paper_bgcolor: '#ffffff',
@@ -3298,8 +3314,8 @@ function buildXasBandOverlayFigure(results: XasBandPairResult[], style: XasBandF
     }
 
     annotations.push(
-      { x: result.xes.edge + style.vbmLabelXShift, y: panelYAt(clamp(style.vbmLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>VBM<br>${result.xes.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'right', font: { size: style.vbmLabelFontSize, family: style.fontFamily, color: style.vbmColor } },
-      { x: result.xas.edge + style.cbmLabelXShift, y: panelYAt(clamp(style.cbmLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>CBM<br>${result.xas.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'left', font: { size: style.cbmLabelFontSize, family: style.fontFamily, color: style.cbmColor } },
+      { x: result.xes.edge + style.vbmLabelXShift, y: panelYAt(clamp(style.vbmLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>${vbmLabel}<br>${result.xes.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'right', font: { size: style.vbmLabelFontSize, family: style.fontFamily, color: style.vbmColor } },
+      { x: result.xas.edge + style.cbmLabelXShift, y: panelYAt(clamp(style.cbmLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<b>${cbmLabel}<br>${result.xas.edge.toFixed(3)} eV</b>`, showarrow: false, xanchor: 'left', font: { size: style.cbmLabelFontSize, family: style.fontFamily, color: style.cbmColor } },
       { x: (result.xes.edge + result.xas.edge) / 2, y: panelYAt(clamp(style.egLabelYFraction, 0, 1.2)), xref: xRef as Plotly.Annotations['xref'], yref: yRef as Plotly.Annotations['yref'], text: `<i>E</i><sub>g</sub> = <b>${result.bandGap.toFixed(3)} eV</b>`, showarrow: false, font: { size: style.egLabelFontSize, family: style.fontFamily, color: '#6b5600' } },
       { x: style.sampleLabelXPaper, y: sampleLabelY, xref: 'paper', yref: 'paper', text: `<b>${result.pair.sampleLabel}</b>`, showarrow: false, xanchor: 'right', font: { size: style.sampleFontSize, family: style.fontFamily, color } },
     )
@@ -5896,6 +5912,16 @@ export default function PlotFileTool({
                 </div>
                 <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">VBM / CBM / Eg 標註</p>
+                  <div className="mb-2 grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">VBM 名稱</span>
+                      <input value={xasBandStyle.vbmLabelName} onChange={event => setXasBandStyle(prev => ({ ...prev, vbmLabelName: event.target.value }))} placeholder="VBM" className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">CBM 名稱</span>
+                      <input value={xasBandStyle.cbmLabelName} onChange={event => setXasBandStyle(prev => ({ ...prev, cbmLabelName: event.target.value }))} placeholder="CBM" className="w-full rounded-lg border border-[var(--input-border)] bg-[var(--input-bg)] px-2 py-1.5 text-xs text-[var(--input-text)] focus:outline-none" />
+                    </label>
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     <NumInput label="VBM 字體" value={xasBandStyle.vbmLabelFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, vbmLabelFontSize: clamp(value, 8, 42) }))} min={8} max={42} step={1} />
                     <NumInput label="CBM 字體" value={xasBandStyle.cbmLabelFontSize} onChange={value => setXasBandStyle(prev => ({ ...prev, cbmLabelFontSize: clamp(value, 8, 42) }))} min={8} max={42} step={1} />

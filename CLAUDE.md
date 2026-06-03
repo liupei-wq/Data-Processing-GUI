@@ -483,3 +483,11 @@ streamlit run app.py --server.port 8505
 [2026-06-01] 檢查：再次確認 node.exe、npm.cmd、corepack.cmd 皆不可用，因此本輪無法執行 TypeScript/Vite build。
 
 [2026-06-01] 檢查：最終狀態確認僅修改 CLAUDE.md 與 web/frontend/src/pages/XRD.tsx；確認 + 記錄、Excel 匯出檔名與 Ga2O3 hkl 修正皆在 XRD.tsx 中。
+
+[2026-06-04] 檢查：開始處理繪製圖檔區 XAS Band gap 可修改 CBM/VBM 名稱需求；已定位主要實作於 web/frontend/src/pages/PlotFileTool.tsx 的 xasBandStyle、buildXasBandOverlayFigure 與 XAS 圖面設定區。
+
+[2026-06-04] 實作：PlotFileTool XAS Band gap 圖面設定新增 VBM 名稱與 CBM 名稱輸入欄；XasBandFigureStyle 補上 vbmLabelName/cbmLabelName 預設值，buildXasBandOverlayFigure 與 531 eV 特殊外推圖的 VBM/CBM 標註改讀取自訂名稱，空白時 fallback 為 VBM/CBM，並以 escapePlotlyText 避免特殊字元破壞 Plotly annotation。
+
+[2026-06-04] 檢查：完成 XAS Band gap CBM/VBM 名稱功能後執行 git diff --check 通過，僅有既有 LF/CRLF 換行提示；rg 確認 XasBandFigureStyle 只有 DEFAULT_XAS_BAND_STYLE 初始化點且已補新欄位；where/Get-Command 皆找不到 npm/node，因此本輪無法執行 npm run build。變更範圍限於 CLAUDE.md 與 web/frontend/src/pages/PlotFileTool.tsx。
+
+[2026-06-04] 檢查：最終 git diff --check 通過；僅顯示 CLAUDE.md 與 PlotFileTool.tsx 的既有 LF/CRLF 換行提示，未發現 whitespace error。
