@@ -67,6 +67,9 @@ export const PHASE_COLORS: Record<string, string> = {
   'ZnO': '#14b8a6',
 }
 
+const resolveHexColor = (value: string | undefined, fallback: string) =>
+  /^#[0-9A-Fa-f]{6}$/.test(value || '') ? value as string : fallback
+
 // 擴充後且補齊的參考峰特徵資料庫 (REFERENCE_DB)
 export const REFERENCE_DB: Record<string, Omit<XrdDesktopReferenceDbRow, 'phase'>[]> = {
   'β-Ga2O3': [
@@ -77,7 +80,6 @@ export const REFERENCE_DB: Record<string, Omit<XrdDesktopReferenceDbRow, 'phase'
     { hkl: '-402', twoTheta: 38.4, intensity: 85, tolerance: 0.3 },
     { hkl: '-311', twoTheta: 45.8, intensity: 25, tolerance: 0.3 },
     { hkl: '600', twoTheta: 46.2, intensity: 20, tolerance: 0.3 },
-    { hkl: '002', twoTheta: 48.6, intensity: 15, tolerance: 0.3 },
     { hkl: '-603', twoTheta: 59.1, intensity: 40, tolerance: 0.3 },
     { hkl: '311', twoTheta: 60.9, intensity: 30, tolerance: 0.3 },
     { hkl: '403', twoTheta: 64.6, intensity: 22, tolerance: 0.3 },
@@ -953,6 +955,7 @@ export default function XRD({
   const [beautify, setBeautify] = useState({
     showXTickLabels: true,
     showYTickLabels: true,
+    showYTicks: true,
     xNTicks: 8,
     yNTicks: 6,
     xAxisTitle: '2θ (degree)',
@@ -975,6 +978,7 @@ export default function XRD({
 
   // 參考峰 (hkl) 標籤字體大小（沿用至主圖、美化卡與 Origin Pro 風格匯出）
   const [refMarkerLabelSize, setRefMarkerLabelSize] = useState<number>(11)
+  const [refMarkerColors, setRefMarkerColors] = useState<Record<string, string>>(PHASE_COLORS)
 
   // Beautify 卡資料源：'auto' = 跟隨主圖；或某個 rawFile.id 表示「單筆指定」
   const [beautifySourceMode, setBeautifySourceMode] = useState<string>('auto')
@@ -1529,7 +1533,8 @@ export default function XRD({
       Object.keys(enabledRefCompounds).forEach(compName => {
         if (enabledRefCompounds[compName]) {
           const peaks = REFERENCE_DB[compName] || []
-          const phaseColor = PHASE_COLORS[compName] || '#ef4444'
+          const defaultPhaseColor = PHASE_COLORS[compName] || '#ef4444'
+          const phaseColor = resolveHexColor(refMarkerColors[compName], defaultPhaseColor)
 
           peaks.forEach((peak, peakIdx) => {
             // 參考峰主要在 xMin 到 xMax 角度限制內才繪製 (對齊桌面版)
@@ -1573,7 +1578,7 @@ export default function XRD({
     }
 
     return traces
-  }, [showReferenceMarkers, enabledRefCompounds, enabledRefPeaks, xMin, xMax, refMarkerLabelSize])
+  }, [showReferenceMarkers, enabledRefCompounds, enabledRefPeaks, xMin, xMax, refMarkerLabelSize, refMarkerColors])
 
   const buildChartLayout = useCallback((chartTraces: typeof processedTraces, chartMode: 'single' | 'offset' | 'overlay', height = 480) => {
     let yTitle = '強度（a.u.）'
@@ -2135,7 +2140,7 @@ export default function XRD({
         title: { text: beautify.xAxisTitle, font: { size: beautify.titleFontSize, family: 'Times New Roman, serif', color: axisColor } },
         showgrid: beautify.showXGrid, gridcolor: gridColor, zeroline: false,
         linecolor: axisColor, linewidth: 1.5, mirror: true,
-        tickcolor: axisColor, ticks: 'outside', showline: true,
+        tickcolor: axisColor, ticks: 'inside', showline: true,
         showticklabels: beautify.showXTickLabels,
         nticks: beautify.xNTicks,
         range: [xMin, xMax],
@@ -2145,7 +2150,7 @@ export default function XRD({
         title: { text: beautify.yAxisTitle, font: { size: beautify.titleFontSize, family: 'Times New Roman, serif', color: axisColor } },
         showgrid: beautify.showYGrid, gridcolor: gridColor, zeroline: false,
         linecolor: axisColor, linewidth: 1.5, mirror: true,
-        tickcolor: axisColor, ticks: 'outside', showline: true,
+        tickcolor: axisColor, ticks: beautify.showYTicks ? 'inside' : '', showline: true,
         showticklabels: beautify.showYTickLabels,
         nticks: beautify.yNTicks,
         range: yRange,
@@ -2986,6 +2991,10 @@ export default function XRD({
                           <input type="checkbox" checked={beautify.showYTickLabels} onChange={e => setBeautify(b => ({ ...b, showYTickLabels: e.target.checked }))} />
                           顯示 Y 軸數字
                         </label>
+                        <label className="flex items-center gap-2 text-[11px] text-[var(--text-soft)]">
+                          <input type="checkbox" checked={beautify.showYTicks} onChange={e => setBeautify(b => ({ ...b, showYTicks: e.target.checked }))} />
+                          顯示 Y 軸刻度
+                        </label>
                         <NumInput label="X tick 數量" value={beautify.xNTicks} onChange={v => setBeautify(b => ({ ...b, xNTicks: Math.max(2, Math.min(30, v)) }))} min={2} max={30} />
                         <NumInput label="Y tick 數量" value={beautify.yNTicks} onChange={v => setBeautify(b => ({ ...b, yNTicks: Math.max(2, Math.min(30, v)) }))} min={2} max={30} />
                         <TextInput label="X 軸標題" value={beautify.xAxisTitle} onChange={v => setBeautify(b => ({ ...b, xAxisTitle: v }))} />
@@ -3041,6 +3050,30 @@ export default function XRD({
                             { value: 'hidden', label: '隱藏' },
                           ]}
                         />
+                      </div>
+                      <div className="mt-3 border-t border-[var(--card-divider)] pt-3">
+                        <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-soft)] font-mono">參考峰顏色</p>
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                          {Object.keys(PHASE_COLORS).map(compName => (
+                            <label key={compName} className="flex min-w-0 items-center gap-2 rounded-md border border-[var(--card-border)] bg-[var(--card-ghost)] px-2 py-1.5">
+                              <input
+                                type="color"
+                                value={resolveHexColor(refMarkerColors[compName], PHASE_COLORS[compName])}
+                                onChange={e => setRefMarkerColors(prev => ({ ...prev, [compName]: e.target.value }))}
+                                className="h-6 w-8 shrink-0 cursor-pointer rounded border border-[var(--card-border)] bg-transparent p-0"
+                                title={`${compName} 參考峰顏色`}
+                              />
+                              <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-muted)]">{compName}</span>
+                              <input
+                                type="text"
+                                value={refMarkerColors[compName] || PHASE_COLORS[compName]}
+                                onChange={e => setRefMarkerColors(prev => ({ ...prev, [compName]: e.target.value }))}
+                                className="w-20 rounded border border-[var(--card-border)] bg-[var(--card-bg)] px-1.5 py-1 font-mono text-[10px] text-[var(--text-main)]"
+                                aria-label={`${compName} 參考峰顏色 HEX`}
+                              />
+                            </label>
+                          ))}
+                        </div>
                       </div>
                     </Advanced>
 

@@ -491,3 +491,23 @@ streamlit run app.py --server.port 8505
 [2026-06-04] 檢查：完成 XAS Band gap CBM/VBM 名稱功能後執行 git diff --check 通過，僅有既有 LF/CRLF 換行提示；rg 確認 XasBandFigureStyle 只有 DEFAULT_XAS_BAND_STYLE 初始化點且已補新欄位；where/Get-Command 皆找不到 npm/node，因此本輪無法執行 npm run build。變更範圍限於 CLAUDE.md 與 web/frontend/src/pages/PlotFileTool.tsx。
 
 [2026-06-04] 檢查：最終 git diff --check 通過；僅顯示 CLAUDE.md 與 PlotFileTool.tsx 的既有 LF/CRLF 換行提示，未發現 whitespace error。
+
+[2026-06-09] 檢查：搜尋 XRD 分析中 β-Ga2O3 晶面列表與 48.6 度晶面位置。
+[2026-06-09] 檢查：確認 XRD.tsx 中 β-Ga2O3 REFERENCE_DB 48.6 度晶面周邊資料結構。
+[2026-06-09] 實作：刪除 XRD 分析 β-Ga2O3 晶面列表中 twoTheta 48.6 度的 002 參考峰。
+
+[2026-06-09] 檢查：確認 XRD.tsx 中 β-Ga2O3 REFERENCE_DB 48.6 度晶面周邊資料結構。
+
+[2026-06-09] 檢查：確認 XRD β-Ga2O3 清單已移除 48.6 度參考峰，並檢視本次變更範圍。
+
+[2026-06-09] 檢查：開始處理 XRD 美化輸出區刻度向內、隱藏 Y 軸刻度選項與參考峰顏色修改功能，先定位 XRD.tsx 相關實作。
+
+[2026-06-09] 實作：準備修改 XRD 美化輸出區，加入 Y 軸刻度顯示控制、參考峰顏色設定，並將美化預覽刻度方向改為向內。
+
+[2026-06-09] 檢查：執行 web/frontend npm run build 驗證 XRD 美化輸出修改。
+
+[2026-06-09] 檢查：npm run build 因系統找不到 npm 無法執行，改查 node/npm/pnpm 可用性。
+
+[2026-06-09] 檢查：Get-Command node/npm/pnpm 皆無可用輸出；本機缺少前端建置工具，改以 git diff --check 檢查格式。
+
+[2026-06-09] 檢查：git diff --check 通過，僅有既有 LF/CRLF 換行提示；確認 XRD 美化輸出新增控制與刻度向內設定。
