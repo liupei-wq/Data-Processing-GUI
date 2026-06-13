@@ -7,7 +7,7 @@ import { EmptyWorkspaceState, GuidedSidebarSection, MODULE_CONTENT, StickySideba
 import { SampleBasketsButton, SampleBasketsPanel, SampleBasketsOverlayModal, type BasketFileItem, type SampleBasket } from '../components/SampleBaskets'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest, PlotPopupUpdate } from '../hooks/usePlotPopups'
-import { downloadFitReport, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData } from '../api/xas'
+import { downloadFitReport, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData, processExafs } from '../api/xas'
 import type {
   DatasetInput,
   ParsedXasFile,
@@ -547,10 +547,10 @@ function NumInput({ label, value, onChange, min, max, step = 1, disabled = false
 }
 
 function DualRangeInput({
-  label, min, max, start, end, step = 0.1, onChange, disabled = false,
+  label, min, max, start, end, step = 0.1, unit = 'eV', onChange, disabled = false,
 }: {
   label: string; min: number; max: number; start: number; end: number
-  step?: number; onChange: (next: { start: number; end: number }) => void; disabled?: boolean
+  step?: number; unit?: string; onChange: (next: { start: number; end: number }) => void; disabled?: boolean
 }) {
   const low = Math.min(start, end)
   const high = Math.max(start, end)
@@ -564,7 +564,7 @@ function DualRangeInput({
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">{label}</span>
         <span className="text-[11px] font-medium text-[var(--text-main)]">
-          {low.toFixed(1)} – {high.toFixed(1)} eV
+          {low.toFixed(1)} – {high.toFixed(1)} {unit}
         </span>
       </div>
       <div className="relative h-9">
@@ -677,6 +677,195 @@ function parseTwoColumnText(text: string, fileName: string): { name: string; x: 
   if (pairs.length < 3) return null
   pairs.sort((a, b) => a[0] - b[0])
   return { name: fileName.replace(/\.[^.]+$/, ''), x: pairs.map(p => p[0]), y: pairs.map(p => p[1]) }
+}
+
+function cropSpectrumRange(
+  x: number[],
+  y: number[],
+  start: number | null | undefined,
+  end: number | null | undefined,
+) {
+  if (x.length !== y.length) return null
+  if (start == null || end == null) return { x, y }
+  const lo = Math.min(start, end)
+  const hi = Math.max(start, end)
+  const nextX: number[] = []
+  const nextY: number[] = []
+  for (let i = 0; i < x.length; i += 1) {
+    const xi = x[i]
+    const yi = y[i]
+    if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue
+    if (xi < lo || xi > hi) continue
+    nextX.push(xi)
+    nextY.push(yi)
+  }
+  if (nextX.length < 3) return null
+  return { x: nextX, y: nextY }
+}
+
+type ExafsWindowType = 'hanning' | 'none'
+type ExafsBackendMethod = 'scipy_preview' | 'larch_autobk'
+
+interface ExafsPreviewResult {
+  method: string
+  energy: number[]
+  mu: number[]
+  mu0: number[]
+  k: number[]
+  chi: number[]
+  chiWeighted: number[]
+  r: number[]
+  ftMag: number[]
+  ftRe: number[]
+  ftIm: number[]
+  edgeStep: number
+  smoothPoints: number
+}
+
+function describeExafsMethod(method: string) {
+  if (method === 'larch_autobk_xftf') return 'Larch autobk'
+  if (method.includes('fallback')) return 'SciPy fallback'
+  if (method.includes('scipy')) return 'SciPy preview'
+  return method || '未知'
+}
+
+function interpolateLinear(xs: number[], ys: number[], xNew: number[]) {
+  if (xs.length < 2 || xs.length !== ys.length) return []
+  const out: number[] = []
+  let j = 0
+  for (const x of xNew) {
+    while (j < xs.length - 2 && xs[j + 1] < x) j += 1
+    const x0 = xs[j]
+    const x1 = xs[j + 1]
+    const y0 = ys[j]
+    const y1 = ys[j + 1]
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || !Number.isFinite(y0) || !Number.isFinite(y1) || x1 === x0) {
+      out.push(Number.NaN)
+      continue
+    }
+    const t = (x - x0) / (x1 - x0)
+    out.push(y0 + (y1 - y0) * t)
+  }
+  return out
+}
+
+function movingAverage(values: number[], radius: number) {
+  const r = Math.max(1, Math.round(radius))
+  return values.map((_, index) => {
+    const start = Math.max(0, index - r)
+    const end = Math.min(values.length - 1, index + r)
+    let sum = 0
+    let count = 0
+    for (let i = start; i <= end; i += 1) {
+      const v = values[i]
+      if (Number.isFinite(v)) {
+        sum += v
+        count += 1
+      }
+    }
+    return count > 0 ? sum / count : values[index]
+  })
+}
+
+function estimateE0ByDerivative(x: number[], y: number[]) {
+  if (x.length !== y.length || x.length < 3) return null
+  let bestE: number | null = null
+  let bestSlope = -Infinity
+  for (let i = 1; i < x.length; i += 1) {
+    const dx = x[i] - x[i - 1]
+    const dy = y[i] - y[i - 1]
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.abs(dx) < 1e-12) continue
+    const slope = dy / dx
+    if (Number.isFinite(slope) && slope > bestSlope) {
+      bestSlope = slope
+      bestE = (x[i] + x[i - 1]) / 2
+    }
+  }
+  return bestE
+}
+
+function buildExafsPreview(
+  x: number[],
+  y: number[],
+  e0: number,
+  kMin: number,
+  kMax: number,
+  kWeight: number,
+  rbkg: number,
+  windowType: ExafsWindowType,
+  rMax: number,
+): ExafsPreviewResult | null {
+  if (x.length !== y.length || x.length < 8 || !Number.isFinite(e0)) return null
+  const pairs = x
+    .map((energy, index) => ({ energy, mu: y[index] }))
+    .filter(point => Number.isFinite(point.energy) && Number.isFinite(point.mu) && point.energy > e0)
+    .map(point => ({
+      ...point,
+      k: Math.sqrt(Math.max(point.energy - e0, 0) / 3.80998212),
+    }))
+    .filter(point => Number.isFinite(point.k) && point.k >= Math.min(kMin, kMax) && point.k <= Math.max(kMin, kMax))
+    .sort((a, b) => a.k - b.k)
+
+  if (pairs.length < 16) return null
+  const kLo = pairs[0].k
+  const kHi = pairs[pairs.length - 1].k
+  if (!Number.isFinite(kLo) || !Number.isFinite(kHi) || kHi <= kLo) return null
+
+  const targetCount = clamp(Math.round((kHi - kLo) / 0.035), 160, 900)
+  const dk = (kHi - kLo) / Math.max(targetCount - 1, 1)
+  const kGrid = Array.from({ length: targetCount }, (_, i) => kLo + i * dk)
+  const sourceK = pairs.map(p => p.k)
+  const sourceMu = pairs.map(p => p.mu)
+  const mu = interpolateLinear(sourceK, sourceMu, kGrid)
+  if (mu.filter(Number.isFinite).length < 16) return null
+
+  const smoothPoints = clamp(Math.round((Math.max(rbkg, 0.2) * 10) / Math.max(dk, 1e-6)), 5, Math.max(5, Math.floor(targetCount / 3)))
+  const mu0 = movingAverage(mu, smoothPoints)
+  const finiteMu = mu.filter(Number.isFinite)
+  const muSpan = Math.max(...finiteMu) - Math.min(...finiteMu)
+  const edgeStep = Math.max(Math.abs(muSpan), 1e-9)
+  const chi = mu.map((value, index) => (value - mu0[index]) / edgeStep)
+  const chiWeighted = chi.map((value, index) => value * Math.pow(kGrid[index], kWeight))
+  const window = kGrid.map((_, index) => {
+    if (windowType === 'none') return 1
+    if (targetCount <= 1) return 1
+    return 0.5 * (1 - Math.cos((2 * Math.PI * index) / (targetCount - 1)))
+  })
+  const rStep = 0.02
+  const rCount = Math.max(2, Math.round(Math.max(rMax, 1) / rStep) + 1)
+  const r = Array.from({ length: rCount }, (_, i) => i * rStep)
+  const ftRe: number[] = []
+  const ftIm: number[] = []
+  const ftMag: number[] = []
+  for (const rv of r) {
+    let re = 0
+    let im = 0
+    for (let i = 0; i < kGrid.length; i += 1) {
+      const amp = chiWeighted[i] * window[i]
+      const phase = 2 * kGrid[i] * rv
+      re += amp * Math.cos(phase) * dk
+      im += amp * Math.sin(phase) * dk
+    }
+    ftRe.push(re)
+    ftIm.push(im)
+    ftMag.push(Math.hypot(re, im))
+  }
+
+  return {
+    method: 'frontend_preview_legacy',
+    energy: kGrid.map(k => e0 + 3.80998212 * k ** 2),
+    mu,
+    mu0,
+    k: kGrid,
+    chi,
+    chiWeighted,
+    r,
+    ftMag,
+    ftRe,
+    ftIm,
+    edgeStep,
+    smoothPoints,
+  }
 }
 
 // ── CBM/VBM linear extrapolation helpers ──────────────────────────────────────
@@ -1006,8 +1195,28 @@ export default function XAS({
   const [showResultFitRange, setShowResultFitRange] = useState(true)
   const [zoomResultToSelection, setZoomResultToSelection] = useState(false)
 
+  // ── XAS sub modes ─────────────────────────────────────────────────────────
+  const [xasMode, setXasMode] = useState<'xas' | 'exafs' | 'conduction_band'>('xas')
+  const [exafsDataSource, setExafsDataSource] = useState<'pipeline' | 'imported'>('pipeline')
+  const [exafsChannel, setExafsChannel] = useState<'TEY' | 'TFY'>('TEY')
+  const [exafsAutoE0, setExafsAutoE0] = useState(true)
+  const [exafsE0, setExafsE0] = useState<number>(0)
+  const [exafsKMin, setExafsKMin] = useState<number>(2)
+  const [exafsKMax, setExafsKMax] = useState<number>(10)
+  const [exafsKWeight, setExafsKWeight] = useState<number>(2)
+  const [exafsRbkg, setExafsRbkg] = useState<number>(1)
+  const [exafsBackendMethod, setExafsBackendMethod] = useState<ExafsBackendMethod>('scipy_preview')
+  const [exafsWindow, setExafsWindow] = useState<ExafsWindowType>('hanning')
+  const [exafsRMax, setExafsRMax] = useState<number>(6)
+  const [exafsPreview, setExafsPreview] = useState<ExafsPreviewResult | null>(null)
+  const [exafsLoading, setExafsLoading] = useState(false)
+  const [exafsError, setExafsError] = useState<string | null>(null)
+  const [exafsWarnings, setExafsWarnings] = useState<string[]>([])
+  const [exafsProcessingLog, setExafsProcessingLog] = useState<string[]>([])
+  const [importedExafsDataset, setImportedExafsDataset] = useState<{ x: number[]; y: number[]; name: string } | null>(null)
+  const [importedExafsError, setImportedExafsError] = useState<string | null>(null)
+
   // ── Conduction Band mode ──────────────────────────────────────────────────
-  const [xasMode, setXasMode] = useState<'xas' | 'conduction_band'>('xas')
   const [cbmChannel, setCbmChannel] = useState<'TEY' | 'TFY'>('TEY')
   const [cbmDataSource, setCbmDataSource] = useState<'pipeline' | 'imported'>('pipeline')
   const [importedCbmDataset, setImportedCbmDataset] = useState<{ x: number[]; y: number[]; name: string } | null>(null)
@@ -1016,8 +1225,12 @@ export default function XAS({
   const [cbmEdgeHi, setCbmEdgeHi] = useState<number>(0)
   const [cbmBaselineLo, setCbmBaselineLo] = useState<number>(0)
   const [cbmBaselineHi, setCbmBaselineHi] = useState<number>(0)
+  const [cbmValidRangeEnabled, setCbmValidRangeEnabled] = useState(false)
+  const [cbmValidLo, setCbmValidLo] = useState<number>(0)
+  const [cbmValidHi, setCbmValidHi] = useState<number>(0)
   const [showCbmExportPreview, setShowCbmExportPreview] = useState(false)
   const cbmRangeInitKeyRef = useRef<string | null>(null)
+  const cbmValidRangeInitKeyRef = useRef<string | null>(null)
 
 
   const setStepOpen = (step: number, next: boolean) => {
@@ -1310,6 +1523,109 @@ export default function XAS({
     return Math.max(...fitEffective.y.map(v => Number.isFinite(v) ? Math.abs(v) : 0), 1)
   }, [fitEffective])
 
+  const exafsInput = useMemo((): { x: number[]; y: number[]; name: string } | null => {
+    if (exafsDataSource === 'imported') {
+      return importedExafsDataset
+    }
+    if (!activeDataset) return null
+    const flattened = normView === 'flattened' && params.norm_method === 'athena_norm'
+    const y = exafsChannel === 'TEY'
+      ? (flattened && activeDataset.tey_flattened ? activeDataset.tey_flattened : activeDataset.tey_processed)
+      : (flattened && activeDataset.tfy_flattened ? activeDataset.tfy_flattened : activeDataset.tfy_processed)
+    if (!y || y.length === 0) return null
+    return { x: activeDataset.x, y, name: activeDataset.name ?? 'pipeline' }
+  }, [activeDataset, exafsChannel, exafsDataSource, importedExafsDataset, normView, params.norm_method])
+
+  const exafsSuggestedE0 = useMemo(() => {
+    if (!exafsInput) return null
+    return estimateE0ByDerivative(exafsInput.x, exafsInput.y)
+  }, [exafsInput])
+
+  const exafsKBounds = useMemo(() => {
+    if (!exafsInput || !Number.isFinite(exafsE0)) return { min: 0, max: 12 }
+    const maxEnergy = Math.max(...exafsInput.x.filter(Number.isFinite))
+    const maxK = Math.sqrt(Math.max(maxEnergy - exafsE0, 0) / 3.80998212)
+    return { min: 0, max: Math.max(1, Math.min(20, Number.isFinite(maxK) ? maxK : 12)) }
+  }, [exafsE0, exafsInput])
+
+  useEffect(() => {
+    if (!exafsAutoE0 || exafsSuggestedE0 == null) return
+    setExafsE0(Number(exafsSuggestedE0.toFixed(3)))
+  }, [exafsAutoE0, exafsSuggestedE0])
+
+  useEffect(() => {
+    if (!exafsInput || !Number.isFinite(exafsE0)) {
+      setExafsPreview(null)
+      setExafsError(null)
+      setExafsWarnings([])
+      setExafsProcessingLog([])
+      return
+    }
+    let cancelled = false
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      setExafsLoading(true)
+      setExafsError(null)
+      void processExafs({
+        energy: exafsInput.x,
+        mu: exafsInput.y,
+        e0: exafsE0,
+        k_min: exafsKMin,
+        k_max: exafsKMax,
+        k_weight: exafsKWeight,
+        rbkg: exafsRbkg,
+        window: exafsWindow,
+        r_max: exafsRMax,
+        edge_step: params.norm_method === 'none' ? null : 1,
+        backend_method: exafsBackendMethod,
+      }, controller.signal)
+        .then(res => {
+          if (cancelled) return
+          setExafsPreview({
+            method: res.method,
+            energy: res.energy,
+            mu: res.mu,
+            mu0: res.mu0,
+            k: res.k,
+            chi: res.chi,
+            chiWeighted: res.chi_weighted,
+            r: res.r,
+            ftMag: res.ft_mag,
+            ftRe: res.ft_re,
+            ftIm: res.ft_im,
+            edgeStep: res.edge_step,
+            smoothPoints: res.smooth_points,
+          })
+          setExafsWarnings(res.warnings ?? [])
+          setExafsProcessingLog([
+            `Source: ${exafsInput.name}`,
+            `Data source: ${exafsDataSource === 'imported' ? 'imported processed μ(E)' : 'current XANES pipeline'}`,
+            `Channel: ${exafsDataSource === 'imported' ? 'N/A' : exafsChannel}`,
+            `Requested backend: ${exafsBackendMethod === 'larch_autobk' ? 'Larch autobk' : 'SciPy preview'}`,
+            `Actual method: ${describeExafsMethod(res.method)} (${res.method})`,
+            `Input: ${exafsDataSource === 'imported' ? 'imported two-column μ(E)' : 'processed μ(E) from current XANES pipeline'}`,
+            `Normalization method: ${exafsDataSource === 'imported' ? 'external / imported' : params.norm_method}`,
+            ...res.log,
+          ])
+        })
+        .catch(err => {
+          if (cancelled || (err as Error).name === 'AbortError') return
+          setExafsPreview(null)
+          setExafsWarnings([])
+          setExafsProcessingLog([])
+          setExafsError((err as Error).message)
+        })
+        .finally(() => {
+          if (!cancelled) setExafsLoading(false)
+        })
+    }, 220)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [exafsBackendMethod, exafsChannel, exafsDataSource, exafsE0, exafsInput, exafsKMax, exafsKMin, exafsKWeight, exafsRbkg, exafsRMax, exafsWindow, params.norm_method])
+
   const loadSampleEdgePeaks = useCallback(async () => {
     if (!selectedSample || !selectedEdge || !fitEffective) return
     setSamplesLoading(true); setFitError(null)
@@ -1589,14 +1905,29 @@ export default function XAS({
     [cbmDataSource, importedCbmDataset, cbmPipelineRaw]
   )
 
-  const effectiveCbmDataset = useMemo((): { x: number[]; y_processed: number[]; name: string } | null => {
+  const cbmRawEnergyMin = useMemo(() =>
+    effectiveCbmRaw ? Math.min(...effectiveCbmRaw.x.filter(Number.isFinite)) : energyMin
+  , [effectiveCbmRaw, energyMin])
+
+  const cbmRawEnergyMax = useMemo(() =>
+    effectiveCbmRaw ? Math.max(...effectiveCbmRaw.x.filter(Number.isFinite)) : energyMax
+  , [effectiveCbmRaw, energyMax])
+
+  const effectiveCbmValidRaw = useMemo(() => {
     if (!effectiveCbmRaw) return null
-    const y = effectiveCbmRaw.y
+    if (!cbmValidRangeEnabled) return effectiveCbmRaw
+    const cropped = cropSpectrumRange(effectiveCbmRaw.x, effectiveCbmRaw.y, cbmValidLo, cbmValidHi)
+    return cropped ? { ...cropped, name: effectiveCbmRaw.name } : null
+  }, [effectiveCbmRaw, cbmValidRangeEnabled, cbmValidLo, cbmValidHi])
+
+  const effectiveCbmDataset = useMemo((): { x: number[]; y_processed: number[]; name: string } | null => {
+    if (!effectiveCbmValidRaw) return null
+    const y = effectiveCbmValidRaw.y
     const yMin = Math.min(...y.filter(Number.isFinite))
     const yMax = Math.max(...y.filter(Number.isFinite))
     if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax === yMin) return null
-    return { x: effectiveCbmRaw.x, y_processed: y.map(v => (v - yMin) / (yMax - yMin)), name: effectiveCbmRaw.name }
-  }, [effectiveCbmRaw])
+    return { x: effectiveCbmValidRaw.x, y_processed: y.map(v => (v - yMin) / (yMax - yMin)), name: effectiveCbmValidRaw.name }
+  }, [effectiveCbmValidRaw])
 
   const effectiveCbmEnergyMin = useMemo(() =>
     effectiveCbmDataset ? Math.min(...effectiveCbmDataset.x.filter(Number.isFinite)) : energyMin
@@ -1619,6 +1950,17 @@ export default function XAS({
   const cbmPreviewCbm = useMemo(() =>
     intersectEdgeLines(cbmPreviewTangent, cbmPreviewBaselineLine)
   , [cbmPreviewTangent, cbmPreviewBaselineLine])
+
+  useEffect(() => {
+    if (!effectiveCbmRaw) return
+    const key = `${effectiveCbmRaw.name}:${effectiveCbmRaw.x[0]?.toFixed(2)}-${effectiveCbmRaw.x[effectiveCbmRaw.x.length - 1]?.toFixed(2)}`
+    if (cbmValidRangeInitKeyRef.current === key) return
+    cbmValidRangeInitKeyRef.current = key
+    const eMin = Math.min(...effectiveCbmRaw.x.filter(Number.isFinite))
+    const eMax = Math.max(...effectiveCbmRaw.x.filter(Number.isFinite))
+    setCbmValidLo(eMin)
+    setCbmValidHi(eMax)
+  }, [effectiveCbmRaw])
 
   const cbmPlotWindow = useMemo(() => {
     if (!effectiveCbmDataset) return null
@@ -2088,13 +2430,17 @@ export default function XAS({
               {/* Mode toggle */}
               <div className="px-4 py-3">
                 <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">分析模式</p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {(['xas', 'conduction_band'] as const).map(m => (
-                    <button key={m} type="button" onClick={() => setXasMode(m)}
+                <div className="grid grid-cols-3 gap-1.5">
+                  {([
+                    { value: 'xas' as const, label: 'XANES' },
+                    { value: 'exafs' as const, label: 'EXAFS' },
+                    { value: 'conduction_band' as const, label: 'CBM' },
+                  ]).map(m => (
+                    <button key={m.value} type="button" onClick={() => setXasMode(m.value)}
                       className={['rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors pressable',
-                        xasMode === m ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
+                        xasMode === m.value ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}
                     >
-                      {m === 'xas' ? 'XAS 分析' : 'Conduction Band'}
+                      {m.label}
                     </button>
                   ))}
                 </div>
@@ -2938,18 +3284,178 @@ export default function XAS({
               </Section>
               </>)}
 
+              {/* ── EXAFS mode sections ── */}
+              {xasMode === 'exafs' && (<>
+              <Section
+                step={1}
+                title="資料來源 / E0"
+                status={exafsInput ? 'on' : 'locked'}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">EXAFS 資料來源</p>
+                    <p>可以使用目前 XANES 主流程的處理後 μ(E)，也可以匯入外部已處理的兩欄 μ(E) 檔案。正規 EXAFS 流程需要先完成校正、平均、pre-edge subtraction 與 normalization，再從 μ(E) 扣掉平滑背景 μ₀(E) 得到 χ(k)。</p>
+                    <p className="text-[var(--text-soft)]">目前會送到後端用 SciPy 建立預覽版 μ₀ / χ(k) / FT；後續若要做正式定量 fitting，可把同一個 endpoint 內部換成 Larch `autobk()` / `xftf()`。</p>
+                  </div>
+                }
+              >
+                <div className="flex overflow-hidden rounded-xl border border-[var(--card-border)]">
+                  {(['pipeline', 'imported'] as const).map((source, i) => (
+                    <button key={source} type="button" onClick={() => setExafsDataSource(source)}
+                      className={['flex-1 py-1.5 text-xs font-medium transition-colors',
+                        i === 0 ? '' : 'border-l border-[var(--card-border)]',
+                        exafsDataSource === source ? 'bg-[var(--accent-soft)] text-[var(--accent-secondary)]' : 'bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}>
+                      {source === 'pipeline' ? '處理流程結果' : '匯入 μ(E)'}
+                    </button>
+                  ))}
+                </div>
+
+                {exafsDataSource === 'pipeline' && (
+                  <div className="space-y-2">
+                    <div className="flex gap-1.5">
+                      {(['TEY', 'TFY'] as const).map(ch => (
+                        <button key={ch} type="button" onClick={() => setExafsChannel(ch)}
+                          className={['flex-1 rounded-lg border px-2 py-1 text-xs font-medium transition-colors pressable',
+                            exafsChannel === ch ? 'border-[var(--accent-strong)] bg-[var(--accent-soft)] text-[var(--text-main)]' : 'border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-soft)]'].join(' ')}>
+                          {ch}
+                        </button>
+                      ))}
+                    </div>
+                    {!exafsInput && (
+                      <p className="text-[10px] text-amber-400">尚無單筆處理後光譜；請先在 XANES 模式載入資料並完成處理。</p>
+                    )}
+                  </div>
+                )}
+
+                {exafsDataSource === 'imported' && (
+                  <div className="space-y-2 text-xs">
+                    <label className="block cursor-pointer rounded-xl border-2 border-dashed border-[var(--card-border)] px-3 py-3 text-center text-[var(--text-soft)] hover:border-[var(--accent-strong)] hover:text-[var(--text-main)] transition-colors">
+                      <span>點擊上傳已處理 μ(E) TXT / CSV / DAT</span>
+                      <input type="file" className="hidden" accept=".txt,.csv,.dat,.xmu,.nor"
+                        onChange={async e => {
+                          const file = e.target.files?.[0]; if (!file) return
+                          setImportedExafsError(null)
+                          try {
+                            const text = await file.text()
+                            const parsed = parseTwoColumnText(text, file.name)
+                            if (!parsed) { setImportedExafsError('無法解析：需要至少 3 個有效數據點（兩欄數值：Energy, μ(E)）'); return }
+                            setImportedExafsDataset(parsed)
+                          } catch { setImportedExafsError('讀取檔案失敗') }
+                        }}
+                      />
+                    </label>
+                    {importedExafsError && <p className="text-rose-400">{importedExafsError}</p>}
+                    {importedExafsDataset && (
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-[var(--text-main)]">{importedExafsDataset.name}</p>
+                          <p className="text-[var(--text-soft)]">{importedExafsDataset.x.length} 點 · {Math.min(...importedExafsDataset.x).toFixed(2)}–{Math.max(...importedExafsDataset.x).toFixed(2)} eV</p>
+                        </div>
+                        <button type="button" onClick={() => { setImportedExafsDataset(null); setImportedExafsError(null) }}
+                          className="shrink-0 rounded-lg border border-rose-500/30 px-2 py-1 text-rose-400 hover:bg-rose-500/10 text-[10px]">移除</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {exafsInput && (
+                  <p className="text-[10px] text-[var(--text-soft)]">
+                    {exafsInput.name} · {exafsInput.x.length} pts · {exafsInput.x[0]?.toFixed(1)}–{exafsInput.x[exafsInput.x.length - 1]?.toFixed(1)} eV
+                  </p>
+                )}
+                {exafsDataSource === 'pipeline' && params.norm_method === 'none' && (
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                    EXAFS 建議先在 XANES 模式完成歸一化；目前輸入可能仍是未歸一化的處理後光譜。
+                  </div>
+                )}
+                <TogglePill label="自動偵測 E0（導數最大值）" checked={exafsAutoE0} onChange={setExafsAutoE0} />
+                <NumInput label="E0 (eV)" value={exafsE0} onChange={setExafsE0} step={0.1} disabled={exafsAutoE0} />
+                {exafsSuggestedE0 != null && (
+                  <p className="text-[10px] text-[var(--text-soft)]">導數建議 E0：{exafsSuggestedE0.toFixed(3)} eV</p>
+                )}
+              </Section>
+
+              <Section
+                step={2}
+                title="χ(k) 背景扣除"
+                defaultOpen={true}
+                status={exafsPreview ? 'on' : 'off'}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">χ(k)</p>
+                    <p>先把 E 轉成 photoelectron wave number k，再從 μ(E) 扣掉平滑背景 μ₀(E)，得到 χ(k)。這裡的 Rbkg 會控制預覽版 μ₀ 的平滑寬度，數值越大，背景越平滑。</p>
+                  </div>
+                }
+              >
+                <SelectInput
+                  label="後端方法"
+                  value={exafsBackendMethod}
+                  onChange={v => setExafsBackendMethod(v as ExafsBackendMethod)}
+                  options={[
+                    { value: 'scipy_preview', label: 'SciPy preview（穩定預設）' },
+                    { value: 'larch_autobk', label: 'Larch autobk / xftf（若已安裝）' },
+                  ]}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="k min (Å⁻¹)" value={exafsKMin} onChange={setExafsKMin} step={0.1} min={0} />
+                  <NumInput label="k max (Å⁻¹)" value={exafsKMax} onChange={setExafsKMax} step={0.1} min={0.2} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="Rbkg (Å)" value={exafsRbkg} onChange={setExafsRbkg} step={0.1} min={0.2} />
+                  <NumInput label="k-weight" value={exafsKWeight} onChange={v => setExafsKWeight(clamp(Math.round(v), 0, 3))} step={1} min={0} max={3} />
+                </div>
+                {exafsLoading && (
+                  <p className="text-[10px] text-[var(--accent-secondary)]">後端正在更新 χ(k) / FT 預覽…</p>
+                )}
+                {!exafsLoading && !exafsPreview && exafsInput && (
+                  <p className="text-[10px] text-amber-400">目前 E0 或 k 範圍內有效點數不足，請調整 E0 / k range。</p>
+                )}
+                {exafsError && <p className="text-[10px] text-rose-400">{exafsError}</p>}
+              </Section>
+
+              <Section
+                step={3}
+                title="Fourier Transform"
+                defaultOpen={false}
+                status={exafsPreview ? 'on' : 'locked'}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">FT χ(R)</p>
+                    <p>FT 的輸入是 k-weighted χ(k)，不是 raw data，也不是單純 normalized XANES。R-space peak 尚未做 phase correction，因此只能作為殼層趨勢預覽，不能直接當成實際鍵長。</p>
+                  </div>
+                }
+              >
+                <SelectInput
+                  label="FT window"
+                  value={exafsWindow}
+                  onChange={v => setExafsWindow(v as ExafsWindowType)}
+                  options={[
+                    { value: 'hanning', label: 'Hanning' },
+                    { value: 'none', label: 'None' },
+                  ]}
+                />
+                <NumInput label="R max (Å)" value={exafsRMax} onChange={setExafsRMax} step={0.5} min={1} />
+                {exafsPreview && (
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-[11px] text-[var(--text-soft)]">
+                    後端已建立 χ(k) 與 FT 預覽；μ₀ 平滑視窗約 {exafsPreview.smoothPoints} 點。
+                  </div>
+                )}
+              </Section>
+              </>)}
+
               {/* ── Conduction Band mode sections ── */}
               {xasMode === 'conduction_band' && (<>
 
-              {/* CBM Step 1: 資料來源與歸一化 */}
+              {/* CBM Step 1: 資料來源 */}
               <Section
                 step={1}
-                title="資料來源 / 歸一化"
-                status={effectiveCbmDataset ? 'on' : 'off'}
+                title="資料來源"
+                status={effectiveCbmRaw ? 'on' : 'off'}
                 infoContent={
                   <div className="space-y-3">
                     <p className="font-semibold text-[var(--text-main)]">資料來源</p>
                     <p>CBM 模式可以用兩種來源：① 主 XAS 處理流程跑完的 TEY / TFY 光譜（最常用，會跟主流程即時連動）；② 已處理過、來自外部軟體（如 Athena）的雙欄 TXT/CSV 檔（純檢查用，不依賴主流程）。</p>
+                    <p className="font-semibold text-[var(--text-main)]">後續處理順序</p>
+                    <p>載入資料後，系統會先套用你設定的「有效數據範圍」，只保留需要的 energy 區段，再對保留區段做 Min-Max 歸一化，最後進入 CBM 線性外推。</p>
                     <p className="font-semibold text-[var(--text-main)]">Min-Max 歸一化</p>
                     <p>套用公式 <code>y_norm = (y − min) / (max − min)</code> 把光譜映射到 [0, 1]。對 XAS CBM 線性外推來說，歸一化是必要前處理：</p>
                     <div className="space-y-2 text-sm">
@@ -3010,6 +3516,7 @@ export default function XAS({
                             if (!parsed) { setImportedCbmError('無法解析：需要至少 3 個有效數據點（兩欄數值）'); return }
                             setImportedCbmDataset(parsed)
                             cbmRangeInitKeyRef.current = null
+                            cbmValidRangeInitKeyRef.current = null
                           } catch { setImportedCbmError('讀取檔案失敗') }
                         }}
                       />
@@ -3021,7 +3528,7 @@ export default function XAS({
                           <p className="font-medium text-[var(--text-main)]">{importedCbmDataset.name}</p>
                           <p className="text-[var(--text-soft)]">{importedCbmDataset.x.length} 點 · {Math.min(...importedCbmDataset.x).toFixed(2)}–{Math.max(...importedCbmDataset.x).toFixed(2)} eV</p>
                         </div>
-                        <button type="button" onClick={() => { setImportedCbmDataset(null); cbmRangeInitKeyRef.current = null }}
+                        <button type="button" onClick={() => { setImportedCbmDataset(null); cbmRangeInitKeyRef.current = null; cbmValidRangeInitKeyRef.current = null }}
                           className="shrink-0 rounded-lg border border-rose-500/30 px-2 py-1 text-rose-400 hover:bg-rose-500/10 text-[10px]">移除</button>
                       </div>
                     )}
@@ -3030,15 +3537,50 @@ export default function XAS({
 
                 {effectiveCbmDataset && (
                   <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs">
-                    <p className="font-semibold text-emerald-400">Min-Max 歸一化已套用</p>
-                    <p className="mt-0.5 text-[var(--text-soft)]">y → (y − min) / (max − min)，數值已映射至 [0, 1]</p>
+                    <p className="font-semibold text-emerald-400">{cbmValidRangeEnabled ? '有效數據範圍 + Min-Max 歸一化已套用' : 'Min-Max 歸一化已套用'}</p>
+                    <p className="mt-0.5 text-[var(--text-soft)]">
+                      {cbmValidRangeEnabled
+                        ? `先裁切 ${Math.min(cbmValidLo, cbmValidHi).toFixed(2)}–${Math.max(cbmValidLo, cbmValidHi).toFixed(2)} eV，再做 y → (y − min) / (max − min)。`
+                        : 'y → (y − min) / (max − min)，數值已映射至 [0, 1]'}
+                    </p>
                   </div>
                 )}
               </Section>
 
-              {/* CBM Step 2: CBM 線性外推 */}
               <Section
                 step={2}
+                title="有效數據範圍"
+                defaultOpen={false}
+                status={!effectiveCbmRaw ? 'locked' : (cbmValidRangeEnabled ? 'on' : 'off')}
+                infoContent={
+                  <div className="space-y-3">
+                    <p className="font-semibold text-[var(--text-main)]">有效數據範圍</p>
+                    <p>這一步會先在 CBM 模式裁切光譜，只保留你指定的 energy 區段，再把裁切後的光譜送去做 Min-Max 歸一化與 CBM 外推。這樣可以避開遠端雜訊、平台尾巴或不想納入的額外結構。</p>
+                  </div>
+                }
+              >
+                <TogglePill label="啟用有效數據範圍" checked={cbmValidRangeEnabled} onChange={setCbmValidRangeEnabled} />
+                {cbmValidRangeEnabled && effectiveCbmRaw && (
+                  <>
+                    <DualRangeInput
+                      label="有效數據範圍"
+                      min={cbmRawEnergyMin}
+                      max={cbmRawEnergyMax}
+                      start={cbmValidLo}
+                      end={cbmValidHi}
+                      onChange={({ start, end }) => { setCbmValidLo(start); setCbmValidHi(end) }}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumInput label="起始 (eV)" value={cbmValidLo} onChange={v => setCbmValidLo(clamp(v ?? cbmRawEnergyMin, cbmRawEnergyMin, cbmRawEnergyMax))} step={0.1} />
+                      <NumInput label="結束 (eV)" value={cbmValidHi} onChange={v => setCbmValidHi(clamp(v ?? cbmRawEnergyMax, cbmRawEnergyMin, cbmRawEnergyMax))} step={0.1} />
+                    </div>
+                  </>
+                )}
+              </Section>
+
+              {/* CBM Step 3: CBM 線性外推 */}
+              <Section
+                step={3}
                 title="CBM 線性外推"
                 defaultOpen={true}
                 status={!effectiveCbmDataset ? 'locked' : (cbmPreviewCbm !== null ? 'on' : 'off')}
@@ -3132,7 +3674,7 @@ export default function XAS({
         )}
 
         {/* empty state */}
-        {!result && !isLoading && !(fitDataSource === 'imported' && importedFitDataset) && (
+        {xasMode === 'xas' && !result && !isLoading && !(fitDataSource === 'imported' && importedFitDataset) && (
           <EmptyWorkspaceState
             module="xas"
             title={moduleContent.uploadTitle}
@@ -3142,7 +3684,7 @@ export default function XAS({
         )}
 
         {/* Pre-fit preview — shows data + seed Gaussians + range before executing fit */}
-        {hasFitTarget && !fitResult && fitEffective && (
+        {xasMode === 'xas' && hasFitTarget && !fitResult && fitEffective && (
           <div className="mb-4 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
             <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
               <p className="text-sm font-semibold text-[var(--text-main)]">擬合預覽 — {fitEffective.name}</p>
@@ -3196,7 +3738,7 @@ export default function XAS({
           </div>
         )}
 
-        {result && (activeDataset != null || overlayDatasets.length > 0) && (
+        {xasMode === 'xas' && result && (activeDataset != null || overlayDatasets.length > 0) && (
           <>
             {/* summary cards */}
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
@@ -3530,7 +4072,7 @@ export default function XAS({
         )}
 
         {/* Peak fitting result — shown in both pipeline and imported mode */}
-        {fitResult && fitEffective && (() => {
+        {xasMode === 'xas' && fitResult && fitEffective && (() => {
           const fEff = fitEffective
           const r2 = fitResult.r_squared ?? 0
           const rmse = fitResult.rmse ?? 0
@@ -3683,6 +4225,282 @@ export default function XAS({
           )
         })()}
 
+        {/* ── EXAFS main content ── */}
+        {xasMode === 'exafs' && (
+          <div className="space-y-4">
+            {!exafsInput && (
+              <EmptyWorkspaceState
+                module="xas"
+                title={exafsDataSource === 'imported' ? '請先匯入已處理 μ(E)' : '請先建立 XANES 處理後光譜'}
+                description={exafsDataSource === 'imported'
+                  ? '左側可匯入兩欄 Energy / μ(E) 的 TXT、CSV、DAT、XMU 或 NOR 檔，匯入後會送到後端建立 χ(k) 與 FT 預覽。'
+                  : 'EXAFS 會使用目前 XANES 主流程的處理後 μ(E)。請先載入資料、完成必要校正與歸一化，再切回 EXAFS 檢查 χ(k) 與 FT。'}
+                formats={exafsDataSource === 'imported' ? ['.TXT', '.CSV', '.DAT', '.XMU', '.NOR'] : []}
+              />
+            )}
+
+            {exafsDataSource === 'pipeline' && exafsInput && params.norm_method === 'none' && (
+              <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                EXAFS 正常流程建議使用歸一化後 μ(E)。目前 XANES 歸一化尚未啟用，圖形可作為介面預覽，但不建議拿來做正式判讀。
+              </div>
+            )}
+
+            {exafsInput && exafsLoading && (
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="text-sm font-semibold text-[var(--text-main)]">EXAFS 後端處理中…</p>
+                <p className="mt-1 text-xs text-[var(--text-soft)]">正在依目前 E0、k range、Rbkg 與 FT 參數重新建立 χ(k) / χ(R)。</p>
+              </div>
+            )}
+
+            {exafsInput && exafsError && (
+              <div className="rounded-xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+                {exafsError}
+              </div>
+            )}
+
+            {exafsInput && !exafsLoading && !exafsPreview && (
+              <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                <p className="text-sm font-semibold text-[var(--text-main)]">EXAFS 預覽尚未建立</p>
+                <p className="mt-1 text-xs text-[var(--text-soft)]">請確認 E0 位於光譜範圍內，且 k min / k max 範圍內至少有足夠的 post-edge 資料點。</p>
+              </div>
+            )}
+
+            {exafsInput && exafsPreview && (
+              <>
+                {exafsWarnings.length > 0 && (
+                  <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                    {exafsWarnings.join('；')}
+                  </div>
+                )}
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="analysis-metric-card px-4 py-3">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">來源</p>
+                    <p className="mt-1 truncate text-sm font-semibold text-[var(--text-main)]" title={exafsInput.name}>{exafsInput.name}</p>
+                  </div>
+                  <div className="analysis-metric-card px-4 py-3">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">方法</p>
+                    <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{describeExafsMethod(exafsPreview.method)}</p>
+                    <p className="mt-1 truncate text-[11px] text-[var(--text-soft)]" title={exafsPreview.method}>
+                      requested {exafsBackendMethod === 'larch_autobk' ? 'Larch' : 'SciPy'}
+                    </p>
+                  </div>
+                  <div className="analysis-metric-card px-4 py-3">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">E0</p>
+                    <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{exafsE0.toFixed(3)} eV</p>
+                  </div>
+                  <div className="analysis-metric-card px-4 py-3">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-soft)]">k range</p>
+                    <p className="mt-1 text-sm font-semibold text-[var(--text-main)]">{Math.min(exafsKMin, exafsKMax).toFixed(1)}–{Math.max(exafsKMin, exafsKMax).toFixed(1)} Å⁻¹</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                    <div className="mb-2">
+                      <p className="text-sm font-semibold text-[var(--text-main)]">μ(E) 與 μ₀(E) 預覽</p>
+                      <p className="mt-1 text-xs text-[var(--text-soft)]">青色為輸入 μ(E)，橘色為平滑背景 μ₀(E)。這是前端預覽版背景，不等同正式 `autobk()`。</p>
+                    </div>
+                    <Plot
+                      data={[
+                        { x: exafsPreview.energy, y: exafsPreview.mu, type: 'scatter', mode: 'lines', name: `μ(E) ${exafsChannel}`, line: { color: '#38bdf8', width: 1.8 } },
+                        { x: exafsPreview.energy, y: exafsPreview.mu0, type: 'scatter', mode: 'lines', name: 'μ₀(E) preview', line: { color: '#f97316', width: 1.8, dash: 'dash' as const } },
+                      ] as Plotly.Data[]}
+                      layout={chartLayout('Energy (eV)', 'μ(E)') as Plotly.Layout}
+                      config={withPlotFullscreen()}
+                      style={{ width: '100%', height: 330 }}
+                    />
+                  </div>
+
+                  <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                    <div className="mb-2">
+                      <p className="text-sm font-semibold text-[var(--text-main)]">χ(k) / k-weighted χ(k)</p>
+                      <p className="mt-1 text-xs text-[var(--text-soft)]">左軸顯示 χ(k)，右軸顯示 k^{exafsKWeight}χ(k)。</p>
+                    </div>
+                    <Plot
+                      data={[
+                        { x: exafsPreview.k, y: exafsPreview.chi, type: 'scatter', mode: 'lines', name: 'χ(k)', line: { color: '#34d399', width: 1.7 } },
+                        { x: exafsPreview.k, y: exafsPreview.chiWeighted, type: 'scatter', mode: 'lines', name: `k^${exafsKWeight}χ(k)`, yaxis: 'y2' as const, line: { color: '#a78bfa', width: 1.8 } },
+                      ] as Plotly.Data[]}
+                      layout={{
+                        ...(chartLayout('k (Å⁻¹)', 'χ(k)') as Plotly.Layout),
+                        yaxis2: {
+                          overlaying: 'y' as const,
+                          side: 'right' as const,
+                          showgrid: false,
+                          zeroline: false,
+                          title: { text: `k^${exafsKWeight}χ(k)` },
+                          color: '#a78bfa',
+                        },
+                      }}
+                      config={withPlotFullscreen()}
+                      style={{ width: '100%', height: 330 }}
+                    />
+                    <div className="mt-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                      <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">k 取量範圍</p>
+                      <DualRangeInput
+                        label=""
+                        min={exafsKBounds.min}
+                        max={exafsKBounds.max}
+                        start={exafsKMin}
+                        end={exafsKMax}
+                        step={0.1}
+                        unit="Å⁻¹"
+                        onChange={({ start, end }) => {
+                          setExafsKMin(clamp(start, exafsKBounds.min, exafsKBounds.max))
+                          setExafsKMax(clamp(end, exafsKBounds.min, exafsKBounds.max))
+                        }}
+                      />
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <NumInput label="k min (Å⁻¹)" value={exafsKMin} onChange={v => setExafsKMin(clamp(v, exafsKBounds.min, exafsKBounds.max))} step={0.1} min={exafsKBounds.min} max={exafsKBounds.max} />
+                        <NumInput label="k max (Å⁻¹)" value={exafsKMax} onChange={v => setExafsKMax(clamp(v, exafsKBounds.min, exafsKBounds.max))} step={0.1} min={exafsKBounds.min} max={exafsKBounds.max} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4 shadow-[var(--card-shadow-soft)]">
+                  <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-[var(--text-main)]">Fourier Transform：χ(R)</p>
+                      <p className="mt-1 text-xs text-[var(--text-soft)]">Magnitude / Real / Imaginary 都一起顯示；R-space peak 未做 phase correction，請先看趨勢，不直接當鍵長。</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const safeName = exafsInput.name.replace(/[^a-zA-Z0-9_\-.]/g, '_').replace(/_+/g, '_').slice(0, 42)
+                          const header = [
+                            `# Nigiro Pro XAS EXAFS chi(k) preview`,
+                            `# Sample: ${exafsInput.name}`,
+                            `# Data source: ${exafsDataSource === 'imported' ? 'imported processed mu(E)' : `pipeline ${exafsChannel}`}`,
+                            `# Method: ${describeExafsMethod(exafsPreview.method)} (${exafsPreview.method})`,
+                            `# E0: ${exafsE0.toFixed(6)} eV`,
+                            `# k range: ${Math.min(exafsKMin, exafsKMax).toFixed(3)} - ${Math.max(exafsKMin, exafsKMax).toFixed(3)} A^-1`,
+                            `# k-weight: ${exafsKWeight}`,
+                            `# Rbkg preview: ${exafsRbkg.toFixed(3)} A`,
+                            `# FT window: ${exafsWindow}`,
+                            `# Columns: k_A^-1 energy_eV mu mu0_preview chi_k k${exafsKWeight}_chi_k`,
+                            ['k_A^-1', 'energy_eV', 'mu', 'mu0_preview', 'chi_k', `k${exafsKWeight}_chi_k`].join('\t'),
+                          ]
+                          const rows = exafsPreview.k.map((kValue, index) => [
+                            kValue,
+                            exafsPreview.energy[index],
+                            exafsPreview.mu[index],
+                            exafsPreview.mu0[index],
+                            exafsPreview.chi[index],
+                            exafsPreview.chiWeighted[index],
+                          ].map(v => Number.isFinite(v) ? Number(v).toPrecision(10) : 'NaN').join('\t'))
+                          downloadFile([...header, ...rows].join('\n'), `xas_exafs_chi_${safeName}.txt`, 'text/plain')
+                        }}
+                        className="rounded-full border border-[var(--accent-secondary)] px-4 py-1.5 text-[12px] font-semibold text-[var(--accent-secondary)] transition-colors hover:bg-[var(--accent-soft)] pressable"
+                      >
+                        ↓ χ(k) TXT
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const safeName = exafsInput.name.replace(/[^a-zA-Z0-9_\-.]/g, '_').replace(/_+/g, '_').slice(0, 42)
+                          const header = [
+                            `# Nigiro Pro XAS EXAFS FT preview`,
+                            `# Sample: ${exafsInput.name}`,
+                            `# Data source: ${exafsDataSource === 'imported' ? 'imported processed mu(E)' : `pipeline ${exafsChannel}`}`,
+                            `# Method: ${describeExafsMethod(exafsPreview.method)} (${exafsPreview.method})`,
+                            `# E0: ${exafsE0.toFixed(6)} eV`,
+                            `# k range: ${Math.min(exafsKMin, exafsKMax).toFixed(3)} - ${Math.max(exafsKMin, exafsKMax).toFixed(3)} A^-1`,
+                            `# k-weight: ${exafsKWeight}`,
+                            `# FT window: ${exafsWindow}`,
+                            `# Columns: R_A FT_magnitude FT_real FT_imaginary`,
+                            ['R_A', 'FT_magnitude', 'FT_real', 'FT_imaginary'].join('\t'),
+                          ]
+                          const rows = exafsPreview.r.map((rValue, index) => [
+                            rValue,
+                            exafsPreview.ftMag[index],
+                            exafsPreview.ftRe[index],
+                            exafsPreview.ftIm[index],
+                          ].map(v => Number.isFinite(v) ? Number(v).toPrecision(10) : 'NaN').join('\t'))
+                          downloadFile([...header, ...rows].join('\n'), `xas_exafs_ft_${safeName}.txt`, 'text/plain')
+                        }}
+                        className="rounded-full border border-[var(--card-border)] px-4 py-1.5 text-[12px] font-semibold text-[var(--text-main)] transition-colors hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] pressable"
+                      >
+                        ↓ FT TXT
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rows = exafsPreview.k.map((kValue, index) => [
+                            kValue,
+                            exafsPreview.energy[index],
+                            exafsPreview.mu[index],
+                            exafsPreview.mu0[index],
+                            exafsPreview.chi[index],
+                            exafsPreview.chiWeighted[index],
+                          ])
+                          downloadFile(toCsv(['k_A^-1', 'energy_eV', 'mu', 'mu0_preview', 'chi_k', `k${exafsKWeight}_chi_k`], rows), 'xas_exafs_chi_preview.csv', 'text/csv')
+                        }}
+                        className="rounded-full border border-[var(--card-border)] px-4 py-1.5 text-[12px] font-semibold text-[var(--text-soft)] transition-colors hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] pressable"
+                      >
+                        ↓ CSV
+                      </button>
+                    </div>
+                  </div>
+                  <Plot
+                    data={[
+                      { x: exafsPreview.r, y: exafsPreview.ftMag, type: 'scatter', mode: 'lines', name: '|χ(R)|', line: { color: '#38bdf8', width: 2.1 } },
+                      { x: exafsPreview.r, y: exafsPreview.ftRe, type: 'scatter', mode: 'lines', name: 'Re[χ(R)]', line: { color: '#f97316', width: 1.5, dash: 'dash' as const } },
+                      { x: exafsPreview.r, y: exafsPreview.ftIm, type: 'scatter', mode: 'lines', name: 'Im[χ(R)]', line: { color: '#34d399', width: 1.5, dash: 'dot' as const } },
+                    ] as Plotly.Data[]}
+                    layout={chartLayout('R (Å)', 'FT amplitude') as Plotly.Layout}
+                    config={withPlotFullscreen()}
+                    style={{ width: '100%', height: 360 }}
+                  />
+                  <div className="mt-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">R 顯示範圍 / FT 上限</p>
+                      <span className="text-[11px] font-medium text-[var(--text-main)]">0.0 – {exafsRMax.toFixed(1)} Å</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={12}
+                      step={0.1}
+                      value={exafsRMax}
+                      onChange={event => setExafsRMax(clamp(Number(event.target.value), 1, 12))}
+                      className="w-full accent-[var(--accent-strong)]"
+                    />
+                    <div className="mt-2 max-w-[220px]">
+                      <NumInput label="R max (Å)" value={exafsRMax} onChange={v => setExafsRMax(clamp(v, 1, 12))} step={0.1} min={1} max={12} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-[var(--text-main)]">Processing Log</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const safeName = exafsInput.name.replace(/[^a-zA-Z0-9_\-.]/g, '_').replace(/_+/g, '_').slice(0, 42)
+                        const lines = [
+                          '# Nigiro Pro XAS EXAFS processing log',
+                          `# Exported: ${formatUtc8Iso()}`,
+                          '',
+                          ...exafsProcessingLog,
+                          ...(exafsWarnings.length > 0 ? ['', 'Warnings:', ...exafsWarnings] : []),
+                        ]
+                        downloadFile(lines.join('\n'), `xas_exafs_log_${safeName}.txt`, 'text/plain')
+                      }}
+                      className="rounded-full border border-[var(--card-border)] px-4 py-1.5 text-[12px] font-semibold text-[var(--text-main)] transition-colors hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] pressable"
+                    >
+                      ↓ Log TXT
+                    </button>
+                  </div>
+                  <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-[var(--card-border)] bg-black/20 px-3 py-3 text-xs leading-6 text-[var(--text-soft)]">{exafsProcessingLog.join('\n')}</pre>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* ── Conduction Band main content ── */}
         {xasMode === 'conduction_band' && (
           <div className="space-y-4">
@@ -3736,10 +4554,12 @@ export default function XAS({
                           yaxis: { ...(base.yaxis ?? {}), autorange: false, range: cbmPlotWindow.yAxisRange },
                         } : {}),
                         shapes: [
+                          ...(cbmValidRangeEnabled ? buildRegionShapes(Math.min(cbmValidLo, cbmValidHi), Math.max(cbmValidLo, cbmValidHi), '#38bdf8') : []),
                           ...buildRegionShapes(Math.min(cbmEdgeLo, cbmEdgeHi), Math.max(cbmEdgeLo, cbmEdgeHi), '#f97316'),
                           ...buildRegionShapes(Math.min(cbmBaselineLo, cbmBaselineHi), Math.max(cbmBaselineLo, cbmBaselineHi), '#a855f7'),
                         ] as unknown as Plotly.Shape[],
                         annotations: [
+                          ...(cbmValidRangeEnabled ? buildRegionAnnotations(Math.min(cbmValidLo, cbmValidHi), Math.max(cbmValidLo, cbmValidHi), '有效數據範圍', '#38bdf8') : []),
                           ...buildRegionAnnotations(Math.min(cbmEdgeLo, cbmEdgeHi), Math.max(cbmEdgeLo, cbmEdgeHi), '切線區間', '#f97316'),
                           ...buildRegionAnnotations(Math.min(cbmBaselineLo, cbmBaselineHi), Math.max(cbmBaselineLo, cbmBaselineHi), '基準線區間', '#a855f7'),
                           ...(cbm !== null ? [{
@@ -3755,9 +4575,19 @@ export default function XAS({
                     style={{ width: '100%', height: 360 }}
                   />
                   {/* Range control sliders */}
-                  <div className="mt-3 grid gap-3 xl:grid-cols-2">
-                    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
-                      <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">切線區間</p>
+                    <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                      {cbmValidRangeEnabled && (
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs xl:col-span-2">
+                          <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">有效數據範圍</p>
+                          <DualRangeInput
+                            label="" min={cbmRawEnergyMin} max={cbmRawEnergyMax}
+                            start={cbmValidLo} end={cbmValidHi}
+                            onChange={({ start, end }) => { setCbmValidLo(start); setCbmValidHi(end) }}
+                          />
+                        </div>
+                      )}
+                      <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs">
+                        <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">切線區間</p>
                       <DualRangeInput
                         label="" min={effectiveCbmEnergyMin} max={effectiveCbmEnergyMax}
                         start={cbmEdgeLo} end={cbmEdgeHi}

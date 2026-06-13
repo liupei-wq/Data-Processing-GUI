@@ -916,7 +916,7 @@ export const WORKSPACE_MENU_ITEMS: WorkspaceMenuItem[] = [
   { id: 'workflow-xas', label: 'XAS', detail: 'X 光吸收光譜', group: 'analysis' },
   { id: 'workflow-xps', label: 'XPS', detail: 'X 光光電子能譜', group: 'analysis' },
   { id: 'workflow-xes', label: 'XES', detail: 'X 光發射光譜', group: 'analysis' },
-  { id: 'tool-athena', label: 'XAS Athena 處理', detail: 'XAS Athena 流程', group: 'analysis' },
+  { id: 'tool-athena', label: 'XAS Athena 處理', detail: 'XAS Athena 流程', group: 'tool' },
   { id: 'tool-plot-files', label: '繪製圖檔', detail: 'PNG / SVG / PDF 匯出', group: 'tool' },
   { id: 'tool-background', label: '背景扣除', detail: '單一處理', group: 'tool' },
   { id: 'tool-normalize', label: '歸一化', detail: '單一處理', group: 'tool' },
@@ -1185,4 +1185,3 @@ export function TextField({ value, disabled, onChange }: TextFieldProps) {
     />
   )
 }
-

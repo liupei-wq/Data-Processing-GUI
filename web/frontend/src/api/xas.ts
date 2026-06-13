@@ -7,6 +7,8 @@ import type {
   XasFitResult,
   XasSampleListItem,
   XasSampleEdgeResponse,
+  ExafsRequest,
+  ExafsResult,
 } from '../types/xas'
 import { readApiError } from './http'
 
@@ -55,6 +57,17 @@ export async function fitXasPeaks(
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(await readApiError(res, 'XAS peak fitting 失敗'))
+  return res.json()
+}
+
+export async function processExafs(payload: ExafsRequest, signal?: AbortSignal): Promise<ExafsResult> {
+  const res = await fetch(`${BASE}/exafs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+  if (!res.ok) throw new Error(await readApiError(res, 'EXAFS 處理失敗'))
   return res.json()
 }
 

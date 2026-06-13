@@ -203,6 +203,30 @@ function parseTwoColumnText(text: string, fileName: string): { name: string; x: 
   return { name: fileName.replace(/\.[^.]+$/, ''), x: pairs.map(p => p[0]), y: pairs.map(p => p[1]) }
 }
 
+function cropSpectrumRange(
+  x: number[],
+  y: number[],
+  start: number | null | undefined,
+  end: number | null | undefined,
+) {
+  if (x.length !== y.length) return null
+  if (start == null || end == null) return { x, y }
+  const lo = Math.min(start, end)
+  const hi = Math.max(start, end)
+  const nextX: number[] = []
+  const nextY: number[] = []
+  for (let i = 0; i < x.length; i += 1) {
+    const xi = x[i]
+    const yi = y[i]
+    if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue
+    if (xi < lo || xi > hi) continue
+    nextX.push(xi)
+    nextY.push(yi)
+  }
+  if (nextX.length < 3) return null
+  return { x: nextX, y: nextY }
+}
+
 interface XesLineFit {
   slope: number
   intercept: number
@@ -581,8 +605,12 @@ export default function XES({
   const [vbmEdgeHi, setVbmEdgeHi] = useState<number>(0)
   const [vbmBaselineLo, setVbmBaselineLo] = useState<number>(0)
   const [vbmBaselineHi, setVbmBaselineHi] = useState<number>(0)
+  const [vbmValidRangeEnabled, setVbmValidRangeEnabled] = useState(false)
+  const [vbmValidLo, setVbmValidLo] = useState<number>(0)
+  const [vbmValidHi, setVbmValidHi] = useState<number>(0)
   const [showVbmExportPreview, setShowVbmExportPreview] = useState(false)
   const vbmRangeInitKeyRef = useRef<string | null>(null)
+  const vbmValidRangeInitKeyRef = useRef<string | null>(null)
 
   const setStepOpen = (step: number, next: boolean) => {
     setSectionOpen(prev => ({ ...prev, [step]: next }))
@@ -703,7 +731,7 @@ export default function XES({
 
   const bandResult = bandParams.enabled ? computeBandAlign(bandParams) : null
 
-  const vbmSpectrum = useMemo(() => {
+  const vbmRawSpectrum = useMemo(() => {
     if (vbmDataSource === 'imported') {
       return importedVbmDataset
     }
@@ -716,7 +744,45 @@ export default function XES({
     }
   }, [vbmDataSource, importedVbmDataset, processed, average, useEv, params.axis_calibration, params.calibration_points])
 
+  const vbmRawEnergyMin = useMemo(() =>
+    vbmRawSpectrum ? Math.min(...vbmRawSpectrum.x.filter(Number.isFinite)) : 0
+  , [vbmRawSpectrum])
+
+  const vbmRawEnergyMax = useMemo(() =>
+    vbmRawSpectrum ? Math.max(...vbmRawSpectrum.x.filter(Number.isFinite)) : 1
+  , [vbmRawSpectrum])
+
+  const vbmTrimmedSpectrum = useMemo(() => {
+    if (!vbmRawSpectrum) return null
+    if (!vbmValidRangeEnabled) return vbmRawSpectrum
+    const cropped = cropSpectrumRange(vbmRawSpectrum.x, vbmRawSpectrum.y, vbmValidLo, vbmValidHi)
+    return cropped ? { ...cropped, name: vbmRawSpectrum.name } : null
+  }, [vbmRawSpectrum, vbmValidRangeEnabled, vbmValidLo, vbmValidHi])
+
+  const vbmSpectrum = useMemo(() => {
+    if (!vbmTrimmedSpectrum) return null
+    const yMin = Math.min(...vbmTrimmedSpectrum.y.filter(Number.isFinite))
+    const yMax = Math.max(...vbmTrimmedSpectrum.y.filter(Number.isFinite))
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax === yMin) return null
+    return {
+      x: vbmTrimmedSpectrum.x,
+      y: vbmTrimmedSpectrum.y.map(v => (v - yMin) / (yMax - yMin)),
+      name: vbmTrimmedSpectrum.name,
+    }
+  }, [vbmTrimmedSpectrum])
+
   // Auto-initialize VBM energy ranges when dataset first becomes available
+  useEffect(() => {
+    if (!vbmRawSpectrum) return
+    const key = `${vbmRawSpectrum.name}:${vbmRawSpectrum.x[0]?.toFixed(2)}-${vbmRawSpectrum.x[vbmRawSpectrum.x.length - 1]?.toFixed(2)}`
+    if (vbmValidRangeInitKeyRef.current === key) return
+    vbmValidRangeInitKeyRef.current = key
+    const eMin = Math.min(...vbmRawSpectrum.x.filter(Number.isFinite))
+    const eMax = Math.max(...vbmRawSpectrum.x.filter(Number.isFinite))
+    setVbmValidLo(eMin)
+    setVbmValidHi(eMax)
+  }, [vbmRawSpectrum])
+
   useEffect(() => {
     if (!vbmSpectrum) return
     const key = `${vbmSpectrum.x[0]?.toFixed(2)}-${vbmSpectrum.x[vbmSpectrum.x.length - 1]?.toFixed(2)}`
@@ -1261,6 +1327,7 @@ export default function XES({
                           <div><span className="font-medium text-[var(--text-main)]">處理管線（Pipeline）</span>：從 XES 主流程取得正在處理 / 已處理完的光譜（含背景扣除、歸一化等），調整主流程參數時這裡會即時同步。適合一邊微調主流程一邊看 VBM 變化。</div>
                           <div><span className="font-medium text-[var(--text-main)]">手動匯入（Imported）</span>：直接讀外部已處理好的雙欄 TXT/CSV，不需要走主流程。常用於檢查別人給的 spectrum、或快速驗算文獻資料。</div>
                         </div>
+                        <p>在 VBM 子模式中，系統會先套用你設定的「有效數據範圍」，再把保留區段做 Min-Max 歸一化，最後才進行切線 / 基準線外推。</p>
                         <p className="text-[var(--text-soft)]">提示：兩種模式可以隨時切換；同樣的外推區間設定下，兩者算出來的 VBM 應該一致（若不一致，多半是主流程歸一化跟匯入檔案的歸一化方式不同）。</p>
                       </div>
                     }
@@ -1307,6 +1374,7 @@ export default function XES({
                               }
                               setImportedVbmDataset(parsed)
                               vbmRangeInitKeyRef.current = null
+                              vbmValidRangeInitKeyRef.current = null
                             } catch (e) {
                               setImportedVbmError((e as Error).message)
                             }
@@ -1325,6 +1393,7 @@ export default function XES({
                               onClick={() => {
                                 setImportedVbmDataset(null)
                                 vbmRangeInitKeyRef.current = null
+                                vbmValidRangeInitKeyRef.current = null
                               }}
                               className="text-red-400 hover:text-red-300 text-xs font-semibold"
                             >
@@ -1339,9 +1408,49 @@ export default function XES({
                     )}
                   </SidebarCard>
 
-                  {/* Step 2: VBM 線性外推設定 */}
                   <SidebarCard
                     step={2}
+                    title="有效數據範圍"
+                    status={!vbmRawSpectrum ? 'locked' : (vbmValidRangeEnabled ? 'on' : 'off')}
+                    infoContent={
+                      <div className="space-y-3">
+                        <p className="font-semibold text-[var(--text-main)]">有效數據範圍</p>
+                        <p>此步驟會先裁切 VBM 模式要使用的 energy 區段，再對裁切後的光譜做 Min-Max 歸一化，最後送進 VBM 線性外推。這樣可以排除不需要的尾巴或雜訊段。</p>
+                      </div>
+                    }
+                  >
+                    <TogglePill label="啟用有效數據範圍" checked={vbmValidRangeEnabled} onChange={setVbmValidRangeEnabled} />
+                    {vbmValidRangeEnabled && vbmRawSpectrum && (
+                      <>
+                        <DualRangeInput
+                          label="有效數據範圍"
+                          min={vbmRawEnergyMin}
+                          max={vbmRawEnergyMax}
+                          start={vbmValidLo}
+                          end={vbmValidHi}
+                          onChange={({ start, end }) => { setVbmValidLo(start); setVbmValidHi(end) }}
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumInput
+                            label="起始 (eV)"
+                            value={vbmValidLo}
+                            onChange={v => setVbmValidLo(Math.min(Math.max(v ?? vbmRawEnergyMin, vbmRawEnergyMin), vbmRawEnergyMax))}
+                            step={0.1}
+                          />
+                          <NumInput
+                            label="結束 (eV)"
+                            value={vbmValidHi}
+                            onChange={v => setVbmValidHi(Math.min(Math.max(v ?? vbmRawEnergyMax, vbmRawEnergyMin), vbmRawEnergyMax))}
+                            step={0.1}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </SidebarCard>
+
+                  {/* Step 2: VBM 線性外推設定 */}
+                  <SidebarCard
+                    step={3}
                     title="VBM 線性外推"
                     status={!vbmSpectrum ? 'locked' : (vbmIntersect ? 'on' : 'off')}
                     infoContent={
@@ -1761,10 +1870,12 @@ export default function XES({
                             yaxis: { ...(base.yaxis ?? {}), autorange: false, range: vbmPlotWindow.yAxisRange },
                           } : {}),
                           shapes: [
+                            ...(vbmValidRangeEnabled ? buildRegionShapes(Math.min(vbmValidLo, vbmValidHi), Math.max(vbmValidLo, vbmValidHi), '#38bdf8') : []),
                             ...buildRegionShapes(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '#fb923c'),
                             ...buildRegionShapes(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '#a78bfa'),
                           ] as any[],
                           annotations: [
+                            ...(vbmValidRangeEnabled ? buildRegionAnnotations(Math.min(vbmValidLo, vbmValidHi), Math.max(vbmValidLo, vbmValidHi), '有效數據範圍', '#38bdf8') : []),
                             ...buildRegionAnnotations(Math.min(vbmEdgeLo, vbmEdgeHi), Math.max(vbmEdgeLo, vbmEdgeHi), '切線區間', '#fb923c'),
                             ...buildRegionAnnotations(Math.min(vbmBaselineLo, vbmBaselineHi), Math.max(vbmBaselineLo, vbmBaselineHi), '基準線區間', '#a78bfa'),
                             ...(intersect !== null ? [{
@@ -1781,6 +1892,16 @@ export default function XES({
                     />
                     {/* Range control DualRangeInput sliders */}
                     <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                      {vbmValidRangeEnabled && (
+                        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-3 text-xs xl:col-span-2">
+                          <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">有效數據範圍</p>
+                          <DualRangeInput
+                            label="" min={vbmRawEnergyMin} max={vbmRawEnergyMax}
+                            start={vbmValidLo} end={vbmValidHi}
+                            onChange={({ start, end }) => { setVbmValidLo(start); setVbmValidHi(end) }}
+                          />
+                        </div>
+                      )}
                       <DualRangeInput
                         label="切線區間" min={eMin} max={eMax}
                         start={vbmEdgeLo} end={vbmEdgeHi}

@@ -92,6 +92,38 @@ export interface ProcessResult {
   average: ProcessedDataset | null
 }
 
+export interface ExafsRequest {
+  energy: number[]
+  mu: number[]
+  e0: number
+  k_min: number
+  k_max: number
+  k_weight: number
+  rbkg: number
+  window: 'hanning' | 'none'
+  r_max: number
+  edge_step?: number | null
+  backend_method?: 'scipy_preview' | 'larch_autobk'
+}
+
+export interface ExafsResult {
+  energy: number[]
+  mu: number[]
+  mu0: number[]
+  k: number[]
+  chi: number[]
+  chi_weighted: number[]
+  r: number[]
+  ft_mag: number[]
+  ft_re: number[]
+  ft_im: number[]
+  edge_step: number
+  smooth_points: number
+  method: string
+  warnings: string[]
+  log: string[]
+}
+
 // ── Peak fitting types ──────────────────────────────────────────────────────
 
 export interface XasInitPeak {

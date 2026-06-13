@@ -13,6 +13,7 @@ import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from scipy.signal import savgol_filter
 
 from core.parsers import looks_like_excel, numeric_excel_table
 from core.peak_fitting import fit_peaks, perturb_init_peaks
@@ -319,6 +320,260 @@ def _normalize_athena(
     return normalized, flattened, float(e0), float(edge_step), pre_line, post_poly, y_sub
 
 
+def _exafs_window(kind: str, n: int) -> np.ndarray:
+    if n <= 1:
+        return np.ones(n, dtype=float)
+    if kind == "none":
+        return np.ones(n, dtype=float)
+    return np.hanning(n)
+
+
+def _calculate_exafs_preview(
+    energy: np.ndarray,
+    mu: np.ndarray,
+    e0: float,
+    k_min: float,
+    k_max: float,
+    k_weight: int,
+    rbkg: float,
+    window: str,
+    r_max: float,
+    edge_step: Optional[float] = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Build a lightweight EXAFS preview.
+
+    This is intentionally a preview backend, not a replacement for Larch autobk.
+    It keeps the API boundary ready for a future autobk/xftf implementation.
+    """
+    warnings: list[str] = []
+    if energy.size != mu.size or energy.size < 8:
+        raise ValueError("EXAFS 輸入資料點不足")
+    if not np.isfinite(e0):
+        raise ValueError("E0 必須是有限數值")
+
+    finite = np.isfinite(energy) & np.isfinite(mu)
+    energy = energy[finite]
+    mu = mu[finite]
+    if energy.size < 8:
+        raise ValueError("EXAFS 有效資料點不足")
+    order = np.argsort(energy)
+    energy = energy[order]
+    mu = mu[order]
+
+    post_mask = energy > float(e0)
+    if int(np.count_nonzero(post_mask)) < 16:
+        raise ValueError("E0 之後的 post-edge 資料點不足，無法建立 χ(k)")
+
+    k_raw = np.sqrt(np.maximum(energy[post_mask] - float(e0), 0.0) / 3.80998212)
+    mu_raw = mu[post_mask]
+    k_lo = float(min(k_min, k_max))
+    k_hi = float(max(k_min, k_max))
+    k_mask = np.isfinite(k_raw) & np.isfinite(mu_raw) & (k_raw >= k_lo) & (k_raw <= k_hi)
+    if int(np.count_nonzero(k_mask)) < 16:
+        raise ValueError("目前 k range 內資料點不足，請調整 k min / k max 或 E0")
+
+    k_src = k_raw[k_mask]
+    mu_src = mu_raw[k_mask]
+    src_order = np.argsort(k_src)
+    k_src = k_src[src_order]
+    mu_src = mu_src[src_order]
+
+    target_count = int(np.clip(round((float(k_src[-1]) - float(k_src[0])) / 0.035), 160, 900))
+    k_grid = np.linspace(float(k_src[0]), float(k_src[-1]), target_count)
+    dk = float(k_grid[1] - k_grid[0]) if target_count > 1 else 1.0
+    mu_grid = np.interp(k_grid, k_src, mu_src)
+
+    smooth_points = int(np.clip(round((max(float(rbkg), 0.2) * 10.0) / max(dk, 1e-9)), 5, max(5, target_count // 3)))
+    if smooth_points % 2 == 0:
+      smooth_points += 1
+    if smooth_points >= target_count:
+      smooth_points = target_count - 1 if (target_count - 1) % 2 == 1 else target_count - 2
+    smooth_points = max(5, smooth_points)
+
+    try:
+        poly_order = min(3, smooth_points - 2)
+        mu0 = savgol_filter(mu_grid, smooth_points, poly_order, mode="interp")
+    except Exception:
+        warnings.append("Savitzky-Golay μ0 平滑失敗，已改用移動平均")
+        kernel = np.ones(smooth_points, dtype=float) / float(smooth_points)
+        mu0 = np.convolve(mu_grid, kernel, mode="same")
+
+    if edge_step is not None and np.isfinite(edge_step) and abs(edge_step) > 1e-12:
+        step = float(abs(edge_step))
+    else:
+        span = float(np.nanmax(mu_grid) - np.nanmin(mu_grid))
+        step = max(abs(span), 1e-9)
+        warnings.append("未提供 edge step，已用輸入 μ(E) span 做預覽尺度")
+
+    chi = (mu_grid - mu0) / step
+    k_weight_int = int(np.clip(round(k_weight), 0, 3))
+    chi_weighted = chi * np.power(k_grid, k_weight_int)
+    win = _exafs_window(window, target_count)
+    r_values = np.linspace(0.0, max(float(r_max), 1.0), int(round(max(float(r_max), 1.0) / 0.02)) + 1)
+    ft_re: list[float] = []
+    ft_im: list[float] = []
+    for r in r_values:
+        phase = 2.0 * k_grid * float(r)
+        amp = chi_weighted * win
+        ft_re.append(float(np.sum(amp * np.cos(phase)) * dk))
+        ft_im.append(float(np.sum(amp * np.sin(phase)) * dk))
+    ft_re_arr = np.array(ft_re, dtype=float)
+    ft_im_arr = np.array(ft_im, dtype=float)
+    ft_mag = np.hypot(ft_re_arr, ft_im_arr)
+
+    log = [
+        "EXAFS backend preview: SciPy Savitzky-Golay μ0 smoothing + direct FT",
+        f"E0: {float(e0):.6g} eV",
+        f"k range: {k_lo:.6g}-{k_hi:.6g} A^-1",
+        f"k-weight: {k_weight_int}",
+        f"Rbkg preview: {float(rbkg):.6g} A",
+        f"FT window: {window}",
+        f"R max: {float(r_max):.6g} A",
+        f"smooth points: {smooth_points}",
+        "Note: this is a visual preview, not a full Larch autobk/xftf replacement.",
+    ]
+
+    return {
+        "energy": (float(e0) + 3.80998212 * np.square(k_grid)).tolist(),
+        "mu": mu_grid.tolist(),
+        "mu0": mu0.tolist(),
+        "k": k_grid.tolist(),
+        "chi": chi.tolist(),
+        "chi_weighted": chi_weighted.tolist(),
+        "r": r_values.tolist(),
+        "ft_mag": ft_mag.tolist(),
+        "ft_re": ft_re_arr.tolist(),
+        "ft_im": ft_im_arr.tolist(),
+        "edge_step": float(step),
+        "smooth_points": int(smooth_points),
+        "method": "scipy_savgol_preview",
+        "log": log,
+    }, warnings
+
+
+def _calculate_exafs_larch(
+    energy: np.ndarray,
+    mu: np.ndarray,
+    e0: float,
+    k_min: float,
+    k_max: float,
+    k_weight: int,
+    rbkg: float,
+    window: str,
+    r_max: float,
+    edge_step: Optional[float] = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Run EXAFS with Larch when available, otherwise fall back safely.
+
+    The import is intentionally lazy so deployments without xraylarch keep
+    working. Larch APIs have changed across versions, so this wrapper catches
+    failures and returns the SciPy preview with an explicit warning.
+    """
+    try:
+        from larch import Group  # type: ignore
+        from larch.xafs import autobk, xftf  # type: ignore
+    except Exception as exc:
+        result, warnings = _calculate_exafs_preview(
+            energy, mu, e0, k_min, k_max, k_weight, rbkg, window, r_max, edge_step
+        )
+        result["method"] = "scipy_savgol_preview_fallback"
+        result["log"] = [
+            "Larch requested but xraylarch is not available; falling back to SciPy preview.",
+            *result.get("log", []),
+        ]
+        return result, [f"Larch 未安裝或無法載入，已 fallback 到 SciPy preview：{exc}", *warnings]
+
+    try:
+        finite = np.isfinite(energy) & np.isfinite(mu)
+        energy = energy[finite]
+        mu = mu[finite]
+        order = np.argsort(energy)
+        energy = energy[order]
+        mu = mu[order]
+        if energy.size < 16:
+            raise ValueError("EXAFS 有效資料點不足")
+
+        group = Group(energy=energy, mu=mu)
+        k_lo = float(min(k_min, k_max))
+        k_hi = float(max(k_min, k_max))
+        k_weight_int = int(np.clip(round(k_weight), 0, 3))
+
+        try:
+            autobk(energy, mu, group=group, rbkg=float(rbkg), e0=float(e0), kmin=k_lo, kmax=k_hi, kweight=k_weight_int)
+        except TypeError:
+            autobk(energy, mu, group=group, rbkg=float(rbkg), e0=float(e0))
+
+        k_arr = np.array(getattr(group, "k"), dtype=float)
+        chi_arr = np.array(getattr(group, "chi"), dtype=float)
+        mask = np.isfinite(k_arr) & np.isfinite(chi_arr) & (k_arr >= k_lo) & (k_arr <= k_hi)
+        if int(np.count_nonzero(mask)) < 16:
+            raise ValueError("Larch autobk 回傳的 k range 內資料點不足")
+        k_arr = k_arr[mask]
+        chi_arr = chi_arr[mask]
+
+        energy_k = float(e0) + 3.80998212 * np.square(k_arr)
+        mu_k = np.interp(energy_k, energy, mu)
+        bkg = getattr(group, "bkg", None)
+        if bkg is not None:
+            mu0_k = np.interp(energy_k, energy, np.array(bkg, dtype=float))
+        else:
+            step = float(abs(edge_step)) if edge_step is not None and np.isfinite(edge_step) and abs(edge_step) > 1e-12 else 1.0
+            mu0_k = mu_k - chi_arr * step
+        chi_weighted = chi_arr * np.power(k_arr, k_weight_int)
+
+        try:
+            xftf(k_arr, chi_arr, group=group, kmin=k_lo, kmax=k_hi, kweight=k_weight_int, window=window, rmax=float(r_max))
+        except TypeError:
+            xftf(k_arr, chi_arr, group=group, kmin=k_lo, kmax=k_hi, kweight=k_weight_int)
+
+        r_arr = np.array(getattr(group, "r"), dtype=float)
+        ft_mag = np.array(getattr(group, "chir_mag"), dtype=float)
+        ft_re = np.array(getattr(group, "chir_re"), dtype=float)
+        ft_im = np.array(getattr(group, "chir_im"), dtype=float)
+        r_mask = np.isfinite(r_arr) & (r_arr <= max(float(r_max), 1.0))
+        r_arr = r_arr[r_mask]
+        ft_mag = ft_mag[r_mask]
+        ft_re = ft_re[r_mask]
+        ft_im = ft_im[r_mask]
+
+        log = [
+            "EXAFS backend: Larch autobk() + xftf()",
+            f"E0: {float(e0):.6g} eV",
+            f"k range: {k_lo:.6g}-{k_hi:.6g} A^-1",
+            f"k-weight: {k_weight_int}",
+            f"Rbkg: {float(rbkg):.6g} A",
+            f"FT window: {window}",
+            f"R max: {float(r_max):.6g} A",
+            "Note: R-space peak positions are not phase-corrected bond lengths.",
+        ]
+        return {
+            "energy": energy_k.tolist(),
+            "mu": mu_k.tolist(),
+            "mu0": mu0_k.tolist(),
+            "k": k_arr.tolist(),
+            "chi": chi_arr.tolist(),
+            "chi_weighted": chi_weighted.tolist(),
+            "r": r_arr.tolist(),
+            "ft_mag": ft_mag.tolist(),
+            "ft_re": ft_re.tolist(),
+            "ft_im": ft_im.tolist(),
+            "edge_step": float(abs(edge_step)) if edge_step is not None and np.isfinite(edge_step) and abs(edge_step) > 1e-12 else 1.0,
+            "smooth_points": 0,
+            "method": "larch_autobk_xftf",
+            "log": log,
+        }, []
+    except Exception as exc:
+        result, warnings = _calculate_exafs_preview(
+            energy, mu, e0, k_min, k_max, k_weight, rbkg, window, r_max, edge_step
+        )
+        result["method"] = "scipy_savgol_preview_fallback"
+        result["log"] = [
+            f"Larch calculation failed; falling back to SciPy preview: {exc}",
+            *result.get("log", []),
+        ]
+        return result, [f"Larch 計算失敗，已 fallback 到 SciPy preview：{exc}", *warnings]
+
+
 # ── Gaussian template helpers ─────────────────────────────────────────────────
 
 _GAUSS_SIGMA_FACTOR = 2.3548200450309493  # 2√(2ln2)
@@ -448,6 +703,38 @@ class ProcessedDataset(BaseModel):
 class ProcessResponse(BaseModel):
     datasets: List[ProcessedDataset]
     average: Optional[ProcessedDataset] = None
+
+
+class ExafsRequest(BaseModel):
+    energy: List[float]
+    mu: List[float]
+    e0: float
+    k_min: float = 2.0
+    k_max: float = 10.0
+    k_weight: int = 2
+    rbkg: float = 1.0
+    window: str = "hanning"
+    r_max: float = 6.0
+    edge_step: Optional[float] = None
+    backend_method: str = "scipy_preview"  # scipy_preview | larch_autobk
+
+
+class ExafsResponse(BaseModel):
+    energy: List[float]
+    mu: List[float]
+    mu0: List[float]
+    k: List[float]
+    chi: List[float]
+    chi_weighted: List[float]
+    r: List[float]
+    ft_mag: List[float]
+    ft_re: List[float]
+    ft_im: List[float]
+    edge_step: float
+    smooth_points: int
+    method: str
+    warnings: List[str] = Field(default_factory=list)
+    log: List[str] = Field(default_factory=list)
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -712,6 +999,32 @@ def process_xas(req: ProcessRequest):
             pass
 
     return ProcessResponse(datasets=processed_datasets, average=average_ds)
+
+
+@router.post("/exafs", response_model=ExafsResponse)
+def process_exafs(req: ExafsRequest):
+    try:
+        args = dict(
+            energy=np.array(req.energy, dtype=float),
+            mu=np.array(req.mu, dtype=float),
+            e0=float(req.e0),
+            k_min=float(req.k_min),
+            k_max=float(req.k_max),
+            k_weight=int(req.k_weight),
+            rbkg=float(req.rbkg),
+            window=req.window if req.window in ("hanning", "none") else "hanning",
+            r_max=float(req.r_max),
+            edge_step=req.edge_step,
+        )
+        if req.backend_method == "larch_autobk":
+            result, warnings = _calculate_exafs_larch(**args)
+        else:
+            result, warnings = _calculate_exafs_preview(**args)
+        return ExafsResponse(**result, warnings=warnings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"EXAFS 處理失敗：{exc}") from exc
 
 
 # ── XANES deconvolution ───────────────────────────────────────────────────────
