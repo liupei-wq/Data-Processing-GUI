@@ -531,3 +531,23 @@ streamlit run app.py --server.port 8505
 [2026-06-09] 檢查：Get-Command node/npm/pnpm 皆無可用輸出；本機缺少前端建置工具，改以 git diff --check 檢查格式。
 
 [2026-06-09] 檢查：git diff --check 通過，僅有既有 LF/CRLF 換行提示；確認 XRD 美化輸出新增控制與刻度向內設定。
+
+[2026-06-18] 重要判斷：XRD 的匯出圖表省略號功能應接在 web/frontend/src/pages/XRD.tsx 的美化預覽/PNG 匯出流程；該流程使用 Plotly 預覽圖轉 PNG，加入可開關的 Y 軸斷軸設定即可讓預覽與匯出一致。
+
+[2026-06-18] 實作：開始修改 XRD 美化匯出圖表，新增可開關的 Y 軸省略區間（預設 2000~50000），以資料壓縮轉換加自訂 tick label 方式呈現斷軸與省略號。
+
+[2026-06-18] 檢查：準備執行前端 build 驗證 XRD Y 軸省略區間實作是否通過 TypeScript 與 Vite 建置。
+
+[2026-06-18] 檢查：首次在 web/frontend 執行 build 時因相對路徑讀不到 CLAUDE.md，且 PowerShell 回報 npm 不存在；改用專案根目錄絕對路徑讀取紀錄並確認 Node/npm 可用性。
+
+[2026-06-18] 檢查：Get-Command node/npm/pnpm 皆無可用輸出，本機目前無法執行前端 build；改以 git diff --check 與靜態檢視驗證本次 XRD 修改。
+
+[2026-06-18] 檢查：git diff --check 通過（僅 LF/CRLF 提示）；靜態檢視 XRD Y 軸省略 helper、Plotly traces/layout、A 軸設定 JSX，未發現結構問題。build 未執行，原因為本機 node/npm/pnpm 皆 NOT_FOUND。
+
+[2026-06-18] 重要判斷：使用者要求同步至 GitHub；目前 main 落後 origin/main 2 個 commit，工作樹只有 CLAUDE.md 與 web/frontend/src/pages/XRD.tsx。gh CLI 不存在，因此本次採 git commit、pull --rebase、push 流程，不建立 PR。
+
+[2026-06-18] 檢查：同步至 GitHub 前檢視 diff，確認待提交範圍僅 XRD 匯出圖表 Y 軸省略功能與 CLAUDE.md 紀錄。
+
+[2026-06-18] 同步：已建立本地 commit（初始 hash 156f793，後續可能因補紀錄 amend 變更），接著需先 pull --rebase origin/main，因本機 main 落後遠端 2 個 commit，再推送至 GitHub。
+
+[2026-06-18] 同步：git pull --rebase origin main 成功，本機 main 已接上遠端最新內容並 ahead 1；準備推送 XRD 匯出 Y 軸省略功能 commit 至 origin/main。

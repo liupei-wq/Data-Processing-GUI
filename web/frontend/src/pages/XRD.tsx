@@ -358,6 +358,103 @@ type XrdProcessedTrace = XrdDesktopInputFile & {
   baseline: number
 }
 
+type YAxisBreakSettings = {
+  enabled: boolean
+  from: number
+  to: number
+}
+
+type YAxisBreakScale = {
+  displayRange: [number, number]
+  breakDisplayY: number
+  tickVals: number[]
+  tickText: string[]
+  toDisplay: (value: number) => number
+}
+
+function niceTickStep(rawStep: number) {
+  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)))
+  const residual = rawStep / magnitude
+  if (residual >= 5) return 5 * magnitude
+  if (residual >= 2) return 2 * magnitude
+  return magnitude
+}
+
+function formatAxisTickValue(value: number) {
+  const normalized = Math.abs(value) < 1e-9 ? 0 : value
+  const absValue = Math.abs(normalized)
+  if (absValue >= 100) return String(Math.round(normalized))
+  if (absValue >= 10) return String(Math.round(normalized * 10) / 10)
+  return String(Math.round(normalized * 1000) / 1000)
+}
+
+function buildNiceTicks(start: number, end: number, count: number) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return []
+  const step = niceTickStep((end - start) / Math.max(1, count - 1))
+  const ticks: number[] = []
+  const first = Math.ceil(start / step) * step
+  for (let tick = first; tick <= end + step * 0.5; tick += step) {
+    if (tick >= start - step * 0.5 && tick <= end + step * 0.5) ticks.push(Number(tick.toPrecision(12)))
+  }
+  return ticks
+}
+
+function buildYAxisBreakScale(
+  yRange: [number, number] | undefined,
+  settings: YAxisBreakSettings,
+  tickCount: number,
+): YAxisBreakScale | null {
+  if (!settings.enabled || !yRange) return null
+  const [rawMin, rawMax] = yRange
+  const lower = Math.min(settings.from, settings.to)
+  const upper = Math.max(settings.from, settings.to)
+  if (!Number.isFinite(rawMin) || !Number.isFinite(rawMax) || !Number.isFinite(lower) || !Number.isFinite(upper)) return null
+  if (upper <= lower || rawMax <= upper || rawMin >= lower) return null
+
+  const lowerSpan = Math.max(lower - rawMin, 1)
+  const upperSpan = Math.max(rawMax - upper, 1)
+  const gap = Math.max((lowerSpan + upperSpan) * 0.06, 1)
+  const toDisplay = (value: number) => {
+    if (value <= lower) return value
+    if (value >= upper) return lower + gap + (value - upper)
+    return lower + ((value - lower) / (upper - lower)) * gap
+  }
+
+  const lowerTickCount = Math.max(2, Math.ceil(tickCount / 2))
+  const upperTickCount = Math.max(2, Math.floor(tickCount / 2))
+  const rawTicks = [
+    ...buildNiceTicks(rawMin, lower, lowerTickCount),
+    lower,
+    upper,
+    ...buildNiceTicks(upper, rawMax, upperTickCount),
+  ]
+    .filter(value => value <= lower || value >= upper)
+    .sort((a, b) => a - b)
+
+  const dedupedTicks = rawTicks.filter((value, index, values) => index === 0 || Math.abs(value - values[index - 1]) > 1e-9)
+  return {
+    displayRange: [rawMin, toDisplay(rawMax)],
+    breakDisplayY: lower + gap / 2,
+    tickVals: dedupedTicks.map(toDisplay),
+    tickText: dedupedTicks.map(formatAxisTickValue),
+    toDisplay,
+  }
+}
+
+function applyYAxisBreakToPlotlyTraces(traces: Plotly.Data[], scale: YAxisBreakScale | null) {
+  if (!scale) return traces
+  return traces.map((trace: any) => {
+    if (!Array.isArray(trace.y)) return trace
+    return {
+      ...trace,
+      y: trace.y.map((value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value) ? scale.toDisplay(value) : value
+      ),
+    }
+  })
+}
+
 function XrdSingleChartCardBody({
   trace,
   index,
@@ -969,6 +1066,9 @@ export default function XRD({
     background: 'white' as 'white' | 'transparent' | 'dark',
     showXGrid: false,
     showYGrid: false,
+    yAxisBreakEnabled: false,
+    yAxisBreakFrom: 2000,
+    yAxisBreakTo: 50000,
     pngWidth: 1600,
     pngHeight: 900,
     pngScale: 2,
@@ -2090,29 +2190,48 @@ export default function XRD({
     return { traces: processedTraces, mode: viewMode }
   }, [beautifySourceMode, viewMode, activeTrace, processedTraces])
 
+  const beautifyYAxisRawRange = useMemo(() => {
+    const traces = beautifyEffective.traces
+    const mode = beautifyEffective.mode
+    const allYVals = traces.flatMap(t => mode === 'offset' ? t.yStacked : t.yProcessed)
+    if (allYVals.length === 0) return undefined
+    const yMinVal = Math.min(...allYVals)
+    const yMaxVal = Math.max(...allYVals)
+    const ySpan = yMaxVal - yMinVal || 1
+    return [yMinVal - 0.02 * ySpan, yMaxVal + 0.15 * ySpan] as [number, number]
+  }, [beautifyEffective])
+
+  const beautifyYAxisBreakScale = useMemo(() => buildYAxisBreakScale(
+    beautifyYAxisRawRange,
+    {
+      enabled: beautify.yAxisBreakEnabled,
+      from: beautify.yAxisBreakFrom,
+      to: beautify.yAxisBreakTo,
+    },
+    beautify.yNTicks,
+  ), [
+    beautifyYAxisRawRange,
+    beautify.yAxisBreakEnabled,
+    beautify.yAxisBreakFrom,
+    beautify.yAxisBreakTo,
+    beautify.yNTicks,
+  ])
+
   // ── 美化預覽 traces（套用 lineWidthScale） ────────────────────
   const beautifyTraces = useMemo(() => {
     const base = buildChartTraces(beautifyEffective.traces, beautifyEffective.mode)
-    return base.map((t: any) => {
+    const scaledBase = applyYAxisBreakToPlotlyTraces(base, beautifyYAxisBreakScale)
+    return scaledBase.map((t: any) => {
       if (t && t.type === 'scatter' && t.mode === 'lines' && t.line) {
         return { ...t, line: { ...t.line, width: (t.line.width || 2) * beautify.lineWidthScale } }
       }
       return t
     })
-  }, [beautifyEffective, buildChartTraces, beautify.lineWidthScale])
+  }, [beautifyEffective, buildChartTraces, beautify.lineWidthScale, beautifyYAxisBreakScale])
 
   // ── 美化預覽 layout（覆寫 axis / legend / 字體 / 背景） ──────────
   const beautifyLayout = useMemo(() => {
-    const traces = beautifyEffective.traces
-    const mode = beautifyEffective.mode
-    const allYVals = traces.flatMap(t => mode === 'offset' ? t.yStacked : t.yProcessed)
-    let yRange: any = undefined
-    if (allYVals.length > 0) {
-      const yMinVal = Math.min(...allYVals)
-      const yMaxVal = Math.max(...allYVals)
-      const ySpan = yMaxVal - yMinVal || 1
-      yRange = [yMinVal - 0.02 * ySpan, yMaxVal + 0.15 * ySpan]
-    }
+    const yRange: any = beautifyYAxisBreakScale?.displayRange ?? beautifyYAxisRawRange
 
     const isLight = beautify.background !== 'dark'
     const axisColor = isLight ? '#111111' : '#cbd5e1'
@@ -2152,7 +2271,9 @@ export default function XRD({
         linecolor: axisColor, linewidth: 1.5, mirror: true,
         tickcolor: axisColor, ticks: beautify.showYTicks ? 'inside' : '', showline: true,
         showticklabels: beautify.showYTickLabels,
-        nticks: beautify.yNTicks,
+        ...(beautifyYAxisBreakScale
+          ? { tickmode: 'array' as const, tickvals: beautifyYAxisBreakScale.tickVals, ticktext: beautifyYAxisBreakScale.tickText }
+          : { nticks: beautify.yNTicks }),
         range: yRange,
         tickfont: { color: axisColor, family: 'Times New Roman, serif', size: beautify.axisFontSize },
       },
@@ -2167,10 +2288,21 @@ export default function XRD({
       plot_bgcolor: plotBg,
       font: { color: axisColor, family: 'Times New Roman, serif' },
       hovermode: 'x unified',
+      annotations: beautifyYAxisBreakScale ? [{
+        xref: 'paper',
+        yref: 'y',
+        x: -0.045,
+        y: beautifyYAxisBreakScale.breakDisplayY,
+        text: '...',
+        showarrow: false,
+        xanchor: 'center',
+        yanchor: 'middle',
+        font: { color: axisColor, family: 'Times New Roman, serif', size: Math.max(14, beautify.axisFontSize + 2) },
+      }] as any : undefined,
       autosize: true,
       height: 540,
     } as Partial<Plotly.Layout>
-  }, [beautifyEffective, xMin, xMax, beautify])
+  }, [beautifyYAxisRawRange, beautifyYAxisBreakScale, xMin, xMax, beautify])
 
   // ── 美化卡：PNG / TXT / CSV 匯出（一律走預覽） ──
   const handleBeautifyExportPng = () => {
@@ -3007,6 +3139,22 @@ export default function XRD({
                           <input type="checkbox" checked={beautify.showYGrid} onChange={e => setBeautify(b => ({ ...b, showYGrid: e.target.checked }))} />
                           Y 網格
                         </label>
+                        <label className="flex items-center gap-2 text-[11px] text-[var(--text-soft)]">
+                          <input type="checkbox" checked={beautify.yAxisBreakEnabled} onChange={e => setBeautify(b => ({ ...b, yAxisBreakEnabled: e.target.checked }))} />
+                          Y 軸省略
+                        </label>
+                        <NumInput
+                          label="省略起點"
+                          value={beautify.yAxisBreakFrom}
+                          onChange={v => setBeautify(b => ({ ...b, yAxisBreakFrom: v }))}
+                          disabled={!beautify.yAxisBreakEnabled}
+                        />
+                        <NumInput
+                          label="省略終點"
+                          value={beautify.yAxisBreakTo}
+                          onChange={v => setBeautify(b => ({ ...b, yAxisBreakTo: v }))}
+                          disabled={!beautify.yAxisBreakEnabled}
+                        />
                       </div>
                     </div>
 
