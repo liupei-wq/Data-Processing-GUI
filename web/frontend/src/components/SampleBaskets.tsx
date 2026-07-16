@@ -130,6 +130,7 @@ export function SampleBasketsPanel({
   onChangeItems,
   onChangeBaskets,
   onApplyBasket,
+  onFilesAdded,
   applyDisabled,
   moduleLabel,
   acceptFileExts,
@@ -143,6 +144,8 @@ export function SampleBasketsPanel({
   onChangeItems: (next: BasketFileItem[]) => void
   onChangeBaskets: (next: SampleBasket[]) => void
   onApplyBasket: (basket: SampleBasket, basketFiles: File[]) => void | Promise<void>
+  /** Optional module hook for loading newly uploaded files immediately. */
+  onFilesAdded?: (files: File[]) => void | Promise<void>
   applyDisabled?: boolean
   moduleLabel: string
   acceptFileExts: string[]
@@ -216,12 +219,14 @@ export function SampleBasketsPanel({
 
   const handleFileAdd = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return
-    const newItems: BasketFileItem[] = Array.from(fileList).map(f => ({
+    const files = Array.from(fileList)
+    const newItems: BasketFileItem[] = files.map(f => ({
       id: makeId('f'),
       file: f,
       basketId: null,
     }))
     onChangeItems([...items, ...newItems])
+    if (onFilesAdded) void onFilesAdded(files)
   }
 
   const handleAddBasket = () => {

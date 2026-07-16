@@ -237,28 +237,23 @@ def parse_xps_bytes(raw: bytes):
     if excel_err and looks_like_excel(raw):
         return None, None, excel_err
 
-    for enc in ("utf-8", "big5", "cp950", "latin-1", "utf-16"):
+    # Try the instrument-specific block format first.  A successfully decoded
+    # text file is not necessarily a structured XPS export, so a format error
+    # must not stop the remaining encodings or the generic two-column parser.
+    structured_error = None
+    for enc in ("utf-8", "utf-8-sig", "big5", "cp950", "latin-1", "utf-16"):
         try:
             content_str = raw.decode(enc)
-            # 先嘗試標準 CSV（兩欄數字，首行可為標頭）
-            df = pd.read_csv(io.StringIO(content_str))
-            if df.shape[1] >= 2:
-                x = df.iloc[:, 0].to_numpy(dtype=float)
-                y = df.iloc[:, 1].to_numpy(dtype=float)
-                if len(x) >= 2:
-                    idx = np.argsort(x)
-                    return x[idx], y[idx], None
         except UnicodeDecodeError:
             continue
-        except Exception:
-            pass
 
         try:
-            content_str = raw.decode(enc)
             x, y = parse_structured_xps(content_str)
             return x, y, None
-        except UnicodeDecodeError:
-            continue
         except Exception as e:
-            return None, None, str(e)
-    return None, None, "無法辨識編碼"
+            structured_error = str(e)
+
+    x, y, generic_error = parse_two_column_spectrum_bytes(raw)
+    if x is not None and y is not None:
+        return x, y, None
+    return None, None, generic_error or structured_error or "無法辨識 XPS 檔案格式"

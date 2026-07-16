@@ -2439,6 +2439,7 @@ export default function XPS({
       setRawFiles(nextFiles)
       setActiveDatasetIdx(0)
       if (res.errors.length) setError(res.errors.join('; '))
+      else if (nextFiles.length === 0) setError('檔案中沒有可分析的 XPS 數據，請確認至少包含兩列 X、Y 數值。')
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally {
@@ -2450,6 +2451,12 @@ export default function XPS({
   const [basketsPanelOpen, setBasketsPanelOpen] = useState(true)
   const [basketItems, setBasketItems] = useState<BasketFileItem[]>([])
   const [baskets, setBaskets] = useState<SampleBasket[]>([])
+
+  const handleBasketFilesAdded = useCallback(async (files: File[]) => {
+    if (files.length === 0) return
+    setBasketsPanelOpen(false)
+    await handleFiles(files)
+  }, [handleFiles])
 
   const handleApplyBasket = useCallback(async (_basket: SampleBasket, basketFiles: File[]) => {
     if (basketFiles.length === 0) return
@@ -5385,6 +5392,7 @@ export default function XPS({
         onChangeItems={setBasketItems}
         onChangeBaskets={setBaskets}
         onApplyBasket={handleApplyBasket}
+        onFilesAdded={handleBasketFilesAdded}
         applyDisabled={parseLoading}
         moduleLabel="XPS"
         acceptFileExts={['.xy', '.txt', '.csv', '.vms', '.pro', '.dat', '.asc', '.xlsx', '.xls']}

@@ -551,3 +551,31 @@ streamlit run app.py --server.port 8505
 [2026-06-18] 同步：已建立本地 commit（初始 hash 156f793，後續可能因補紀錄 amend 變更），接著需先 pull --rebase origin/main，因本機 main 落後遠端 2 個 commit，再推送至 GitHub。
 
 [2026-06-18] 同步：git pull --rebase origin main 成功，本機 main 已接上遠端最新內容並 ahead 1；準備推送 XRD 匯出 Y 軸省略功能 commit 至 origin/main。
+
+[2026-07-16] 檢查：開始追查 XPS 檔案上傳後未顯示可分析數據，先盤點專案結構與目前工作樹，避免影響使用者既有變更。
+
+[2026-07-16] 檢查：讀取 XPS 頁面、上傳元件、分組元件、前端 API 與後端解析路由，定位上傳後資料未進入分析區的狀態或格式問題。
+
+[2026-07-16] 重要判斷：初步畫面顯示檔案已進入樣品 1，但「套用／開始分析」仍停用；改以精準搜尋 XPS 的 parsedFiles、basket、apply 與 parse handler，檢查啟用條件和 ID 對應。
+
+[2026-07-16] 檢查：擷取 XPS 上傳與樣品籃的完整關鍵區段，確認新檔案如何建立 basketId、按鈕實際 disabled 條件，以及套用後 handleFiles 是否更新 parsedFiles。
+
+[2026-07-16] 重要判斷：確認 XPS 解析器未使用既有通用兩欄解析，且在第一個可解碼但不符合 structured 格式時提前回傳；準備沿用通用 parser 並檢視現有測試架構與前端錯誤呈現位置。
+
+[2026-07-16] 檢查：確認 XPS 工作區以 rawFiles 是否為空決定顯示上傳提示；將同時修正後端解析 fallback，並讓 XPS 樣品面板上傳後直接載入分析資料（分類籃仍保留作後續分組）。
+[2026-07-16] 實作：修正 XPS 文字檔解析流程。儀器 structured 格式解析失敗時不再提前返回，改由既有通用兩欄 parser 接手，支援空白、Tab、逗號分隔及多種文字編碼。
+[2026-07-16] 實作：XPS 樣品分類面板選檔後會立即關閉面板並載入分析資料；檔案仍保留於未分類清單，可再分組與套用。另補上解析成功但無資料時的明確錯誤提示。
+
+[2026-07-16] 檢查：檢視本次差異與可用 Python/Node 環境，確認修改僅落在 XPS parser、XPS 即時載入及樣品面板的可選 callback。
+
+[2026-07-16] 檢查：本機 PATH 無 Node/npm 且專案無 .venv；查找既有 uv、py launcher、Node 安裝位置與 frontend node_modules，選擇不下載依賴的驗證方式。
+
+[2026-07-16] 檢查：首次 uv 回歸測試因工作目錄誤指 backend 導致 CLAUDE.md 相對路徑讀取失敗，且 uv cache 權限遭沙盒拒絕；改由專案根目錄記錄後，以非沙盒方式重跑相同 parser 測試。
+
+[2026-07-16] 檢查：XPS parser 回歸測試通過空白、Tab、CSV、structured 四種格式，Python py_compile 通過；接著檢查 SampleBasketsPanel 全部呼叫端、TypeScript props 一致性及 whitespace 錯誤。
+
+[2026-07-16] 重要判斷：發現先前在 backend 工作目錄執行紀錄命令時誤建 web/backend/CLAUDE.md；確認為本次操作產生，將只移除此非預期檔案，不碰使用者變更。
+
+[2026-07-16] 實作：移除本次操作誤建的 web/backend/CLAUDE.md。
+
+[2026-07-16] 檢查：最終驗證通過：parser 四格式回歸與 Python py_compile 成功，SampleBasketsPanel 新 callback 為 optional、其餘模組呼叫不受影響，git diff --check 無錯；前端因本機未安裝 Node/npm 無法執行 tsc/build。
