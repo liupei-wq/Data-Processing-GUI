@@ -579,3 +579,29 @@ streamlit run app.py --server.port 8505
 [2026-07-16] 實作：移除本次操作誤建的 web/backend/CLAUDE.md。
 
 [2026-07-16] 檢查：最終驗證通過：parser 四格式回歸與 Python py_compile 成功，SampleBasketsPanel 新 callback 為 optional、其餘模組呼叫不受影響，git diff --check 無錯；前端因本機未安裝 Node/npm 無法執行 tsc/build。
+
+[2026-07-16] 檢查：開始診斷 Render 網站 data-processing-gui-web.onrender.com 連線逾時，先盤點專案檔案、部署與啟動設定。
+
+[2026-07-16] 檢查：讀取 render.yaml、web/Dockerfile、後端入口、前端 API 設定及 Git 工作區狀態，確認逾時來源。
+
+[2026-07-16] 重要判斷：Docker 啟動命令已正確綁定 0.0.0.0 與 Render PORT，健康檢查路徑亦存在；需進一步探測正式站與檢查啟動期匯入／相依問題。
+
+[2026-07-16] 檢查：正式站與 /health 的網頁探測未取得 HTTP 回應，改查 DNS、TCP 443 與 PowerShell HTTP 詳細錯誤。
+
+[2026-07-16] 檢查：正式網域 DNS 正常解析到 Render/Cloudflare，但本機對 216.24.57.8、216.24.57.9 的 TCP 443 均失敗；比對 render.com、其他 onrender.com 與一般 HTTPS，判斷是否為本機網路路由／防火牆。
+
+[2026-07-16] 重要判斷：TCP 測試在目前受限執行環境對多個 HTTPS 網站皆失敗，不能單靠本機 TCP 結果判定 Render 故障；改用外部搜尋與專案本機啟動驗證交叉確認。
+
+[2026-07-16] 檢查：外部網頁工具未回傳結果；檢查部署檔近期歷史、Python 相依與前端建置命令，尋找可重現的部署失敗。
+
+[2026-07-16] 檢查：前一輪歷史查詢因 git --follow 同時指定兩檔而以 code 1 結束，但已確認 requirements 已移除龐大 xraylarch；改為逐檔查歷史並盤點本機環境。
+
+[2026-07-16] 檢查：本機沒有 .venv、frontend node_modules/dist，且未偵測到 Node/Docker；搜尋既有 Render 部署紀錄、README 指引與啟動錯誤線索。
+
+[2026-07-16] 檢查：以非沙盒網路直接探測正式 /health、Render 官方狀態 API 與 GitHub 遠端 main，排除執行環境網路限制造成的誤判。
+
+[2026-07-16] 重要判斷：非沙盒探測確認正式 /health 回傳 HTTP 200 與 {status:ok}，Render 官方狀態為 All Systems Operational，origin/main 與本機 HEAD 同為 f58782d；目前並非程式啟動或部署同步失敗，截圖較符合暫時性連線／免費服務冷啟動逾時。
+
+[2026-07-16] 檢查：連續 3 次正式 /health 均回 200，總回應 0.35~0.70 秒；首頁檢查變數誤用 PowerShell 保留的 HOME 而未執行，改名後重跑首頁與靜態資源驗證。
+
+[2026-07-16] 檢查：正式首頁回傳 HTTP 200、Nigiro Pro HTML 正常，主要 JavaScript 靜態資源回傳 HTTP 200（5,794,563 bytes）；確認服務已完整恢復。未修改應用程式碼，避免針對非程式故障做無效變更。
