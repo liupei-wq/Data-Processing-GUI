@@ -9,6 +9,8 @@ import type {
   XasSampleEdgeResponse,
   ExafsRequest,
   ExafsResult,
+  XasGlobalFitRequest,
+  XasGlobalFitResult,
 } from '../types/xas'
 import { readApiError } from './http'
 
@@ -58,6 +60,36 @@ export async function fitXasPeaks(
   })
   if (!res.ok) throw new Error(await readApiError(res, 'XAS peak fitting 失敗'))
   return res.json()
+}
+
+export async function fitXasGlobal(payload: XasGlobalFitRequest): Promise<XasGlobalFitResult> {
+  const res = await fetch(`${BASE}/global-fit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(await readApiError(res, 'XAS 全域擬合失敗'))
+  return res.json()
+}
+
+export async function downloadXasGlobalExport(
+  format: 'xlsx' | 'zip',
+  config: XasGlobalFitRequest,
+  result: XasGlobalFitResult,
+): Promise<void> {
+  const res = await fetch(`${BASE}/global-fit-export/${format}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config, result }),
+  })
+  if (!res.ok) throw new Error(await readApiError(res, 'XAS 全域擬合匯出失敗'))
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = format === 'xlsx' ? 'xas_global_fit.xlsx' : 'xas_global_fit_complete.zip'
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 export async function processExafs(payload: ExafsRequest, signal?: AbortSignal): Promise<ExafsResult> {

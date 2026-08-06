@@ -161,6 +161,88 @@ export interface XasFitResult {
   chi_red: number | null
 }
 
+export interface XasGlobalDatasetInput {
+  name: string
+  x: number[]
+  y: number[]
+}
+
+export interface XasGlobalSmallPeakSettings {
+  range: [number, number]
+  center: number
+  center_min: number
+  center_max: number
+  lock_center: boolean
+  fwhm: number
+  fwhm_min: number
+  fwhm_max: number
+  lock_fwhm: boolean
+  background: 'constant' | 'linear'
+}
+
+export interface XasGlobalMainPeakSettings {
+  label: string
+  center: number
+  center_min: number
+  center_max: number
+  lock_center: boolean
+  fwhm: number
+  fwhm_min: number
+  fwhm_max: number
+  lock_fwhm: boolean
+}
+
+export interface XasGlobalFitRequest {
+  datasets: XasGlobalDatasetInput[]
+  small_peak: XasGlobalSmallPeakSettings
+  main_peaks: XasGlobalMainPeakSettings[]
+  fit_range: [number, number]
+  main_background: 'constant' | 'linear'
+  ratio_numerator: string | null
+  ratio_denominator: string | null
+  max_nfev?: number
+}
+
+export interface XasGlobalPeakResult {
+  label: string
+  center: number
+  fwhm: number
+  height: number
+  area: number
+}
+
+export interface XasGlobalDatasetResult {
+  name: string
+  x: number[]
+  original: number[]
+  small_peak: {
+    center: number
+    fwhm: number
+    height: number
+    area: number
+    component: number[]
+    local_background: number[]
+  }
+  corrected: number[]
+  background: number[]
+  components: number[][]
+  total_fit: number[]
+  residual: number[]
+  peaks: XasGlobalPeakResult[]
+  area_ratio: number | null
+  r_squared: number
+  rmse: number
+}
+
+export interface XasGlobalFitResult {
+  success: boolean
+  message: string
+  shared_peaks: Array<{ label: string; center: number; fwhm: number }>
+  ratio_numerator: string | null
+  ratio_denominator: string | null
+  datasets: XasGlobalDatasetResult[]
+}
+
 // ── XAS sample database types ───────────────────────────────────────────────
 
 export interface XasSampleListItem {

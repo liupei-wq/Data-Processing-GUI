@@ -5,6 +5,7 @@ import { formatUtc8Iso } from '../utils/time'
 import FileUpload from '../components/FileUpload'
 import { EmptyWorkspaceState, GuidedSidebarSection, MODULE_CONTENT, StickySidebarHeader } from '../components/WorkspaceUi'
 import { SampleBasketsButton, SampleBasketsPanel, SampleBasketsOverlayModal, type BasketFileItem, type SampleBasket } from '../components/SampleBaskets'
+import XasGlobalFitPanel from '../components/XasGlobalFitPanel'
 import { withPlotFullscreen } from '../components/plotConfig'
 import type { PlotPopupRequest, PlotPopupUpdate } from '../hooks/usePlotPopups'
 import { downloadFitReport, fetchXasSamplePeaks, fitXasPeaks, listXasSamples, parseFiles, processData, processExafs } from '../api/xas'
@@ -4069,6 +4070,10 @@ export default function XAS({
               </div>
             )}
           </>
+        )}
+
+        {xasMode === 'xas' && (
+          <XasGlobalFitPanel pipelineDatasets={result?.datasets ?? []} />
         )}
 
         {/* Peak fitting result — shown in both pipeline and imported mode */}

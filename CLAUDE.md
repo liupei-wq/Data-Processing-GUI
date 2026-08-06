@@ -14,9 +14,9 @@
 - Plotly 一律走 `web/frontend/src/components/PlotlyChart.tsx` 兼容層。
 - 目前 PowerShell profile 可能出現執行原則警告，通常不影響指令結果。
 - 畫任何數據圖的疊圖時，顏色設定固定為：
-  - `50-0`：藍色 `#136DE4`
+  - `40-10`：藍色 `#136DE4`
   - `45-5`：紅色 `#E42213`
-  - `40-10`：黑色 `#252526`
+  - `50-0`：黑色 `#252526`
 
 ## 專案定位
 
@@ -172,6 +172,20 @@ streamlit run app.py --server.port 8505
 
 ## 精簡動作紀錄
 
+- [2026-08-07] 檢查：最終 `git diff --check` 通過（僅 LF/CRLF 提示）；確認變更範圍僅有 `CLAUDE.md`、XAS router/API/types/page、新增全域擬合引擎/面板/測試，未覆蓋其他既有修改。
+- [2026-08-07] 檢查：以 tree-sitter TSX parser 檢查 `XasGlobalFitPanel.tsx`、`XAS.tsx`、`api/xas.ts`、`types/xas.ts` 全部語法正確；再檢查新檔無行尾空白，`git diff --check` 通過。
+- [2026-08-07] 檢查：實際 import XAS router 並執行 `_global_fit_excel`，成功產生 7,349 bytes 且具有正確 ZIP/XLSX `PK` 檔頭的 Excel。
+- [2026-08-07] 檢查：`uv run python -m py_compile web/backend/core/xas_global_fitting.py web/backend/routers/xas.py` 通過。本機無 Node/npm 且前端尚未安裝 `node_modules`，無法直接執行 Vite build，將另以 TSX parser 先檢查語法。
+- [2026-08-07] 檢查：改用 `uv run --with pytest --with numpy --with scipy python -m pytest -q` 驗證 XAS 全域擬合，結果 `1 passed`。
+- [2026-08-07] 檢查：`uv run ... pytest -q` 首次因 uv cache 權限改用非沙盒執行；依賴安裝成功，但 pytest console script 在含中文路徑下未將 backend 根目錄加入 import path，收集階段因 `No module named core` 失敗，改以 `python -m pytest` 再驗證。
+- [2026-08-07] 檢查：首次 `git diff --check` 通過（僅既有 LF/CRLF 提示）；但當前 PowerShell PATH 的 `python.exe` 無法存取，且找不到 `node` / `npm`，需再搜尋專案或系統可用 runtime 後驗證。
+- [2026-08-07] 實作：新增 XAS 全域擬合數值測試，覆蓋兩樣品共用峰形、小峰僅扣高斯、局部背景保留、C2/B2 面積比與擬合品質。
+- [2026-08-07] 實作：將「全域成分擬合」面板掛入 XAS/XANES 主工作區，保留原有單光譜峰擬合區與結果顯示。
+- [2026-08-07] 實作：新增原生 React `XasGlobalFitPanel`，支援直接使用 XAS TEY/TFY 處理結果或上傳第一欄 X/後續多樣品的 CSV；含小峰約束、可編輯主峰表、面積比選擇、分樣品曲線/結果表及 JSON/Excel/ZIP 匯出。
+- [2026-08-07] 實作：補上 XAS 全域擬合的 TypeScript request/result 型別、擬合 API client 與 Excel/ZIP 下載 client。
+- [2026-08-07] 實作：XAS 後端新增 `/api/xas/global-fit` 與 `/api/xas/global-fit-export/{xlsx|zip}`；匯出包含設定 JSON、結果 JSON、Excel 統計/光譜表與逐樣品 CSV。
+- [2026-08-07] 實作：新增 `web/backend/core/xas_global_fitting.py`，完成多樣品高斯全域擬合引擎；小峰以局部常數/線性背景擬合但只扣除高斯成分，主峰中心與 FWHM 跨樣品共用，高度與背景各樣品獨立，並以峰面積計算指定比值。
+- [2026-08-07] 重要判斷：XAS 已有單光譜峰擬合；新需求改以同一 XANES 分析區內的「全域成分擬合」獨立面板整合，保留原有擬合流程，並新增小峰僅扣高斯、背景分離、跨樣品共用中心/FWHM、面積比與完整匯出。
 - [2026-07-27] 重要判斷：使用者要求整理 `CLAUDE.md`；確認原檔案同時包含前置流水帳與舊版短手冊，資訊重複且近期紀錄分散，決定整份重組為短版協作手冊。
 - [2026-07-27] 實作：重寫 `CLAUDE.md` 結構，保留協作規則、專案定位、技術棧、驗證慣例、關鍵約定、模組現況與 2026-05-24 至 2026-07-16 的重要變更摘要；刪除重複逐步流水帳。
 - [2026-07-27] 檢查：整理後執行 `git diff --check` 通過，僅有既有 LF/CRLF 換行提示；`git diff --stat` 顯示 `CLAUDE.md` 大幅精簡。

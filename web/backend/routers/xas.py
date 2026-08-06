@@ -6,6 +6,9 @@ Handles TEY/TFY dual-channel XAS data from beamline DAT files.
 from __future__ import annotations
 
 import io
+import json
+import re
+import zipfile
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -19,6 +22,7 @@ from core.parsers import looks_like_excel, numeric_excel_table
 from core.peak_fitting import fit_peaks, perturb_init_peaks
 from core.processing import apply_normalization
 from core.spectrum_ops import interpolate_spectrum_to_grid, mean_spectrum_arrays
+from core.xas_global_fitting import fit_xas_global_components
 from db.xas_database import get_sample_edge_peaks, list_samples
 
 router = APIRouter()
@@ -1158,6 +1162,162 @@ def xanes_deconv(req: DeconvRequest):
 
 
 # ── Peak fitting (XPS-compatible, adapted for XAS energy axis) ────────────────
+
+class XasGlobalDataset(BaseModel):
+    name: str
+    x: List[float]
+    y: List[float]
+
+
+class XasGlobalSmallPeak(BaseModel):
+    range: List[float] = Field(default_factory=lambda: [544.0, 545.9], min_length=2, max_length=2)
+    center: float = 545.0
+    center_min: float = 544.0
+    center_max: float = 545.9
+    lock_center: bool = False
+    fwhm: float = 1.0
+    fwhm_min: float = 0.2
+    fwhm_max: float = 2.0
+    lock_fwhm: bool = False
+    background: str = "linear"
+
+
+class XasGlobalMainPeak(BaseModel):
+    label: str
+    center: float
+    center_min: float
+    center_max: float
+    lock_center: bool = False
+    fwhm: float = 1.2
+    fwhm_min: float = 0.6
+    fwhm_max: float = 2.0
+    lock_fwhm: bool = False
+
+
+class XasGlobalFitRequest(BaseModel):
+    datasets: List[XasGlobalDataset]
+    small_peak: XasGlobalSmallPeak
+    main_peaks: List[XasGlobalMainPeak]
+    fit_range: List[float] = Field(min_length=2, max_length=2)
+    main_background: str = "linear"
+    ratio_numerator: Optional[str] = "C2"
+    ratio_denominator: Optional[str] = "B2"
+    max_nfev: int = 30000
+
+
+class XasGlobalExportRequest(BaseModel):
+    config: Dict[str, Any]
+    result: Dict[str, Any]
+
+
+def _global_fit_excel(config: dict, result: dict) -> bytes:
+    buffer = io.BytesIO()
+    shared_rows = result.get("shared_peaks", [])
+    sample_rows = [{
+        "sample": dataset.get("name"),
+        "r_squared": dataset.get("r_squared"),
+        "rmse": dataset.get("rmse"),
+        "ratio_numerator": result.get("ratio_numerator"),
+        "ratio_denominator": result.get("ratio_denominator"),
+        "area_ratio": dataset.get("area_ratio"),
+        "small_peak_center_eV": dataset.get("small_peak", {}).get("center"),
+        "small_peak_fwhm_eV": dataset.get("small_peak", {}).get("fwhm"),
+        "small_peak_area": dataset.get("small_peak", {}).get("area"),
+    } for dataset in result.get("datasets", [])]
+    peak_rows = []
+    for dataset in result.get("datasets", []):
+        for peak in dataset.get("peaks", []):
+            peak_rows.append({"sample": dataset.get("name"), **peak})
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame(shared_rows).to_excel(writer, sheet_name="共用峰參數", index=False)
+        pd.DataFrame(sample_rows).to_excel(writer, sheet_name="擬合品質與面積比", index=False)
+        pd.DataFrame(peak_rows).to_excel(writer, sheet_name="各樣品峰結果", index=False)
+        pd.DataFrame([{"config_json": json.dumps(config, ensure_ascii=False)}]).to_excel(writer, sheet_name="設定", index=False)
+        for index, dataset in enumerate(result.get("datasets", []), start=1):
+            components = dataset.get("components", [])
+            peaks = dataset.get("peaks", [])
+            columns: dict[str, Any] = {
+                "Energy_eV": dataset.get("x", []),
+                "Original": dataset.get("original", []),
+                "Small_Gaussian": dataset.get("small_peak", {}).get("component", []),
+                "Small_Local_Background": dataset.get("small_peak", {}).get("local_background", []),
+                "Corrected": dataset.get("corrected", []),
+                "Main_Background": dataset.get("background", []),
+                "Total_Fit": dataset.get("total_fit", []),
+                "Residual": dataset.get("residual", []),
+            }
+            for peak_index, component in enumerate(components):
+                label = peaks[peak_index].get("label", f"Peak_{peak_index + 1}") if peak_index < len(peaks) else f"Peak_{peak_index + 1}"
+                columns[f"Peak_{label}"] = component
+            safe_name = re.sub(r"[\\/*?:\[\]]", "_", str(dataset.get("name") or f"sample_{index}"))[:22]
+            pd.DataFrame(columns).to_excel(writer, sheet_name=f"{index:02d}_{safe_name}"[:31], index=False)
+    return buffer.getvalue()
+
+
+@router.post("/global-fit")
+def fit_xas_global(req: XasGlobalFitRequest):
+    if req.small_peak.background not in {"constant", "linear"}:
+        raise HTTPException(status_code=400, detail="小峰背景僅支援 constant 或 linear")
+    if req.main_background not in {"constant", "linear"}:
+        raise HTTPException(status_code=400, detail="主擬合背景僅支援 constant 或 linear")
+    try:
+        return fit_xas_global_components(
+            datasets=[dataset.model_dump() for dataset in req.datasets],
+            small_peak=req.small_peak.model_dump(),
+            main_peaks=[peak.model_dump() for peak in req.main_peaks],
+            fit_range=req.fit_range,
+            main_background=req.main_background,
+            ratio_numerator=req.ratio_numerator,
+            ratio_denominator=req.ratio_denominator,
+            max_nfev=req.max_nfev,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"全域擬合失敗：{exc}") from exc
+
+
+@router.post("/global-fit-export/{export_format}")
+def export_xas_global_fit(export_format: str, req: XasGlobalExportRequest):
+    if export_format not in {"xlsx", "zip"}:
+        raise HTTPException(status_code=400, detail="匯出格式僅支援 xlsx 或 zip")
+    excel_bytes = _global_fit_excel(req.config, req.result)
+    if export_format == "xlsx":
+        return StreamingResponse(
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=xas_global_fit.xlsx"},
+        )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xas_global_fit_settings.json", json.dumps(req.config, ensure_ascii=False, indent=2))
+        archive.writestr("xas_global_fit_results.json", json.dumps(req.result, ensure_ascii=False, indent=2))
+        archive.writestr("xas_global_fit.xlsx", excel_bytes)
+        for index, dataset in enumerate(req.result.get("datasets", []), start=1):
+            components = dataset.get("components", [])
+            peaks = dataset.get("peaks", [])
+            columns: dict[str, Any] = {
+                "Energy_eV": dataset.get("x", []),
+                "Original": dataset.get("original", []),
+                "Small_Gaussian": dataset.get("small_peak", {}).get("component", []),
+                "Small_Local_Background": dataset.get("small_peak", {}).get("local_background", []),
+                "Corrected": dataset.get("corrected", []),
+                "Main_Background": dataset.get("background", []),
+                "Total_Fit": dataset.get("total_fit", []),
+                "Residual": dataset.get("residual", []),
+            }
+            for peak_index, component in enumerate(components):
+                label = peaks[peak_index].get("label", f"Peak_{peak_index + 1}") if peak_index < len(peaks) else f"Peak_{peak_index + 1}"
+                columns[f"Peak_{label}"] = component
+            safe_name = re.sub(r"[^\w.-]+", "_", str(dataset.get("name") or f"sample_{index}"))
+            archive.writestr(f"spectra/{index:02d}_{safe_name}.csv", pd.DataFrame(columns).to_csv(index=False))
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=xas_global_fit_complete.zip"},
+    )
+
 
 class XasInitPeak(BaseModel):
     center: float
