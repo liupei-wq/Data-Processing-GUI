@@ -25,6 +25,7 @@ ORBITALS = [
 FACTOR_ALIASES = {
     "O_2p": ["O_2p", "O2p"],
     "O_2s": ["O_2s", "O2s"],
+    "Ga_4s": ["Ga_4s", "Ga_tet_s", "Ga_oct_s"],
     "Ga_4p": ["Ga_4p", "Ga_tet_p", "Ga_oct_p", "Ga_tet_4p", "Ga_oct_4p"],
     "Ga_3d": ["Ga_3d", "Ga3d", "Ga_tet_d", "Ga_oct_d", "Ga_tet_3d", "Ga_oct_3d"],
     "Ga_tet": ["Ga_tet", "Ga_tet_s", "Ga_tet_p", "Ga_tet_d", "Ga_tet_4p", "Ga_tet_3d"],
@@ -43,14 +44,24 @@ def prepare_pdos(df: pd.DataFrame, energy_col: str, mapping: dict[str, str], fli
 
 
 def apply_cross_sections(pdos: pd.DataFrame, factors: dict[str, float]) -> pd.DataFrame:
+    """
+    Multiply each pDOS column by its photo-ionisation weight.
+
+    A column gets the factor of every group it belongs to exactly once
+    (e.g. Ga_tet_p ← Ga_4p (orbital) × Ga_tet (site)). A factor keyed by the
+    column name itself is applied only when that name is not also a group
+    key, so e.g. O_2p is not weighted twice (factor²).
+    """
     out = pdos.copy()
     for col in out.columns:
         if col == "Energy_rel":
             continue
-        factor = factors.get(col, 1.0)
+        factor = 1.0
         for group, aliases in FACTOR_ALIASES.items():
             if col in aliases:
                 factor *= factors.get(group, 1.0)
+        if col in factors and col not in FACTOR_ALIASES:
+            factor *= factors[col]
         out[col] = out[col].to_numpy(float) * factor
     return out
 

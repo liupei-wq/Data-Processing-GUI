@@ -267,8 +267,11 @@ class FitPeakRow(BaseModel):
     Area: float
     Area_pct: float
     SNR: Optional[float] = None
+    # 1σ errors; Uncertainty_Method tells whether they come from the fit
+    # covariance ("fit_covariance"), a bootstrap, or the SNR heuristic
     Bootstrap_Center_STD: Optional[float] = None
     Bootstrap_FWHM_STD: Optional[float] = None
+    Uncertainty_Method: str = ""
     Fit_Status: str = "Fit OK"
     Physical_Confidence: str = "Medium"
     Confidence: str = "Medium"
@@ -2482,6 +2485,11 @@ def _fit_with_aic_bic_auto_peaks(
 
 
 def _estimate_uncertainty(fwhm: float, snr: float, tolerance: float) -> tuple[float | None, float | None]:
+    """
+    Heuristic fallback ONLY (used when the fit covariance is unavailable):
+    σ_center ≈ FWHM / (2.355·SNR), σ_FWHM ≈ FWHM / SNR, with floors/caps.
+    This is an order-of-magnitude estimate, not a statistical error.
+    """
     if not np.isfinite(snr) or snr <= 0:
         return None, None
     center_unc = min(max(fwhm / (2.355 * max(snr, 1.0)), 0.08), max(tolerance * 0.7, 0.5))
@@ -2606,7 +2614,17 @@ def _peak_row_from_candidate(
     fwhm = float(peak.get("fwhm", candidate.get("fwhm", 0.0)))
     height = float(peak.get("amplitude", 0.0))
     snr = float(abs(height) / noise) if noise > 0 and fitted_peak is not None else 0.0
-    center_unc, fwhm_unc = _estimate_uncertainty(fwhm, snr, float(candidate.get("tolerance_cm", 8.0)))
+    # Prefer 1σ errors from the fit covariance s²(JᵀJ)⁻¹ (core.peak_fitting);
+    # fall back to the SNR-based heuristic only when the covariance is not
+    # available (e.g. locked parameters or a degenerate Jacobian).
+    cov_center = peak.get("center_err")
+    cov_fwhm = peak.get("fwhm_err")
+    if cov_center is not None and cov_fwhm is not None and np.isfinite(cov_center) and np.isfinite(cov_fwhm):
+        center_unc, fwhm_unc = float(cov_center), float(cov_fwhm)
+        uncertainty_method = "fit_covariance"
+    else:
+        center_unc, fwhm_unc = _estimate_uncertainty(fwhm, snr, float(candidate.get("tolerance_cm", 8.0)))
+        uncertainty_method = "snr_heuristic"
     status, confidence_score, note_list = _status_and_confidence(candidate, fitted_peak, snr, improvement, group_shift=group_shift)
     flags: list[str] = []
     if peak.get("center_at_boundary"):
@@ -2657,8 +2675,11 @@ def _peak_row_from_candidate(
         "Area": area,
         "Area_pct": area_pct,
         "SNR": snr if status not in {"not_observed", "rejected"} else 0.0,
+        # field names kept for backward compatibility; values are 1σ errors
+        # (see Uncertainty_Method), not bootstrap standard deviations
         "Bootstrap_Center_STD": center_unc,
         "Bootstrap_FWHM_STD": fwhm_unc,
+        "Uncertainty_Method": uncertainty_method,
         "Fit_Status": "Fit OK" if status in {"matched", "shifted"} else ("Not observed" if status == "not_observed" else "Fit warning"),
         "Physical_Confidence": "High" if confidence_score >= 75 else ("Medium" if confidence_score >= 45 else "Low"),
         "Confidence": "High" if confidence_score >= 75 else ("Medium" if confidence_score >= 45 else "Low"),

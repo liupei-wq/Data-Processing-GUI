@@ -41,13 +41,18 @@ export const DEFAULT_PARAMS: ProcessParams = {
   norm_x_end: null,
 }
 
+/**
+ * Kα1 與強度加權 Kα 平均 (2·Kα1 + Kα2)/3，International Tables for Crystallography Vol. C, Table 4.2.2.1。
+ * 已去除 Kα2 時用 Kα1，未去除時用加權平均。
+ */
 export const WAVELENGTH_MAP: Record<WavelengthPreset, number> = {
-  'Cu Kα (1.5406 Å)': 1.5406,
-  'Co Kα (1.7890 Å)': 1.7890,
-  'Mo Kα (0.7093 Å)': 0.7093,
-  'Cr Kα (2.2909 Å)': 2.2909,
-  'Fe Kα (1.9373 Å)': 1.9373,
-  自訂: 1.5406,
+  'Cu Kα1 (1.5406 Å)': 1.540598,
+  'Cu Kα 加權平均 (1.5419 Å)': 1.541874,
+  'Co Kα1 (1.7890 Å)': 1.788965,
+  'Mo Kα1 (0.7093 Å)': 0.709317,
+  'Cr Kα1 (2.2898 Å)': 2.289760,
+  'Fe Kα1 (1.9360 Å)': 1.936042,
+  自訂: 1.540598,
 }
 
 function Section({

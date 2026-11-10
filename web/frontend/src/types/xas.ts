@@ -149,6 +149,11 @@ export interface XasFitPeakRow {
   Area: number
   Height: number
   Area_pct: number | null
+  /** 1σ 標準誤差（擬合共變異矩陣），無法估計時為 null */
+  Center_err?: number | null
+  FWHM_err?: number | null
+  Area_err?: number | null
+  Height_err?: number | null
 }
 
 export interface XasFitResult {
@@ -158,7 +163,9 @@ export interface XasFitResult {
   peaks: XasFitPeakRow[]
   r_squared: number
   rmse: number
+  /** Σr²/(n−p)；資料未以量測誤差加權時不是嚴格的 reduced χ² */
   chi_red: number | null
+  notes?: string[]
 }
 
 export interface XasGlobalDatasetInput {

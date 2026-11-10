@@ -21,7 +21,7 @@ from scipy.signal import find_peaks, peak_widths
 
 from core.parsers import parse_two_column_spectrum_bytes
 from core.peak_fitting import fit_peaks
-from core.processing import smooth_signal, apply_normalization, apply_background
+from core.processing import smooth_signal, apply_normalization, apply_background, strip_kalpha2
 from core.spectrum_ops import (
     fit_fixed_gaussian_templates,
     interpolate_spectrum_to_grid,
@@ -32,14 +32,23 @@ from db.xrd_database import XRD_REFERENCES
 router = APIRouter()
 
 # ── wavelength presets (Å) ────────────────────────────────────────────────────
+# Kα1 lines and the intensity-weighted Kα average (2·Kα1 + Kα2)/3, from
+# International Tables for Crystallography Vol. C, Table 4.2.2.1;
+# Cu–Cr also Hölzer et al., Phys. Rev. A 56, 4554 (1997).
+# Use Kα1 when Kα2 has been stripped / resolved, Kα-average otherwise.
 WAVELENGTHS = {
-    "Cu Kα (1.5406 Å)": 1.5406,
-    "Cu Kα1 (1.5406 Å)": 1.5406,
-    "Co Kα (1.7890 Å)": 1.7890,
-    "Mo Kα (0.7093 Å)": 0.7093,
-    "Cr Kα (2.2909 Å)": 2.2909,
-    "Fe Kα (1.9373 Å)": 1.9373,
+    "Cu Kα1 (1.5406 Å)": 1.540598,
+    "Cu Kα 加權平均 (1.5419 Å)": 1.541874,
+    "Co Kα1 (1.7890 Å)": 1.788965,
+    "Co Kα 加權平均 (1.7903 Å)": 1.790260,
+    "Mo Kα1 (0.7093 Å)": 0.709317,
+    "Mo Kα 加權平均 (0.7107 Å)": 0.710747,
+    "Cr Kα1 (2.2898 Å)": 2.289760,
+    "Cr Kα 加權平均 (2.2911 Å)": 2.291061,
+    "Fe Kα1 (1.9360 Å)": 1.936042,
+    "Fe Kα 加權平均 (1.9374 Å)": 1.937355,
 }
+KALPHA2_WAVELENGTHS = {"Cu": 1.544426, "Co": 1.792850, "Mo": 0.713607, "Cr": 2.293663, "Fe": 1.939980}
 
 
 def _d_to_two_theta(d: float, wavelength: float) -> Optional[float]:
@@ -68,6 +77,11 @@ class ProcessParams(BaseModel):
     interpolate: bool = False
     n_points: int = 1000
     average: bool = False
+    # Rachinger Kα2 stripping (applied first, on the raw pattern)
+    kalpha2_strip: bool = False
+    kalpha1_wavelength: float = 1.540598
+    kalpha2_wavelength: float = 1.544426
+    kalpha2_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     bg_enabled: bool = False
     bg_method: str = "none"           # none | linear | shirley | polynomial | asls | airpls
     bg_x_start: Optional[float] = None
@@ -304,6 +318,8 @@ def process_data(req: ProcessRequest):
     for ds in datasets:
         x = np.array(ds.x, dtype=float)
         y = np.array(ds.y, dtype=float)
+        if params.kalpha2_strip:
+            y = strip_kalpha2(x, y, params.kalpha1_wavelength, params.kalpha2_wavelength, params.kalpha2_ratio)
         if (params.interpolate or params.gaussian_enabled) and params.n_points >= 2:
             x_grid = np.linspace(x.min(), x.max(), params.n_points)
             y = interpolate_spectrum_to_grid(x, y, x_grid)

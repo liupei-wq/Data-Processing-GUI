@@ -6,20 +6,48 @@ from scipy.sparse.linalg import spsolve
 from scipy.signal import savgol_filter
 
 
-def shirley_background(y, max_iter=20):
+def _edge_level(y, n_points, at_start):
+    """Mean intensity of the first / last `n_points` samples (at most 1/4 of the data)."""
+    y = np.asarray(y, dtype=float)
+    n = int(max(1, min(int(n_points), len(y) // 4)))
+    segment = y[:n] if at_start else y[-n:]
+    return float(np.mean(segment))
+
+
+def shirley_background(y, max_iter=20, end_points=5, tol=1e-7):
     """
-    Iterative Shirley background using cumulative sum (fast & stable).
-    Starts from a linear guess and refines until the integral converges.
+    Iterative Shirley background (Shirley 1972; Proctor & Sherwood 1982).
+
+        B(i) = I_end + (I_start − I_end) · A(i → end) / A_total
+
+    where A is the cumulative peak area above the current background.
+    The formula is direction-independent, so it gives the same result for
+    ascending or descending binding-energy order.
+
+    I_start / I_end are averaged over `end_points` samples at each edge of
+    the window (like the averaging width in CasaXPS), so that one noisy
+    point at the window edge does not tilt the whole background.
     """
     y = np.asarray(y, dtype=float)
     if len(y) < 2:
         return np.zeros_like(y)
-    bkg = np.linspace(y[0], y[-1], len(y))
-    for _ in range(max_iter):
-        integral = np.cumsum(y - bkg)
-        if integral[-1] == 0:
+    i_start = _edge_level(y, end_points, at_start=True)
+    i_end = _edge_level(y, end_points, at_start=False)
+    scale = max(float(np.max(np.abs(y))), 1e-12)
+    bkg = np.linspace(i_start, i_end, len(y))
+    for _ in range(max(1, int(max_iter))):
+        above = y - bkg
+        total = float(np.sum(above))
+        if total == 0:
             break
-        bkg = y[-1] + (y[0] - y[-1]) * (1 - integral / integral[-1])
+        # midpoint cumulative area (half of the current sample), so that the
+        # result is exactly symmetric under reversing the energy order
+        integral = np.cumsum(above) - 0.5 * above
+        new_bkg = i_end + (i_start - i_end) * (1 - integral / total)
+        converged = float(np.max(np.abs(new_bkg - bkg))) <= tol * scale
+        bkg = new_bkg
+        if converged:
+            break
     return bkg
 
 
@@ -32,7 +60,7 @@ def linear_background(x, y):
     return bg
 
 
-def shirley_linear_background(x, y, max_iter=20):
+def shirley_linear_background(x, y, max_iter=20, end_points=5):
     """
     Shirley background with an added linear trend component.
 
@@ -46,7 +74,7 @@ def shirley_linear_background(x, y, max_iter=20):
 
     linear_part = linear_background(x, y)
     residual = y - linear_part
-    shirley_part = shirley_background(residual, max_iter=max_iter)
+    shirley_part = shirley_background(residual, max_iter=max_iter, end_points=end_points)
     return linear_part + shirley_part
 
 
@@ -291,33 +319,88 @@ def masked_weight_profile(x, centers=None, widths=None, extra_mask=None, notch_d
     return np.clip(weights, notch_depth, 1.0)
 
 
-def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20):
+def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20, end_points=5):
     """
-    Iterative 2-parameter Tougaard background for XPS.
-    bg(E) = B × ∫_E^E_max max(y(E')−bg(E'), 0) × T / (T² + C)² dE'
-    where T = E' - E.
+    Two-parameter universal Tougaard background for XPS on a
+    binding-energy (BE) axis.
 
-    Default B=2866、C=1643 are the commonly used universal Tougaard
-    parameters for XPS core-level backgrounds.
-    Background grows from the high-BE tail toward the peak.
+    A photoelectron that loses energy T appears at a HIGHER binding energy,
+    so the background at BE = E is produced by the spectrum at lower BE:
+
+        bg(E) = J0 + B · ∫_{E_min}^{E} K(E − E') · [J(E') − J0] dE'
+        K(T)  = T / (C + T²)²
+
+    J0 is the intensity at the low-BE (high kinetic energy) end of the
+    window, averaged over `end_points` samples, and is removed before the
+    integral so that a flat offset does not generate a fake loss tail.
+    B = 2866 eV², C = 1643 eV² are the universal cross-section parameters
+    (S. Tougaard, Surf. Interface Anal. 11, 453 (1988)).
+
+    The formula uses the measured spectrum directly and needs no iteration;
+    `max_iter` is kept only for backward compatibility.
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    sort_idx = np.argsort(x)
-    xs, ys = x[sort_idx], y[sort_idx]
-    n = len(xs)
-    bg = np.zeros(n)
-    for _ in range(max_iter):
-        bg_prev = bg.copy()
-        for i in range(n - 1):
-            T = xs[i + 1:] - xs[i]
-            K = T / (T ** 2 + C) ** 2
-            integrand = np.maximum(ys[i + 1:] - bg[i + 1:], 0.0) * K
-            bg[i] = B * float(np.trapezoid(integrand, xs[i + 1:]))
-        if np.max(np.abs(bg - bg_prev)) < 1e-8 * (np.max(np.abs(ys)) + 1e-10):
-            break
-    result = np.zeros_like(y)
-    result[sort_idx] = bg
+    n = len(x)
+    if n < 2:
+        return np.zeros_like(y)
+    if not np.isfinite(C) or C <= 0:
+        raise ValueError("Tougaard C 參數必須大於 0")
+
+    order = np.argsort(x)  # ascending binding energy
+    xs, ys = x[order], y[order]
+    j0 = _edge_level(ys, end_points, at_start=True)  # low-BE end
+    signal = ys - j0
+
+    bg = np.full(n, j0, dtype=float)
+    for i in range(1, n):
+        loss = xs[i] - xs[:i + 1]  # energy loss T >= 0
+        kernel = loss / (C + loss ** 2) ** 2
+        bg[i] += float(B) * _trapezoid(kernel * signal[:i + 1], xs[:i + 1])
+
+    result = np.empty_like(y)
+    result[order] = bg
+    return result
+
+
+def strip_kalpha2(two_theta, intensity, lambda1=1.540598, lambda2=1.544426, ratio=0.5):
+    """
+    Rachinger Kα2 stripping (W. A. Rachinger, J. Sci. Instrum. 25, 254 (1948)).
+
+    The measured pattern is I(2θ) = I1(2θ) + R·I1(2θ₁), where 2θ₁ is the
+    Kα1 angle whose Kα2 line falls at 2θ:  sin θ₁ = (λ1/λ2)·sin θ.
+    Working from low to high angle, I1(2θ) = I(2θ) − R·I1(2θ₁). When 2θ₁
+    lies between the previous and the current sample, the implicit equation
+    is solved exactly. R ≈ 0.5 for Cu (Kα2 : Kα1 intensity).
+    """
+    x = np.asarray(two_theta, dtype=float)
+    y = np.asarray(intensity, dtype=float)
+    n = len(x)
+    if n < 3 or not (lambda1 > 0 and lambda2 > lambda1 and ratio > 0):
+        return y.copy()
+    order = np.argsort(x)
+    xs, ys = x[order], y[order]
+    out = ys.copy()
+    k = float(lambda1) / float(lambda2)
+    for i in range(1, n):
+        s = k * np.sin(np.radians(xs[i] / 2.0))
+        if not (0.0 < s < 1.0):
+            continue
+        tt1 = 2.0 * np.degrees(np.arcsin(s))
+        if tt1 < xs[0]:
+            continue
+        j = int(np.searchsorted(xs[:i + 1], tt1, side="left"))
+        j = max(j, 1)
+        if j > i:
+            continue
+        x0, x1 = xs[j - 1], xs[j]
+        t = (tt1 - x0) / (x1 - x0) if x1 > x0 else 0.0
+        if j == i:
+            out[i] = (ys[i] - ratio * (1.0 - t) * out[i - 1]) / (1.0 + ratio * t)
+        else:
+            out[i] = ys[i] - ratio * ((1.0 - t) * out[j - 1] + t * out[j])
+    result = np.empty_like(out)
+    result[order] = out
     return result
 
 
@@ -325,11 +408,14 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
                      baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20,
                      tougaard_B=2866.0, tougaard_C=1643.0,
                      manual_anchor_x=None, manual_anchor_y=None,
-                     strict=False):
+                     strict=False, edge_points=5):
     """
     Calculate and subtract background only within [bg_x_start, bg_x_end].
     Outside that region the background is extended as a constant
     (left side = bg value at bg_x_start, right side = bg value at bg_x_end).
+
+    edge_points: number of samples averaged at each window edge for the
+    Shirley / Shirley+linear / Tougaard anchor intensities.
 
     Returns (y_subtracted, bg_full_curve)
     """
@@ -355,9 +441,9 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
     elif method == "linear":
         bg_seg = linear_background(xs, ys)
     elif method == "shirley":
-        bg_seg = shirley_background(ys)
+        bg_seg = shirley_background(ys, end_points=edge_points)
     elif method == "shirley_linear":
-        bg_seg = shirley_linear_background(xs, ys)
+        bg_seg = shirley_linear_background(xs, ys, end_points=edge_points)
     elif method == "polynomial":
         bg_seg = polynomial_background(xs, ys, degree=poly_deg)
     elif method == "rubber_band":
@@ -377,7 +463,7 @@ def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
             ys, lam=baseline_lambda, max_iter=baseline_iter,
         )
     elif method == "tougaard":
-        bg_seg = tougaard_background(xs, ys, B=tougaard_B, C=tougaard_C)
+        bg_seg = tougaard_background(xs, ys, B=tougaard_B, C=tougaard_C, end_points=edge_points)
     else:
         if strict:
             raise ValueError(f"Unknown background method: {method}")
@@ -451,7 +537,12 @@ def smooth_signal(y, method="none", window_points=11, poly_deg=3):
     if method == "moving_average":
         window_points = min(window_points, len(y))
         kernel = np.ones(window_points, dtype=float) / window_points
-        return np.convolve(y, kernel, mode="same")
+        # pad by repeating the edge values instead of zeros, so the first /
+        # last window_points/2 samples are not pulled towards zero
+        left = window_points // 2
+        right = window_points - 1 - left
+        padded = np.pad(y, (left, right), mode="edge")
+        return np.convolve(padded, kernel, mode="valid")
 
     if method == "savitzky_golay":
         max_window = len(y) if len(y) % 2 == 1 else len(y) - 1

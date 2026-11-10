@@ -136,86 +136,59 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function fitVbmLine(x: number[], y: number[], start: number, end: number, mode: 'tangent' | 'baseline'): VbmLineFit | null {
+  // 與後端 /api/xps/vbm 相同：對 [start, end] 內所有點做最小平方直線擬合
+  // （Kraut et al., PRL 44, 1620 (1980)；Chambers et al., JVST B 22, 2205 (2004)）。mode 僅為相容保留。
+  void mode
   if (x.length !== y.length) return null
   const lo = Math.min(start, end)
   const hi = Math.max(start, end)
   const points = x
     .map((xi, index) => ({ x: xi, y: y[index] }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y) && point.x >= lo && point.x <= hi)
     .sort((a, b) => a.x - b.x)
-  if (points.length < 2) return null
-
-  const nearestPoint = (targetX: number) => {
-    let bestIndex = 0
-    let bestDistance = Infinity
-    for (let i = 0; i < points.length; i += 1) {
-      const distance = Math.abs(points[i].x - targetX)
-      if (distance < bestDistance) {
-        bestDistance = distance
-        bestIndex = i
-      }
-    }
-    return { index: bestIndex, point: points[bestIndex] }
+  const n = points.length
+  if (n < 2) return null
+  let sumX = 0
+  let sumY = 0
+  for (const point of points) { sumX += point.x; sumY += point.y }
+  const meanX = sumX / n
+  const meanY = sumY / n
+  let sxx = 0
+  let sxy = 0
+  for (const point of points) {
+    const dx = point.x - meanX
+    sxx += dx * dx
+    sxy += dx * (point.y - meanY)
   }
-
-  const anchorStart = nearestPoint(lo)
-  const anchorEnd = nearestPoint(hi)
-  const spanPoints = Math.max(Math.abs(anchorEnd.index - anchorStart.index) + 1, 5)
-  const windowPointCount = Math.max(3, Math.min(points.length, Math.round(spanPoints * 0.2)))
-  const buildWindow = (anchorIndex: number) => {
-    const startIndex = Math.max(0, Math.min(points.length - windowPointCount, anchorIndex - Math.floor(windowPointCount / 2)))
-    return points.slice(startIndex, startIndex + windowPointCount)
+  if (!(sxx > 0)) return null
+  const slope = sxy / sxx
+  const intercept = meanY - slope * meanX
+  let ssRes = 0
+  let ssTot = 0
+  for (const point of points) {
+    const r = point.y - (slope * point.x + intercept)
+    ssRes += r * r
+    ssTot += (point.y - meanY) * (point.y - meanY)
   }
-
-  const startWindow = buildWindow(anchorStart.index)
-  const endWindow = buildWindow(anchorEnd.index)
-
-  let bestPair: { startPoint: VbmLineFit['start_point']; endPoint: VbmLineFit['end_point']; slope: number; span: number; meanY: number } | null = null
-  let candidatePairCount = 0
-  for (const startPoint of startWindow) {
-    for (const endPoint of endWindow) {
-      const dx = endPoint.x - startPoint.x
-      if (dx <= 1e-10) continue
-      const slope = (endPoint.y - startPoint.y) / dx
-      const span = Math.abs(dx)
-      const meanY = (startPoint.y + endPoint.y) / 2
-      candidatePairCount += 1
-      if (!bestPair) {
-        bestPair = { startPoint, endPoint, slope, span, meanY }
-        continue
-      }
-
-      if (mode === 'tangent') {
-        if (slope > bestPair.slope + 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span)) {
-          bestPair = { startPoint, endPoint, slope, span, meanY }
-        }
-      } else {
-        const absSlope = Math.abs(slope)
-        const bestAbsSlope = Math.abs(bestPair.slope)
-        if (
-          absSlope < bestAbsSlope - 1e-10
-          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && meanY < bestPair.meanY - 1e-10)
-          || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && Math.abs(meanY - bestPair.meanY) <= 1e-10 && span > bestPair.span)
-        ) {
-          bestPair = { startPoint, endPoint, slope, span, meanY }
-        }
-      }
-    }
-  }
-
-  if (!bestPair) return null
-  const intercept = bestPair.startPoint.y - bestPair.slope * bestPair.startPoint.x
+  const s2 = n > 2 ? ssRes / (n - 2) : NaN
+  const first = points[0]
+  const last = points[n - 1]
   return {
-    slope: bestPair.slope,
+    slope,
     intercept,
-    point_count: startWindow.length + endWindow.length,
-    start_window_point_count: startWindow.length,
-    end_window_point_count: endWindow.length,
-    candidate_pair_count: candidatePairCount,
-    anchor_start_point: anchorStart.point,
-    anchor_end_point: anchorEnd.point,
-    start_point: bestPair.startPoint,
-    end_point: bestPair.endPoint,
+    point_count: n,
+    start_window_point_count: n,
+    end_window_point_count: n,
+    candidate_pair_count: 0,
+    anchor_start_point: first,
+    anchor_end_point: last,
+    start_point: { x: first.x, y: slope * first.x + intercept },
+    end_point: { x: last.x, y: slope * last.x + intercept },
+    method: 'least_squares',
+    slope_err: n > 2 ? Math.sqrt(s2 / sxx) : null,
+    intercept_err: n > 2 ? Math.sqrt(s2 * (1 / n + (meanX * meanX) / sxx)) : null,
+    slope_intercept_cov: n > 2 ? (-meanX * s2) / sxx : null,
+    r_squared: ssTot > 0 ? 1 - ssRes / ssTot : null,
   }
 }
 
@@ -1775,6 +1748,8 @@ export default function XPS({
   // fitting
   const [fitProfile, setFitProfile] = useState<string>('voigt')
   const [fitNRestarts, setFitNRestarts] = useState<number>(1)
+  // 自旋軌道雙峰約束（同元素、同化學態的 2p3/2–2p1/2、3d5/2–3d3/2、4f7/2–4f5/2）
+  const [doubletConstraints, setDoubletConstraints] = useState(false)
   const [peakCandidates, setPeakCandidates] = useState<PeakCandidate[]>([])
   const [fitResult, setFitResult] = useState<FitResult | null>(null)
   const [overlayFitResult, setOverlayFitResult] = useState<FitResult | null>(null)
@@ -1842,6 +1817,8 @@ export default function XPS({
   const [rsfRows, setRsfRows] = useState<{ peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]>([])
   const [overlayRsfRows, setOverlayRsfRows] = useState<{ peakName: string; element: string; orbitalLabel: string; rsf: number | null; source: string }[]>([])
   const [rsfLoading, setRsfLoading] = useState(false)
+  // RSF 動能校正指數 n：RSF_eff = RSF × (KE/KE_C1s)^n；0 = 不校正
+  const [rsfKeExponent, setRsfKeExponent] = useState(0)
   const [rsfError, setRsfError] = useState<string | null>(null)
 
   const rawFileKeys = rawFiles.map((file, index) => getDatasetKey(file, index))
@@ -2723,8 +2700,12 @@ export default function XPS({
     if (validCount === 0) { setRsfError('請先填入元素與軌域標籤'); return }
     setRsfLoading(true); setRsfError(null)
     try {
-      const items: RsfRequestItem[] = currentRsfRows.map(r => ({ element: r.element.trim(), label: r.orbitalLabel.trim() }))
-      const results: RsfResultRow[] = await lookupRsf(items)
+      const items: RsfRequestItem[] = currentRsfRows.map((r, idx) => ({
+        element: r.element.trim(),
+        label: r.orbitalLabel.trim(),
+        binding_energy: currentFitResult?.peaks[idx]?.Center_eV ?? null,
+      }))
+      const results: RsfResultRow[] = await lookupRsf(items, { photonEnergy: 1486.6, keExponent: rsfKeExponent })
       if (processingViewMode === 'overlay') {
         setOverlayRsfRows(prev => prev.map((row, idx) => ({
           ...row,
@@ -2791,7 +2772,7 @@ export default function XPS({
         initPeaks,
         fitProfile,
         peakLabels,
-        { maxfev: 8000, nRestarts: fitNRestarts },
+        { maxfev: 8000, nRestarts: fitNRestarts, doubletConstraints },
       )
       const r2 = res.r_squared ?? 0
       const rmse = res.rmse ?? 0
@@ -2847,7 +2828,7 @@ export default function XPS({
           initPeaks,
           fitProfile,
           peakLabels,
-          { maxfev: 8000, nRestarts: 1 },
+          { maxfev: 8000, nRestarts: 1, doubletConstraints },
         )
         const r2 = res.r_squared ?? 0
         const rmse = res.rmse ?? 0
@@ -3939,6 +3920,13 @@ export default function XPS({
                           >{n}</button>
                         ))}
                       </div>
+                      <label className="flex items-start gap-2 text-[11px] text-[var(--text-soft)]">
+                        <input type="checkbox" checked={doubletConstraints} onChange={e => setDoubletConstraints(e.target.checked)} className="mt-0.5" />
+                        <span>
+                          自旋軌道雙峰約束：同元素、同化學態的 j = l±1/2 峰固定分裂能、面積比 (2j+1)（p 1:2、d 2:3、f 3:4）並共用 FWHM
+                          （Major et al., JVST A 38, 061203 (2020)）。峰名需含 2p3/2 / 2p1/2 等次殼層標記。
+                        </span>
+                      </label>
                       <div className="flex gap-2">
                         <button type="button" onClick={handleFit} disabled={isFitting || autoConverging}
                           className="flex-1 rounded-lg bg-[var(--accent)] py-2 text-sm font-semibold text-[var(--accent-contrast)] hover:opacity-90 disabled:opacity-50"
@@ -4002,9 +3990,9 @@ export default function XPS({
                         <p>從 XPS valence band spectrum 推估價帶頂部（VBM）能量。物理：valence band 在 Fermi 能附近的 emission edge 起點就是 VBM，量好就能對應 binding energy = 0 的位置。XPS BE 軸是反向的（左大右小），所以 leading edge 出現在 BE 較高的那一側，向 BE → 0 的方向下降。</p>
                         <p className="font-semibold text-[var(--text-main)]">算法</p>
                         <div className="space-y-2 text-sm">
-                          <div><span className="font-medium text-[var(--text-main)]">切線</span>：在 leading edge 中段選兩個 x 值，每個 x 在附近 20% 搜尋窗內挑選局部點對，從所有候選中取最大正斜率（XPS BE 軸 leading edge 上升方向）的兩點，連線成 tangent。</div>
-                          <div><span className="font-medium text-[var(--text-main)]">基準線</span>：在 BE 接近 0 的平坦區挑兩個 x 值，同樣 20% 搜尋窗內取最平斜率的兩點，連線成 baseline。</div>
-                          <div><span className="font-medium text-[var(--text-main)]">VBM 交點</span>：聯立兩條線方程求 x 軸交點，這個 BE 值就是 VBM。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">切線</span>：在 leading edge 的線性段選起點與終點，對區間內「所有」資料點做最小平方直線擬合（Kraut et al. 1980；Chambers et al. 2004）。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">基準線</span>：在 VBM 以下（BE 接近 0）的背景區選起點與終點，同樣對區間內所有點做最小平方直線擬合。</div>
+                          <div><span className="font-medium text-[var(--text-main)]">VBM 交點</span>：聯立兩條直線求交點；不確定度由兩條直線的斜率／截距誤差傳遞而得（±1σ）。</div>
                         </div>
                         <p className="font-semibold text-[var(--text-main)]">資料來源</p>
                         <p>可選 ① 處理流程結果（剛剛在 Core Level 跑完管線的光譜）或 ② 匯入已處理光譜（外部 TXT/CSV）。後者方便快速驗算別人提供的資料。</p>
@@ -4012,7 +4000,7 @@ export default function XPS({
                       </div>
                     }
                   >
-                    <p className="text-[10px] text-[var(--text-soft)]">先把你輸入的兩個 x 值映射到光譜點，再以各點附近 20% 搜尋窗挑選切線與基準線用點；切線取最大正斜率，基準線取最平斜率，兩條線交點就是 VBM。</p>
+                    <p className="text-[10px] text-[var(--text-soft)]">切線與基準線都是對所選區間內所有資料點做最小平方直線擬合，兩條線交點就是 VBM（±1σ 由擬合誤差傳遞）。</p>
 
                     {/* data source toggle */}
                     <div className="flex rounded-xl border border-[var(--card-border)] bg-[var(--card-ghost)] p-1 gap-1">
@@ -4114,18 +4102,17 @@ export default function XPS({
                     )}
                     <div className="grid gap-2 md:grid-cols-2">
                       {[
-                        { label: '切線擬合', tone: '#f97316', slopeLabel: '最大正斜率', line: vbmPreviewTangent },
-                        { label: '基準線擬合', tone: '#a855f7', slopeLabel: '最平斜率', line: vbmPreviewBaselineLine },
+                        { label: '切線擬合', tone: '#f97316', slopeLabel: '斜率', line: vbmPreviewTangent },
+                        { label: '基準線擬合', tone: '#a855f7', slopeLabel: '斜率', line: vbmPreviewBaselineLine },
                       ].map(item => (
                         <div key={item.label} className="rounded-xl border border-[var(--card-border)] bg-black/10 p-3 text-[11px]">
                           <p className="font-semibold" style={{ color: item.tone }}>{item.label}</p>
                           {item.line ? (
                             <div className="mt-1 space-y-1 text-[var(--text-soft)]">
-                              <p>{item.slopeLabel}：{item.line.slope.toFixed(5)}</p>
+                              <p>{item.slopeLabel}：{item.line.slope.toFixed(5)}{item.line.slope_err != null ? ` ± ${item.line.slope_err.toFixed(5)}` : ''}</p>
                               <p>輸入點對應：({item.line.anchor_start_point.x.toFixed(3)}, {item.line.anchor_start_point.y.toFixed(3)}) → ({item.line.anchor_end_point.x.toFixed(3)}, {item.line.anchor_end_point.y.toFixed(3)})</p>
-                              <p>實際選點：({item.line.start_point.x.toFixed(3)}, {item.line.start_point.y.toFixed(3)}) → ({item.line.end_point.x.toFixed(3)}, {item.line.end_point.y.toFixed(3)})</p>
-                              <p>搜尋窗：起點 {item.line.start_window_point_count} 點 / 終點 {item.line.end_window_point_count} 點</p>
-                              <p>候選組合：{item.line.candidate_pair_count} 組</p>
+                              <p>擬合直線端點：({item.line.start_point.x.toFixed(3)}, {item.line.start_point.y.toFixed(3)}) → ({item.line.end_point.x.toFixed(3)}, {item.line.end_point.y.toFixed(3)})</p>
+                              <p>擬合點數：{item.line.point_count} 點{item.line.r_squared != null ? `，R² = ${item.line.r_squared.toFixed(4)}` : ''}</p>
                             </div>
                           ) : (
                             <p className="mt-1 text-[var(--text-soft)]">區間內有效點數不足</p>
@@ -4141,36 +4128,38 @@ export default function XPS({
                     {vbmError && <p className="text-xs text-rose-400">{vbmError}</p>}
                     {vbmResult?.success && (
                       <div className="rounded-xl border border-[var(--card-border)] bg-[var(--accent-soft)] p-3 text-xs space-y-2">
-                        <p className="font-semibold text-[var(--text-main)]">VBM = {vbmResult.vbm_ev?.toFixed(3)} eV</p>
+                        <p className="font-semibold text-[var(--text-main)]">
+                          VBM = {vbmResult.vbm_ev?.toFixed(3)}{vbmResult.vbm_err_ev != null ? ` ± ${vbmResult.vbm_err_ev.toFixed(3)}` : ''} eV
+                        </p>
                         <p className="text-[var(--text-soft)]">
-                          交點算法：輸入點附近 20% 搜尋窗選點後，以切線最大正斜率 x 基準線最平斜率聯立
+                          交點算法：切線區間與基準線區間各自做最小平方直線擬合後聯立（Kraut et al. 1980；Chambers et al. 2004）
                         </p>
                         <div className="grid gap-2 md:grid-cols-2">
                           <div className="rounded-lg border border-[var(--card-border)] bg-black/10 p-2">
                             <p className="font-medium text-[var(--text-main)]">切線</p>
-                            <p className="text-[var(--text-soft)]">最大正斜率：{vbmResult.slope.toFixed(5)}</p>
+                            <p className="text-[var(--text-soft)]">斜率：{vbmResult.slope.toFixed(5)}{vbmResult.edge_line?.slope_err != null ? ` ± ${vbmResult.edge_line.slope_err.toFixed(5)}` : ''}</p>
                             <p className="text-[var(--text-soft)]">
                               輸入點對應：{vbmResult.edge_line ? `(${vbmResult.edge_line.anchor_start_point.x.toFixed(3)}, ${vbmResult.edge_line.anchor_start_point.y.toFixed(3)}) -> (${vbmResult.edge_line.anchor_end_point.x.toFixed(3)}, ${vbmResult.edge_line.anchor_end_point.y.toFixed(3)})` : 'N/A'}
                             </p>
                             <p className="text-[var(--text-soft)]">
-                              實際選點：{vbmResult.edge_line ? `(${vbmResult.edge_line.start_point.x.toFixed(3)}, ${vbmResult.edge_line.start_point.y.toFixed(3)}) -> (${vbmResult.edge_line.end_point.x.toFixed(3)}, ${vbmResult.edge_line.end_point.y.toFixed(3)})` : 'N/A'}
+                              擬合直線端點：{vbmResult.edge_line ? `(${vbmResult.edge_line.start_point.x.toFixed(3)}, ${vbmResult.edge_line.start_point.y.toFixed(3)}) -> (${vbmResult.edge_line.end_point.x.toFixed(3)}, ${vbmResult.edge_line.end_point.y.toFixed(3)})` : 'N/A'}
                             </p>
                             <p className="text-[var(--text-soft)]">
-                              搜尋窗：{vbmResult.edge_line ? `${vbmResult.edge_line.start_window_point_count} / ${vbmResult.edge_line.end_window_point_count} 點` : 'N/A'}
+                              擬合點數：{vbmResult.edge_line ? `${vbmResult.edge_line.point_count} 點` : 'N/A'}
                             </p>
                           </div>
                           <div className="rounded-lg border border-[var(--card-border)] bg-black/10 p-2">
                             <p className="font-medium text-[var(--text-main)]">基準線</p>
-                            <p className="text-[var(--text-soft)]">最平斜率：{vbmResult.baseline_slope.toFixed(5)}</p>
+                            <p className="text-[var(--text-soft)]">斜率：{vbmResult.baseline_slope.toFixed(5)}{vbmResult.baseline_line?.slope_err != null ? ` ± ${vbmResult.baseline_line.slope_err.toFixed(5)}` : ''}</p>
                             <p className="text-[var(--text-soft)]">平均強度：{vbmResult.baseline_level.toFixed(3)}</p>
                             <p className="text-[var(--text-soft)]">
                               輸入點對應：{vbmResult.baseline_line ? `(${vbmResult.baseline_line.anchor_start_point.x.toFixed(3)}, ${vbmResult.baseline_line.anchor_start_point.y.toFixed(3)}) -> (${vbmResult.baseline_line.anchor_end_point.x.toFixed(3)}, ${vbmResult.baseline_line.anchor_end_point.y.toFixed(3)})` : 'N/A'}
                             </p>
                             <p className="text-[var(--text-soft)]">
-                              實際選點：{vbmResult.baseline_line ? `(${vbmResult.baseline_line.start_point.x.toFixed(3)}, ${vbmResult.baseline_line.start_point.y.toFixed(3)}) -> (${vbmResult.baseline_line.end_point.x.toFixed(3)}, ${vbmResult.baseline_line.end_point.y.toFixed(3)})` : 'N/A'}
+                              擬合直線端點：{vbmResult.baseline_line ? `(${vbmResult.baseline_line.start_point.x.toFixed(3)}, ${vbmResult.baseline_line.start_point.y.toFixed(3)}) -> (${vbmResult.baseline_line.end_point.x.toFixed(3)}, ${vbmResult.baseline_line.end_point.y.toFixed(3)})` : 'N/A'}
                             </p>
                             <p className="text-[var(--text-soft)]">
-                              搜尋窗：{vbmResult.baseline_line ? `${vbmResult.baseline_line.start_window_point_count} / ${vbmResult.baseline_line.end_window_point_count} 點` : 'N/A'}
+                              擬合點數：{vbmResult.baseline_line ? `${vbmResult.baseline_line.point_count} 點` : 'N/A'}
                             </p>
                           </div>
                         </div>
@@ -4986,18 +4975,26 @@ export default function XPS({
                     RMSE = {formatMetric(rmse)}
                   </span>
                   {chiRed != null && (
-                    <span className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]">
-                      χ²ᵣ = {formatMetric(chiRed)}
+                    <span
+                      className="rounded-full border border-[var(--card-border)] px-2.5 py-0.5 text-[11px] text-[var(--text-soft)]"
+                      title="每自由度殘差變異 Σr²/(n−p)。資料未以量測誤差加權，因此不是嚴格的 reduced χ²；先內插或平滑再擬合時，相鄰點殘差相關，R² 與此值都會偏樂觀。"
+                    >
+                      Σr²/(n−p) = {formatMetric(chiRed)}
                     </span>
                   )}
                 </div>
+                {(currentFitResult.notes ?? []).length > 0 && (
+                  <ul className="mb-2 list-disc space-y-0.5 pl-5 text-[11px] text-[var(--text-soft)]">
+                    {(currentFitResult.notes ?? []).map(note => <li key={note}>{note}</li>)}
+                  </ul>
+                )}
                 <table className="analysis-data-table">
                   <thead>
                     <tr className="border-b border-[var(--card-divider)] text-[var(--text-soft)]">
                       <th className="pb-2 text-left font-medium">峰</th>
-                      <th className="pb-2 text-right font-medium">中心 (eV)</th>
-                      <th className="pb-2 text-right font-medium">FWHM (eV)</th>
-                      <th className="pb-2 text-right font-medium">面積</th>
+                      <th className="pb-2 text-right font-medium">中心 (eV) ±1σ</th>
+                      <th className="pb-2 text-right font-medium">FWHM (eV) ±1σ</th>
+                      <th className="pb-2 text-right font-medium">面積 ±1σ</th>
                       <th className="pb-2 text-right font-medium">面積 %</th>
                     </tr>
                   </thead>
@@ -5005,10 +5002,12 @@ export default function XPS({
                     {currentFitResult.peaks.map(pk => (
                       <tr key={pk.Peak_Name} className="border-b border-[var(--card-divider)]">
                         <td className="py-1.5 font-medium">{pk.Peak_Name}</td>
-                        <td className="py-1.5 text-right">{pk.Center_eV.toFixed(2)}</td>
-                        <td className="py-1.5 text-right">{pk.FWHM_eV.toFixed(3)}</td>
-                        <td className="py-1.5 text-right">{pk.Area.toFixed(1)}</td>
-                        <td className="py-1.5 text-right">{pk.Area_pct?.toFixed(1) ?? '—'} %</td>
+                        <td className="py-1.5 text-right">{pk.Center_eV.toFixed(2)}{pk.Center_err != null ? ` ± ${pk.Center_err.toFixed(2)}` : ''}</td>
+                        <td className="py-1.5 text-right">{pk.FWHM_eV.toFixed(3)}{pk.FWHM_err != null ? ` ± ${pk.FWHM_err.toFixed(3)}` : ''}</td>
+                        <td className="py-1.5 text-right">{pk.Area.toFixed(1)}{pk.Area_err != null ? ` ± ${pk.Area_err.toFixed(1)}` : ''}</td>
+                        <td className="py-1.5 text-right" title={[pk.Linked_To ? `連動到 ${pk.Linked_To}` : '', pk.Note ?? ''].filter(Boolean).join('；')}>
+                          {pk.Area_pct?.toFixed(1) ?? '—'} %{pk.Linked_To ? ' 🔗' : ''}{pk.Note ? ' ⚠' : ''}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -5020,7 +5019,7 @@ export default function XPS({
             {xpsMode === 'valence_band' && effectiveVbmDataset && (
               <div className="analysis-section-card mb-4 p-4">
                 <p className="mb-1 text-sm font-semibold text-[var(--text-main)]">VBM 線性外推圖</p>
-                <p className="mb-3 text-xs text-[var(--text-soft)]">空心 marker 是你輸入 x 值對應到的光譜點，實心 marker 是在附近 20% 搜尋窗中實際被拿來畫線的點。</p>
+                <p className="mb-3 text-xs text-[var(--text-soft)]">空心 marker 是擬合區間兩端的光譜點，實心 marker 是最小平方直線在區間兩端的位置。</p>
                 <Plot
                   data={(() => {
                     const lineXArr = vbmPlotWindow?.lineX ?? [effectiveVbmBeMin, effectiveVbmBeMax]
@@ -5151,6 +5150,12 @@ export default function XPS({
               <div className="analysis-section-card mb-4 p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <p className="text-sm font-semibold text-[var(--text-main)]">RSF 定量分析</p>
+                  <label className="ml-auto mr-2 flex items-center gap-1 text-[10px] text-[var(--text-soft)]" title="RSF_eff = RSF × (KE/KE_C1s)^n。只校正 IMFP（TPP-2M）時 n ≈ 0.7–0.8；穿透函數需依儀器而定；0 = 不校正">
+                    KE 校正 n
+                    <input type="number" step={0.05} value={rsfKeExponent}
+                      onChange={e => setRsfKeExponent(Number(e.target.value) || 0)}
+                      className="w-14 rounded border border-[var(--input-border)] bg-[var(--input-bg)] px-1.5 py-0.5 text-xs text-[var(--input-text)]" />
+                  </label>
                   <button type="button" onClick={lookupRsfFn} disabled={rsfLoading}
                     className="rounded-lg border border-[var(--accent-strong)] px-3 py-1 text-xs text-[var(--accent-strong)] hover:bg-[var(--accent-soft)] disabled:opacity-50 pressable"
                   >
@@ -5198,8 +5203,21 @@ export default function XPS({
                             />
                           </td>
                           <td className="py-1.5 text-right">{(pk?.Area ?? 0).toFixed(1)}</td>
-                          <td className="py-1.5 text-right">
-                            {row.rsf != null ? <span title={row.source}>{row.rsf.toFixed(2)}</span> : '—'}
+                          <td className="py-1 text-right">
+                            <input
+                              type="number"
+                              step={0.01}
+                              value={row.rsf ?? ''}
+                              title={row.source}
+                              placeholder="—"
+                              onChange={e => {
+                                const value = e.target.value === '' ? null : Number(e.target.value)
+                                const update = (r: typeof row, i: number) => i === idx ? { ...r, rsf: value, source: '手動輸入' } : r
+                                if (processingViewMode === 'overlay') setOverlayRsfRows(prev => prev.map(update))
+                                else setRsfRows(prev => prev.map(update))
+                              }}
+                              className={`w-16 rounded border bg-[var(--input-bg)] px-1.5 py-0.5 text-right text-xs text-[var(--input-text)] ${row.source.includes('⚠') ? 'border-amber-500' : 'border-[var(--input-border)]'}`}
+                            />
                           </td>
                           <td className="py-1.5 text-right font-semibold text-[var(--accent-strong)]">
                             {atomicPct != null ? `${atomicPct.toFixed(1)} %` : '—'}
@@ -5211,7 +5229,9 @@ export default function XPS({
                 </table>
                 {currentRsfRows.some(r => r.rsf != null) && (
                   <p className="mt-2 text-[10px] text-[var(--text-soft)]">
-                    RSF 來源：Scofield (1976)，Al Kα。Atomic% = (Area/RSF) / Σ(Area/RSF) × 100。
+                    RSF 來源：Scofield (1976)，Al Kα；可直接改成儀器軟體的 RSF。Atomic% = (Area/RSF) / Σ(Area/RSF) × 100。
+                    Scofield 只含光電離截面，未含 IMFP 與分析器穿透函數（Shard, JVST A 38, 041201 (2020)）；
+                    動能校正指數 n = {rsfKeExponent}{rsfKeExponent === 0 ? '（未校正）' : ''}。黃框表示該 RSF 需核對。
                   </p>
                 )}
               </div>

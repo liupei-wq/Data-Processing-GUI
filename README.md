@@ -24,6 +24,58 @@ Nigiro Pro 光譜資料處理平台 — 支援 XRD、Raman、XAS、XPS、XES 等
 
 ---
 
+## XPS 擬合：程式碼位置與數值驗證
+
+> 所有模組（XPS、XRD、Raman、XAS、XES、Ga2O3 價帶 DFT 分析）的方法、文獻、限制與數值驗證，整理在
+> [`docs/METHODS_AND_REFERENCES.md`](docs/METHODS_AND_REFERENCES.md)。
+
+### 程式碼位置
+
+| 功能 | 檔案 | 函式 |
+|---|---|---|
+| 峰形（Gaussian / Lorentzian / Voigt / pseudo-Voigt）與面積 | [`web/backend/core/peak_fitting.py`](web/backend/core/peak_fitting.py) | `gaussian`、`voigt_peak`、`pseudo_voigt_peak`、`area_*` |
+| 非線性最小平方擬合（有邊界的 Trust Region Reflective，`scipy.optimize.least_squares`） | [`web/backend/core/peak_fitting.py`](web/backend/core/peak_fitting.py) | `fit_peaks` |
+| 背景扣除（Shirley、Shirley+linear、Tougaard 等） | [`web/backend/core/processing.py`](web/backend/core/processing.py) | `shirley_background`、`tougaard_background`、`apply_background` |
+| XPS 處理流程（能量校正 → 背景 → 裁切 → 平滑 → 歸一化 → 擬合） | [`web/backend/routers/xps.py`](web/backend/routers/xps.py) | `process_xps`、`fit_xps_peaks` |
+| 元素結合能與 RSF | [`web/backend/db/xps_database.py`](web/backend/db/xps_database.py) | `get_orbital_rsf` |
+| 數值驗證測試 | [`web/backend/tests/test_xps_fitting.py`](web/backend/tests/test_xps_fitting.py) | — |
+
+### 方法摘要
+
+- **Shirley 背景**：迭代式 Shirley（Shirley 1972；Proctor & Sherwood 1982），背景高度正比於累積峰面積；端點強度取視窗兩端各 5 點平均，降低單點雜訊影響。
+- **Tougaard 背景**：二參數 universal cross-section，`K(T) = T / (C + T²)²`，B = 2866 eV²、C = 1643 eV²（Tougaard, *Surf. Interface Anal.* 11, 453 (1988)）；在結合能座標下由低結合能側往高結合能側積分。
+- **峰面積**：Gaussian、Lorentzian、pseudo-Voigt、Voigt 皆使用解析解（Voigt：`面積 = 峰高 / V(0; σ, γ)`）。
+- **擬合參數**：每個峰可個別鎖定或放開峰位、半高寬、峰高；峰位與半高寬可設上下限。
+- **參數誤差**：每個峰回報 ±1σ（共變異矩陣 s²(JᵀJ)⁻¹ 傳遞到峰位、FWHM、面積）。
+- **雙峰約束**：可勾選讓同元素、同化學態的 j = l±1/2 峰固定分裂能、面積比 (2j+1) 並共用 FWHM。
+- **VBM**：前緣與背景各做最小平方直線擬合求交點，並回報 ±1σ（Kraut et al. 1980；Chambers et al. 2004）。
+- **RSF 定量**：Scofield 截面，子能階依簡併度換算，可選動能校正或手動輸入儀器 RSF。
+
+### 數值驗證
+
+`tests/test_xps_fitting.py` 以「已知答案」的合成光譜驗證：
+
+| 測試 | 驗證內容 | 結果 |
+|---|---|---|
+| 合成 O 1s 雙峰（530.2 / 531.8 eV）+ Shirley 階梯 | Shirley 扣除後擬合回峰位、半高寬、峰高、面積比 | 誤差 < 0.5% |
+| Shirley 能量順序 | 結合能正序 / 反序結果相同 | 一致（rtol 1e-6） |
+| 帶雜訊（σ = 8 counts）重複 20 次 | 端點平均可降低面積比對雜訊的敏感度 | 標準差約 8.3% → 4.1%，無系統偏差 |
+| Voigt 面積 | 與解析解、極寬範圍數值積分、Gaussian / Lorentzian 極限比對 | 誤差 < 0.1% |
+| Voigt 擬合 | 已知面積的 Voigt 峰擬合後面積 | 誤差 < 0.5% |
+| Tougaard 方向 | 峰的高結合能側背景抬升、低結合能側只剩常數 | 通過 |
+
+其他模組的驗證（VBM 無偏與誤差校準、參數誤差 vs Monte Carlo、雙峰約束、RSF、XES、XAS flatten、Kα2 去除、pDOS 比例）在 `tests/test_rigor_audit.py`。
+
+執行方式：
+
+```bash
+cd web/backend
+python -m pip install numpy scipy pandas fastapi pydantic python-multipart pytest
+python -m pytest tests -v
+```
+
+---
+
 ## 技術棧
 
 | 層級 | 技術 |
