@@ -52,6 +52,7 @@ class ProcessParams(BaseModel):
     bg_baseline_iter: int = 20
     bg_tougaard_B: float = 2866.0
     bg_tougaard_C: float = 1643.0
+    bg_end_points: int = Field(default=5, ge=1, le=50)  # Shirley / Tougaard 端點平均點數
     valid_range_enabled: bool = False
     valid_x_start: Optional[float] = None
     valid_x_end: Optional[float] = None
@@ -278,6 +279,7 @@ def process_xps(req: ProcessRequest):
                     tougaard_B=p.bg_tougaard_B,
                     tougaard_C=p.bg_tougaard_C,
                     strict=True,
+                    edge_points=p.bg_end_points,
                 )
                 y = y_sub
                 y_bg = bg_curve

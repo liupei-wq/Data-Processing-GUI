@@ -172,6 +172,12 @@ streamlit run app.py --server.port 8505
 
 ## 精簡動作紀錄
 
+- [2026-11-10] 重要判斷：使用者要把原始碼給教授檢查 XPS 擬合。以已知答案的合成光譜驗證後，確認擬合引擎與 Shirley 公式正確，但發現 Voigt / split pseudo-Voigt 面積被截尾低估（最多約 8%）、Tougaard 在結合能座標方向相反、Shirley 端點只取單點對雜訊敏感、Shirley 累積面積有半個取樣點的不對稱。
+- [2026-11-10] 實作：`core/peak_fitting.py` 的 `area_voigt` 改為解析解 `A / V(0; σ, γ)`，`area_split_pseudo_voigt` 改為左右半邊 pseudo-Voigt 解析面積平均（同時移除 NumPy 1.26 沒有的 `np.trapezoid` 依賴）。注意：Raman / XPS 用 Voigt 的面積會比舊版大 1–8%。
+- [2026-11-10] 實作：`core/processing.py` 新增 `_edge_level`；`shirley_background` 端點改為兩端各 `end_points`（預設 5）點平均、改用中點累積面積（正反序結果完全一致）並加入收斂判斷；`tougaard_background` 改為結合能座標的正確方向（由低 BE 往高 BE 積分）、先扣除低 BE 端常數，C≤0 會丟 ValueError；`apply_background` 新增 `edge_points` 參數。
+- [2026-11-10] 實作：`routers/xps.py` 的 `ProcessParams` 新增 `bg_end_points`（預設 5，範圍 1–50）並傳入背景扣除；前端未改，沿用後端預設值。
+- [2026-11-10] 實作：新增 `web/backend/tests/test_xps_fitting.py`（8 項中的 7 項 XPS 驗證：合成 O 1s 擬合回真值、Shirley 正反序一致、端點平均降噪、Voigt 面積解析解、split pseudo-Voigt 面積、Voigt 擬合回真面積、Tougaard 方向）；README 新增「XPS 擬合：程式碼位置與數值驗證」章節。
+- [2026-11-10] 檢查：`uv run --no-project --with pytest --with numpy --with scipy python -m pytest tests -v` 8 passed（含既有 XAS 測試）；以 Python 3.11 + NumPy<2 + SciPy<1.14 再跑一次 8 passed；`py_compile` 通過。帶雜訊（σ=8）50 次重複：面積比標準差 端點 1 點 8.28% → 5 點 4.14%。前端未改動，未跑 build。
 - [2026-08-07] 檢查：最終 `git diff --check` 通過（僅 LF/CRLF 提示）；確認變更範圍僅有 `CLAUDE.md`、XAS router/API/types/page、新增全域擬合引擎/面板/測試，未覆蓋其他既有修改。
 - [2026-08-07] 檢查：以 tree-sitter TSX parser 檢查 `XasGlobalFitPanel.tsx`、`XAS.tsx`、`api/xas.ts`、`types/xas.ts` 全部語法正確；再檢查新檔無行尾空白，`git diff --check` 通過。
 - [2026-08-07] 檢查：實際 import XAS router 並執行 `_global_fit_excel`，成功產生 7,349 bytes 且具有正確 ZIP/XLSX `PK` 檔頭的 Excel。

@@ -106,9 +106,18 @@ def area_lorentzian(amplitude: float, gamma: float) -> float:
 
 
 def area_voigt(amplitude: float, sigma: float, gamma: float) -> float:
-    half = 8 * max(abs(sigma), abs(gamma), 1e-6)
-    xs = np.linspace(-half, half, 2000)
-    return float(np.trapezoid(voigt_peak(xs, amplitude, 0.0, sigma, gamma), xs))
+    """
+    Exact area of the height-scaled Voigt peak.
+
+    voigt_peak() = A · V(x; σ, γ) / V(0; σ, γ), and scipy's V is
+    area-normalised, so the integral over all x is exactly A / V(0).
+    (A finite-window numerical integral truncates the Lorentzian tails and
+    under-estimates the area by up to ~8 %.)
+    """
+    v0 = float(voigt_profile(0.0, abs(sigma), abs(gamma)))
+    if not np.isfinite(v0) or v0 <= 0:
+        return 0.0
+    return float(abs(amplitude) / v0)
 
 
 def area_pseudo_voigt(amplitude: float, fwhm: float, eta: float) -> float:
@@ -119,9 +128,14 @@ def area_pseudo_voigt(amplitude: float, fwhm: float, eta: float) -> float:
 
 
 def area_split_pseudo_voigt(amplitude: float, fwhm_left: float, fwhm_right: float, eta: float) -> float:
-    half = 8 * max(abs(fwhm_left), abs(fwhm_right), 1e-6)
-    xs = np.linspace(-half, half, 3000)
-    return float(np.trapezoid(split_pseudo_voigt_peak(xs, amplitude, 0.0, fwhm_left, fwhm_right, eta), xs))
+    """
+    Exact area of the split pseudo-Voigt: each side is one half of a
+    symmetric pseudo-Voigt with that side's FWHM.
+    """
+    return 0.5 * (
+        area_pseudo_voigt(amplitude, fwhm_left, eta)
+        + area_pseudo_voigt(amplitude, fwhm_right, eta)
+    )
 
 
 def area_super_gaussian(amplitude: float, fwhm: float, shape: float) -> float:
