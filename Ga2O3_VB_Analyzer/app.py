@@ -230,9 +230,20 @@ def pdos_panel(processed: list[pd.DataFrame]):
 
     st.subheader("光電離截面校正")
     corr_mode = st.radio("校正模式", ["none", "manual", "upload"], horizontal=True, key="pdos_corr_mode", format_func=CORRECTION_LABELS.get)
-    factors = {name: 1.0 for name in ["O_2p", "O_2s", "Ga_4p", "Ga_3d", "Ga_tet", "Ga_oct"]}
+    st.caption(
+        "XPS 價帶強度 ≈ Σ（軌域 pDOS × 該軌域在入射光能量下的每電子光電離截面）。"
+        "截面請查 Yeh & Lindau, At. Data Nucl. Data Tables 32, 1 (1985)（Al Kα 1486.6 eV）"
+        "或 Scofield (1973) / Trzhaskovskaya 等表；cross_section.csv 需含 orbital, factor 兩欄，"
+        "orbital 可用 O_2p、O_2s、Ga_4s、Ga_4p、Ga_3d、Ga_tet、Ga_oct。"
+    )
+    factors = {name: 1.0 for name in ["O_2p", "O_2s", "Ga_4s", "Ga_4p", "Ga_3d", "Ga_tet", "Ga_oct"]}
+    if corr_mode == "none":
+        st.warning(
+            "目前未做光電離截面加權：各軌域 pDOS 以 1:1 直接相加。在 Al Kα 下 O 2p 與 Ga 4s/4p/3d 的截面差異很大，"
+            "此時擬合出的軌域比例只代表 DOS 形狀的組合，不能解讀為實驗強度中的軌域貢獻。"
+        )
     if corr_mode == "manual":
-        factor_cols = st.columns(6)
+        factor_cols = st.columns(len(factors))
         for i, name in enumerate(factors):
             factors[name] = factor_cols[i].number_input(f"{name} 係數", value=1.0, step=0.1, key=f"fac_{name}")
     elif corr_mode == "upload":

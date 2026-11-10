@@ -388,23 +388,65 @@ import re as _re
 _ORBITAL_LABEL_RE = _re.compile(r'(\d[spdf](?:\d+/\d+)?)')
 
 
+# RSF entries that are inconsistent with the periodic trend of the same table
+# (e.g. Zn 2p = 27.0 but Ga 2p = 8.54, Ge 2p = 5.80). They are kept for
+# backward compatibility but flagged so users verify them against the RSF
+# library of their own instrument software before quantification.
+UNVERIFIED_RSF_KEYS = {"Ga 2p", "Ge 2p", "Ga", "Ge"}
+
+_SUBLEVEL_RE = _re.compile(r'^(\d[pdf])(\d+)/2$')
+_ORBITAL_L = {"p": 1, "d": 2, "f": 3}
+
+
+def _sublevel_fraction(orbital: str) -> tuple[str, float] | None:
+    """'2p3/2' → ('2p', 2/3); '3d3/2' → ('3d', 2/5): (2j+1) / Σ(2j+1)."""
+    m = _SUBLEVEL_RE.match(orbital)
+    if not m:
+        return None
+    shell, two_j = m.group(1), int(m.group(2))
+    l_value = _ORBITAL_L[shell[-1]]
+    if two_j not in {2 * l_value - 1, 2 * l_value + 1}:
+        return None
+    return shell, (two_j + 1) / (2 * (2 * l_value + 1))
+
+
 def get_orbital_rsf(
     element: str, label: str, source: str = "Al Kα"
 ) -> tuple[float | None, str]:
     """Return (rsf_value, source_description) for a specific XPS peak.
 
-    Tries orbital-specific lookup first (e.g. 'Ni 2p3/2'), then falls back to
-    element-level ELEMENT_RSF.  source_description describes the lookup path.
+    Lookup order:
+      1. exact orbital entry (e.g. 'Ni 2p3/2')
+      2. a spin-orbit sub-level split from the shell total by degeneracy,
+         (2j+1)/Σ(2j+1): 2p3/2 = 2/3 × 2p, 3d5/2 = 3/5 × 3d, 4f7/2 = 4/7 × 4f
+      3. element-level ELEMENT_RSF (approximate)
+    source_description describes the lookup path and flags values that
+    should be verified (see UNVERIFIED_RSF_KEYS).
     """
+    def _flag(key: str, text: str) -> str:
+        if key in UNVERIFIED_RSF_KEYS:
+            return f"{text}；⚠ 此值與同表週期趨勢不一致，定量前請以儀器 RSF 庫核對"
+        return text
+
     m = _ORBITAL_LABEL_RE.search(str(label))
     if m:
-        orbital_key = f"{element} {m.group(1)}"
+        orbital = m.group(1)
+        orbital_key = f"{element} {orbital}"
         val = ORBITAL_RSF.get(orbital_key)
         if val is not None:
-            return val, f"軌域精確 ({orbital_key})"
+            return val, _flag(orbital_key, f"軌域精確 ({orbital_key})")
+        split = _sublevel_fraction(orbital)
+        if split is not None:
+            shell_key = f"{element} {split[0]}"
+            total = ORBITAL_RSF.get(shell_key)
+            if total is not None:
+                return (
+                    float(total) * split[1],
+                    _flag(shell_key, f"由 {shell_key} 總量依簡併度 × {split[1]:.3f} 換算 ({orbital_key})"),
+                )
     val = ELEMENT_RSF.get(element)
     if val is not None:
-        return val, f"元素層級近似 ({element})"
+        return val, _flag(element, f"元素層級近似 ({element})")
     return None, "未知"
 
 # ── Spin-orbit doublet information ────────────────────────────────────────────

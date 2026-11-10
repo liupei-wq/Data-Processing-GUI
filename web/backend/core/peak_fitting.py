@@ -211,6 +211,81 @@ def perturb_init_peaks(init_peaks: list, rng) -> list:
     return out
 
 
+def _area_for_profile(prof, A, fwhm, v1, v2, eta) -> float:
+    """Analytic peak area for each supported profile (see area_* helpers)."""
+    if prof == "gaussian":
+        return area_gaussian(A, fwhm / 2.3548)
+    if prof == "lorentzian":
+        return area_lorentzian(A, fwhm / 2.0)
+    if prof == "super_gaussian":
+        return area_super_gaussian(A, fwhm, eta if eta is not None else 4.0)
+    if prof == "pseudo_voigt":
+        return area_pseudo_voigt(A, fwhm, eta if eta is not None else 0.5)
+    if prof == "split_pseudo_voigt":
+        return area_split_pseudo_voigt(
+            A,
+            v1 if v1 is not None else fwhm,
+            v2 if v2 is not None else fwhm,
+            eta if eta is not None else 0.5,
+        )
+    return area_voigt(A, v1 if v1 is not None else fwhm / 3.6, v2 if v2 is not None else fwhm / 3.6)
+
+
+def _parameter_covariance(res, n_rows: int, n_params: int):
+    """
+    Gauss–Newton covariance  cov = s² (JᵀJ)⁻¹  with  s² = Σr² / (m − p).
+
+    Only the data rows of the Jacobian are used (penalty rows are excluded).
+    Parameters stuck on a bound (``res.active_mask != 0``) are treated as
+    fixed: their rows/columns stay zero and they are reported in ``at_bound``.
+    Returns (cov or None, at_bound bool array).
+    """
+    at_bound = np.zeros(n_params, dtype=bool)
+    if res is None or n_params == 0:
+        return None, at_bound
+    try:
+        if getattr(res, "active_mask", None) is not None:
+            at_bound = np.asarray(res.active_mask) != 0
+        free = ~at_bound
+        n_free = int(np.sum(free))
+        dof = n_rows - n_free
+        if n_free == 0 or dof <= 0:
+            return None, at_bound
+        jac = np.asarray(res.jac, dtype=float)[:n_rows][:, free]
+        resid = np.asarray(res.fun, dtype=float)[:n_rows]
+        s2 = float(np.sum(resid ** 2)) / dof
+        cov_free = np.linalg.pinv(jac.T @ jac) * s2
+        cov = np.zeros((n_params, n_params), dtype=float)
+        cov[np.ix_(free, free)] = cov_free
+        if not np.all(np.isfinite(cov)):
+            return None, at_bound
+        return cov, at_bound
+    except Exception:
+        return None, at_bound
+
+
+def _propagate_errors(func, popt, covariance, at_bound):
+    """
+    1σ standard errors of func(p) via a central-difference Jacobian:
+    var = G · cov · Gᵀ.  Returns (list of errors or Nones, uses_bound_param).
+    """
+    base = func(popt)
+    if covariance is None or len(popt) == 0:
+        return [None] * len(base), False
+    grad = np.zeros((len(base), len(popt)), dtype=float)
+    for j in range(len(popt)):
+        step = 1e-6 * max(abs(float(popt[j])), 1e-3)
+        p_hi = np.array(popt, dtype=float)
+        p_lo = np.array(popt, dtype=float)
+        p_hi[j] += step
+        p_lo[j] -= step
+        grad[:, j] = (func(p_hi) - func(p_lo)) / (2.0 * step)
+    variance = np.einsum("ij,jk,ik->i", grad, covariance, grad)
+    errors = [float(np.sqrt(v)) if np.isfinite(v) and v >= 0 else None for v in variance]
+    depends = np.any(np.abs(grad) > 0, axis=0)
+    return errors, bool(np.any(depends & np.asarray(at_bound, dtype=bool)))
+
+
 # ── Main fitting routine ──────────────────────────────────────────────────────
 
 def fit_peaks(x, y, init_peaks, profile="voigt",
@@ -225,6 +300,18 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
     tolerance_cm, center_min, center_max, fwhm_min, fwhm_max, profile,
     lock_center, lock_fwhm, lock_area, lock_profile, amplitude, eta,
     fwhm_left, fwhm_right, and shape.
+
+    Linked (constrained) peaks, e.g. XPS spin-orbit doublets:
+        link_to            index of the parent peak in init_peaks
+        link_center_offset child center = parent center + offset
+        link_area_ratio    child height = ratio × parent height
+    A linked peak has no free parameters of its own: it shares the parent's
+    profile and width, so the area ratio equals the height ratio.
+
+    Each fitted peak also reports standard errors (``*_err``) from the
+    Gauss–Newton covariance  s² (JᵀJ)⁻¹  at the solution, propagated to
+    height / center / FWHM / area with a numerical Jacobian. Parameters that
+    end on a bound are treated as fixed and flagged.
 
     The legacy signature is preserved for XPS callers that pass only
     init_peaks/profile/maxfev.
@@ -297,7 +384,42 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         hi.append(upper)
         return idx, value
 
+    # ── linked peaks (e.g. spin-orbit doublets): child → parent ──────────────
+    candidate_links: dict[int, dict] = {}
     for i, pk in enumerate(init_peaks):
+        parent_raw = pk.get("link_to")
+        if parent_raw is None:
+            continue
+        try:
+            parent = int(parent_raw)
+        except (TypeError, ValueError):
+            continue
+        if parent == i or not (0 <= parent < n):
+            continue
+        offset = _finite_or_none(pk.get("link_center_offset"))
+        ratio = _finite_or_none(pk.get("link_area_ratio"))
+        candidate_links[i] = {
+            "parent": parent,
+            "offset": float(offset if offset is not None else 0.0),
+            "ratio": max(float(ratio if ratio is not None else 1.0), 0.0),
+        }
+    # no chains: a parent must not itself be a linked child
+    link_of = {i: info for i, info in candidate_links.items() if info["parent"] not in candidate_links}
+
+    for i, pk in enumerate(init_peaks):
+        if i in link_of:
+            specs.append({
+                "label": pk.get("label", f"Peak {i + 1}"),
+                "linked": link_of[i],
+                "profile": None,  # filled from the parent after the loop
+                "center_min": 0.0,
+                "center_max": 0.0,
+                "fwhm_min": 0.0,
+                "fwhm_max": 0.0,
+                "center_seed": float(pk.get("be", pk.get("center", 0.0))),
+                **{k: v for k, v in pk.items() if k not in {"label", "be", "center", "fwhm", "fwhm_cm", "link_to"}},
+            })
+            continue
         ctr_seed = (
             manual_centers[i] if manual_centers and i < len(manual_centers) and manual_centers[i] is not None
             else pk.get("be", pk.get("center", 0.0))
@@ -419,6 +541,17 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
                 spec[key] = value
         specs.append(spec)
 
+    for i, info in link_of.items():
+        parent_spec = specs[info["parent"]]
+        child = specs[i]
+        child["profile"] = parent_spec["profile"]
+        child["center_min"] = parent_spec["center_min"] + info["offset"]
+        child["center_max"] = parent_spec["center_max"] + info["offset"]
+        child["fwhm_min"] = parent_spec["fwhm_min"]
+        child["fwhm_max"] = parent_spec["fwhm_max"]
+        child["linked_to_label"] = parent_spec["label"]
+        parent_spec["has_linked_child"] = True
+
     def value_at(p, spec, name):
         idx = spec.get(f"{name}_idx")
         if idx is None:
@@ -426,6 +559,10 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         return float(p[idx])
 
     def peak_values(p, spec):
+        link = spec.get("linked")
+        if link is not None:
+            A, c, fwhm, v1, v2, eta = peak_values(p, specs[link["parent"]])
+            return link["ratio"] * A, c + link["offset"], fwhm, v1, v2, eta
         A = value_at(p, spec, "amp")
         c = value_at(p, spec, "center")
         prof = spec["profile"]
@@ -489,7 +626,7 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         for spec in specs:
             _, _, fwhm, _, _, _ = peak_values(p, spec)
             penalty_value = 0.0
-            if spec["profile"] == "voigt":
+            if spec["profile"] == "voigt" and spec.get("linked") is None:
                 if fwhm < spec["fwhm_min"]:
                     penalty_value = (spec["fwhm_min"] - fwhm) / max(spec["fwhm_min"], 1e-6) * y_span * 5
                 elif fwhm > spec["fwhm_max"]:
@@ -504,6 +641,7 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
     if loss not in {"linear", "soft_l1", "huber", "cauchy", "arctan"}:
         loss = "linear"
 
+    res = None
     try:
         if len(p0_arr) == 0:
             popt = p0_arr
@@ -526,6 +664,12 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
     residuals = y - y_fit
     metrics = _metric_values(y[fit_mask], y_fit[fit_mask], len(popt))
 
+    def derived(p, spec):
+        A, c, fwhm, v1, v2, eta = peak_values(p, spec)
+        return np.array([A, c, fwhm, _area_for_profile(spec["profile"], A, fwhm, v1, v2, eta)], dtype=float)
+
+    covariance, at_bound = _parameter_covariance(res, int(np.sum(fit_mask)), len(popt))
+
     peaks_out: list[dict] = []
     y_individual: list[np.ndarray] = []
 
@@ -533,23 +677,8 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
         yi = eval_one(x, popt, spec)
         A, c, fwhm_fit, v1, v2, eta = peak_values(popt, spec)
         prof = spec["profile"]
-        if prof == "gaussian":
-            area = area_gaussian(A, fwhm_fit / 2.3548)
-        elif prof == "lorentzian":
-            area = area_lorentzian(A, fwhm_fit / 2.0)
-        elif prof == "super_gaussian":
-            area = area_super_gaussian(A, fwhm_fit, eta if eta is not None else 4.0)
-        elif prof == "pseudo_voigt":
-            area = area_pseudo_voigt(A, fwhm_fit, eta if eta is not None else 0.5)
-        elif prof == "split_pseudo_voigt":
-            area = area_split_pseudo_voigt(
-                A,
-                v1 if v1 is not None else fwhm_fit,
-                v2 if v2 is not None else fwhm_fit,
-                eta if eta is not None else 0.5,
-            )
-        else:
-            area = area_voigt(A, v1 if v1 is not None else fwhm_fit / 3.6, v2 if v2 is not None else fwhm_fit / 3.6)
+        area = _area_for_profile(prof, A, fwhm_fit, v1, v2, eta)
+        errors, uses_bound_param = _propagate_errors(lambda p, s=spec: derived(p, s), popt, covariance, at_bound)
 
         center_span = max(spec["center_max"] - spec["center_min"], 1e-9)
         boundary_margin = max(0.1, center_span * 0.05)
@@ -581,12 +710,19 @@ def fit_peaks(x, y, init_peaks, profile="voigt",
             "fwhm_at_boundary": bool(fwhm_at_min or fwhm_at_max),
             "fwhm_boundary_side": "lower" if fwhm_at_min else ("upper" if fwhm_at_max else ""),
             "broad_peak": bool(fwhm_at_max),
-            "doublet": False,
+            "doublet": bool(spec.get("linked") is not None or spec.get("has_linked_child")),
+            "linked_to": spec.get("linked_to_label"),
+            "amplitude_err": errors[0],
+            "center_err": errors[1],
+            "fwhm_err": errors[2],
+            "area_err": errors[3],
+            "stderr_excludes_bound_params": bool(uses_bound_param),
         }
         for key, value in spec.items():
             if key not in peak_entry and not key.endswith("_idx") and key not in {
                 "amp_fixed", "center_fixed", "fwhm_fixed", "fwhm_left_fixed", "fwhm_right_fixed",
                 "sigma_fixed", "gamma_fixed", "eta_fixed", "shape_fixed", "center_seed", "profile",
+                "linked", "has_linked_child", "linked_to_label",
             }:
                 peak_entry[key] = value
         peaks_out.append(peak_entry)

@@ -256,8 +256,10 @@ export interface FitPeakRow {
   Area: number
   Area_pct: number
   SNR: number | null
+  /** 1σ 誤差；來源見 Uncertainty_Method（fit_covariance / bootstrap / snr_heuristic） */
   Bootstrap_Center_STD: number | null
   Bootstrap_FWHM_STD: number | null
+  Uncertainty_Method?: string
   Fit_Status: string
   Physical_Confidence: ConfidenceLevel
   Confidence: ConfidenceLevel

@@ -355,13 +355,10 @@ def process_xes(req: ProcessRequest):
 
             y_raw = y.copy()
 
-            # I0 normalization (per-dataset monitor signal)
-            i0_val = p.i0_values.get(ds.name)
-            if i0_val and i0_val > 0:
-                y = y / i0_val
-                y_raw = y_raw / i0_val
-
-            # BG1/BG2 subtraction
+            # BG1/BG2 subtraction FIRST, in raw detector counts.
+            # BG1/BG2 are background / dark frames that are not proportional to
+            # the incident flux, so they must be removed before dividing by I0:
+            #     y_corrected = (y_raw − BG) / I0
             y_bg: np.ndarray | None = None
             bg_weight: float | None = None
             if p.bg_method != "none":
@@ -383,11 +380,21 @@ def process_xes(req: ProcessRequest):
                 if y_bg is not None:
                     y = np.nan_to_num(y - y_bg, nan=0.0)
 
+            # I0 normalization (per-dataset monitor signal), applied after the
+            # background subtraction; raw / background curves are scaled by the
+            # same I0 so that all returned curves share one intensity unit.
+            i0_val = p.i0_values.get(ds.name)
+            if i0_val and i0_val > 0:
+                y = y / i0_val
+                y_raw = y_raw / i0_val
+                if y_bg is not None:
+                    y_bg = y_bg / i0_val
+
             y_corrected = y.copy()
 
             # smoothing
             if p.smooth_method != "none":
-                y, _ = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
+                y = smooth_signal(y, method=p.smooth_method, window_points=p.smooth_window, poly_deg=p.smooth_poly)
 
             # normalization
             if p.norm_method != "none":

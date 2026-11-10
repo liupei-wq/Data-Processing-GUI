@@ -100,7 +100,8 @@ streamlit run app.py --server.port 8505
 - 每層都要做錯誤處理，不可靜默吞例外。
 - 輸入驗證放在系統邊界。
 - Excel 匯入需維持 `.xlsx` / `.xls` 支援，部署端要有 `openpyxl` / `xlrd`。
-- XAS / XES band gap 線性外推需對齊 XPS VBM 的 tangent / baseline 候選點邏輯。
+- XAS / XES band gap 線性外推需與 XPS VBM 一致：切線與基準線都對區間內所有點做最小平方直線擬合（後端 `routers/xps.py` `_fit_vbm_line`，前端 `XPS.tsx` `fitVbmLine`、`XAS.tsx` `fitEdgeLine`、`PlotFileTool.tsx` `fitVbmPlotLine`）；不要再用「兩點最大斜率」候選點搜尋（有系統偏差）。
+- 方法、文獻與數值驗證整理在 `docs/METHODS_AND_REFERENCES.md`；改動演算法時要同步更新該文件並在 `web/backend/tests/` 補已知答案的測試。
 - PlotFileTool XPS 疊圖的 X offset 是「每筆 fit spectra 的 X 軸位移」，不是裁切範圍。
 - XAS EXAFS 若選 `larch_autobk`，需要後端 Python 環境安裝 `xraylarch`；前端不需安裝 Larch。
 
@@ -172,6 +173,17 @@ streamlit run app.py --server.port 8505
 
 ## 精簡動作紀錄
 
+- [2026-11-10] 重要判斷：使用者要求全專案嚴謹度審查（只審不改）後，再要求「全部修正」。審查以合成資料實測確認 7 項主要問題與數項次要問題，本次全部修正如下（分支 `fix/xps-fitting-accuracy`，PR #1）。
+- [2026-11-10] 實作（VBM / 能隙）：`routers/xps.py` `_fit_vbm_line` 由「兩小段各挑一點取最大斜率」改為區間內所有點的最小平方直線擬合，新增 `_intersection_error` 回報 `vbm_err_ev`（±1σ）；前端 `XPS.tsx` `fitVbmLine`、`XAS.tsx` `fitEdgeLine`、`PlotFileTool.tsx` `fitVbmPlotLine` 同步改為最小平方，並更新說明文字。實測舊版 VBM 平均偏高 0.19 eV、新版偏差 < 0.01 eV。
+- [2026-11-10] 實作（擬合核心）：`core/peak_fitting.py` 新增參數標準誤差（`_parameter_covariance` s²(JᵀJ)⁻¹、`_propagate_errors` 數值 Jacobian 傳遞到峰高/峰位/FWHM/面積，碰邊界參數視為固定並標記）與連動峰（`link_to` / `link_center_offset` / `link_area_ratio`，共用峰形與寬度）；面積計算抽成 `_area_for_profile`。
+- [2026-11-10] 實作（XPS）：`/api/xps/fit` 新增 `doublet_constraints`（`_auto_doublet_links` 依「元素 + 次殼層 + 化學態」配對 j = l±1/2，面積比 (2j+1)、ΔSO 取 DOUBLET_INFO 或初始峰位差）、回傳 `Center_err/FWHM_err/Area_err/Height_err/Linked_To/Note` 與 `notes`，重啟失敗原因不再被吞掉；`db/xps_database.py` `get_orbital_rsf` 子能階找不到時依簡併度由總量換算、Ga 2p/Ge 2p 等可疑值加 ⚠ 標記；`/api/xps/rsf` 新增 `photon_energy`、`ke_exponent` 動能校正（C 1s 維持 1）。前端 `XPS.tsx` 新增雙峰約束勾選、±1σ 欄位、notes、χ² 改標 Σr²/(n−p)、RSF 可手動輸入與 KE 校正指數。
+- [2026-11-10] 實作（XES）：`routers/xes.py` 修正 `y, _ = smooth_signal(...)` 造成開平滑必定 422 的 bug；改為先在原始計數扣 BG1/BG2 再除 I0（raw / bg 曲線同步除 I0）。
+- [2026-11-10] 實作（XAS）：`_normalize_athena` flatten 只套用在 E ≥ E0（與 Athena/Larch 一致）；新增 `_smoothed_derivative`（Savitzky–Golay，非均勻網格先重取樣），E0 偵測與二次微分改用它，`ProcessParams` 新增 `d2y_window`、`d2y_poly`；多檔平均失敗改回 422 而非靜默略過；XAS 峰擬合回傳 ±1σ 與 notes。
+- [2026-11-10] 實作（XRD）：後端 `WAVELENGTHS` 與前端 `ProcessingPanel.tsx` / `types/xrd.ts` 改為一致的 Kα1 與加權 Kα 平均（ITC Vol. C）；新增 Rachinger Kα2 去除（後端 `core/processing.py` `strip_kalpha2` + `ProcessParams.kalpha2_*`，前端 `XRD.tsx` `stripKalpha2` + 開關）；`XRD.tsx` FWHM/Scherrer 改用線性強度 `yLinear`（舊版用 log/sqrt 顯示曲線量 FWHM）、Scherrer 新增儀器展寬 β_inst 與 Gaussian/Lorentzian 校正模型，記錄與匯出同步新增欄位。
+- [2026-11-10] 實作（Raman）：`routers/raman.py` 峰位/FWHM 誤差優先用擬合共變異矩陣，新增 `Uncertainty_Method`；`db/raman_database.py` Kranert 引用改為 Sci. Rep. 6, 35964 (2016)；`Raman.tsx` Si 應力係數改為 De Wolf (1996) 單軸 −2.0 / 雙軸 −4.0 預設選項，Si 峰改依 Material/Phase_Group 為 Si 且最接近參考位置選取。
+- [2026-11-10] 實作（共用與 Ga2O3）：`smooth_signal` 移動平均改用端點延伸而非補 0；`Ga2O3_VB_Analyzer/src/fitting.py` 比例改用「係數 × 成分積分」；`pdos_acquisition.py` 能量改對齊 DFT VBM（`dos.get_cbm_vbm()`，失敗才退回 E_F 並提示）；`pdos_model.py` 修正截面係數被平方的 bug、新增 Ga_4s 群組；`app.py` 未加權截面時顯示警告與截面文獻。
+- [2026-11-10] 實作（文件與測試）：新增 `docs/METHODS_AND_REFERENCES.md`（各模組方法、程式位置、文獻、限制、驗證）、`web/backend/tests/test_rigor_audit.py`（16 項已知答案測試）；README 連到該文件。未實作：TFY 自吸收校正（需組成/角度/吸收係數，文件中列為限制）、內建光電離截面數值（無法查證，改為使用者輸入並警告）。
+- [2026-11-10] 檢查：`uv run --no-project --with pytest --with numpy --with scipy --with pandas --with fastapi --with pydantic --with python-multipart python -m pytest tests -q` 24 passed；Python 3.11 + NumPy<2 + SciPy<1.14 再跑 24 passed；`py_compile` 後端與 Ga2O3 全部通過；前端 `npm.cmd ci` 後 `npm.cmd run build`（tsc + vite build）通過（僅既有 chunk 大小警告）。以原審查腳本重跑：XES 平滑不再報錯、移動平均邊緣維持 100、VBM 平均 3.002 eV、pre-edge flatten 0.000、pDOS 比例 90.9/9.1%。
 - [2026-11-10] 重要判斷：使用者要把原始碼給教授檢查 XPS 擬合。以已知答案的合成光譜驗證後，確認擬合引擎與 Shirley 公式正確，但發現 Voigt / split pseudo-Voigt 面積被截尾低估（最多約 8%）、Tougaard 在結合能座標方向相反、Shirley 端點只取單點對雜訊敏感、Shirley 累積面積有半個取樣點的不對稱。
 - [2026-11-10] 實作：`core/peak_fitting.py` 的 `area_voigt` 改為解析解 `A / V(0; σ, γ)`，`area_split_pseudo_voigt` 改為左右半邊 pseudo-Voigt 解析面積平均（同時移除 NumPy 1.26 沒有的 `np.trapezoid` 依賴）。注意：Raman / XPS 用 Voigt 的面積會比舊版大 1–8%。
 - [2026-11-10] 實作：`core/processing.py` 新增 `_edge_level`；`shirley_background` 端點改為兩端各 `end_points`（預設 5）點平均、改用中點累積面積（正反序結果完全一致）並加入收斂判斷；`tougaard_background` 改為結合能座標的正確方向（由低 BE 往高 BE 積分）、先扣除低 BE 端常數，C≤0 會丟 ValueError；`apply_background` 新增 `edge_points` 參數。

@@ -129,6 +129,14 @@ export interface FitPeakRow {
   Area: number
   Height: number
   Area_pct: number | null
+  /** 1σ 標準誤差（由擬合共變異矩陣 s²(JᵀJ)⁻¹ 傳遞而來），無法估計時為 null */
+  Center_err?: number | null
+  FWHM_err?: number | null
+  Area_err?: number | null
+  Height_err?: number | null
+  /** 雙峰約束：此峰連動到哪個主峰 */
+  Linked_To?: string | null
+  Note?: string
 }
 
 export interface FitResult {
@@ -138,7 +146,9 @@ export interface FitResult {
   peaks: FitPeakRow[]
   r_squared: number
   rmse: number
+  /** Σr²/(n−p)：每自由度殘差變異；只有在資料以量測誤差加權時才等於 reduced χ² */
   chi_red: number | null
+  notes?: string[]
 }
 
 export interface VbmLinePoint {
@@ -157,6 +167,11 @@ export interface VbmLineFit {
   anchor_end_point: VbmLinePoint
   start_point: VbmLinePoint
   end_point: VbmLinePoint
+  method?: string
+  slope_err?: number | null
+  intercept_err?: number | null
+  slope_intercept_cov?: number | null
+  r_squared?: number | null
 }
 
 export interface VbmResult {
@@ -170,11 +185,15 @@ export interface VbmResult {
   baseline_line: VbmLineFit | null
   success: boolean
   message: string
+  /** VBM 交點的 1σ 不確定度（由兩條最小平方直線的參數誤差傳遞） */
+  vbm_err_ev?: number | null
 }
 
 export interface RsfRequestItem {
   element: string
   label: string
+  /** 擬合峰位（eV），動能校正時需要 */
+  binding_energy?: number | null
 }
 
 export interface RsfResultRow {
@@ -182,4 +201,7 @@ export interface RsfResultRow {
   label: string
   rsf: number | null
   source: string
+  rsf_raw?: number | null
+  kinetic_energy?: number | null
+  ke_factor?: number | null
 }

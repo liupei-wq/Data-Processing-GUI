@@ -112,6 +112,8 @@ export async function fitPeaks(
     maxfev?: number
     fitRange?: [number, number]
     nRestarts?: number
+    /** 自旋軌道雙峰約束（同元素、同化學態的 j = l±1/2 峰：固定分裂能、面積比、FWHM 相同） */
+    doubletConstraints?: boolean
   },
 ): Promise<FitResult> {
   const body: Record<string, unknown> = {
@@ -121,6 +123,7 @@ export async function fitPeaks(
     profile,
     maxfev: options?.maxfev ?? 6000,
     n_restarts: options?.nRestarts ?? 1,
+    doublet_constraints: options?.doubletConstraints ?? false,
   }
   if (peakLabels) body.peak_labels = peakLabels
   if (options?.fitRange) body.fit_range = options.fitRange
@@ -154,8 +157,15 @@ export async function computeVbm(
   return res.json()
 }
 
-export async function lookupRsf(items: RsfRequestItem[]): Promise<RsfResultRow[]> {
-  const res = await fetch(`${BASE}/rsf`, {
+export async function lookupRsf(
+  items: RsfRequestItem[],
+  options?: { photonEnergy?: number; keExponent?: number },
+): Promise<RsfResultRow[]> {
+  const query = new URLSearchParams()
+  if (options?.photonEnergy != null) query.set('photon_energy', String(options.photonEnergy))
+  if (options?.keExponent != null) query.set('ke_exponent', String(options.keExponent))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  const res = await fetch(`${BASE}/rsf${suffix}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(items),

@@ -12,6 +12,11 @@ export interface ProcessParams {
   interpolate: boolean
   n_points: number
   average: boolean
+  /** Rachinger Kα2 去除（後端預設關閉） */
+  kalpha2_strip?: boolean
+  kalpha1_wavelength?: number
+  kalpha2_wavelength?: number
+  kalpha2_ratio?: number
   bg_enabled: boolean
   bg_method: 'none' | 'linear' | 'shirley' | 'polynomial' | 'asls' | 'airpls'
   bg_x_start: number | null
@@ -252,9 +257,10 @@ export type XMode = 'twotheta' | 'dspacing'
 
 /** Wavelength preset label */
 export type WavelengthPreset =
-  | 'Cu Kα (1.5406 Å)'
-  | 'Co Kα (1.7890 Å)'
-  | 'Mo Kα (0.7093 Å)'
-  | 'Cr Kα (2.2909 Å)'
-  | 'Fe Kα (1.9373 Å)'
+  | 'Cu Kα1 (1.5406 Å)'
+  | 'Cu Kα 加權平均 (1.5419 Å)'
+  | 'Co Kα1 (1.7890 Å)'
+  | 'Mo Kα1 (0.7093 Å)'
+  | 'Cr Kα1 (2.2898 Å)'
+  | 'Fe Kα1 (1.9360 Å)'
   | '自訂'

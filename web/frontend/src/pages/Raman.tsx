@@ -1441,7 +1441,10 @@ export default function Raman({
   const [fitTargetName, setFitTargetName] = useState<string>('')
   const [isFitting, setIsFitting] = useState(false)
   const [siRefPos, setSiRefPos] = useState(520.7)
-  const [siCoeff, setSiCoeff] = useState(-1.93)
+  // Si 應力係數：De Wolf, Semicond. Sci. Technol. 11, 139 (1996)
+  //   單軸：σ[MPa] = −500·Δω → −2.0 cm⁻¹/GPa；雙軸（平面等向）：σ[MPa] = −250·Δω → −4.0 cm⁻¹/GPa
+  const [siStressModel, setSiStressModel] = useState<'uniaxial' | 'biaxial' | 'custom'>('uniaxial')
+  const [siCoeff, setSiCoeff] = useState(-2.0)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [rawFileColors, setRawFileColors] = useState<string[]>([])
@@ -2238,8 +2241,18 @@ export default function Raman({
 
   const siPeak = useMemo(() => {
     if (!fitResult?.success) return null
-    return (fitResult.peaks ?? []).find(pk => pk.Center_cm >= 480 && pk.Center_cm <= 570) ?? null
-  }, [fitResult])
+    // 依峰的歸屬選 Si 峰（Material / Phase_Group 為 Si），再取最接近參考位置者；
+    // 不再取 480–570 cm⁻¹ 內的「第一個」峰，避免誤抓 NiO / β-Ga₂O₃ 的峰。
+    const inWindow = (fitResult.peaks ?? []).filter(pk => pk.Center_cm >= 480 && pk.Center_cm <= 570)
+    const isSi = (pk: (typeof inWindow)[number]) =>
+      /^Si(\b|\s|\(|$)/.test(String(pk.Material ?? '')) || String(pk.Phase_Group ?? '').startsWith('Si ')
+    const pool = inWindow.filter(isSi)
+    const candidates = pool.length > 0 ? pool : inWindow.filter(pk => Math.abs(pk.Center_cm - siRefPos) <= 10)
+    if (candidates.length === 0) return null
+    return candidates.reduce((best, pk) => (
+      Math.abs(pk.Center_cm - siRefPos) < Math.abs(best.Center_cm - siRefPos) ? pk : best
+    ))
+  }, [fitResult, siRefPos])
   const peakTableFilterOptions = useMemo(() => ({
     groups: ['all', ...Array.from(new Set((fitResult?.peaks ?? []).map(row => row.Phase_Group))).filter(Boolean)],
     statuses: ['all', ...Array.from(new Set((fitResult?.peaks ?? []).map(row => row.Status))).filter(Boolean)],
@@ -4790,9 +4803,33 @@ export default function Raman({
                     {siPeak && (
                       <div className="mt-4 rounded-[22px] border border-[var(--card-border)] bg-[var(--card-bg)] p-4">
                         <div className="mb-3 text-sm font-semibold text-[var(--text-muted)]">Si 應力估算</div>
-                        <p className="mb-3 text-xs text-[var(--text-soft)]">
-                          偵測到 Si 峰（{siPeak.Center_cm.toFixed(2)} cm⁻¹）。Anastassakis et al. (1990) 方法。
+                        <p className="mb-3 text-xs leading-relaxed text-[var(--text-soft)]">
+                          使用 Si 峰 {siPeak.Peak_Name ? `「${siPeak.Peak_Name}」` : ''}（{siPeak.Center_cm.toFixed(2)} cm⁻¹）。
+                          σ = Δω / 係數（De Wolf, Semicond. Sci. Technol. 11, 139 (1996)；Anastassakis et al., PRB 41, 7529 (1990)）。
+                          單一峰位只能決定簡單的應力狀態，請依樣品選擇單軸或雙軸；參考位置建議用同一台儀器、同一雷射功率量測無應力 Si 晶片。
                         </p>
+                        <div className="mb-3">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">應力模型</span>
+                          <div className="grid grid-cols-3 gap-2">
+                            {([
+                              { key: 'uniaxial', label: '單軸 −2.0', coeff: -2.0 },
+                              { key: 'biaxial', label: '雙軸 −4.0', coeff: -4.0 },
+                              { key: 'custom', label: '自訂', coeff: null },
+                            ] as const).map(opt => (
+                              <button
+                                key={opt.key}
+                                type="button"
+                                onClick={() => {
+                                  setSiStressModel(opt.key)
+                                  if (opt.coeff != null) setSiCoeff(opt.coeff)
+                                }}
+                                className={`rounded-xl border px-2 py-1.5 text-xs pressable ${siStressModel === opt.key ? 'border-[var(--accent-strong)] text-[var(--accent-strong)]' : 'border-[var(--card-border)] text-[var(--text-muted)]'}`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                         <div className="mb-3 grid grid-cols-2 gap-3">
                           <label className="block">
                             <span className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-[var(--text-soft)]">參考位置 (cm⁻¹)</span>
@@ -4810,7 +4847,7 @@ export default function Raman({
                               type="number"
                               value={siCoeff}
                               step={0.01}
-                              onChange={e => setSiCoeff(Number(e.target.value))}
+                              onChange={e => { setSiStressModel('custom'); setSiCoeff(Number(e.target.value)) }}
                               className="theme-input w-full rounded-xl px-3 py-2 text-sm"
                             />
                           </label>

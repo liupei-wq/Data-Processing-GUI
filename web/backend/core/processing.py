@@ -363,6 +363,47 @@ def tougaard_background(x, y, B=2866.0, C=1643.0, max_iter=20, end_points=5):
     return result
 
 
+def strip_kalpha2(two_theta, intensity, lambda1=1.540598, lambda2=1.544426, ratio=0.5):
+    """
+    Rachinger Kα2 stripping (W. A. Rachinger, J. Sci. Instrum. 25, 254 (1948)).
+
+    The measured pattern is I(2θ) = I1(2θ) + R·I1(2θ₁), where 2θ₁ is the
+    Kα1 angle whose Kα2 line falls at 2θ:  sin θ₁ = (λ1/λ2)·sin θ.
+    Working from low to high angle, I1(2θ) = I(2θ) − R·I1(2θ₁). When 2θ₁
+    lies between the previous and the current sample, the implicit equation
+    is solved exactly. R ≈ 0.5 for Cu (Kα2 : Kα1 intensity).
+    """
+    x = np.asarray(two_theta, dtype=float)
+    y = np.asarray(intensity, dtype=float)
+    n = len(x)
+    if n < 3 or not (lambda1 > 0 and lambda2 > lambda1 and ratio > 0):
+        return y.copy()
+    order = np.argsort(x)
+    xs, ys = x[order], y[order]
+    out = ys.copy()
+    k = float(lambda1) / float(lambda2)
+    for i in range(1, n):
+        s = k * np.sin(np.radians(xs[i] / 2.0))
+        if not (0.0 < s < 1.0):
+            continue
+        tt1 = 2.0 * np.degrees(np.arcsin(s))
+        if tt1 < xs[0]:
+            continue
+        j = int(np.searchsorted(xs[:i + 1], tt1, side="left"))
+        j = max(j, 1)
+        if j > i:
+            continue
+        x0, x1 = xs[j - 1], xs[j]
+        t = (tt1 - x0) / (x1 - x0) if x1 > x0 else 0.0
+        if j == i:
+            out[i] = (ys[i] - ratio * (1.0 - t) * out[i - 1]) / (1.0 + ratio * t)
+        else:
+            out[i] = ys[i] - ratio * ((1.0 - t) * out[j - 1] + t * out[j])
+    result = np.empty_like(out)
+    result[order] = out
+    return result
+
+
 def apply_background(x, y, method, bg_x_start, bg_x_end, poly_deg=3,
                      baseline_lambda=1e5, baseline_p=0.01, baseline_iter=20,
                      tougaard_B=2866.0, tougaard_C=1643.0,
@@ -496,7 +537,12 @@ def smooth_signal(y, method="none", window_points=11, poly_deg=3):
     if method == "moving_average":
         window_points = min(window_points, len(y))
         kernel = np.ones(window_points, dtype=float) / window_points
-        return np.convolve(y, kernel, mode="same")
+        # pad by repeating the edge values instead of zeros, so the first /
+        # last window_points/2 samples are not pulled towards zero
+        left = window_points // 2
+        right = window_points - 1 - left
+        padded = np.pad(y, (left, right), mode="edge")
+        return np.convolve(padded, kernel, mode="valid")
 
     if method == "savitzky_golay":
         max_window = len(y) if len(y) % 2 == 1 else len(y) - 1

@@ -256,11 +256,58 @@ def _normalize_post_edge(
     return normalized, edge_step
 
 
+def _smoothed_derivative(
+    x: np.ndarray, y: np.ndarray, deriv: int = 1, window_points: int = 11, poly_deg: int = 3,
+) -> np.ndarray:
+    """
+    Savitzky–Golay derivative (Savitzky & Golay, Anal. Chem. 36, 1627 (1964)).
+
+    Plain finite differences amplify noise strongly (a second derivative from
+    two np.gradient calls is dominated by noise). Savitzky–Golay fits a local
+    polynomial and differentiates it. Non-uniform energy grids are resampled
+    onto a uniform grid of the same length and mapped back.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(x)
+    if n < 5:
+        out = np.asarray(y, dtype=float)
+        for _ in range(deriv):
+            out = np.gradient(out, x)
+        return out
+    order = np.argsort(x)
+    xs, ys = x[order], y[order]
+    steps = np.diff(xs)
+    uniform = bool(np.all(steps > 0) and (steps.max() - steps.min()) <= 1e-3 * max(abs(float(steps.mean())), 1e-12))
+    if uniform:
+        xu, yu = xs, ys
+    else:
+        xu = np.linspace(float(xs[0]), float(xs[-1]), n)
+        yu = np.interp(xu, xs, ys)
+    delta = float(xu[-1] - xu[0]) / (n - 1)
+    max_window = n if n % 2 == 1 else n - 1
+    window = int(max(window_points, poly_deg + 2, 5))
+    if window % 2 == 0:
+        window += 1
+    window = min(window, max_window)
+    poly = int(min(max(poly_deg, deriv), window - 1))
+    d = savgol_filter(yu, window_length=window, polyorder=poly, deriv=deriv, delta=delta, mode="interp")
+    if not uniform:
+        d = np.interp(xs, xu, d)
+    out = np.empty_like(d)
+    out[order] = d
+    return out
+
+
 def _detect_e0(x: np.ndarray, y: np.ndarray) -> float:
-    """Detect edge energy E₀ as the energy of the maximum first derivative."""
+    """
+    Detect edge energy E₀ as the energy of the maximum first derivative
+    (the convention used by Athena / Larch), using a Savitzky–Golay
+    derivative so that a single noisy point cannot define E₀.
+    """
     if len(x) < 3:
         return float(x[len(x) // 2])
-    dy = np.gradient(y, x)
+    dy = _smoothed_derivative(x, y, deriv=1, window_points=9, poly_deg=3)
     return float(x[int(np.argmax(dy))])
 
 
@@ -282,7 +329,11 @@ def _normalize_athena(
     3. Fit a polynomial to the post-edge region of the subtracted spectrum.
     4. edge_step = post_poly(E₀).
     5. normalized = y_sub / edge_step  (~0 before edge, ~1 after edge).
-    6. flattened  = (y_sub − post_poly) / edge_step + 1  (post-edge goes flat at 1).
+    6. flattened  = normalized for E < E₀;
+                    (y_sub − post_poly) / edge_step + 1 for E ≥ E₀
+       (as in Athena / Larch pre_edge: the post-edge curvature is removed only
+       above E₀, so the extrapolated post-edge polynomial cannot distort the
+       pre-edge region).
 
     Returns (normalized, flattened, e0_used, edge_step, pre_line, post_poly, y_sub).
     pre_line / post_poly / y_sub are retained for visualization purposes.
@@ -319,7 +370,9 @@ def _normalize_athena(
         return y, y, float(e0), 1.0, pre_line, post_poly, y_sub
 
     normalized = y_sub / edge_step
-    flattened = (y_sub - post_poly) / edge_step + 1.0
+    flattened = normalized.copy()
+    above_e0 = x >= float(e0)
+    flattened[above_e0] = (y_sub[above_e0] - post_poly[above_e0]) / edge_step + 1.0
 
     return normalized, flattened, float(e0), float(edge_step), pre_line, post_poly, y_sub
 
@@ -668,6 +721,8 @@ class ProcessParams(BaseModel):
     gauss_peaks: List[GaussPeak] = Field(default_factory=list)
     gauss_search: float = 0.5              # ±eV center search range
     d2y_enabled: bool = False
+    d2y_window: int = Field(default=11, ge=5, le=101)   # Savitzky–Golay window (points)
+    d2y_poly: int = Field(default=3, ge=2, le=6)        # Savitzky–Golay polynomial order
 
 
 class ProcessRequest(BaseModel):
@@ -943,8 +998,8 @@ def process_xas(req: ProcessRequest):
         tey_d2y: np.ndarray | None = None
         tfy_d2y: np.ndarray | None = None
         if p.d2y_enabled and len(x_out) > 4:
-            tey_d2y = np.gradient(np.gradient(tey_proc, x_out), x_out)
-            tfy_d2y = np.gradient(np.gradient(tfy_proc, x_out), x_out)
+            tey_d2y = _smoothed_derivative(x_out, tey_proc, deriv=2, window_points=p.d2y_window, poly_deg=p.d2y_poly)
+            tfy_d2y = _smoothed_derivative(x_out, tfy_proc, deriv=2, window_points=p.d2y_window, poly_deg=p.d2y_poly)
 
         processed_datasets.append(ProcessedDataset(
             name=ds.name,
@@ -999,8 +1054,8 @@ def process_xas(req: ProcessRequest):
                 white_line_tey=wl_tey_avg,
                 white_line_tfy=wl_tfy_avg,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"多檔平均失敗：{exc}") from exc
 
     return ProcessResponse(datasets=processed_datasets, average=average_ds)
 
@@ -1353,6 +1408,11 @@ class XasFitPeakRow(BaseModel):
     Area: float
     Height: float
     Area_pct: Optional[float] = None
+    # 1σ standard errors from the fit covariance (None when not estimable)
+    Center_err: Optional[float] = None
+    FWHM_err: Optional[float] = None
+    Area_err: Optional[float] = None
+    Height_err: Optional[float] = None
 
 
 class XasFitResponse(BaseModel):
@@ -1362,7 +1422,9 @@ class XasFitResponse(BaseModel):
     peaks: List[XasFitPeakRow]
     r_squared: float = 0.0
     rmse: float = 0.0
+    # Σr²/(n−p); equals reduced χ² only for σ-weighted data
     chi_red: Optional[float] = None
+    notes: List[str] = Field(default_factory=list)
 
 
 @router.post("/fit", response_model=XasFitResponse)
@@ -1410,14 +1472,17 @@ def fit_xas_peaks(req: XasFitRequest):
 
     best_result: dict | None = None
     best_ss_res = float("inf")
+    failures: list[str] = []
     for restart_idx in range(n_restarts):
         current_peaks = init_peaks if restart_idx == 0 else perturb_init_peaks(init_peaks, rng)
         try:
             candidate = fit_peaks(x, y, current_peaks, profile=req.profile,
                                   maxfev=capped_maxfev, fit_range=fit_range)
-        except Exception:
+        except Exception as exc:
+            failures.append(f"第 {restart_idx + 1} 次：{exc}")
             continue
         if not candidate.get("success", False):
+            failures.append(f"第 {restart_idx + 1} 次：{candidate.get('message', '未收斂')}")
             continue
         cand_ss = candidate.get("ss_res", float("inf"))
         if cand_ss < best_ss_res:
@@ -1425,11 +1490,20 @@ def fit_xas_peaks(req: XasFitRequest):
             best_ss_res = cand_ss
 
     if best_result is None:
-        raise HTTPException(status_code=422, detail="擬合失敗（全部嘗試均未收斂）")
+        detail = "擬合失敗（全部嘗試均未收斂）"
+        if failures:
+            detail += "：" + "；".join(failures[:3])
+        raise HTTPException(status_code=422, detail=detail)
     result = best_result
+    notes: list[str] = []
+    if failures:
+        notes.append(f"{len(failures)} / {n_restarts} 次重啟擬合失敗，已採用殘差最小的成功結果")
 
     raw_peaks = result.get("peaks", [])
     total_area = sum(abs(pk.get("area", 0)) for pk in raw_peaks)
+
+    def _err(value):
+        return float(value) if value is not None and np.isfinite(value) else None
 
     rows: list[XasFitPeakRow] = []
     for i, pk in enumerate(raw_peaks, 1):
@@ -1446,6 +1520,10 @@ def fit_xas_peaks(req: XasFitRequest):
             Area=area,
             Height=float(pk.get("amplitude", 0)),
             Area_pct=round(100 * abs(area) / total_area, 2) if total_area > 0 else 0,
+            Center_err=_err(pk.get("center_err")),
+            FWHM_err=_err(pk.get("fwhm_err")),
+            Area_err=_err(pk.get("area_err")),
+            Height_err=_err(pk.get("amplitude_err")),
         ))
 
     def _to_list(arr):
@@ -1459,6 +1537,7 @@ def fit_xas_peaks(req: XasFitRequest):
         r_squared=float(result.get("r_squared", 0.0)),
         rmse=float(result.get("rmse", 0.0)),
         chi_red=result.get("chi_red"),
+        notes=notes,
     )
 
 

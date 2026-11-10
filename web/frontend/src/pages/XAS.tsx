@@ -882,68 +882,68 @@ interface XasLineFit {
   anchor_end_point: { x: number; y: number }
   start_point: { x: number; y: number }
   end_point: { x: number; y: number }
+  slope_err?: number | null
+  intercept_err?: number | null
+  slope_intercept_cov?: number | null
+  r_squared?: number | null
 }
 
+// 最小平方直線擬合：使用 [start, end] 區間內「所有」資料點（Kraut et al., PRL 44, 1620 (1980)；
+// Chambers et al., JVST B 22, 2205 (2004)）。舊版在兩小段裡各挑一點、取斜率最大的組合，
+// 雜訊會造成系統偏差（實測 VBM 偏高約 0.19 eV）。mode 參數僅為相容保留。
 function fitEdgeLine(x: number[], y: number[], start: number, end: number, mode: 'tangent' | 'baseline'): XasLineFit | null {
   if (x.length !== y.length) return null
   const lo = Math.min(start, end)
   const hi = Math.max(start, end)
   const points = x
     .map((xi, index) => ({ x: xi, y: y[index] }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y) && point.x >= lo && point.x <= hi)
     .sort((a, b) => a.x - b.x)
-  if (points.length < 2) return null
-  const nearestPoint = (targetX: number) => {
-    let bestIndex = 0; let bestDistance = Infinity
-    for (let i = 0; i < points.length; i += 1) {
-      const d = Math.abs(points[i].x - targetX)
-      if (d < bestDistance) { bestDistance = d; bestIndex = i }
-    }
-    return { index: bestIndex, point: points[bestIndex] }
+  const n = points.length
+  if (n < 2) return null
+  let sumX = 0
+  let sumY = 0
+  for (const point of points) { sumX += point.x; sumY += point.y }
+  const meanX = sumX / n
+  const meanY = sumY / n
+  let sxx = 0
+  let sxy = 0
+  for (const point of points) {
+    const dx = point.x - meanX
+    sxx += dx * dx
+    sxy += dx * (point.y - meanY)
   }
-  const anchorStart = nearestPoint(lo)
-  const anchorEnd = nearestPoint(hi)
-  const spanPoints = Math.max(Math.abs(anchorEnd.index - anchorStart.index) + 1, 5)
-  const windowPointCount = Math.max(3, Math.min(points.length, Math.round(spanPoints * 0.2)))
-  const buildWindow = (anchorIndex: number) => {
-    const startIndex = Math.max(0, Math.min(points.length - windowPointCount, anchorIndex - Math.floor(windowPointCount / 2)))
-    return points.slice(startIndex, startIndex + windowPointCount)
+  if (!(sxx > 0)) return null
+  const slope = sxy / sxx
+  const intercept = meanY - slope * meanX
+  let ssRes = 0
+  let ssTot = 0
+  for (const point of points) {
+    const r = point.y - (slope * point.x + intercept)
+    ssRes += r * r
+    ssTot += (point.y - meanY) * (point.y - meanY)
   }
-  const startWindow = buildWindow(anchorStart.index)
-  const endWindow = buildWindow(anchorEnd.index)
-  let bestPair: { startPoint: { x: number; y: number }; endPoint: { x: number; y: number }; slope: number; span: number; meanY: number } | null = null
-  let candidatePairCount = 0
-  for (const startPoint of startWindow) {
-    for (const endPoint of endWindow) {
-      const dx = endPoint.x - startPoint.x
-      if (dx <= 1e-10) continue
-      const slope = (endPoint.y - startPoint.y) / dx
-      const span = Math.abs(dx)
-      const meanY = (startPoint.y + endPoint.y) / 2
-      candidatePairCount += 1
-      if (!bestPair) { bestPair = { startPoint, endPoint, slope, span, meanY }; continue }
-      if (mode === 'tangent') {
-        if (slope > bestPair.slope + 1e-10 || (Math.abs(slope - bestPair.slope) <= 1e-10 && span > bestPair.span))
-          bestPair = { startPoint, endPoint, slope, span, meanY }
-      } else {
-        const absSlope = Math.abs(slope); const bestAbsSlope = Math.abs(bestPair.slope)
-        if (absSlope < bestAbsSlope - 1e-10 || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && meanY < bestPair.meanY - 1e-10) || (Math.abs(absSlope - bestAbsSlope) <= 1e-10 && Math.abs(meanY - bestPair.meanY) <= 1e-10 && span > bestPair.span))
-          bestPair = { startPoint, endPoint, slope, span, meanY }
-      }
-    }
-  }
-  if (!bestPair) return null
-  const intercept = bestPair.startPoint.y - bestPair.slope * bestPair.startPoint.x
+  const s2 = n > 2 ? ssRes / (n - 2) : NaN
+  const slopeErr = n > 2 ? Math.sqrt(s2 / sxx) : null
+  const interceptErr = n > 2 ? Math.sqrt(s2 * (1 / n + (meanX * meanX) / sxx)) : null
+  const slopeInterceptCov = n > 2 ? (-meanX * s2) / sxx : null
+  const first = points[0]
+  const last = points[n - 1]
+  void mode
   return {
-    slope: bestPair.slope, intercept,
-    point_count: startWindow.length + endWindow.length,
-    start_window_point_count: startWindow.length,
-    end_window_point_count: endWindow.length,
-    candidate_pair_count: candidatePairCount,
-    anchor_start_point: anchorStart.point,
-    anchor_end_point: anchorEnd.point,
-    start_point: bestPair.startPoint,
-    end_point: bestPair.endPoint,
+    slope, intercept,
+    point_count: n,
+    start_window_point_count: n,
+    end_window_point_count: n,
+    candidate_pair_count: 0,
+    anchor_start_point: first,
+    anchor_end_point: last,
+    start_point: { x: first.x, y: slope * first.x + intercept },
+    end_point: { x: last.x, y: slope * last.x + intercept },
+    slope_err: slopeErr,
+    intercept_err: interceptErr,
+    slope_intercept_cov: slopeInterceptCov,
+    r_squared: ssTot > 0 ? 1 - ssRes / ssTot : null,
   }
 }
 

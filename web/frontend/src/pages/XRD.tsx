@@ -241,6 +241,55 @@ function calcDSpacing(twoThetaDeg: number, lambdaAng: number): number {
   return lambdaAng / (2 * s)
 }
 
+/** Cu Kα1 / Kα2 波長（Å），Deslattes et al., Rev. Mod. Phys. 75, 35 (2003)；Hölzer et al., PRA 56, 4554 (1997) */
+const CU_KALPHA1_ANGSTROM = 1.540598
+const CU_KALPHA2_ANGSTROM = 1.544426
+
+/**
+ * Rachinger (1948) Kα2 去除：I(2θ) = I1(2θ) + R·I1(2θ₁)，其中 2θ₁ 是「Kα2 落在 2θ」所對應的 Kα1 角度，
+ * sin θ₁ = (λ1/λ2)·sin θ。由低角往高角遞推 I1 = I − R·I1(2θ₁)；當 2θ₁ 落在目前點與前一點之間時解隱式方程。
+ */
+function stripKalpha2(x: number[], y: number[], lambda1: number, lambda2: number, ratio: number): number[] {
+  const n = x.length
+  if (n < 3 || !(lambda1 > 0) || !(lambda2 > lambda1) || !(ratio > 0)) return y.slice()
+  const order = x.map((_, i) => i).sort((a, b) => x[a] - x[b])
+  const xs = order.map(i => x[i])
+  const ys = order.map(i => y[i])
+  const out = ys.slice()
+  const k = lambda1 / lambda2
+  for (let i = 1; i < n; i++) {
+    const s = k * Math.sin((xs[i] / 2) * Math.PI / 180)
+    if (!(s > 0 && s < 1)) continue
+    const tt1 = 2 * Math.asin(s) * 180 / Math.PI
+    if (tt1 < xs[0]) continue
+    let j = 1
+    while (j < i && xs[j] < tt1) j++
+    if (xs[j] < tt1 || j > i) continue
+    const x0 = xs[j - 1]
+    const x1 = xs[j]
+    const t = x1 > x0 ? (tt1 - x0) / (x1 - x0) : 0
+    if (j === i) {
+      out[i] = (ys[i] - ratio * (1 - t) * out[i - 1]) / (1 + ratio * t)
+    } else {
+      out[i] = ys[i] - ratio * ((1 - t) * out[j - 1] + t * out[j])
+    }
+  }
+  const result = new Array<number>(n)
+  order.forEach((origIdx, sortedIdx) => { result[origIdx] = out[sortedIdx] })
+  return result
+}
+
+/**
+ * 儀器展寬校正（Langford & Wilson, J. Appl. Cryst. 11, 102 (1978)）：
+ * Gaussian：β² = β_obs² − β_inst²；Lorentzian：β = β_obs − β_inst。β_inst 需以 LaB6 / Si 標準樣品量測。
+ */
+function correctInstrumentalBroadening(betaObsDeg: number, betaInstDeg: number, model: 'gaussian' | 'lorentzian'): number {
+  if (!(betaInstDeg > 0)) return betaObsDeg
+  if (model === 'lorentzian') return betaObsDeg - betaInstDeg
+  const diff = betaObsDeg * betaObsDeg - betaInstDeg * betaInstDeg
+  return diff > 0 ? Math.sqrt(diff) : NaN
+}
+
 /** Scherrer: D = K·λ / (β·cos θ)，β 為 FWHM (rad)，θ = 2θ/2 (rad)；D 以 Å 為單位 */
 function calcScherrerD(twoThetaDeg: number, fwhmDeg: number, K: number, lambdaAng: number): number {
   const theta = (twoThetaDeg / 2) * Math.PI / 180
@@ -270,6 +319,9 @@ type XrdCalcRecord = {
   crystalSizeAngstrom?: number
   crystalSizeNm?: number
   fwhmSource?: string
+  instrumentFwhmDeg?: number
+  sampleFwhmDeg?: number
+  broadeningModel?: string
 }
 
 /**
@@ -354,6 +406,8 @@ function getSingleCardSpanClass(wide: boolean) {
 type XrdProcessedTrace = XrdDesktopInputFile & {
   xProcessed: number[]
   yProcessed: number[]
+  /** 線性強度（扣基線、可選 Kα2 去除），不經 log/sqrt/歸一化；FWHM / Scherrer 一律用這條 */
+  yLinear: number[]
   yStacked: number[]
   baseline: number
 }
@@ -995,6 +1049,12 @@ export default function XRD({
   // 強度強度轉換模式
   const [transformMode, setTransformMode] = useState<'log10' | 'ln' | 'sqrt' | 'none'>('none')
 
+  // Kα2 去除（Rachinger 1948）
+  const [kalpha2Strip, setKalpha2Strip] = useState(false)
+  const [kalpha1Lambda, setKalpha1Lambda] = useState(CU_KALPHA1_ANGSTROM)
+  const [kalpha2Lambda, setKalpha2Lambda] = useState(CU_KALPHA2_ANGSTROM)
+  const [kalpha2Ratio, setKalpha2Ratio] = useState(0.5)
+
   // 疊圖與查看模式
   const [viewMode, setViewMode] = useState<'single' | 'offset' | 'overlay'>('offset')
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null)
@@ -1100,9 +1160,15 @@ export default function XRD({
   const [calcFwhm, setCalcFwhm] = useState<CalcModule>({
     enabled: false, imported: null, selectedSourceId: '', selectedPeakX: null,
   })
-  const [calcScherrer, setCalcScherrer] = useState<CalcModule & { K: number; lambda: number; fwhmOverride: string }>({
+  const [calcScherrer, setCalcScherrer] = useState<CalcModule & {
+    K: number
+    lambda: number
+    fwhmOverride: string
+    instFwhm: number
+    broadeningModel: 'gaussian' | 'lorentzian'
+  }>({
     enabled: false, imported: null, selectedSourceId: '', selectedPeakX: null,
-    K: 0.9, lambda: 1.5406, fwhmOverride: '',
+    K: 0.9, lambda: 1.5406, fwhmOverride: '', instFwhm: 0, broadeningModel: 'gaussian',
   })
   const [calcDspacing, setCalcDspacing] = useState<CalcModule & { lambda: number }>({
     enabled: false, imported: null, selectedSourceId: '', selectedPeakX: null,
@@ -1390,18 +1456,23 @@ export default function XRD({
           ...file,
           xProcessed: [],
           yProcessed: [],
+          yLinear: [],
           yStacked: [],
           baseline: 0,
         }
       }
 
       const xProcessed = rawPoints.map(p => p.xVal)
-      const ySel = rawPoints.map(p => p.yVal)
+      const yInput = rawPoints.map(p => p.yVal)
+      const ySel = kalpha2Strip
+        ? stripKalpha2(xProcessed, yInput, kalpha1Lambda, kalpha2Lambda, kalpha2Ratio)
+        : yInput
 
       // 2. 基線扣除：計算強度之 1st percentile 得到背景
       const sortedY = [...ySel].sort((a, b) => a - b)
       const pct1Index = Math.floor((sortedY.length - 1) * 0.01)
       const baseline = sortedY[pct1Index] || 0
+      const yLinear = ySel.map(yVal => yVal - baseline)
 
       let yProcessed = ySel.map(yVal => {
         // y_corr = y - baseline + 1.0
@@ -1437,11 +1508,12 @@ export default function XRD({
         ...file,
         xProcessed,
         yProcessed,
+        yLinear,
         yStacked,
         baseline,
       }
     })
-  }, [rawFiles, transformMode, xMin, xMax, normalizeCurves])
+  }, [rawFiles, transformMode, xMin, xMax, normalizeCurves, kalpha2Strip, kalpha1Lambda, kalpha2Lambda, kalpha2Ratio])
 
   // 當前選中的 active trace
   const activeTrace = useMemo(() => {
@@ -1956,7 +2028,8 @@ export default function XRD({
       return { x: mod.imported.x, y: mod.imported.y, name: mod.imported.name, color: mod.imported.color }
     }
     const trace = processedTraces.find(t => t.id === mod.selectedSourceId)
-    if (trace) return { x: trace.xProcessed, y: trace.yProcessed, name: trace.name, color: trace.color }
+    // FWHM / Scherrer 必須在線性強度上量測；log / sqrt 顯示會把峰形拉寬
+    if (trace) return { x: trace.xProcessed, y: trace.yLinear, name: trace.name, color: trace.color }
     return null
   }, [processedTraces])
 
@@ -2009,8 +2082,16 @@ export default function XRD({
     const measured = calcFwhmFromTrace(src.x, src.y, calcScherrer.selectedPeakX)
     const fwhmDeg = useOverride ? fwhmOverride : (measured?.fwhm ?? NaN)
     if (!Number.isFinite(fwhmDeg)) return null
-    const D = calcScherrerD(calcScherrer.selectedPeakX, fwhmDeg, calcScherrer.K, calcScherrer.lambda)
-    return { D, fwhmDeg, usedOverride: useOverride, measured, peakX: calcScherrer.selectedPeakX }
+    const instFwhm = Number.isFinite(calcScherrer.instFwhm) && calcScherrer.instFwhm > 0 ? calcScherrer.instFwhm : 0
+    const sampleFwhmDeg = correctInstrumentalBroadening(fwhmDeg, instFwhm, calcScherrer.broadeningModel)
+    const broadeningError = !(sampleFwhmDeg > 0)
+      ? '量測 FWHM 不大於儀器展寬：峰寬已接近儀器解析極限，無法用 Scherrer 估算晶粒尺寸'
+      : null
+    const D = broadeningError ? NaN : calcScherrerD(calcScherrer.selectedPeakX, sampleFwhmDeg, calcScherrer.K, calcScherrer.lambda)
+    return {
+      D, fwhmDeg, sampleFwhmDeg, instFwhm, broadeningModel: calcScherrer.broadeningModel, broadeningError,
+      usedOverride: useOverride, measured, peakX: calcScherrer.selectedPeakX,
+    }
   }, [calcScherrer, resolveCalcSource])
 
   const dspacingResult = useMemo(() => {
@@ -2114,6 +2195,9 @@ export default function XRD({
       crystalSizeAngstrom: scherrerResult.D,
       crystalSizeNm: scherrerResult.D / 10,
       fwhmSource: scherrerResult.usedOverride ? 'manual_override' : 'auto_measured',
+      instrumentFwhmDeg: scherrerResult.instFwhm,
+      sampleFwhmDeg: scherrerResult.sampleFwhmDeg,
+      broadeningModel: scherrerResult.instFwhm > 0 ? scherrerResult.broadeningModel : 'none',
     }])
   }, [calcScherrer, scherrerResult, resolveCalcSource])
 
@@ -2124,6 +2208,7 @@ export default function XRD({
       'd_spacing_angstrom', 'd_spacing_nm', 'peak_height', 'baseline',
       'fwhm_deg', 'left_half_2theta', 'right_half_2theta',
       'K', 'D_angstrom', 'D_nm', 'fwhm_source',
+      'instrument_fwhm_deg', 'sample_fwhm_deg', 'broadening_correction',
     ]
     const rows = calcRecords.map(record => [
       record.recordedAt,
@@ -2142,6 +2227,9 @@ export default function XRD({
       formatRecordNumber(record.crystalSizeAngstrom, 3),
       formatRecordNumber(record.crystalSizeNm, 4),
       record.fwhmSource ?? '',
+      formatRecordNumber(record.instrumentFwhmDeg, 5),
+      formatRecordNumber(record.sampleFwhmDeg, 5),
+      record.broadeningModel ?? '',
     ])
     const content = '\ufeff' + [headers, ...rows].map(row => row.map(excelCell).join('\t')).join('\n')
     downloadText(`XRD_Calculation_Records_${timestampForUtc8Filename()}.xls`, content, 'application/vnd.ms-excel')
@@ -2159,10 +2247,14 @@ export default function XRD({
   const handleScherrerExport = (sep: string, ext: string) => {
     if (!scherrerResult) return
     const lines = [
-      ['peak_2theta_deg', 'fwhm_deg', 'K', 'lambda_angstrom', 'D_angstrom', 'D_nm', 'fwhm_source'].join(sep),
+      ['peak_2theta_deg', 'fwhm_obs_deg', 'instrument_fwhm_deg', 'broadening_correction', 'sample_fwhm_deg',
+       'K', 'lambda_angstrom', 'D_angstrom', 'D_nm', 'fwhm_source'].join(sep),
       [scherrerResult.peakX.toFixed(4), scherrerResult.fwhmDeg.toFixed(5),
+       scherrerResult.instFwhm.toFixed(5), scherrerResult.instFwhm > 0 ? scherrerResult.broadeningModel : 'none',
+       Number.isFinite(scherrerResult.sampleFwhmDeg) ? scherrerResult.sampleFwhmDeg.toFixed(5) : 'NaN',
        calcScherrer.K.toString(), calcScherrer.lambda.toString(),
-       scherrerResult.D.toFixed(3), (scherrerResult.D / 10).toFixed(4),
+       Number.isFinite(scherrerResult.D) ? scherrerResult.D.toFixed(3) : 'NaN',
+       Number.isFinite(scherrerResult.D) ? (scherrerResult.D / 10).toFixed(4) : 'NaN',
        scherrerResult.usedOverride ? 'manual_override' : 'auto_measured'].join(sep),
     ]
     downloadText(`XRD_Scherrer_${timestampForUtc8Filename()}.${ext}`, lines.join('\n'), ext === 'csv' ? 'text/csv' : 'text/plain')
@@ -2776,6 +2868,21 @@ export default function XRD({
                       { value: 'sqrt', label: 'Sqrt 強度開根號' },
                     ]}
                   />
+                  <TogglePill
+                    label="Kα2 去除（Rachinger 法）"
+                    checked={kalpha2Strip}
+                    onChange={setKalpha2Strip}
+                  />
+                  {kalpha2Strip && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <NumInput label="λ Kα1 (Å)" value={kalpha1Lambda} step={0.000001} onChange={setKalpha1Lambda} />
+                      <NumInput label="λ Kα2 (Å)" value={kalpha2Lambda} step={0.000001} onChange={setKalpha2Lambda} />
+                      <NumInput label="I(Kα2)/I(Kα1)" value={kalpha2Ratio} min={0} max={1} step={0.01} onChange={setKalpha2Ratio} />
+                    </div>
+                  )}
+                  <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
+                    強度轉換只影響顯示；FWHM / Scherrer 計算一律使用線性強度（扣基線後）。預設為 Cu Kα1/Kα2 波長與強度比 0.5。
+                  </p>
                 </div>
               </Section>
 
@@ -3287,7 +3394,7 @@ export default function XRD({
                   paramsRow={
                     <div className="grid grid-cols-2 gap-2">
                       <NumInput label="波長 λ (Å)" value={calcDspacing.lambda} step={0.0001} onChange={v => setCalcDspacing(p => ({ ...p, lambda: v }))} />
-                      <CalcQuickPreset onClick={() => setCalcDspacing(p => ({ ...p, lambda: 1.5406 }))} label="Cu Kα (1.5406 Å)" />
+                      <CalcQuickPreset onClick={() => setCalcDspacing(p => ({ ...p, lambda: 1.5406 }))} label="Cu Kα1 (1.5406 Å)" />
                     </div>
                   }
                   overlayShapes={[]}
@@ -3372,7 +3479,22 @@ export default function XRD({
                       <NumInput label="形狀因子 K" value={calcScherrer.K} step={0.01} onChange={v => setCalcScherrer(p => ({ ...p, K: v }))} />
                       <NumInput label="波長 λ (Å)" value={calcScherrer.lambda} step={0.0001} onChange={v => setCalcScherrer(p => ({ ...p, lambda: v }))} />
                       <TextInput label="β 手動 override (°，空＝自動)" value={calcScherrer.fwhmOverride} onChange={v => setCalcScherrer(p => ({ ...p, fwhmOverride: v }))} placeholder="留空表示自動量測" />
-                      <CalcQuickPreset onClick={() => setCalcScherrer(p => ({ ...p, lambda: 1.5406 }))} label="Cu Kα (1.5406 Å)" />
+                      <CalcQuickPreset onClick={() => setCalcScherrer(p => ({ ...p, lambda: 1.5406 }))} label="Cu Kα1 (1.5406 Å)" />
+                      <NumInput label="儀器展寬 β_inst (°)" value={calcScherrer.instFwhm} min={0} step={0.001} onChange={v => setCalcScherrer(p => ({ ...p, instFwhm: v }))} />
+                      <CustomSelect
+                        label="展寬校正模型"
+                        value={calcScherrer.broadeningModel}
+                        onChange={v => setCalcScherrer(p => ({ ...p, broadeningModel: v as 'gaussian' | 'lorentzian' }))}
+                        options={[
+                          { value: 'gaussian', label: 'Gaussian：β² = β_obs² − β_inst²' },
+                          { value: 'lorentzian', label: 'Lorentzian：β = β_obs − β_inst' },
+                        ]}
+                      />
+                      <p className="col-span-2 text-[11px] leading-relaxed text-[var(--text-soft)] md:col-span-4">
+                        β_inst 請用同一台儀器、同一組光學設定量測 LaB6 或 Si 標準樣品在相近 2θ 的 FWHM（Langford &amp; Wilson 1978）。
+                        {calcScherrer.instFwhm > 0 ? '' : ' ⚠ 目前 β_inst = 0，未扣儀器展寬，晶粒尺寸會被低估。'}
+                        Scherrer 只考慮尺寸展寬，忽略微應變，所得 D 為下限估計。
+                      </p>
                     </div>
                   }
                   overlayShapes={scherrerResult?.measured && !scherrerResult.usedOverride ? [
@@ -3381,9 +3503,13 @@ export default function XRD({
                   resultBlock={scherrerResult ? (
                     <div className="grid grid-cols-2 gap-2 md:grid-cols-4 text-xs">
                       <ResultCell label="峰位 2θ" value={`${scherrerResult.peakX.toFixed(3)}°`} />
-                      <ResultCell label="β (FWHM)" value={`${scherrerResult.fwhmDeg.toFixed(4)}° ${scherrerResult.usedOverride ? '(手動)' : '(自動)'}`} />
-                      <ResultCell label="D (Å)" value={scherrerResult.D.toFixed(2)} accent />
-                      <ResultCell label="D (nm)" value={(scherrerResult.D / 10).toFixed(3)} accent />
+                      <ResultCell label="β_obs (FWHM)" value={`${scherrerResult.fwhmDeg.toFixed(4)}° ${scherrerResult.usedOverride ? '(手動)' : '(自動)'}`} />
+                      <ResultCell label="β_sample（扣儀器展寬）" value={Number.isFinite(scherrerResult.sampleFwhmDeg) ? `${scherrerResult.sampleFwhmDeg.toFixed(4)}°` : '—'} />
+                      <ResultCell label="D (Å)" value={Number.isFinite(scherrerResult.D) ? scherrerResult.D.toFixed(2) : '—'} accent />
+                      <ResultCell label="D (nm)" value={Number.isFinite(scherrerResult.D) ? (scherrerResult.D / 10).toFixed(3) : '—'} accent />
+                      {scherrerResult.broadeningError && (
+                        <p className="col-span-2 text-rose-400 md:col-span-4">{scherrerResult.broadeningError}</p>
+                      )}
                     </div>
                   ) : <CalcEmptyHint />}
                   exportButtons={

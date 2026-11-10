@@ -26,6 +26,9 @@ Nigiro Pro 光譜資料處理平台 — 支援 XRD、Raman、XAS、XPS、XES 等
 
 ## XPS 擬合：程式碼位置與數值驗證
 
+> 所有模組（XPS、XRD、Raman、XAS、XES、Ga2O3 價帶 DFT 分析）的方法、文獻、限制與數值驗證，整理在
+> [`docs/METHODS_AND_REFERENCES.md`](docs/METHODS_AND_REFERENCES.md)。
+
 ### 程式碼位置
 
 | 功能 | 檔案 | 函式 |
@@ -43,6 +46,10 @@ Nigiro Pro 光譜資料處理平台 — 支援 XRD、Raman、XAS、XPS、XES 等
 - **Tougaard 背景**：二參數 universal cross-section，`K(T) = T / (C + T²)²`，B = 2866 eV²、C = 1643 eV²（Tougaard, *Surf. Interface Anal.* 11, 453 (1988)）；在結合能座標下由低結合能側往高結合能側積分。
 - **峰面積**：Gaussian、Lorentzian、pseudo-Voigt、Voigt 皆使用解析解（Voigt：`面積 = 峰高 / V(0; σ, γ)`）。
 - **擬合參數**：每個峰可個別鎖定或放開峰位、半高寬、峰高；峰位與半高寬可設上下限。
+- **參數誤差**：每個峰回報 ±1σ（共變異矩陣 s²(JᵀJ)⁻¹ 傳遞到峰位、FWHM、面積）。
+- **雙峰約束**：可勾選讓同元素、同化學態的 j = l±1/2 峰固定分裂能、面積比 (2j+1) 並共用 FWHM。
+- **VBM**：前緣與背景各做最小平方直線擬合求交點，並回報 ±1σ（Kraut et al. 1980；Chambers et al. 2004）。
+- **RSF 定量**：Scofield 截面，子能階依簡併度換算，可選動能校正或手動輸入儀器 RSF。
 
 ### 數值驗證
 
@@ -57,12 +64,14 @@ Nigiro Pro 光譜資料處理平台 — 支援 XRD、Raman、XAS、XPS、XES 等
 | Voigt 擬合 | 已知面積的 Voigt 峰擬合後面積 | 誤差 < 0.5% |
 | Tougaard 方向 | 峰的高結合能側背景抬升、低結合能側只剩常數 | 通過 |
 
+其他模組的驗證（VBM 無偏與誤差校準、參數誤差 vs Monte Carlo、雙峰約束、RSF、XES、XAS flatten、Kα2 去除、pDOS 比例）在 `tests/test_rigor_audit.py`。
+
 執行方式：
 
 ```bash
 cd web/backend
-python -m pip install numpy scipy pytest
-python -m pytest tests/test_xps_fitting.py -v
+python -m pip install numpy scipy pandas fastapi pydantic python-multipart pytest
+python -m pytest tests -v
 ```
 
 ---

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.integrate import trapezoid
 from scipy.optimize import lsq_linear, nnls
 
 
@@ -46,15 +47,26 @@ def fit_components(
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
     coef_names = names + bg_names
     coeffs = {name: float(value) for name, value in zip(coef_names, coef)}
-    spectral = np.array([coeffs[name] for name in names], dtype=float)
-    denom = float(np.sum(spectral))
-    perc = {f"{name}_percent": float(value / denom * 100) if denom > 0 else 0.0 for name, value in zip(names, spectral)}
+    # Contribution of each component = coefficient × integral of that
+    # (broadened, cross-section-weighted) component over the fit range.
+    # Coefficients alone are scale factors of curves with different areas,
+    # so their ratio is NOT the fraction of the measured intensity.
+    areas = {
+        name: float(coeffs[name] * trapezoid(np.clip(components[name][mask], 0.0, None), x))
+        for name in names
+    }
+    denom = float(sum(max(value, 0.0) for value in areas.values()))
+    perc = {
+        f"{name}_percent": float(max(areas[name], 0.0) / denom * 100) if denom > 0 else 0.0
+        for name in names
+    }
     return {
         "energy": x,
         "observed": y,
         "fit": fit,
         "residual": residual,
         "coefficients": coeffs,
+        "component_areas": areas,
         "percentages": perc,
         "r2": r2,
         "rmse": rmse,

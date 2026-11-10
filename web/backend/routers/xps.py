@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 import numpy as np
@@ -115,6 +116,10 @@ class InitPeak(BaseModel):
     fwhm_max: Optional[float] = None
     amplitude_max: Optional[float] = None
     theoretical_center: Optional[float] = None
+    # explicit link to another peak (index in `peaks`), e.g. 2p1/2 → 2p3/2
+    link_to: Optional[int] = None
+    link_center_offset: Optional[float] = None
+    link_area_ratio: Optional[float] = None
 
 
 class FitRequest(BaseModel):
@@ -126,6 +131,8 @@ class FitRequest(BaseModel):
     fit_range: Optional[List[float]] = None
     peak_labels: Optional[List[str]] = None
     n_restarts: int = 1
+    # auto-link spin-orbit doublets (same element + same chemical-state label)
+    doublet_constraints: bool = False
 
 
 class FitPeakRow(BaseModel):
@@ -135,6 +142,13 @@ class FitPeakRow(BaseModel):
     Area: float
     Height: float
     Area_pct: Optional[float] = None
+    # 1σ standard errors from the fit covariance (None when not estimable)
+    Center_err: Optional[float] = None
+    FWHM_err: Optional[float] = None
+    Area_err: Optional[float] = None
+    Height_err: Optional[float] = None
+    Linked_To: Optional[str] = None
+    Note: str = ""
 
 
 class FitResponse(BaseModel):
@@ -144,7 +158,10 @@ class FitResponse(BaseModel):
     peaks: List[FitPeakRow]
     r_squared: float = 0.0
     rmse: float = 0.0
+    # Σr²/(n−p): residual variance per degree of freedom. It equals the
+    # reduced χ² only if the data were weighted by their measurement σ.
     chi_red: Optional[float] = None
+    notes: List[str] = Field(default_factory=list)
 
 
 class CalibrationRequest(BaseModel):
@@ -165,6 +182,67 @@ class CalibrationResponse(BaseModel):
     search_window: float
     success: bool
     message: str = ""
+
+
+_SUBSHELL_RE = re.compile(r"(\d)([pdf])\s*(\d+)\s*/\s*2")
+_ORBITAL_L = {"p": 1, "d": 2, "f": 3}
+
+
+def _auto_doublet_links(labels: list[str], seeds: list[float]) -> tuple[dict[int, dict], list[str]]:
+    """
+    Pair spin-orbit doublets by label: same element (first token), same
+    shell (e.g. 2p), same remaining chemical-state text, j = l+1/2 (major)
+    and j = l−1/2 (minor).
+
+    Constraints (standard practice, e.g. Major et al., JVST A 38, 061203 (2020)):
+      area(minor) / area(major) = (2j_minor + 1) / (2j_major + 1)
+                                 = 1/2 (p), 2/3 (d), 3/4 (f)
+      center(minor) = center(major) + ΔSO
+    ΔSO comes from DOUBLET_INFO when available, otherwise from the seed
+    positions of the two peaks.
+    """
+    parsed: list[Optional[tuple[str, str, int, str]]] = []
+    for label in labels:
+        text = str(label or "").strip()
+        match = _SUBSHELL_RE.search(text)
+        if not match:
+            parsed.append(None)
+            continue
+        element = text.split()[0] if text.split() else ""
+        shell = f"{match.group(1)}{match.group(2)}"
+        two_j = int(match.group(3))
+        state = " ".join((text[:match.start()] + " " + text[match.end():]).split()[1:])
+        parsed.append((element, shell, two_j, state))
+
+    links: dict[int, dict] = {}
+    notes: list[str] = []
+    for child_idx, info in enumerate(parsed):
+        if info is None:
+            continue
+        element, shell, two_j, state = info
+        l_value = _ORBITAL_L.get(shell[-1])
+        if l_value is None or two_j != 2 * l_value - 1:
+            continue  # not the minor (j = l − 1/2) component
+        major_two_j = 2 * l_value + 1
+        for parent_idx, other in enumerate(parsed):
+            if other is None or parent_idx == child_idx:
+                continue
+            if other == (element, shell, major_two_j, state):
+                ratio = (two_j + 1) / (major_two_j + 1)
+                db = DOUBLET_INFO.get(element)
+                if db and db.get("orbital") == shell:
+                    offset = float(db["be_sep"])
+                    source = "DOUBLET_INFO"
+                else:
+                    offset = float(seeds[child_idx] - seeds[parent_idx])
+                    source = "初始峰位差"
+                links[child_idx] = {"link_to": parent_idx, "link_center_offset": offset, "link_area_ratio": ratio}
+                notes.append(
+                    f"雙峰約束：{labels[child_idx]} → {labels[parent_idx]}，"
+                    f"ΔSO = {offset:.2f} eV（{source}），面積比 = {ratio:.3f}，FWHM 相同"
+                )
+                break
+    return links, notes
 
 
 def _sorted_xy(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -441,9 +519,26 @@ def fit_xps_peaks(req: FitRequest):
             "amplitude_max": pk.amplitude_max,
             "theoretical_center": pk.theoretical_center,
             "label": pk.label,
+            "link_to": pk.link_to,
+            "link_center_offset": pk.link_center_offset,
+            "link_area_ratio": pk.link_area_ratio,
         }
         for pk in req.peaks
     ]
+
+    notes: list[str] = []
+    labels_for_links = [
+        (req.peak_labels[i] if req.peak_labels and i < len(req.peak_labels) else None) or pk.label or ""
+        for i, pk in enumerate(req.peaks)
+    ]
+    if req.doublet_constraints:
+        auto_links, link_notes = _auto_doublet_links(labels_for_links, [pk.center for pk in req.peaks])
+        for child_idx, link in auto_links.items():
+            if init_peaks[child_idx].get("link_to") is None:
+                init_peaks[child_idx].update(link)
+        notes.extend(link_notes)
+        if not auto_links:
+            notes.append("雙峰約束已開啟，但沒有找到可配對的 j = l±1/2 峰（標籤需含如 2p3/2 / 2p1/2）")
 
     fit_range = req.fit_range
     if fit_range is None and req.peaks:
@@ -460,14 +555,17 @@ def fit_xps_peaks(req: FitRequest):
 
     best_result: dict | None = None
     best_ss_res = float("inf")
+    failures: list[str] = []
     for restart_idx in range(n_restarts):
         current_peaks = init_peaks if restart_idx == 0 else perturb_init_peaks(init_peaks, rng)
         try:
             candidate = fit_peaks(x, y, current_peaks, profile=req.profile,
                                   maxfev=capped_maxfev, fit_range=fit_range)
-        except Exception:
+        except Exception as exc:
+            failures.append(f"第 {restart_idx + 1} 次：{exc}")
             continue
         if not candidate.get("success", False):
+            failures.append(f"第 {restart_idx + 1} 次：{candidate.get('message', '未收斂')}")
             continue
         cand_ss = candidate.get("ss_res", float("inf"))
         if cand_ss < best_ss_res:
@@ -475,11 +573,19 @@ def fit_xps_peaks(req: FitRequest):
             best_ss_res = cand_ss
 
     if best_result is None:
-        raise HTTPException(status_code=422, detail="擬合失敗（全部嘗試均未收斂）")
+        detail = "擬合失敗（全部嘗試均未收斂）"
+        if failures:
+            detail += "：" + "；".join(failures[:3])
+        raise HTTPException(status_code=422, detail=detail)
     result = best_result
+    if failures:
+        notes.append(f"{len(failures)} / {n_restarts} 次重啟擬合失敗，已採用殘差最小的成功結果")
 
     raw_peaks = result.get("peaks", [])
     total_area = sum(abs(pk.get("area", 0)) for pk in raw_peaks)
+
+    def _err(value):
+        return float(value) if value is not None and np.isfinite(value) else None
 
     rows: list[FitPeakRow] = []
     for i, pk in enumerate(raw_peaks, 1):
@@ -489,6 +595,13 @@ def fit_xps_peaks(req: FitRequest):
             if req.peak_labels and i - 1 < len(req.peak_labels)
             else str(pk.get("label", f"Peak {i}"))
         )
+        row_notes: list[str] = []
+        if pk.get("stderr_excludes_bound_params"):
+            row_notes.append("有參數碰到上下限，誤差估計把它視為固定值（可能偏小）")
+        if pk.get("center_at_boundary"):
+            row_notes.append("峰位碰到範圍邊界")
+        if pk.get("fwhm_at_boundary"):
+            row_notes.append("FWHM 碰到限制")
         rows.append(FitPeakRow(
             Peak_Name=name,
             Center_eV=float(pk.get("center", 0)),
@@ -496,6 +609,16 @@ def fit_xps_peaks(req: FitRequest):
             Area=area,
             Height=float(pk.get("amplitude", 0)),
             Area_pct=round(100 * abs(area) / total_area, 2) if total_area > 0 else 0,
+            Center_err=_err(pk.get("center_err")),
+            FWHM_err=_err(pk.get("fwhm_err")),
+            Area_err=_err(pk.get("area_err")),
+            Height_err=_err(pk.get("amplitude_err")),
+            Linked_To=(
+                labels_for_links[int(init_peaks[i - 1]["link_to"])]
+                if pk.get("linked_to") is not None and init_peaks[i - 1].get("link_to") is not None
+                else None
+            ),
+            Note="；".join(row_notes),
         ))
 
     def _to_list(arr):
@@ -509,6 +632,7 @@ def fit_xps_peaks(req: FitRequest):
         r_squared=float(result.get("r_squared", 0.0)),
         rmse=float(result.get("rmse", 0.0)),
         chi_red=result.get("chi_red"),
+        notes=notes,
     )
 
 
@@ -539,6 +663,12 @@ class VbmLineFit(BaseModel):
     anchor_end_point: VbmLinePoint
     start_point: VbmLinePoint
     end_point: VbmLinePoint
+    # least-squares statistics of the straight line
+    method: str = "least_squares"
+    slope_err: Optional[float] = None
+    intercept_err: Optional[float] = None
+    slope_intercept_cov: Optional[float] = None
+    r_squared: Optional[float] = None
 
 
 class VbmResponse(BaseModel):
@@ -552,94 +682,89 @@ class VbmResponse(BaseModel):
     baseline_line: Optional[VbmLineFit] = None
     success: bool
     message: str = ""
+    # 1σ uncertainty of the intersection, propagated from both line fits
+    vbm_err_ev: Optional[float] = None
 
 
-def _fit_vbm_line(x: np.ndarray, y: np.ndarray, lo: float, hi: float, mode: str) -> Optional[VbmLineFit]:
-    mask = np.isfinite(x) & np.isfinite(y)
-    if int(np.sum(mask)) < 2:
+def _fit_vbm_line(x: np.ndarray, y: np.ndarray, lo: float, hi: float, mode: str = "tangent") -> Optional[VbmLineFit]:
+    """
+    Ordinary least-squares straight line through ALL points in [lo, hi].
+
+    This is the standard linear-extrapolation method for the valence-band
+    leading edge and the background (Kraut et al., PRL 44, 1620 (1980);
+    Chambers et al., JVST B 22, 2205 (2004)). Using every point in the window
+    (instead of picking the steepest pair of single points) avoids the
+    selection bias that noise would otherwise introduce.
+    `mode` is kept only for backward compatibility; both lines use the same fit.
+    """
+    lo, hi = min(lo, hi), max(lo, hi)
+    mask = np.isfinite(x) & np.isfinite(y) & (x >= lo) & (x <= hi)
+    n_points = int(np.sum(mask))
+    if n_points < 2:
         return None
-
     xs = x[mask]
     ys = y[mask]
     order = np.argsort(xs)
     xs = xs[order]
     ys = ys[order]
 
-    def nearest_point(target_x: float) -> tuple[int, float, float]:
-        idx = int(np.argmin(np.abs(xs - target_x)))
-        return idx, float(xs[idx]), float(ys[idx])
+    design = np.column_stack([xs, np.ones_like(xs)])
+    coef, *_ = np.linalg.lstsq(design, ys, rcond=None)
+    slope, intercept = float(coef[0]), float(coef[1])
+    fitted = slope * xs + intercept
+    resid = ys - fitted
+    ss_res = float(np.sum(resid ** 2))
+    ss_tot = float(np.sum((ys - np.mean(ys)) ** 2))
 
-    anchor_start_idx, anchor_start_x, anchor_start_y = nearest_point(lo)
-    anchor_end_idx, anchor_end_x, anchor_end_y = nearest_point(hi)
-    span_points = max(abs(anchor_end_idx - anchor_start_idx) + 1, 5)
-    window_point_count = max(3, min(int(xs.size), int(round(span_points * 0.2))))
+    slope_err = intercept_err = cov_si = None
+    if n_points > 2:
+        s2 = ss_res / (n_points - 2)
+        try:
+            cov = s2 * np.linalg.inv(design.T @ design)
+            slope_err = float(np.sqrt(max(cov[0, 0], 0.0)))
+            intercept_err = float(np.sqrt(max(cov[1, 1], 0.0)))
+            cov_si = float(cov[0, 1])
+        except np.linalg.LinAlgError:
+            pass
 
-    def build_window(anchor_idx: int) -> tuple[np.ndarray, np.ndarray]:
-        start_idx = max(0, min(int(xs.size) - window_point_count, anchor_idx - window_point_count // 2))
-        end_idx = start_idx + window_point_count
-        return xs[start_idx:end_idx], ys[start_idx:end_idx]
-
-    start_xs, start_ys = build_window(anchor_start_idx)
-    end_xs, end_ys = build_window(anchor_end_idx)
-
-    best = None
-    candidate_pair_count = 0
-    for sx0, sy0 in zip(start_xs, start_ys):
-        for ex0, ey0 in zip(end_xs, end_ys):
-            dx = float(ex0 - sx0)
-            if dx <= 1e-10:
-                continue
-            slope = float((ey0 - sy0) / dx)
-            span = abs(dx)
-            mean_y = float((sy0 + ey0) / 2.0)
-            candidate_pair_count += 1
-            candidate = {
-                "start_x": float(sx0),
-                "start_y": float(sy0),
-                "end_x": float(ex0),
-                "end_y": float(ey0),
-                "slope": slope,
-                "span": span,
-                "mean_y": mean_y,
-            }
-            if best is None:
-                best = candidate
-                continue
-
-            if mode == "tangent":
-                if slope > best["slope"] + 1e-10 or (abs(slope - best["slope"]) <= 1e-10 and span > best["span"]):
-                    best = candidate
-            else:
-                abs_slope = abs(slope)
-                best_abs_slope = abs(best["slope"])
-                if (
-                    abs_slope < best_abs_slope - 1e-10
-                    or (abs(abs_slope - best_abs_slope) <= 1e-10 and mean_y < best["mean_y"] - 1e-10)
-                    or (
-                        abs(abs_slope - best_abs_slope) <= 1e-10
-                        and abs(mean_y - best["mean_y"]) <= 1e-10
-                        and span > best["span"]
-                    )
-                ):
-                    best = candidate
-
-    if best is None:
-        return None
-
-    slope = float(best["slope"])
-    intercept = float(best["start_y"] - slope * best["start_x"])
     return VbmLineFit(
         slope=slope,
         intercept=intercept,
-        point_count=int(start_xs.size + end_xs.size),
-        start_window_point_count=int(start_xs.size),
-        end_window_point_count=int(end_xs.size),
-        candidate_pair_count=candidate_pair_count,
-        anchor_start_point=VbmLinePoint(x=anchor_start_x, y=anchor_start_y),
-        anchor_end_point=VbmLinePoint(x=anchor_end_x, y=anchor_end_y),
-        start_point=VbmLinePoint(x=float(best["start_x"]), y=float(best["start_y"])),
-        end_point=VbmLinePoint(x=float(best["end_x"]), y=float(best["end_y"])),
+        point_count=n_points,
+        start_window_point_count=n_points,
+        end_window_point_count=n_points,
+        candidate_pair_count=0,
+        anchor_start_point=VbmLinePoint(x=float(xs[0]), y=float(ys[0])),
+        anchor_end_point=VbmLinePoint(x=float(xs[-1]), y=float(ys[-1])),
+        start_point=VbmLinePoint(x=float(xs[0]), y=float(fitted[0])),
+        end_point=VbmLinePoint(x=float(xs[-1]), y=float(fitted[-1])),
+        method="least_squares",
+        slope_err=slope_err,
+        intercept_err=intercept_err,
+        slope_intercept_cov=cov_si,
+        r_squared=(1.0 - ss_res / ss_tot) if ss_tot > 0 else None,
     )
+
+
+def _intersection_error(vbm: float, edge: VbmLineFit, base: VbmLineFit) -> Optional[float]:
+    """
+    1σ error of V = (b_base − b_edge) / (m_edge − m_base), assuming the two
+    line fits are independent:
+      σ²_V = [σ²(b_e) + 2V·cov(m_e,b_e) + V²σ²(m_e)
+              + σ²(b_b) + 2V·cov(m_b,b_b) + V²σ²(m_b)] / (m_e − m_b)²
+    """
+    terms = [edge.slope_err, edge.intercept_err, edge.slope_intercept_cov,
+             base.slope_err, base.intercept_err, base.slope_intercept_cov]
+    if any(t is None for t in terms):
+        return None
+    delta_m = edge.slope - base.slope
+    if abs(delta_m) < 1e-12:
+        return None
+    var = (
+        edge.intercept_err ** 2 + 2 * vbm * edge.slope_intercept_cov + vbm ** 2 * edge.slope_err ** 2
+        + base.intercept_err ** 2 + 2 * vbm * base.slope_intercept_cov + vbm ** 2 * base.slope_err ** 2
+    ) / delta_m ** 2
+    return float(np.sqrt(var)) if np.isfinite(var) and var >= 0 else None
 
 
 @router.post("/vbm", response_model=VbmResponse)
@@ -685,6 +810,7 @@ def compute_vbm(req: VbmRequest):
     baseline_level = float(np.mean(y[mask_bl])) if int(np.sum(mask_bl)) > 0 else 0.0
 
     vbm_ev = None
+    vbm_err_ev = None
     success = False
     message = ""
     slope = edge_line.slope
@@ -702,11 +828,12 @@ def compute_vbm(req: VbmRequest):
             lower_bound = min(float(np.min(x)) - 1.0, -1.0)
             if lower_bound <= vbm_candidate <= float(np.max(x)) + upper_margin:
                 vbm_ev = float(vbm_candidate)
+                vbm_err_ev = _intersection_error(vbm_ev, edge_line, baseline_line)
                 success = True
             elif vbm_candidate < lower_bound:
                 message = (
                     f"外推 VBM ({vbm_candidate:.2f} eV) 為負值，"
-                    "請確認切線區間是否選在費米邊（Fermi edge）附近的低 BE 線性上升段，"
+                    "請確認切線區間是否選在價帶前緣（leading edge）的線性上升段，"
                     "而非 VB 內部特徵"
                 )
             else:
@@ -727,6 +854,7 @@ def compute_vbm(req: VbmRequest):
         baseline_line=baseline_line,
         success=success,
         message=message,
+        vbm_err_ev=vbm_err_ev,
     )
 
 
@@ -810,6 +938,7 @@ def get_element_peaks(element: str):
 class RsfItem(BaseModel):
     element: str
     label: str
+    binding_energy: Optional[float] = None  # fitted peak BE, needed for KE correction
 
 
 class RsfResultRow(BaseModel):
@@ -817,14 +946,59 @@ class RsfResultRow(BaseModel):
     label: str
     rsf: Optional[float]
     source: str
+    rsf_raw: Optional[float] = None       # tabulated (Scofield) value before KE correction
+    kinetic_energy: Optional[float] = None
+    ke_factor: Optional[float] = None
+
+
+C1S_REFERENCE_BE = 284.8
 
 
 @router.post("/rsf", response_model=List[RsfResultRow])
-def get_rsf_values(items: List[RsfItem]):
+def get_rsf_values(
+    items: List[RsfItem],
+    photon_energy: float = 1486.6,
+    ke_exponent: float = 0.0,
+):
+    """
+    Look up RSFs and optionally apply a kinetic-energy correction.
+
+    Scofield values are photo-ionisation cross-sections only. The measured
+    intensity also scales with the inelastic mean free path λ(KE) and the
+    analyser transmission T(KE) (Shard, JVST A 38, 041201 (2020)). With the
+    common power-law approximation λ·T ∝ KE^n:
+
+        RSF_eff = RSF × (KE / KE_C1s)^n,   KE = hν − BE
+
+    normalised to C 1s so that RSF(C 1s) stays 1. n = 0 means no correction.
+    λ alone (TPP-2M, Tanuma et al., SIA 21, 165 (1994)) gives n ≈ 0.7–0.8;
+    the transmission part is instrument-specific and must come from the
+    instrument's own calibration.
+    """
+    exponent = float(ke_exponent)
+    hv = float(photon_energy)
+    ke_ref = hv - C1S_REFERENCE_BE
     results = []
     for item in items:
         rsf, source = get_orbital_rsf(item.element.strip(), item.label.strip())
-        results.append(RsfResultRow(element=item.element, label=item.label, rsf=rsf, source=source))
+        rsf_raw = rsf
+        ke = factor = None
+        if rsf is not None and abs(exponent) > 1e-12:
+            if item.binding_energy is None or not np.isfinite(item.binding_energy):
+                source += "；未提供結合能，未做動能校正"
+            else:
+                ke = hv - float(item.binding_energy)
+                if ke <= 0 or ke_ref <= 0:
+                    source += "；動能 ≤ 0，未做動能校正"
+                    ke = None
+                else:
+                    factor = (ke / ke_ref) ** exponent
+                    rsf = rsf * factor
+                    source += f"；動能校正 (KE/KE_C1s)^{exponent:g} = × {factor:.3f}"
+        results.append(RsfResultRow(
+            element=item.element, label=item.label, rsf=rsf, source=source,
+            rsf_raw=rsf_raw, kinetic_energy=ke, ke_factor=factor,
+        ))
     return results
 
 

@@ -111,9 +111,7 @@ def _get_structure_and_dos(api_key: str, material_id: str) -> tuple[Any, Any]:
 
 def materials_project_reference(api_key: str, material_id: str) -> PdosReference:
     structure, dos = _get_structure_and_dos(api_key, material_id)
-    notes = [
-        f"已匯入 Materials Project 參考資料 {material_id}。能量已對齊為 E_rel = -(E - Efermi)；定量比較前請確認 VBM 對齊。"
-    ]
+    notes = [f"已匯入 Materials Project 參考資料 {material_id}。"]
 
     pdos = getattr(dos, "pdos", None)
     if not pdos:
@@ -121,7 +119,20 @@ def materials_project_reference(api_key: str, material_id: str) -> PdosReference
 
     energies = np.asarray(getattr(dos, "energies"), dtype=float)
     efermi = float(getattr(dos, "efermi", 0.0))
-    out = pd.DataFrame({"Energy_rel": -(energies - efermi)})
+    # Align to the computed VBM, not to E_F: for an insulator E_F can sit
+    # anywhere in the gap, while the experimental axis is E_rel = BE − VBM.
+    reference = efermi
+    try:
+        _cbm, vbm = dos.get_cbm_vbm()
+        if np.isfinite(vbm):
+            reference = float(vbm)
+            notes.append(f"能量已對齊 DFT VBM：E_rel = −(E − E_VBM)，E_VBM = {reference:.3f} eV（E_F = {efermi:.3f} eV）。")
+        else:
+            raise ValueError("VBM 非有限值")
+    except Exception as exc:
+        notes.append(f"無法由 DOS 取得 VBM（{exc}），改用 E_F 對齊：E_rel = −(E − E_F)；定量比較前請確認 VBM 對齊。")
+    notes.append("DFT（PBE）常低估能隙與 Ga 3d 結合能；線性外推的實驗 VBM 與 DFT 真實 VBM 也可能差數百 meV（Chambers et al. 2004），比較前請確認能量對齊。")
+    out = pd.DataFrame({"Energy_rel": -(energies - reference)})
     for col in MP_COLUMNS:
         out[col] = 0.0
 
